@@ -24,6 +24,8 @@ const { envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
   }),
 }));
 
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
+
 vi.mock("undici", () => ({
   EnvHttpProxyAgent: envHttpProxyAgentCtor,
   ProxyAgent: proxyAgentCtor,
@@ -252,6 +254,16 @@ function expectRuntimeLogContaining(
   expect(runtime.log.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
 }
 
+function installUndiciRuntimeDeps(): void {
+  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: vi.fn(),
+    EnvHttpProxyAgent: envHttpProxyAgentCtor,
+    Pool: vi.fn(),
+    ProxyAgent: proxyAgentCtor,
+    fetch: vi.fn(),
+  };
+}
+
 describe("web session", () => {
   beforeAll(async () => {
     ({
@@ -269,11 +281,13 @@ describe("web session", () => {
     vi.clearAllMocks();
     envHttpProxyAgentCtor.mockClear();
     proxyAgentCtor.mockClear();
+    installUndiciRuntimeDeps();
     resetBaileysMocks();
     resetLoadConfigMock();
   });
 
   afterEach(async () => {
+    Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
     await waitForCredsSaveQueue();
     resetLogger();
     setLoggerOverride(null);

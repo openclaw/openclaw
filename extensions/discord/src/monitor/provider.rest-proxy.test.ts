@@ -10,6 +10,8 @@ const { undiciFetchMock, agentSpy, envHttpProxyAgentSpy, proxyAgentSpy } = vi.ho
   proxyAgentSpy: vi.fn(),
 }));
 
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
+
 vi.mock("undici", () => {
   class Agent {
     options: unknown;
@@ -89,6 +91,59 @@ function recordField(value: unknown, field: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function installUndiciRuntimeDeps(): void {
+  class Agent {
+    options: unknown;
+    constructor(options?: unknown) {
+      this.options = options;
+      agentSpy(options);
+    }
+  }
+  class EnvHttpProxyAgent {
+    options: unknown;
+    constructor(options?: unknown) {
+      if (
+        typeof options === "object" &&
+        options !== null &&
+        ("httpsProxy" in options || "httpProxy" in options)
+      ) {
+        const proxyOptions = options as { httpsProxy?: unknown; httpProxy?: unknown };
+        if (proxyOptions.httpsProxy === "bad-proxy" || proxyOptions.httpProxy === "bad-proxy") {
+          throw new Error("bad env proxy");
+        }
+      }
+      this.options = options;
+      envHttpProxyAgentSpy(options);
+    }
+  }
+  class ProxyAgent {
+    options: unknown;
+    uri: string;
+    constructor(options: string | { uri: string; allowH2?: boolean }) {
+      const resolved = typeof options === "string" ? { uri: options } : options;
+      if (resolved.uri === "bad-proxy") {
+        throw new Error("bad proxy");
+      }
+      this.options = resolved;
+      this.uri = resolved.uri;
+      proxyAgentSpy(resolved);
+    }
+  }
+  class Pool {
+    constructor(
+      readonly origin: unknown,
+      readonly options: unknown,
+    ) {}
+  }
+  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent,
+    EnvHttpProxyAgent,
+    Pool,
+    ProxyAgent,
+    fetch: undiciFetchMock,
+  };
+}
+
 describe("resolveDiscordRestFetch", () => {
   const proxyEnvKeys = [
     "HTTP_PROXY",
@@ -117,9 +172,11 @@ describe("resolveDiscordRestFetch", () => {
     agentSpy.mockReset();
     envHttpProxyAgentSpy.mockReset();
     proxyAgentSpy.mockReset();
+    installUndiciRuntimeDeps();
   });
 
   afterEach(() => {
+    Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }

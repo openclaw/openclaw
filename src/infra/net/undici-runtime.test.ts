@@ -10,8 +10,8 @@ import {
   TEST_UNDICI_RUNTIME_DEPS_KEY,
 } from "./undici-runtime.js";
 
-const clientCtor = vi.fn();
 const envHttpProxyAgentCtor = vi.fn();
+const poolCtor = vi.fn();
 const proxyAgentCtor = vi.fn();
 const proxyConnect = vi.fn();
 
@@ -19,14 +19,14 @@ class MockAgent {
   readonly __testStub = true;
 }
 
-class MockClient {
+class MockPool {
   readonly __testStub = true;
 
   constructor(
     public readonly origin: unknown,
     public readonly options: unknown,
   ) {
-    clientCtor(origin, options);
+    poolCtor(origin, options);
   }
 }
 
@@ -49,8 +49,8 @@ class MockProxyAgent {
 function installUndiciRuntimeDeps(): void {
   (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
     Agent: MockAgent,
-    Client: MockClient,
     EnvHttpProxyAgent: MockEnvHttpProxyAgent,
+    Pool: MockPool,
     ProxyAgent: MockProxyAgent,
     fetch: vi.fn(),
   };
@@ -80,11 +80,11 @@ function requireEnvHttpProxyAgentOptions(): Record<string, unknown> {
 }
 
 function requireClientOptions(): Record<string, unknown> {
-  const call = clientCtor.mock.calls[0];
+  const call = poolCtor.mock.calls[0];
   if (!call) {
-    throw new Error("expected Client constructor call");
+    throw new Error("expected Pool constructor call");
   }
-  return expectOptionsRecord(call[1], "expected Client options object");
+  return expectOptionsRecord(call[1], "expected Pool options object");
 }
 
 function invokeProxyClientFactory(options: Record<string, unknown>): void {
@@ -105,8 +105,8 @@ function invokeClientConnect(options: Record<string, unknown>, servername: strin
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
-  clientCtor.mockReset();
   envHttpProxyAgentCtor.mockReset();
+  poolCtor.mockReset();
   proxyAgentCtor.mockReset();
   proxyConnect.mockReset();
   _resetActiveManagedProxyStateForTests();
@@ -140,6 +140,19 @@ describe("createHttp1ProxyAgent", () => {
 
     expect(proxyConnect).toHaveBeenCalledWith(
       expect.not.objectContaining({ servername: "127.0.0.1" }),
+      expect.any(Function),
+    );
+  });
+
+  it("strips invalid bracketed IPv6 SNI when undici connects to an HTTPS proxy by IP", () => {
+    installUndiciRuntimeDeps();
+
+    createHttp1ProxyAgent({ uri: "https://[::1]:8443" });
+    invokeProxyClientFactory(requireProxyAgentOptions());
+    invokeClientConnect(requireClientOptions(), "[::1]");
+
+    expect(proxyConnect).toHaveBeenCalledWith(
+      expect.not.objectContaining({ servername: "[::1]" }),
       expect.any(Function),
     );
   });

@@ -1,6 +1,10 @@
 // Public fetch/proxy helpers for plugins that need wrapped fetch behavior.
 
 export { resolveFetch, wrapFetchWithAbortSignal } from "../infra/fetch.js";
+export {
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+} from "../infra/net/undici-runtime.js";
 export { withTrustedEnvProxyGuardedFetchMode } from "../infra/net/fetch-guard.ts";
 export {
   addActiveManagedProxyTlsOptions,

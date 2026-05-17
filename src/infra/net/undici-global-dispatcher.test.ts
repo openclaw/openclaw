@@ -14,6 +14,8 @@ const {
   getDefaultAutoSelectFamily,
   setDefaultAutoSelectFamily,
   isProxylineDispatcher,
+  createHttp1Agent,
+  createHttp1EnvHttpProxyAgent,
   loadUndiciGlobalDispatcherDeps,
 } = vi.hoisted(() => {
   class Agent {
@@ -75,6 +77,23 @@ const {
   const isProxylineDispatcher = vi.fn(
     (dispatcher: unknown) => dispatcher instanceof ManagedUndiciDispatcher,
   );
+  const createHttp1Agent = vi.fn(
+    (options?: Record<string, unknown>, timeoutMs?: number) =>
+      new Agent({
+        ...(options ?? {}),
+        ...(timeoutMs ? { bodyTimeout: timeoutMs, headersTimeout: timeoutMs } : {}),
+        allowH2: false,
+      }),
+  );
+  const createHttp1EnvHttpProxyAgent = vi.fn(
+    (options?: Record<string, unknown>, timeoutMs?: number) =>
+      new EnvHttpProxyAgent({
+        ...(options ?? {}),
+        ...(timeoutMs ? { bodyTimeout: timeoutMs, headersTimeout: timeoutMs } : {}),
+        allowH2: false,
+        clientFactory: "ip-safe-test-client-factory",
+      }),
+  );
   const loadUndiciGlobalDispatcherDeps = vi.fn(() => ({
     Agent,
     EnvHttpProxyAgent,
@@ -93,6 +112,8 @@ const {
     getCurrentDispatcher,
     getDefaultAutoSelectFamily,
     isProxylineDispatcher,
+    createHttp1Agent,
+    createHttp1EnvHttpProxyAgent,
     setDefaultAutoSelectFamily,
     loadUndiciGlobalDispatcherDeps,
   };
@@ -122,6 +143,8 @@ vi.mock("./proxy-env.js", () => ({
 }));
 
 vi.mock("./undici-runtime.js", () => ({
+  createHttp1Agent,
+  createHttp1EnvHttpProxyAgent,
   loadUndiciGlobalDispatcherDeps,
 }));
 
@@ -653,6 +676,7 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
       httpProxy: "socks5://proxy.test:1080",
       httpsProxy: "socks5://proxy.test:1080",
       allowH2: false,
+      clientFactory: "ip-safe-test-client-factory",
     });
   });
 
@@ -677,6 +701,7 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
         httpsProxy: "https://proxy.example:8443",
         proxyTls: { ca: "bootstrap-ca" },
         allowH2: false,
+        clientFactory: "ip-safe-test-client-factory",
       });
     } finally {
       stopActiveManagedProxyRegistration(registration);
@@ -745,6 +770,7 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
       httpProxy: "http://new-proxy.example:3128",
       httpsProxy: "http://new-proxy.example:3128",
       allowH2: false,
+      clientFactory: "ip-safe-test-client-factory",
     });
   });
 
@@ -815,6 +841,7 @@ describe("forceResetGlobalDispatcher", () => {
       httpProxy: "http://proxy-b.example:8080",
       httpsProxy: "http://proxy-b.example:8080",
       allowH2: false,
+      clientFactory: "ip-safe-test-client-factory",
     });
   });
 
@@ -834,6 +861,7 @@ describe("forceResetGlobalDispatcher", () => {
       httpProxy: "http://proxy-all.example:3128",
       httpsProxy: "http://proxy-all.example:3128",
       allowH2: false,
+      clientFactory: "ip-safe-test-client-factory",
     });
   });
 

@@ -71,25 +71,26 @@ function isUndiciGlobalDispatcherDeps(value: unknown): value is UndiciGlobalDisp
   );
 }
 
-function loadUndiciClientCtor(): typeof import("undici").Client {
+function loadUndiciProxyPoolCtor(): typeof import("undici").Pool {
   const override = (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY];
   if (
     typeof override === "object" &&
     override !== null &&
-    typeof (override as { Client?: unknown }).Client === "function"
+    typeof (override as { Pool?: unknown }).Pool === "function"
   ) {
-    return (override as { Client: typeof import("undici").Client }).Client;
+    return (override as { Pool: typeof import("undici").Pool }).Pool;
   }
 
   const require = createRequire(import.meta.url);
-  return (require("undici") as typeof import("undici")).Client;
+  return (require("undici") as typeof import("undici")).Pool;
 }
 
 function stripIpServernameFromConnectOptions(options: unknown): unknown {
   if (!isObjectRecord(options) || typeof options.servername !== "string") {
     return options;
   }
-  if (net.isIP(options.servername) === 0) {
+  const servername = options.servername.replace(/^\[|\]$/g, "");
+  if (net.isIP(servername) === 0) {
     return options;
   }
   const next = { ...options };
@@ -107,13 +108,13 @@ function stripIpServernameFromConnect(connect: unknown): unknown {
 
 function createIpSafeProxyClientFactory(): UndiciProxyClientFactory {
   return (origin, options) => {
-    const Client = loadUndiciClientCtor();
+    const Pool = loadUndiciProxyPoolCtor();
     const clientOptions = isObjectRecord(options)
       ? { ...options, connect: stripIpServernameFromConnect(options.connect) }
       : options;
-    return new Client(
+    return new Pool(
       origin,
-      clientOptions as ConstructorParameters<typeof import("undici").Client>[1],
+      clientOptions as ConstructorParameters<typeof import("undici").Pool>[1],
     );
   };
 }

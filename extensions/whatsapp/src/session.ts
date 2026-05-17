@@ -5,7 +5,8 @@ import { HttpsProxyAgent } from "https-proxy-agent";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import {
-  addActiveManagedProxyTlsOptions,
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
   resolveActiveManagedProxyTlsOptions,
   resolveEnvHttpProxyUrl,
   shouldUseEnvHttpProxyForUrl,
@@ -259,10 +260,7 @@ async function resolveEnvFetchDispatcher(
     return undefined;
   }
   try {
-    const { EnvHttpProxyAgent, ProxyAgent } = await import("undici");
-    return proxyUrl
-      ? new ProxyAgent(addActiveManagedProxyTlsOptions({ allowH2: false, uri: proxyUrl }))
-      : new EnvHttpProxyAgent(addActiveManagedProxyTlsOptions({ allowH2: false }));
+    return proxyUrl ? createHttp1ProxyAgent({ uri: proxyUrl }) : createHttp1EnvHttpProxyAgent();
   } catch (error) {
     logger.warn(
       { error: String(error) },
