@@ -58,6 +58,8 @@ export type OpenClawConfig = {
     lastTouchedVersion?: string;
     /** ISO timestamp when this config was last written. */
     lastTouchedAt?: string;
+    /** Forward-compatible metadata written by older or newer OpenClaw versions. */
+    [key: string]: unknown;
   };
   auth?: AuthConfig;
   accessGroups?: AccessGroupsConfig;
