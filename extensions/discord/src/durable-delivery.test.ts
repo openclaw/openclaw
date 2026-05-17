@@ -1,11 +1,11 @@
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-message";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
 import {
+  createEmptyPluginRegistry,
+  createTestRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
-} from "../../../src/plugins/runtime.js";
-import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createDiscordOutboundHoisted,
   installDiscordOutboundModuleSpies,
