@@ -92,6 +92,10 @@ function resolveReplyMessage(msg: Message): Message | undefined {
   return msg.reply_to_message ?? externalReply;
 }
 
+function resolveEmbeddedReplyMessage(msg: Message): Message | undefined {
+  return msg.reply_to_message;
+}
+
 function resolveMessageBody(msg: Message): string | undefined {
   const text = getTelegramTextParts(msg).text.trim();
   if (text) {
@@ -139,6 +143,52 @@ function normalizeMessageNode(
   };
 }
 
+function normalizeRequiredMessageNode(
+  msg: Message,
+  params: { threadId?: number },
+): TelegramCachedMessageNode {
+  const node = normalizeMessageNode(msg, params);
+  if (!node) {
+    throw new Error("Telegram message cache node missing message id");
+  }
+  return node;
+}
+
+function resolveMessageThreadId(msg: Message): number | undefined {
+  const threadId = (msg as { message_thread_id?: unknown }).message_thread_id;
+  return typeof threadId === "number" && Number.isFinite(threadId)
+    ? Math.trunc(threadId)
+    : undefined;
+}
+
+function normalizeMessageNodes(
+  msg: Message,
+  params: { threadId?: number },
+): TelegramCachedMessageNode[] {
+  const nodes: TelegramCachedMessageNode[] = [];
+  const visited = new Set<string>();
+  const nodeThreadId = (node: TelegramCachedMessageNode) => {
+    const threadId = Number(node.threadId);
+    return Number.isFinite(threadId) ? threadId : undefined;
+  };
+  const visit = (message: Message, inheritedThreadId?: number) => {
+    const node = normalizeMessageNode(message, {
+      threadId: resolveMessageThreadId(message) ?? inheritedThreadId,
+    });
+    if (!node?.messageId || visited.has(node.messageId)) {
+      return;
+    }
+    visited.add(node.messageId);
+    const replyMessage = resolveEmbeddedReplyMessage(message);
+    if (replyMessage?.message_id != null) {
+      visit(replyMessage, nodeThreadId(node) ?? inheritedThreadId);
+    }
+    nodes.push(node);
+  };
+  visit(msg, params.threadId);
+  return nodes;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -162,23 +212,27 @@ function isTelegramSourceMessage(value: unknown): value is Message {
   );
 }
 
-function parsePersistedNode(value: unknown): TelegramCachedMessageNode | null {
-  if (!isRecord(value) || !isTelegramSourceMessage(value.sourceMessage)) {
-    return null;
-  }
-  const threadId = Number(readOptionalString(value, "threadId"));
-  return normalizeMessageNode(value.sourceMessage, Number.isFinite(threadId) ? { threadId } : {});
-}
-
-function parsePersistedEntry(value: unknown): {
+function parsePersistedEntry(value: unknown): Array<{
   key: string;
   node: TelegramCachedMessageNode;
-} | null {
+}> {
   if (!isRecord(value) || !isString(value.key)) {
-    return null;
+    return [];
   }
-  const node = parsePersistedNode(value.node);
-  return node ? { key: value.key, node } : null;
+  const separatorIndex = value.key.lastIndexOf(":");
+  if (
+    separatorIndex === -1 ||
+    !isRecord(value.node) ||
+    !isTelegramSourceMessage(value.node.sourceMessage)
+  ) {
+    return [];
+  }
+  const keyPrefix = value.key.slice(0, separatorIndex + 1);
+  const threadId = Number(readOptionalString(value.node, "threadId"));
+  return normalizeMessageNodes(
+    value.node.sourceMessage,
+    Number.isFinite(threadId) ? { threadId } : {},
+  ).map((node) => ({ key: `${keyPrefix}${node.messageId}`, node }));
 }
 
 function findJsonArrayEnd(text: string): number {
@@ -270,6 +324,44 @@ function trimMessages(messages: Map<string, TelegramCachedMessageNode>, maxMessa
   }
 }
 
+function mergeTelegramSourceMessage(existing: Message, incoming: Message): Message {
+  const existingReply = resolveEmbeddedReplyMessage(existing);
+  const incomingReply = resolveEmbeddedReplyMessage(incoming);
+  const merged = { ...existing, ...incoming };
+  if (existingReply?.message_id != null && incomingReply?.message_id === existingReply.message_id) {
+    return {
+      ...merged,
+      reply_to_message: mergeTelegramSourceMessage(existingReply, incomingReply),
+    };
+  }
+  return merged;
+}
+
+function mergeCachedMessageNode(
+  existing: TelegramCachedMessageNode,
+  incoming: TelegramCachedMessageNode,
+): TelegramCachedMessageNode {
+  const threadId = Number(incoming.threadId ?? existing.threadId);
+  return normalizeRequiredMessageNode(
+    mergeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage),
+    {
+      ...(Number.isFinite(threadId) ? { threadId } : {}),
+    },
+  );
+}
+
+function upsertCachedMessageNode(params: {
+  messages: Map<string, TelegramCachedMessageNode>;
+  key: string;
+  node: TelegramCachedMessageNode;
+}): TelegramCachedMessageNode {
+  const existing = params.messages.get(params.key);
+  const node = existing ? mergeCachedMessageNode(existing, params.node) : params.node;
+  params.messages.delete(params.key);
+  params.messages.set(params.key, node);
+  return node;
+}
+
 function readPersistedMessages(filePath: string, maxMessages: number): PersistedMessageReadResult {
   const messages = new Map<string, TelegramCachedMessageNode>();
   let persistedEntryCount = 0;
@@ -281,14 +373,11 @@ function readPersistedMessages(filePath: string, maxMessages: number): Persisted
     const persisted = readPersistedEntryValues(fs.readFileSync(filePath, "utf-8"));
     needsRewrite = persisted.needsRewrite;
     for (const value of persisted.values) {
-      const entry = parsePersistedEntry(value);
-      if (!entry) {
-        continue;
+      for (const entry of parsePersistedEntry(value)) {
+        persistedEntryCount++;
+        upsertCachedMessageNode({ messages, key: entry.key, node: entry.node });
+        trimMessages(messages, maxMessages);
       }
-      persistedEntryCount++;
-      messages.delete(entry.key);
-      messages.set(entry.key, entry.node);
-      trimMessages(messages, maxMessages);
     }
   } catch (error) {
     logVerbose(`telegram: failed to read message cache: ${String(error)}`);
@@ -426,30 +515,36 @@ export function createTelegramMessageCache(params?: {
 
   return {
     record: ({ accountId, chatId, msg, threadId }) => {
-      const entry = normalizeMessageNode(msg, { threadId });
-      if (!entry?.messageId) {
+      const entries = normalizeMessageNodes(msg, { threadId });
+      const entry = entries.at(-1);
+      if (!entry) {
         return null;
       }
-      const key = telegramMessageCacheKey({ accountId, chatId, messageId: entry.messageId });
-      messages.delete(key);
-      messages.set(key, entry);
-      trimMessages(messages, maxMessages);
-      try {
-        bucket.persistedEntryCount += appendPersistedMessage({
-          key,
-          node: entry,
-          persistedPath: params?.persistedPath,
-        });
-        if (bucket.persistedEntryCount > maxMessages * COMPACT_THRESHOLD_RATIO) {
-          bucket.persistedEntryCount = replacePersistedMessages({
-            messages,
+      let recordedEntry: TelegramCachedMessageNode | null = null;
+      for (const node of entries) {
+        const key = telegramMessageCacheKey({ accountId, chatId, messageId: node.messageId });
+        const cachedNode = upsertCachedMessageNode({ messages, key, node });
+        if (node.messageId === entry.messageId) {
+          recordedEntry = cachedNode;
+        }
+        trimMessages(messages, maxMessages);
+        try {
+          bucket.persistedEntryCount += appendPersistedMessage({
+            key,
+            node: cachedNode,
             persistedPath: params?.persistedPath,
           });
+          if (bucket.persistedEntryCount > maxMessages * COMPACT_THRESHOLD_RATIO) {
+            bucket.persistedEntryCount = replacePersistedMessages({
+              messages,
+              persistedPath: params?.persistedPath,
+            });
+          }
+        } catch (error) {
+          logVerbose(`telegram: failed to persist message cache: ${String(error)}`);
         }
-      } catch (error) {
-        logVerbose(`telegram: failed to persist message cache: ${String(error)}`);
       }
-      return entry;
+      return recordedEntry ?? entry;
     },
     get,
     recentBefore: ({ accountId, chatId, messageId, threadId, limit }) => {
