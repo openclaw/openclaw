@@ -535,6 +535,82 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
+  it("disables delegate prompt timeout for OpenClaw-managed turns", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      timeoutMs: 1,
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+        list: () => ["codex"],
+      },
+    });
+    const runTurn = vi.spyOn(delegate, "runTurn").mockImplementation(async function* () {
+      yield { type: "done" };
+    });
+    const startTurn = vi.spyOn(delegate, "startTurn").mockImplementation(
+      (input): AcpRuntimeTurn => ({
+        requestId: input.requestId,
+        events: (async function* () {
+          yield { type: "done" as const, stopReason: "end_turn" };
+        })(),
+        result: Promise.resolve({
+          status: "completed" as const,
+          stopReason: "end_turn",
+        }),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }),
+    );
+
+    for await (const _event of runtime.runTurn({
+      handle: {
+        sessionKey: "agent:codex:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:test",
+        acpxRecordId: "agent:codex:acp:test",
+      },
+      text: "Reply exactly OK",
+      mode: "prompt",
+      requestId: "turn-1",
+    })) {
+      // no-op
+    }
+
+    expect(runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 0,
+      }),
+    );
+
+    const turn = runtime.startTurn({
+      handle: {
+        sessionKey: "agent:codex:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:test",
+        acpxRecordId: "agent:codex:acp:test",
+      },
+      text: "Reply exactly OK",
+      mode: "prompt",
+      requestId: "turn-2",
+    });
+    for await (const _event of turn.events) {
+      // no-op
+    }
+    await turn.result;
+
+    expect(startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 0,
+      }),
+    );
+  });
+
   it("does not normalize model startup for non-Codex ACP agents", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),

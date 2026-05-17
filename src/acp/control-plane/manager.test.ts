@@ -679,7 +679,7 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
   });
 
-  it("times out a hung persistent turn without closing the session and lets queued work continue", async () => {
+  it("times out a hung persistent turn after partial progress without closing the session and lets queued work continue", async () => {
     vi.useFakeTimers();
     try {
       const runtimeState = createRuntime();
@@ -697,6 +697,7 @@ describe("AcpSessionManager", () => {
       runtimeState.runTurn.mockImplementation(async function* (input: { requestId: string }) {
         if (input.requestId === "r1") {
           firstTurnStarted = true;
+          yield { type: "text_delta" as const, text: "Working on it..." };
           await new Promise(() => {});
         }
         yield { type: "done" as const };

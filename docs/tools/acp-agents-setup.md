@@ -274,18 +274,19 @@ What this does:
 - Exposes selected built-in OpenClaw tools. The initial server exposes `cron`.
 - Keeps core-tool exposure explicit and default-off.
 
-### Runtime timeout configuration
+### Runtime operation timeout configuration
 
-The `acpx` plugin defaults embedded runtime turns to a 120-second
-timeout. This gives slower harnesses such as Gemini CLI enough time to complete
-ACP startup and initialization. Override it if your host needs a different
-runtime limit:
+The `acpx` plugin gives embedded runtime startup and control operations 120
+seconds by default. This gives slower harnesses such as Gemini CLI enough time
+to complete ACP startup and initialization. Override it if your host needs a
+different operation limit:
 
 ```bash
 openclaw config set plugins.entries.acpx.config.timeoutSeconds 180
 ```
 
-Restart the gateway after changing this value.
+Runtime turns use OpenClaw agent/run timeouts, including `/acp timeout` and
+`sessions_spawn.timeoutSeconds`. Restart the gateway after changing this value.
 
 ### Health probe agent configuration
 

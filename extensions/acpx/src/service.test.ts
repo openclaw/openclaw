@@ -483,6 +483,36 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
+  it("passes the plugin timeout to the default acpx runtime constructor", async () => {
+    process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const service = createAcpxRuntimeService({
+      pluginConfig: { timeoutSeconds: 0.001 },
+    });
+
+    await service.start(ctx);
+
+    const backend = getAcpRuntimeBackend("acpx");
+    if (!backend) {
+      throw new Error("expected ACPX runtime backend");
+    }
+    const backendRuntime = backend.runtime as {
+      ensureSession(input: { agent: string; mode: string; sessionKey: string }): Promise<unknown>;
+    };
+
+    await backendRuntime.ensureSession({
+      agent: "codex",
+      mode: "oneshot",
+      sessionKey: "agent:codex:acp:test",
+    });
+
+    const [options] = acpxRuntimeConstructorMock.mock.calls[0] ?? [];
+    expect(options).toHaveProperty("timeoutMs", 1);
+
+    await service.stop?.(ctx);
+  });
+
   it("runs the embedded runtime probe at startup by default and reports health", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
