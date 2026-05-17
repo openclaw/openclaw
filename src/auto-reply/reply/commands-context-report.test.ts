@@ -154,9 +154,9 @@ describe("buildContextReply", () => {
       }),
     );
     expect(result.text).toContain("Tracked prompt estimate: 1,020 chars (~255 tok)");
-    expect(result.text).toContain("Actual context usage (cached): unavailable");
-    expect(result.text).toContain("Session tokens (cached): unknown / ctx=8,192");
-    expect(result.text).not.toContain("~645 tok");
+    expect(result.text).toContain("Actual context usage (cached): 900 tok");
+    expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
+    expect(result.text).toContain("Untracked provider/runtime overhead: ~645 tok");
   });
 
   it("prefers the target session entry from sessionStore for cached context stats", async () => {

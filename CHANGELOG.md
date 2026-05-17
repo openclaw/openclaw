@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/sessions: return preserved totalTokens from resolveFreshSessionTotalTokens even when totalTokensFresh is false, so /context and Control UI context meter no longer show stale/unknown utilization while compaction and memory flush continue using the totalTokensFresh flag directly. Fixes #82900. (#82903) Thanks @njuboy11.
 - Agents/skills: apply the full effective tool policy pipeline to inline `command-dispatch: tool` skill dispatch before owner-only filtering, preserving configured allow, deny, sandbox, sender, group, and subagent restrictions. (#78525)
 - Providers/GitHub Copilot: request identity-encoded Copilot API responses across token exchange, catalog, model calls, usage, and embeddings so compressed Business-account error payloads no longer reach JSON parsers as gzip bytes. Fixes #82871. Thanks @tonyfe01.
 - Telegram: preserve replied-to bot messages, captions, and media metadata in group reply chains so follow-up replies understand what the user is reacting to. (#82863)

@@ -128,8 +128,8 @@ describe("buildStatusMessage", () => {
     });
     const normalized = normalizeTestText(text);
 
-    expect(normalized).toContain("Context: ?/1.0m");
-    expect(normalized).not.toContain("Context: 3.8m/1.0m");
+    expect(normalized).toContain("Context: 3.8m/1.0m");
+    expect(normalized).not.toContain("Context: ?/1.0m");
   });
 
   it("shows sanitized TTS provider details in the voice status line", async () => {
@@ -1585,8 +1585,8 @@ describe("buildStatusMessage", () => {
         });
         const normalized = normalizeTestText(text);
 
-        expect(normalized).toContain("Context: ?/1.0m");
-        expect(normalized).not.toContain("Context: 3.8m/1.0m");
+        expect(normalized).toContain("Context: 3.8m/1.0m");
+        expect(normalized).not.toContain("Context: ?/1.0m");
         expect(normalized).not.toContain("Context: 3.82m/1.0m");
       },
       { prefix: "openclaw-status-" },
