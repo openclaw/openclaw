@@ -353,6 +353,7 @@ struct ConfigSchemaForm: View {
         let placeholder = hint?.placeholder ?? ""
         let sensitive = hint?.sensitive ?? isSensitivePath(path)
         let defaultValue = schema.explicitDefault as? String
+<<<<<<< HEAD
         if self.isChannelQuickLeaf(path) {
             self.renderChannelQuickField(title: label, subtitle: help) {
                 if sensitive {
@@ -379,6 +380,21 @@ struct ConfigSchemaForm: View {
                 } else {
                     TextField(placeholder, text: self.stringBinding(path, defaultValue: defaultValue))
                         .textFieldStyle(.roundedBorder)
+=======
+        VStack(alignment: .leading, spacing: 6) {
+            if let label { Text(label).font(.callout.weight(.semibold)) }
+            if let help {
+                Text(help)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let options = schema.enumValues {
+                Picker("", selection: self.enumBinding(path, options: options, defaultValue: schema.explicitDefault)) {
+                    Text("Select…").tag(-1)
+                    ForEach(options.indices, id: \.self) { index in
+                        Text(String(describing: options[index])).tag(index)
+                    }
+>>>>>>> b31f9ed4bd (fix(macos): satisfy SwiftFormat lint)
                 }
             }
         }
@@ -470,11 +486,10 @@ struct ConfigSchemaForm: View {
         }
     }
 
-    @ViewBuilder
-    private func renderAdditionalProperties(
-        _ schema: ConfigSchemaNode,
-        path: ConfigPath,
-        value: Any?) -> some View
+	    private func renderAdditionalProperties(
+	        _ schema: ConfigSchemaNode,
+	        path: ConfigPath,
+	        value: Any?) -> some View
     {
         if let additionalSchema = schema.additionalProperties {
             let dict = value as? [String: Any] ?? [:]
