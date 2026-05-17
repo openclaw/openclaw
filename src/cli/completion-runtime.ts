@@ -63,15 +63,29 @@ export async function completionCacheExists(
   return pathExists(cachePath);
 }
 
-function formatCompletionSourceLine(
+function escapePowerShellSingleQuotedString(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+export function formatCompletionSourceLine(
   shell: CompletionShell,
   _binName: string,
   cachePath: string,
 ): string {
+  if (shell === "powershell") {
+    return `. '${escapePowerShellSingleQuotedString(cachePath)}'`;
+  }
   if (shell === "fish") {
     return `test -f "${cachePath}"; and source "${cachePath}"`;
   }
   return `[ -f "${cachePath}" ] && source "${cachePath}"`;
+}
+
+export function formatCompletionReloadCommand(shell: CompletionShell, profilePath: string): string {
+  if (shell === "powershell") {
+    return `. '${escapePowerShellSingleQuotedString(profilePath)}'`;
+  }
+  return `source ${profilePath}`;
 }
 
 function isCompletionProfileHeader(line: string): boolean {
@@ -126,8 +140,18 @@ function updateCompletionProfile(
   return { next, changed: next !== content, hadExisting };
 }
 
-function getShellProfilePath(shell: CompletionShell): string {
-  const home = process.env.HOME || os.homedir();
+export function resolveCompletionProfilePath(
+  shell: CompletionShell,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    homeDir?: () => string;
+    platform?: NodeJS.Platform;
+  } = {},
+): string {
+  const env = options.env ?? process.env;
+  const homeDir = options.homeDir ?? os.homedir;
+  const platform = options.platform ?? process.platform;
+  const home = env.HOME || homeDir();
   if (shell === "zsh") {
     return path.join(home, ".zshrc");
   }
@@ -137,9 +161,9 @@ function getShellProfilePath(shell: CompletionShell): string {
   if (shell === "fish") {
     return path.join(home, ".config", "fish", "config.fish");
   }
-  if (process.platform === "win32") {
-    return path.join(
-      process.env.USERPROFILE || home,
+  if (platform === "win32") {
+    return path.win32.join(
+      env.USERPROFILE || home,
       "Documents",
       "PowerShell",
       "Microsoft.PowerShell_profile.ps1",
@@ -152,7 +176,7 @@ export async function isCompletionInstalled(
   shell: CompletionShell,
   binName = "openclaw",
 ): Promise<boolean> {
-  const profilePath = getShellProfilePath(shell);
+  const profilePath = resolveCompletionProfilePath(shell);
 
   if (!(await pathExists(profilePath))) {
     return false;
@@ -174,7 +198,7 @@ export async function usesSlowDynamicCompletion(
   shell: CompletionShell,
   binName = "openclaw",
 ): Promise<boolean> {
-  const profilePath = getShellProfilePath(shell);
+  const profilePath = resolveCompletionProfilePath(shell);
 
   if (!(await pathExists(profilePath))) {
     return false;
@@ -193,7 +217,6 @@ export async function usesSlowDynamicCompletion(
 }
 
 export async function installCompletion(shell: string, yes: boolean, binName = "openclaw") {
-  const home = process.env.HOME || os.homedir();
   let profilePath = "";
   let sourceLine = "";
 
@@ -213,19 +236,23 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   }
 
   if (shell === "zsh") {
-    profilePath = path.join(home, ".zshrc");
+    profilePath = resolveCompletionProfilePath("zsh");
     sourceLine = formatCompletionSourceLine("zsh", binName, cachePath);
   } else if (shell === "bash") {
-    profilePath = path.join(home, ".bashrc");
+    profilePath = resolveCompletionProfilePath("bash");
     try {
       await fs.access(profilePath);
     } catch {
+      const home = process.env.HOME || os.homedir();
       profilePath = path.join(home, ".bash_profile");
     }
     sourceLine = formatCompletionSourceLine("bash", binName, cachePath);
   } else if (shell === "fish") {
-    profilePath = path.join(home, ".config", "fish", "config.fish");
+    profilePath = resolveCompletionProfilePath("fish");
     sourceLine = formatCompletionSourceLine("fish", binName, cachePath);
+  } else if (shell === "powershell") {
+    profilePath = resolveCompletionProfilePath("powershell");
+    sourceLine = formatCompletionSourceLine("powershell", binName, cachePath);
   } else {
     console.error(`Automated installation not supported for ${shell} yet.`);
     return;
@@ -258,7 +285,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 
     await fs.writeFile(profilePath, update.next, "utf-8");
     if (!yes) {
-      console.log(`Completion installed. Restart your shell or run: source ${profilePath}`);
+      console.log(
+        `Completion installed. Restart your shell or run: ${formatCompletionReloadCommand(shell, profilePath)}`,
+      );
     }
   } catch (err) {
     console.error(`Failed to install completion: ${err as string}`);
