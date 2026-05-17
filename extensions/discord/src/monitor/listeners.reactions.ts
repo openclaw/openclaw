@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
@@ -52,6 +53,14 @@ type DiscordReactionMode = "off" | "own" | "all" | "allowlist";
 type DiscordReactionChannelConfig = ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
 type DiscordReactionIngressAccess = Awaited<ReturnType<typeof authorizeDiscordReactionIngress>>;
 type DiscordFetchedReactionMessage = { author?: User | null } | null;
+type DiscordReactionEmoji = DiscordReactionEvent["emoji"];
+
+function resolveDiscordReactionKey(emoji: DiscordReactionEmoji): string {
+  if (emoji.id) {
+    return `custom_emoji:${emoji.id}`;
+  }
+  return `emoji:${emoji.name ?? "emoji"}`;
+}
 
 export class DiscordReactionListener extends MessageReactionAddListener {
   constructor(private params: DiscordReactionListenerParams) {
@@ -468,6 +477,7 @@ async function handleDiscordReactionEvent(
         return reactionBase;
       }
       const emojiLabel = formatDiscordReactionEmoji(data.emoji);
+      const reactionKey = resolveDiscordReactionKey(data.emoji);
       const actorLabel = formatDiscordUserTag(user);
       const guildSlug =
         guildInfo?.slug ||
@@ -479,8 +489,8 @@ async function handleDiscordReactionEvent(
         : channelName
           ? `#${normalizeDiscordSlug(channelName)}`
           : `#${data.channel_id}`;
-      const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
-      const contextKey = `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`;
+      const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id} (reaction_key=${reactionKey})`;
+      const contextKey = `discord:reaction:${action}:${data.message_id}:${user.id}:${reactionKey}`;
       reactionBase = { baseText, contextKey };
       return reactionBase;
     };
@@ -498,12 +508,20 @@ async function handleDiscordReactionEvent(
         },
         parentPeer: parentPeerId ? { kind: "channel", id: parentPeerId } : undefined,
       });
-      enqueueSystemEvent(text, {
+      const enqueued = enqueueSystemEvent(text, {
         sessionKey: route.sessionKey,
         contextKey,
         forceSenderIsOwnerFalse: true,
         trusted: false,
       });
+      if (enqueued) {
+        requestHeartbeat({
+          source: "notifications-event",
+          intent: "immediate",
+          reason: "discord-reaction",
+          sessionKey: route.sessionKey,
+        });
+      }
     };
     const shouldNotifyReaction = (options: {
       mode: DiscordReactionMode;

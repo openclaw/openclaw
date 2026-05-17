@@ -921,8 +921,9 @@ describe("discord media payload", () => {
 // These test that handleDiscordReactionEvent (via DiscordReactionListener)
 // properly handles DM reactions instead of silently dropping them.
 
-const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
+const { enqueueSystemEventSpy, requestHeartbeatSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
   enqueueSystemEventSpy: vi.fn(),
+  requestHeartbeatSpy: vi.fn(),
   resolveAgentRouteMock: vi.fn((params: unknown) => ({
     agentId: "default",
     channel: "discord",
@@ -937,6 +938,9 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
 
 const channelRuntimeModule = await import("openclaw/plugin-sdk/system-event-runtime");
 vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueSystemEventSpy);
+
+const heartbeatRuntimeModule = await import("openclaw/plugin-sdk/heartbeat-runtime");
+vi.spyOn(heartbeatRuntimeModule, "requestHeartbeat").mockImplementation(requestHeartbeatSpy);
 
 const routingModule = await import("openclaw/plugin-sdk/routing");
 vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRouteMock);
@@ -971,6 +975,7 @@ function makeReactionEvent(overrides?: {
   userId?: string;
   messageId?: string;
   emojiName?: string;
+  emojiId?: string | null;
   botAsAuthor?: boolean;
   messageAuthorId?: string;
   messageFetch?: ReturnType<typeof vi.fn>;
@@ -993,7 +998,7 @@ function makeReactionEvent(overrides?: {
     guild_id: overrides?.guildId,
     channel_id: channelId,
     message_id: messageId,
-    emoji: { name: overrides?.emojiName ?? "👍", id: null },
+    emoji: { name: overrides?.emojiName ?? "👍", id: overrides?.emojiId ?? null },
     guild: overrides?.guild,
     rawMember: overrides?.memberRoleIds ? { roles: overrides.memberRoleIds } : undefined,
     user: {
@@ -1071,7 +1076,9 @@ function makeReactionListenerParams(overrides?: {
 
 describe("discord DM reaction handling", () => {
   beforeEach(() => {
-    enqueueSystemEventSpy.mockClear();
+    enqueueSystemEventSpy.mockReset();
+    enqueueSystemEventSpy.mockReturnValue(false);
+    requestHeartbeatSpy.mockReset();
     resolveAgentRouteMock.mockClear();
     readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   });
@@ -1103,12 +1110,62 @@ describe("discord DM reaction handling", () => {
       const [text, opts] = firstMockCall(enqueueSystemEventSpy, "enqueueSystemEvent");
       expect(text, testCase.name).toContain("Discord reaction added");
       expect(text, testCase.name).toContain("👍");
+      expect(text, testCase.name).toContain("reaction_key=emoji:👍");
       expect(text, testCase.name).toContain("dm");
       expect(text, testCase.name).not.toContain("undefined");
       expect(requireRecord(opts, "system event options").sessionKey, testCase.name).toBe(
         "discord:acc-1:dm:user-1",
       );
     }
+  });
+
+  it("wakes the routed session when an accepted reaction event is enqueued", async () => {
+    enqueueSystemEventSpy.mockReturnValue(true);
+    const data = makeReactionEvent({ botAsAuthor: true });
+    const client = makeReactionClient({ channelType: ChannelType.DM });
+    const listener = new DiscordReactionListener(makeReactionListenerParams());
+
+    await listener.handle(data, client);
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
+    expect(requestHeartbeatSpy).toHaveBeenCalledWith({
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "discord-reaction",
+      sessionKey: "discord:acc-1:dm:user-1",
+    });
+  });
+
+  it("does not wake when a reaction event is deduplicated", async () => {
+    enqueueSystemEventSpy.mockReturnValue(false);
+    const data = makeReactionEvent({ botAsAuthor: true });
+    const client = makeReactionClient({ channelType: ChannelType.DM });
+    const listener = new DiscordReactionListener(makeReactionListenerParams());
+
+    await listener.handle(data, client);
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
+    expect(requestHeartbeatSpy).not.toHaveBeenCalled();
+  });
+
+  it("enqueues custom emoji reactions with stable keys", async () => {
+    enqueueSystemEventSpy.mockReturnValue(true);
+    const data = makeReactionEvent({
+      botAsAuthor: true,
+      emojiName: "shipit",
+      emojiId: "123456789012345678",
+    });
+    const client = makeReactionClient({ channelType: ChannelType.DM });
+    const listener = new DiscordReactionListener(makeReactionListenerParams());
+
+    await listener.handle(data, client);
+
+    const [text, opts] = firstMockCall(enqueueSystemEventSpy, "enqueueSystemEvent");
+    expect(text).toContain("reaction_key=custom_emoji:123456789012345678");
+    expect(requireRecord(opts, "system event options").contextKey).toContain(
+      "discord:reaction:added:msg-1:user-1:custom_emoji:123456789012345678",
+    );
+    expect(requestHeartbeatSpy).toHaveBeenCalledOnce();
   });
 
   it("blocks DM reactions when dmPolicy is disabled", async () => {

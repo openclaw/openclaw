@@ -877,7 +877,12 @@ Default slash command settings:
     - `all`
     - `allowlist` (uses `guilds.<id>.users`)
 
-    Reaction events are turned into system events and attached to the routed Discord session.
+    Accepted reaction events are turned into system events, attached to the routed Discord session, and request an immediate heartbeat wake so reaction-only inputs are processed without a follow-up text message.
+
+    Reaction event text includes stable keys:
+
+    - standard emoji: `reaction_key=emoji:<emoji>`
+    - custom emoji: `reaction_key=custom_emoji:<id>`
 
   </Accordion>
 
