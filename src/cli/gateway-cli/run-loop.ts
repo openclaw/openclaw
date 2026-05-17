@@ -677,15 +677,27 @@ export async function runGatewayLoop(params: {
 
   const onSigterm = () => {
     gatewayLog.info("signal SIGTERM received");
+    // #83116: fire-and-forget async path used to swallow rejections from
+    // loadGatewayLifecycleRuntimeModule (and any downstream lifecycle helper)
+    // straight into Node's unhandled-rejection handler, leaving the gateway
+    // wedged with no shutdown request submitted. Locally catch the failure,
+    // log it, and fall back to the deterministic plain-stop request so the
+    // shutdown path is never skipped silently.
     void (async () => {
-      const { consumeGatewayRestartIntentPayloadSync } = await loadGatewayLifecycleRuntimeModule();
-      const restartIntent = consumeGatewayRestartIntentPayloadSync();
-      request(
-        restartIntent ? "restart" : "stop",
-        "SIGTERM",
-        restartIntent?.reason,
-        restartIntent ?? undefined,
-      );
+      try {
+        const { consumeGatewayRestartIntentPayloadSync } =
+          await loadGatewayLifecycleRuntimeModule();
+        const restartIntent = consumeGatewayRestartIntentPayloadSync();
+        request(
+          restartIntent ? "restart" : "stop",
+          "SIGTERM",
+          restartIntent?.reason,
+          restartIntent ?? undefined,
+        );
+      } catch (err) {
+        gatewayLog.warn("SIGTERM lifecycle import failed; falling back to plain stop", { err });
+        request("stop", "SIGTERM");
+      }
     })();
   };
   const onSigint = () => {
@@ -694,41 +706,50 @@ export async function runGatewayLoop(params: {
   };
   const onSigusr1 = () => {
     gatewayLog.info("signal SIGUSR1 received");
+    // #83116: same fire-and-forget rejection class as SIGTERM. If the
+    // lifecycle module fails to load, the gateway must not leave SIGUSR1 in
+    // an "authorized but never handled" state — log the failure and fall
+    // through to the same authorization-denied warning path operators
+    // already see when commands.restart=false.
     void (async () => {
-      const {
-        consumeGatewayRestartIntentPayloadSync,
-        consumeGatewaySigusr1RestartAuthorization,
-        isGatewaySigusr1RestartExternallyAllowed,
-        markGatewaySigusr1RestartHandled,
-        peekGatewaySigusr1RestartReason,
-        scheduleGatewaySigusr1Restart,
-      } = await loadGatewayLifecycleRuntimeModule();
-      const restartIntent = consumeGatewayRestartIntentPayloadSync();
-      if (restartIntent) {
-        request("restart", "SIGUSR1", restartIntent.reason ?? "gateway.restart", restartIntent);
-        return;
-      }
-      const authorized = consumeGatewaySigusr1RestartAuthorization();
-      if (!authorized) {
+      try {
+        const {
+          consumeGatewayRestartIntentPayloadSync,
+          consumeGatewaySigusr1RestartAuthorization,
+          isGatewaySigusr1RestartExternallyAllowed,
+          markGatewaySigusr1RestartHandled,
+          peekGatewaySigusr1RestartReason,
+          scheduleGatewaySigusr1Restart,
+        } = await loadGatewayLifecycleRuntimeModule();
+        const restartIntent = consumeGatewayRestartIntentPayloadSync();
+        if (restartIntent) {
+          request("restart", "SIGUSR1", restartIntent.reason ?? "gateway.restart", restartIntent);
+          return;
+        }
+        const authorized = consumeGatewaySigusr1RestartAuthorization();
+        if (!authorized) {
+          markGatewaySigusr1RestartHandled();
+          if (!isGatewaySigusr1RestartExternallyAllowed()) {
+            gatewayLog.warn(
+              "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
+            );
+            return;
+          }
+          if (shuttingDown) {
+            gatewayLog.info("received SIGUSR1 during shutdown; ignoring");
+            return;
+          }
+          // External SIGUSR1 requests should still reuse the in-process restart
+          // scheduler so idle drain and restart coalescing stay consistent.
+          scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "SIGUSR1" });
+          return;
+        }
+        const restartReason = peekGatewaySigusr1RestartReason();
         markGatewaySigusr1RestartHandled();
-        if (!isGatewaySigusr1RestartExternallyAllowed()) {
-          gatewayLog.warn(
-            "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
-          );
-          return;
-        }
-        if (shuttingDown) {
-          gatewayLog.info("received SIGUSR1 during shutdown; ignoring");
-          return;
-        }
-        // External SIGUSR1 requests should still reuse the in-process restart
-        // scheduler so idle drain and restart coalescing stay consistent.
-        scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "SIGUSR1" });
-        return;
+        request("restart", "SIGUSR1", restartReason);
+      } catch (err) {
+        gatewayLog.warn("SIGUSR1 lifecycle import failed; restart skipped this cycle", { err });
       }
-      const restartReason = peekGatewaySigusr1RestartReason();
-      markGatewaySigusr1RestartHandled();
-      request("restart", "SIGUSR1", restartReason);
     })();
   };
 
