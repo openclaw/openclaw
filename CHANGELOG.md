@@ -83,6 +83,7 @@ Docs: https://docs.openclaw.ai
 - CLI/setup: collapse raw gateway config keys in existing-config summaries into friendly `Model` and `Gateway` rows.
 - CLI/config: show concise human config-write output with an indented backup path instead of printing checksum-heavy overwrite audit details by default.
 - CLI/docs: call the canonical lowercase docs MCP search tool and surface MCP errors instead of returning empty search results. Fixes #82702. (#82704) Thanks @hclsys.
+- QA-Lab: add gateway log sentinels for plugin hook failures, Codex app-server stalls/timeouts, cron allowlist drift, live quota blockers, and direct-reply self-message transcripts so harness proof fails on self-health regressions. (#80323) Thanks @100yenadmin.
 - QA-Lab: ignore heartbeat-only operational transcripts when capturing runtime parity cells so background checks cannot replace the scenario reply. (#80323) Thanks @100yenadmin.
 - QA-Lab: pin threaded-memory parity runs to `memory-core`, keep bundled plugin resolution enabled for QA commands, and retry transient session-store lock reads. (#72045) Thanks @WuKongAI-CMU.
 - QA-Lab/qa-channel: keep mock memory ranking, inbound media notes, and opened-file realpath checks stable for mock OpenAI qa-channel runs. (#66826) Thanks @gumadeiras.
