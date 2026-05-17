@@ -303,11 +303,19 @@ export async function runThreadIsolationScenario(context: MatrixQaScenarioContex
 export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioContext) {
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const childToken = buildMatrixQaToken("MATRIX_QA_SUBAGENT_CHILD");
+  const spawnArgs = {
+    task: `Finish with exactly ${childToken}.`,
+    label: "matrix-thread-subagent",
+    thread: true,
+    mode: "session",
+    runTimeoutSeconds: 120,
+  };
   const triggerBody = [
-    `${context.sutUserId} For this QA check, call the sessions_spawn tool now.`,
-    `Use exactly these arguments: task="Finish with exactly ${childToken}.", label="matrix-thread-subagent", thread=true, mode="session", runTimeoutSeconds=120.`,
+    `${context.sutUserId} Run this exact OpenClaw Matrix thread-spawn QA check. Use tool calls, not prose.`,
+    `Step 1: call sessions_spawn with exactly this JSON input: ${JSON.stringify(spawnArgs)}.`,
+    'Step 2: after spawn returns status="accepted", wait for the child session reply in the spawned Matrix thread.',
     "Do not omit thread=true; the child must bind to this Matrix thread.",
-    "Do not write the child token in the parent response.",
+    `Do not write ${childToken} in the parent response.`,
   ].join(" ");
   const driverEventId = await client.sendTextMessage({
     body: triggerBody,

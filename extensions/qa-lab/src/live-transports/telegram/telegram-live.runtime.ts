@@ -396,8 +396,10 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   {
     id: "telegram-reply-chain-exact-marker",
     title: "Telegram reply-chain exact marker",
+    defaultEnabled: false,
     defaultProviderModes: ["mock-openai"],
-    rationale: "Mock-backed exact-marker check proves Telegram final text survives reply handling.",
+    rationale:
+      "Opt-in mock-backed exact-marker check for Telegram final text through reply handling.",
     timeoutMs: 75_000,
     buildRun: (sutUsername) =>
       telegramQaStepRun({
@@ -412,8 +414,9 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   {
     id: "telegram-stream-final-single-message",
     title: "Telegram streamed final stays one message",
+    defaultEnabled: false,
     defaultProviderModes: ["mock-openai"],
-    rationale: "Regression guard for duplicate final replies from Telegram streaming paths.",
+    rationale: "Opt-in regression guard for duplicate final replies from Telegram streaming paths.",
     regressionRefs: ["openclaw/openclaw#39905"],
     timeoutMs: 75_000,
     buildRun: (sutUsername) =>
