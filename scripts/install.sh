@@ -1643,7 +1643,7 @@ install_node() {
                 run_quiet_step "Configuring NodeSource repository" env DEBIAN_FRONTEND=noninteractive bash "$tmp"
                 run_quiet_step "Installing Node.js" apt_get_install nodejs
             else
-                run_quiet_step "Configuring NodeSource repository" sudo DEBIAN_FRONTEND=noninteractive bash "$tmp"
+                run_quiet_step "Configuring NodeSource repository" sudo env DEBIAN_FRONTEND=noninteractive bash "$tmp"
                 run_quiet_step "Installing Node.js" apt_get_install nodejs
             fi
         elif command -v dnf &> /dev/null; then
@@ -1675,8 +1675,10 @@ install_node() {
         fi
 
         activate_supported_node_on_path || true
-        if ! command -v node &>/dev/null; then
-            ui_error "Node.js package installed but node binary not found on PATH"
+        if ! node_is_at_least_required; then
+            local active_version
+            active_version="$(node -v 2>/dev/null || echo "not found")"
+            ui_error "Node.js v${NODE_MIN_VERSION}+ required but found ${active_version} after install"
             echo "Install Node.js ${NODE_DEFAULT_MAJOR} manually: https://nodejs.org"
             exit 1
         fi

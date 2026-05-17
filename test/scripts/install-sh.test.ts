@@ -64,7 +64,19 @@ describe("install.sh", () => {
       /detect_os_or_die\s+if \[\[ "\$OS" == "linux" \]\]; then\s+export DEBIAN_FRONTEND="\$\{DEBIAN_FRONTEND:-noninteractive\}"\s+export NEEDRESTART_MODE="\$\{NEEDRESTART_MODE:-a\}"\s+fi/m,
     );
     expect(script).toContain(
-      'run_quiet_step "Configuring NodeSource repository" sudo -E bash "$tmp"',
+      'run_quiet_step "Configuring NodeSource repository" sudo env DEBIAN_FRONTEND=noninteractive bash "$tmp"',
+    );
+  });
+
+  it("verifies node version after install and exits if too old", () => {
+    // The post-install guard calls node_is_at_least_required after
+    // activate_supported_node_on_path. If node is still too old (e.g.
+    // a broken install), the script must exit 1 with a clear message.
+    expect(script).toMatch(
+      /activate_supported_node_on_path \|\| true\s+if ! node_is_at_least_required; then/m,
+    );
+    expect(script).toContain(
+      'ui_error "Node.js v${NODE_MIN_VERSION}+ required but found ${active_version} after install"',
     );
   });
 
