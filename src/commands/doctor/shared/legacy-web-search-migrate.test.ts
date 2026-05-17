@@ -62,6 +62,72 @@ describe("legacy web search config", () => {
     ]);
   });
 
+  it("preserves unrelated record-valued tools.web.search keys (#83287)", () => {
+    // Previous shape dropped any record-valued key not in a short modern
+    // allowlist, silently erasing operator-added custom provider configs that
+    // happened to live under tools.web.search.
+    const res = migrateLegacyWebSearchConfig<OpenClawConfig>({
+      tools: {
+        web: {
+          search: {
+            provider: "grok",
+            apiKey: "brave-key",
+            grok: {
+              apiKey: "xai-key",
+              model: "grok-4-search",
+            },
+            "custom-provider": {
+              endpoint: "https://example.com/search",
+              apiKey: "custom-key",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig["tools"],
+    } as OpenClawConfig);
+
+    expect(res.config.tools?.web?.search).toEqual({
+      provider: "grok",
+      "custom-provider": {
+        endpoint: "https://example.com/search",
+        apiKey: "custom-key",
+      },
+    });
+    expect(res.config.plugins?.entries?.xai).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "xai-key",
+          model: "grok-4-search",
+        },
+      },
+    });
+    expect(res.config.plugins?.entries?.["custom-provider"]).toBeUndefined();
+  });
+
+  it("preserves openaiCodex scoped web search config (#83287 regression)", () => {
+    // Confirms the previously-allowlisted modern key still survives now that
+    // the allowlist was widened to "preserve everything that wasn't a legacy
+    // provider".
+    const res = migrateLegacyWebSearchConfig<OpenClawConfig>({
+      tools: {
+        web: {
+          search: {
+            apiKey: "brave-key",
+            openaiCodex: {
+              provider: "openai",
+              limit: 5,
+            },
+          },
+        },
+      } as unknown as OpenClawConfig["tools"],
+    } as OpenClawConfig);
+
+    expect(res.config.tools?.web?.search?.openaiCodex).toEqual({
+      provider: "openai",
+      limit: 5,
+    });
+  });
+
   it("lists legacy paths for metadata-owned provider config", () => {
     expect(
       listLegacyWebSearchConfigPaths({

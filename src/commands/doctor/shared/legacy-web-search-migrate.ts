@@ -7,8 +7,6 @@ import {
   type JsonRecord,
 } from "./legacy-config-record-shared.js";
 
-const MODERN_SCOPED_WEB_SEARCH_KEYS = new Set(["openaiCodex"]);
-
 const BUNDLED_LEGACY_WEB_SEARCH_OWNERS = new Map<string, string>([
   ["brave", "brave"],
   ["duckduckgo", "duckduckgo"],
@@ -200,16 +198,21 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
   const nextSearch: JsonRecord = {};
   const changes: string[] = [];
 
+  const legacyProviderIds = getLegacyWebSearchProviderIdSet(owners);
   for (const [key, value] of Object.entries(search)) {
     if (key === "apiKey") {
       continue;
     }
-    if (getLegacyWebSearchProviderIdSet(owners).has(key) && isRecord(value)) {
+    if (legacyProviderIds.has(key) && isRecord(value)) {
       continue;
     }
-    if (MODERN_SCOPED_WEB_SEARCH_KEYS.has(key) || !isRecord(value)) {
-      nextSearch[key] = value;
-    }
+    // #83287: previously this branch only preserved a short modern-key
+    // allowlist + non-record values; any other record-valued key — including
+    // unrelated custom provider configs the operator may have added under
+    // tools.web.search — was silently dropped. Preserve any key that survived
+    // the legacy-provider drop above; only the apiKey + explicit legacy
+    // provider records are migrated.
+    nextSearch[key] = value;
   }
   web.search = nextSearch;
 
