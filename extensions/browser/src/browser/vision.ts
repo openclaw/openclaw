@@ -31,6 +31,8 @@ type BrowserVisionModelEntry = {
   maxBytes?: number;
   timeoutSeconds?: number;
   type?: "provider" | "cli";
+  profile?: string;
+  preferredProfile?: string;
 };
 
 type BrowserVisionConfig = {
@@ -97,6 +99,8 @@ type ResolvedVisionCandidate = {
   maxChars?: number;
   maxBytes?: number;
   timeoutMs?: number;
+  profile?: string;
+  preferredProfile?: string;
 };
 
 function collectVisionCandidates(
@@ -127,6 +131,9 @@ function collectVisionCandidates(
         typeof entry.timeoutSeconds === "number" && Number.isFinite(entry.timeoutSeconds)
           ? Math.max(1, Math.floor(entry.timeoutSeconds * 1000))
           : undefined,
+      profile: typeof entry.profile === "string" ? entry.profile : undefined,
+      preferredProfile:
+        typeof entry.preferredProfile === "string" ? entry.preferredProfile : undefined,
     });
   }
   return out;
@@ -251,6 +258,8 @@ export async function describeBrowserImageWithVision(
         model: candidate.model,
         prompt,
         timeoutMs,
+        ...(candidate.profile ? { profile: candidate.profile } : {}),
+        ...(candidate.preferredProfile ? { preferredProfile: candidate.preferredProfile } : {}),
       });
       const rawText = typeof described?.text === "string" ? described.text : "";
       const trimmed = rawText.trim();

@@ -244,6 +244,8 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
     cfg: params.cfg,
     agentDir: params.agentDir ?? "",
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.profile ? { profile: params.profile } : {}),
+    ...(params.preferredProfile ? { preferredProfile: params.preferredProfile } : {}),
   });
 }
 

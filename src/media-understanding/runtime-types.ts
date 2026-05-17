@@ -53,6 +53,10 @@ export type DescribeImageFileWithModelParams = {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
+  /** Auth profile id to use for this provider. */
+  profile?: string;
+  /** Preferred profile id if multiple are available. */
+  preferredProfile?: string;
 };
 
 type DescribeImageFileWithModelResult = Awaited<
