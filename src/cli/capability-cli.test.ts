@@ -925,13 +925,34 @@ describe("capability cli", () => {
     });
 
     const gatewayCall = firstGatewayCall();
-    const sessionId = String(gatewayCall?.params?.sessionId ?? "");
+    const sessionId = gatewayCall?.params?.sessionId;
     expect(gatewayCall?.method).toBe("agent");
+    expect(typeof sessionId).toBe("string");
+    if (typeof sessionId !== "string") {
+      throw new Error("expected gateway model run session id");
+    }
     expect(sessionId).toEqual(expect.stringMatching(/^model-run-[0-9a-f-]{36}$/));
     expect(gatewayCall?.params?.sessionKey).toBe(`agent:main:explicit:${sessionId}`);
     expect(gatewayCall?.params?.cleanupBundleMcpOnRunEnd).toBe(true);
     expect(gatewayCall?.params?.modelRun).toBe(true);
     expect(gatewayCall?.params?.promptMode).toBe("none");
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "again", "--gateway", "--json"],
+    });
+
+    const gatewayCalls = mocks.callGateway.mock.calls as unknown as Array<[GatewayCall]>;
+    const nextGatewayCall = gatewayCalls[1]?.[0];
+    const nextSessionId = nextGatewayCall?.params?.sessionId;
+    expect(nextGatewayCall?.method).toBe("agent");
+    expect(typeof nextSessionId).toBe("string");
+    if (typeof nextSessionId !== "string") {
+      throw new Error("expected second gateway model run session id");
+    }
+    expect(nextSessionId).toEqual(expect.stringMatching(/^model-run-[0-9a-f-]{36}$/));
+    expect(nextGatewayCall?.params?.sessionKey).toBe(`agent:main:explicit:${nextSessionId}`);
+    expect(nextSessionId).not.toBe(sessionId);
   });
 
   it("surfaces gateway model fallback attempts in model probe JSON", async () => {
