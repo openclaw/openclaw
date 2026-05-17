@@ -450,8 +450,14 @@ function createGatewayAuthRateLimiters(rateLimitConfig: AuthRateLimitConfig | un
   return { rateLimiter, browserRateLimiter };
 }
 
+export type GatewayCloseOptions = {
+  reason?: string;
+  restartExpectedMs?: number | null;
+  drainTimeoutMs?: number | null;
+};
+
 export type GatewayServer = {
-  close: (opts?: { reason?: string; restartExpectedMs?: number | null }) => Promise<void>;
+  close: (opts?: GatewayCloseOptions) => Promise<void>;
 };
 
 export type GatewayServerOptions = {
@@ -973,42 +979,46 @@ export async function startGatewayServer(
       postReadySidecar.stop();
     }
   };
-  const createCloseHandler =
-    () => async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
-      const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
-      const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
-        await loadGatewayCloseModule();
-      await createGatewayCloseHandler({
-        bonjourStop: runtimeState.bonjourStop,
-        tailscaleCleanup: runtimeState.tailscaleCleanup,
-        releasePluginRouteRegistry,
-        channelIds,
-        stopChannel,
-        pluginServices: runtimeState.pluginServices,
-        postReadySidecars: runtimeState.postReadySidecars,
-        cron: runtimeState.cronState.cron,
-        heartbeatRunner: runtimeState.heartbeatRunner,
-        updateCheckStop: runtimeState.stopGatewayUpdateCheck,
-        stopTaskRegistryMaintenance: stopTaskRegistryMaintenanceOnDemand,
-        nodePresenceTimers,
-        broadcast,
-        tickInterval: runtimeState.tickInterval,
-        healthInterval: runtimeState.healthInterval,
-        dedupeCleanup: runtimeState.dedupeCleanup,
-        mediaCleanup: runtimeState.mediaCleanup,
-        agentUnsub: runtimeState.agentUnsub,
-        heartbeatUnsub: runtimeState.heartbeatUnsub,
-        transcriptUnsub: runtimeState.transcriptUnsub,
-        lifecycleUnsub: runtimeState.lifecycleUnsub,
-        chatRunState,
-        clients,
-        configReloader: runtimeState.configReloader,
-        wss,
-        httpServer,
-        httpServers,
-        drainActiveSessionsForShutdown,
-      })(opts);
-    };
+  const createCloseHandler = () => async (opts?: GatewayCloseOptions) => {
+    const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
+    const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
+      await loadGatewayCloseModule();
+    await createGatewayCloseHandler({
+      bonjourStop: runtimeState.bonjourStop,
+      tailscaleCleanup: runtimeState.tailscaleCleanup,
+      releasePluginRouteRegistry,
+      channelIds,
+      stopChannel,
+      pluginServices: runtimeState.pluginServices,
+      postReadySidecars: runtimeState.postReadySidecars,
+      cron: runtimeState.cronState.cron,
+      heartbeatRunner: runtimeState.heartbeatRunner,
+      updateCheckStop: runtimeState.stopGatewayUpdateCheck,
+      stopTaskRegistryMaintenance: stopTaskRegistryMaintenanceOnDemand,
+      nodePresenceTimers,
+      broadcast,
+      tickInterval: runtimeState.tickInterval,
+      healthInterval: runtimeState.healthInterval,
+      dedupeCleanup: runtimeState.dedupeCleanup,
+      mediaCleanup: runtimeState.mediaCleanup,
+      agentUnsub: runtimeState.agentUnsub,
+      heartbeatUnsub: runtimeState.heartbeatUnsub,
+      transcriptUnsub: runtimeState.transcriptUnsub,
+      lifecycleUnsub: runtimeState.lifecycleUnsub,
+      chatRunState,
+      chatAbortControllers,
+      removeChatRun,
+      agentRunSeq,
+      nodeSendToSession,
+      getPendingReplyCount: getTotalPendingReplies,
+      clients,
+      configReloader: runtimeState.configReloader,
+      wss,
+      httpServer,
+      httpServers,
+      drainActiveSessionsForShutdown,
+    })(opts);
+  };
   let clearFallbackGatewayContextForServer = () => {};
   const closeOnStartupFailure = async () => {
     try {
