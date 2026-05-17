@@ -425,15 +425,18 @@ const GROUP_VISIBLE_REPLY_PROMPT_TEST_TARGETS = [
   ...GROUP_VISIBLE_REPLY_TEST_TARGETS,
 ];
 const CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS = [
-  ...["directory", "plugin", "surfaces-only", "threading"].flatMap((suite) =>
-    "abcdefgh"
-      .split("")
-      .map(
-        (shard) =>
-          `src/channels/plugins/contracts/${suite}.registry-backed-shard-${shard}.contract.test.ts`,
-      ),
-  ),
-];
+  "directory",
+  "plugin",
+  "surfaces-only",
+  "threading",
+].flatMap((suite) =>
+  "abcdefgh"
+    .split("")
+    .map(
+      (shard) =>
+        `src/channels/plugins/contracts/${suite}.registry-backed-shard-${shard}.contract.test.ts`,
+    ),
+);
 const TEST_HELPER_NORMALIZE_TEXT_TARGETS = [
   "src/auto-reply/reply/commands-status.test.ts",
   "src/auto-reply/status.test.ts",

@@ -143,6 +143,10 @@ afterEach(() => {
 
 describe("gateway restart deferral preflight", () => {
   it("defers channel hot reload until active embedded work drains", async () => {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
     const startChannel = vi.fn(async () => {});
     const stopChannel = vi.fn(async () => {});
     const { applyHotReload } = createGatewayReloadHandlers({
@@ -211,6 +215,16 @@ describe("gateway restart deferral preflight", () => {
       await vi.advanceTimersByTimeAsync(500).catch(() => {});
       vi.useRealTimers();
       await reloadPromise.catch(() => {});
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+      if (previousSkipProviders === undefined) {
+        delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      } else {
+        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+      }
     }
 
     expect(stopChannel).toHaveBeenCalledWith("discord");

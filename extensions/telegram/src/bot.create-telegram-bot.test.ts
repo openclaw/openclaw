@@ -3,10 +3,12 @@ import {
   formatEnvelopeTimestamp,
   stripAnsi,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotOptions } from "./bot.types.js";
+import type { TelegramGetChat } from "./bot/types.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
 const configMutation = await import("openclaw/plugin-sdk/config-mutation");
@@ -2481,7 +2483,8 @@ describe("createTelegramBot", () => {
       99,
     );
 
-    expect(groupConfig?.requireMention).toBe(true);
+    const group = groupConfig as TelegramGroupConfig | undefined;
+    expect(group?.requireMention).toBe(true);
     expect(topicConfig?.requireMention).toBe(false);
   });
 
@@ -2503,8 +2506,9 @@ describe("createTelegramBot", () => {
       99,
     );
 
-    expect(groupConfig?.requireMention).toBe(false);
-    expect(groupConfig?.allowFrom).toEqual(["123456789"]);
+    const group = groupConfig as TelegramGroupConfig | undefined;
+    expect(group?.requireMention).toBe(false);
+    expect(group?.allowFrom).toEqual(["123456789"]);
     expect(topicConfig).toEqual({});
   });
 
@@ -3021,7 +3025,7 @@ describe("createTelegramBot", () => {
       chatType: "supergroup",
       isGroup: true,
       isForum: undefined,
-      getChat: getChatSpy,
+      getChat: getChatSpy as TelegramGetChat,
     });
     const threadSpec = resolveTelegramThreadSpec({
       isGroup: true,
