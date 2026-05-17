@@ -212,8 +212,8 @@ export type GatewayConnectClientInfo = {
 };
 
 export type GatewayConnectParams = {
-  minProtocol: 4;
-  maxProtocol: 4;
+  minProtocol: 5;
+  maxProtocol: 5;
   client: GatewayConnectClientInfo;
   role: string;
   scopes: string[];
@@ -574,8 +574,8 @@ export class GatewayBrowserClient {
 
   private buildConnectParams(plan: ConnectPlan): GatewayConnectParams {
     return {
-      minProtocol: 4,
-      maxProtocol: 4,
+      minProtocol: 5,
+      maxProtocol: 5,
       client: plan.client,
       role: plan.role,
       scopes: plan.scopes,
