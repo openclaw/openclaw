@@ -139,6 +139,7 @@ export function resolvePdfModelConfigForTool(params: {
       const providerId = providerKey.trim();
       if (
         !providerId ||
+        isMinimaxVlmProvider(providerId) ||
         !hasAuthForProvider({
           provider: providerId,
           agentDir: params.agentDir,
