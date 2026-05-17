@@ -3,13 +3,13 @@ name: slacrawl
 description: "Slack archive: search, sync freshness, threads/DMs, SQL counts, and Slacrawl repo work."
 metadata:
   openclaw:
-    homepage: https://github.com/vincentkoc/slacrawl
+    homepage: https://github.com/openclaw/slacrawl
     requires:
       bins:
         - slacrawl
     install:
       - kind: go
-        module: github.com/vincentkoc/slacrawl/cmd/slacrawl@latest
+        module: github.com/openclaw/slacrawl/cmd/slacrawl@latest
         bins:
           - slacrawl
 ---
