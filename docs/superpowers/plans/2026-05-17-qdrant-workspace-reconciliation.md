@@ -697,3 +697,73 @@ Points in collection: 899 managed + rollout canary data
 Vector: fast-all-minilm-l6-v2 (384-dim, Cosine)
 Timer: active, next fire ~10 min, logs: ~/.openclaw-qdrant-workspace-reconcile.log
 ```
+
+### Push and CI failures
+
+Pushed `c4a32e602c` to `origin/main` (Aguanita-LLC/openclaw). The push hit 19 merge conflicts across `.gitignore`, `docker-compose.yml` (3 separate commits), `CHANGELOG.md`, `.github/workflows/parity-gate.yml` (modify/delete), and `src/memory-host-sdk/host/mirror.test.ts` (modify/delete). All resolved manually during an interactive rebase; the final push succeeded.
+
+CI on the Aguanita-LLC fork triggered on `c4a32e60` and produced 3 failures — all in code we added:
+
+#### check-lint (18 errors)
+
+All 18 oxlint violations were in `src/commands/qdrant-workspace-reconcile.ts`:
+
+- **Unused variable** `WORKSPACE_UUID_NAMESPACE` — leftover from an earlier UUID-namespace hashing approach. Removed.
+- **7 missing braces on `if` statements** — oxlint requires curly braces on all `if` bodies, even single-statement. Fixed in `resolveCollectionVectorName` (early returns), `upsertWorkspacePoints` / `deleteManagedWorkspacePointIds` (batch-skip `continue`), and `fetchQdrantJson` (error-detail push conditions).
+- **Missing error cause** — `throw new Error(...)` in `fetchQdrantJson` catch block did not attach the original error as `cause`. Changed to `throw new Error(..., { cause: err })`.
+- **Inefficient object spread in map** — `{ ...point.payload, workspace_id: point.id }` inside a `.map()` callback. Replaced with `Object.assign({}, point.payload, { workspace_id: point.id })`.
+- **Empty fallback in spread** — `...(init?.headers ?? {})` — the `?? {}` is unnecessary since spreading `undefined` is safe. Changed to `...init?.headers`.
+- **Template literal simplification** — `` `${baseUrl}/` `` emitted for string concat. Changed to conditional `endsWith("/")` gate.
+
+#### check-test-types (7 errors)
+
+All in `src/commands/qdrant-workspace-reconcile.test.ts`:
+
+- **`RuntimeMock` → `RuntimeEnv` incompatibility** — Vitest's `Mock<Constructable | Procedure>` is not directly assignable to plain function signatures like `(...args: unknown[]) => void`. Fixed by importing `RuntimeEnv` and casting `runtime as unknown as RuntimeEnv` at each of the 5 call sites passing `runtime` to `runQdrantWorkspaceReconcileCommand`.
+- **`fetchMock` → `typeof fetch` incompatibility** — The mock's return type `Promise<{ok: true; status: number; ...}>` doesn't match `Promise<Response>`. Fixed with double-cast `as unknown as typeof fetch` (4 occurrences, matching the existing codebase pattern in `src/infra/net/proxy-fetch.test.ts`).
+
+#### channel-bootstrap.runtime.ts type error
+
+The stash-restored `src/infra/outbound/channel-bootstrap.runtime.ts` had a null-safety gap: `getActivePluginRegistry()` returns `PluginRegistry | null`, but the non-null value was passed directly to `pinActivePluginChannelRegistry(activeRegistry)`. The guard clause `if (!hasUsableOutboundChannel(activeRegistry, channel))` accepted null (the `hasUsableOutboundChannel` signature allowed it), but `pinActivePluginChannelRegistry` did not. Fixed by adding an explicit `!activeRegistry ||` null check.
+
+#### Docs formatting
+
+The plan document and two other docs files had Mintlify/oxfmt formatting drift. Ran `node scripts/format-docs.mjs --write` which resolved all three.
+
+#### Cascading test shard failures
+
+The `checks-node-core` verify step reported `DIST_SHARD_RESULT: failure` and `NONDIST_SHARD_RESULT: failure` — these were cascading from the lint + test-type gate failures upstream in the CI pipeline. The actual test jobs (`checks-fast-bundled`, etc.) passed; the shard verification step fails when prerequisite checks fail.
+
+#### Pre-existing
+
+`security-dependency-audit` failure is unrelated to our changes (exists on this fork's `main` before our commits).
+
+### Fix commit and push
+
+Commit `21f98f81ac` (`fix(memory): resolve lint, type, and formatting errors from qdrant reconcile CI`) staged the 7 modified files:
+
+```
+src/commands/qdrant-workspace-reconcile.ts          — all 18 lint fixes
+src/commands/qdrant-workspace-reconcile.test.ts     — 7 type errors + RuntimeEnv import
+src/infra/outbound/channel-bootstrap.runtime.ts     — null-safety guard
+docs/superpowers/plans/2026-05-17-qdrant-workspace-reconciliation.md — formatting
+docs/superpowers/plans/2026-05-01-discord-fix1-voice-intent.md       — formatting
+docs/superpowers/specs/2026-05-01-discord-performance-fix-design.md  — formatting
+docs/reference/memory-config.md                     — formatting
+```
+
+Also included in the commit: 12 pre-existing staged files from the stash restore (AGENTS.md, Dockerfile.local, docs/auth-credential-semantics.md, docs/concepts/active-memory.md, docs/concepts/memory-qmd.md, docs/concepts/models.md, docs/install/clawdock.md, docs/reference/memory-config.md, docs/superpowers/specs/2026-05-16-qmd-stabilization-design.md, extensions/memory-core/index.ts, extensions/memory-core/openclaw.plugin.json, src/cli/program/subcli-descriptors.ts, src/plugins/bundled-plugin-metadata.test.ts).
+
+Pushed to `origin/main` (Aguanita-LLC/openclaw).
+
+### Post-fix verification
+
+```
+pnpm exec oxlint src/commands/qdrant-workspace-reconcile.ts       — 0 warnings, 0 errors
+pnpm exec oxlint src/commands/qdrant-workspace-reconcile.test.ts  — 0 warnings, 0 errors
+pnpm exec oxlint src/infra/outbound/channel-bootstrap.runtime.ts  — 0 warnings, 0 errors
+pnpm check:test-types (filtered) — clean (remaining 3 errors are pre-existing web-tree-sitter)
+pnpm exec oxfmt --check — all 5 changed source files pass
+node scripts/format-docs.mjs --check — 603 docs files clean
+pnpm test (3 shards) — 18 passed, 0 failed
+```
