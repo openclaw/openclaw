@@ -120,6 +120,9 @@ export function renderAuthorizationShellCommand(params: {
   if (params.plan.kind === "unanalyzable") {
     return { ok: false, reason: "unanalyzable command" };
   }
+  if (params.plan.kind === "prompt-only") {
+    return { ok: false, reason: "prompt-only command" };
+  }
   if (
     params.mode === "safe-bins" &&
     params.segmentSatisfiedBy !== undefined &&
@@ -330,6 +333,9 @@ function shouldPlanWrapperPayload(params: {
   if (trustPlan.policyBlocked) {
     return false;
   }
+  if (!hasOnlyRenderNeutralWrappers(trustPlan.wrapperChain)) {
+    return false;
+  }
   if (hasNonTransparentPosixShellWrapperOption(trustPlan.argv)) {
     return false;
   }
@@ -343,6 +349,10 @@ function shouldPlanWrapperPayload(params: {
   );
 }
 
+function hasOnlyRenderNeutralWrappers(wrapperChain: readonly string[] | undefined): boolean {
+  return (wrapperChain ?? []).every((wrapper) => SEMANTICS_NEUTRAL_RENDER_WRAPPERS.has(wrapper));
+}
+
 function hasNonTransparentNestedWrapperPayload(
   wrapperPayloadSteps: readonly CommandStep[],
   leafWrapperPayloadSteps: readonly CommandStep[],
@@ -353,7 +363,11 @@ function hasNonTransparentNestedWrapperPayload(
       return false;
     }
     const trustPlan = resolveExecWrapperTrustPlan(payloadStep.argv);
-    return trustPlan.policyBlocked || hasNonTransparentPosixShellWrapperOption(trustPlan.argv);
+    return (
+      trustPlan.policyBlocked ||
+      !hasOnlyRenderNeutralWrappers(trustPlan.wrapperChain) ||
+      hasNonTransparentPosixShellWrapperOption(trustPlan.argv)
+    );
   });
 }
 
@@ -396,6 +410,7 @@ function buildTreeFromCommandSteps(
   const steps = inputSteps.toSorted((left, right) => left.span.startIndex - right.span.startIndex);
   const groups: StepGroup[] = [];
   const operators: CommandAuthorizationChainOperator[] = [];
+  let hasUnsupportedSeparator = false;
   let currentSteps: CommandStep[] = [];
   let currentRelationship: CommandAuthorizationRelationship = "simple";
 
@@ -419,6 +434,7 @@ function buildTreeFromCommandSteps(
       operators.push(separator);
       currentRelationship = relationshipForOperator(separator);
     } else {
+      hasUnsupportedSeparator = true;
       operators.push(";");
       currentRelationship = "sequence";
     }
@@ -444,19 +460,22 @@ function buildTreeFromCommandSteps(
     nextUnitIndex = plannedGroup.nextUnitIndex;
   }
 
-  if (operators.length > 0) {
-    return {
-      tree: { kind: "chain", operators, children },
-      units,
-      nextUnitIndex,
-    };
-  }
+  const planned: PlannedTree =
+    operators.length > 0
+      ? {
+          tree: { kind: "chain", operators, children },
+          units,
+          nextUnitIndex,
+        }
+      : {
+          tree: children[0] ?? { kind: "pipeline", children: [] },
+          units,
+          nextUnitIndex,
+        };
 
-  return {
-    tree: children[0] ?? { kind: "pipeline", children: [] },
-    units,
-    nextUnitIndex,
-  };
+  return hasUnsupportedSeparator
+    ? applyPromptOnlyReasonsToPlannedTree(planned, ["unsupported-shell-syntax"])
+    : planned;
 }
 
 function applyPromptOnlyReasonsToPlannedTree(
@@ -706,11 +725,16 @@ function renderAllowlistPinnedRawUnit(params: {
     }
     return { ok: true, command: rendered };
   }
-  const rendered = replaceLeadingShellToken(
-    raw,
-    rawExecutable,
-    shellEscapeSingleArg(pinnedExecutable),
-  );
+  const replacement = shellEscapeSingleArg(pinnedExecutable);
+  const rendered =
+    replaceSpannedShellArgvToken({
+      raw,
+      argv: params.unit.argv,
+      argvSpans: params.unit.argvSpans,
+      tokenIndex: 0,
+      expectedToken: rawExecutable,
+      replacement,
+    }) ?? replaceLeadingShellToken(raw, rawExecutable, replacement);
   if (!rendered) {
     return { ok: false, reason: "allowlist executable replacement unavailable" };
   }
@@ -1311,9 +1335,6 @@ function hasDynamicWrapperPayloadArgument(
   wrapperPayloadSteps: readonly CommandStep[],
   risks: readonly CommandRisk[],
 ): boolean {
-  if (wrapperPayloadSteps.length === 0) {
-    return false;
-  }
   const hasShellWrapperRisk = risks.some(
     (risk) =>
       (risk.kind === "shell-wrapper" || risk.kind === "shell-wrapper-through-carrier") &&
@@ -1328,13 +1349,54 @@ function hasDynamicWrapperPayloadArgument(
   if (inlineCommand && isDirectShellPositionalCarrierInvocation(inlineCommand)) {
     return false;
   }
-  return risks.some(
-    (risk) =>
-      risk.kind === "dynamic-argument" &&
-      wrapperPayloadSteps.some((payloadStep) =>
-        stepContainsSpan(payloadStep, risk.span.startIndex, risk.span.endIndex),
-      ),
+  const dynamicRisks = risks.filter((risk) => isStepDynamicArgumentRisk(step, risk));
+  if (wrapperPayloadSteps.length === 0) {
+    return Boolean(
+      inlineCommand &&
+      dynamicRisks.some((risk) => dynamicRiskMatchesShellInlinePayload(step, risk, inlineCommand)),
+    );
+  }
+  return dynamicRisks.some((risk) =>
+    wrapperPayloadSteps.some((payloadStep) =>
+      stepContainsSpan(payloadStep, risk.span.startIndex, risk.span.endIndex),
+    ),
   );
+}
+
+function dynamicRiskMatchesShellInlinePayload(
+  step: CommandStep,
+  risk: Extract<CommandRisk, { kind: "dynamic-argument" }>,
+  inlineCommand: string,
+): boolean {
+  const argvToken = step.argv[risk.argumentIndex]?.trim();
+  if (argvToken === inlineCommand) {
+    return true;
+  }
+  const riskText = risk.text.trim();
+  return (
+    riskText === inlineCommand ||
+    stripMatchingShellQuotes(riskText) === inlineCommand ||
+    riskText.includes(inlineCommand)
+  );
+}
+
+function isStepDynamicArgumentRisk(
+  step: CommandStep,
+  risk: CommandRisk,
+): risk is Extract<CommandRisk, { kind: "dynamic-argument" }> {
+  return (
+    risk.kind === "dynamic-argument" &&
+    stepContainsSpan(step, risk.span.startIndex, risk.span.endIndex)
+  );
+}
+
+function stripMatchingShellQuotes(text: string): string {
+  if (text.length < 2) {
+    return text;
+  }
+  const first = text[0];
+  const last = text[text.length - 1];
+  return (first === "'" || first === '"') && first === last ? text.slice(1, -1) : text;
 }
 
 function hasRelativeWrapperPayloadExecutable(explanation: CommandExplanation): boolean {
@@ -1508,7 +1570,7 @@ function isDirectShellPositionalCarrierInvocation(command: string): boolean {
 
   const shellWhitespace = String.raw`[^\S\r\n]+`;
   const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
-  const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
+  const positionalArg = String.raw`(?:\$(?:@|[1-9]|\{[@1-9]\})|"\$(?:@|[1-9]|\{[@1-9]\})")`;
   return new RegExp(
     `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}(?:${shellWhitespace}${positionalArg})*$`,
     "u",

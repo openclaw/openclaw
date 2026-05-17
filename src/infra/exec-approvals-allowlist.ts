@@ -1110,6 +1110,9 @@ function resolveShellWrapperPositionalArgvCandidate(params: {
   if (!isDirectShellPositionalCarrierInvocation(inlineMatch.command)) {
     return undefined;
   }
+  if (detectInlineEvalArgv(argv)) {
+    return undefined;
+  }
 
   const carriedExecutableIndex = argv.findIndex(
     (token, index) => index > inlineValueTokenIndex && token.trim().length > 0,
@@ -1133,6 +1136,15 @@ function resolveShellWrapperPositionalArgvCandidate(params: {
   if (!candidatePath) {
     return undefined;
   }
+  const resolvedExecutableToken = normalizeExecutableToken(
+    execution?.resolvedRealPath ?? execution?.resolvedPath ?? candidatePath,
+  );
+  if (
+    isDispatchWrapperExecutable(resolvedExecutableToken) ||
+    isShellWrapperExecutable(resolvedExecutableToken)
+  ) {
+    return undefined;
+  }
   return {
     path: execution?.resolvedRealPath ?? candidatePath,
     resolvedPath: execution?.resolvedPath ?? candidatePath,
@@ -1150,7 +1162,7 @@ function isDirectShellPositionalCarrierInvocation(command: string): boolean {
 
   const shellWhitespace = String.raw`[^\S\r\n]+`;
   const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
-  const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
+  const positionalArg = String.raw`(?:\$(?:@|[1-9]|\{[@1-9]\})|"\$(?:@|[1-9]|\{[@1-9]\})")`;
   return new RegExp(
     `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}(?:${shellWhitespace}${positionalArg})*$`,
     "u",
@@ -1224,11 +1236,33 @@ function isShellBuiltinCommandCarrier(argv: readonly string[]): boolean {
   return executable === "command" || executable === "builtin" || executable === "exec";
 }
 
+function createAllowAlwaysTrustPlanSegment(params: {
+  segment: ExecCommandSegment;
+  trustPlan: ReturnType<typeof resolveExecWrapperTrustPlan>;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}): ExecCommandSegment {
+  if (params.trustPlan.argv === params.segment.argv) {
+    return params.segment;
+  }
+  return {
+    raw: params.trustPlan.argv.join(" "),
+    argv: params.trustPlan.argv,
+    sourceArgv: params.segment.sourceArgv ?? params.segment.argv,
+    resolution:
+      params.segment.resolution?.effectiveArgv &&
+      argvListsEqual(params.segment.resolution.effectiveArgv, params.trustPlan.argv)
+        ? params.segment.resolution
+        : resolveCommandResolutionFromArgv(params.trustPlan.argv, params.cwd, params.env),
+  };
+}
+
 function collectAllowAlwaysPatterns(params: {
   segment: ExecCommandSegment;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
+  trustedSafeBinDirs?: ReadonlySet<string>;
   strictInlineEval?: boolean;
   depth: number;
   out: AllowAlwaysPattern[];
@@ -1244,15 +1278,12 @@ function collectAllowAlwaysPatterns(params: {
   if (hasSemanticDispatchWrapper(params.segment)) {
     return;
   }
-  const segment =
-    trustPlan.argv === params.segment.argv
-      ? params.segment
-      : {
-          raw: trustPlan.argv.join(" "),
-          argv: trustPlan.argv,
-          sourceArgv: params.segment.sourceArgv,
-          resolution: resolveCommandResolutionFromArgv(trustPlan.argv, params.cwd, params.env),
-        };
+  const segment = createAllowAlwaysTrustPlanSegment({
+    segment: params.segment,
+    trustPlan,
+    cwd: params.cwd,
+    env: params.env,
+  });
 
   if (isShellBuiltinCommandCarrier(segment.argv)) {
     return;
@@ -1289,6 +1320,7 @@ function collectAllowAlwaysPatterns(params: {
           segment,
           cwd: params.cwd,
           env: params.env,
+          trustedSafeBinDirs: params.trustedSafeBinDirs,
         })
       : undefined;
   if (positionalArgvCandidate) {
@@ -1325,6 +1357,7 @@ export function resolveAllowAlwaysPatternEntries(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
+  trustedSafeBinDirs?: ReadonlySet<string>;
   strictInlineEval?: boolean;
 }): AllowAlwaysPattern[] {
   const patterns: AllowAlwaysPattern[] = [];
@@ -1334,6 +1367,7 @@ export function resolveAllowAlwaysPatternEntries(params: {
       cwd: params.cwd,
       env: params.env,
       platform: params.platform,
+      trustedSafeBinDirs: params.trustedSafeBinDirs,
       strictInlineEval: params.strictInlineEval,
       depth: 0,
       out: patterns,
@@ -1349,6 +1383,7 @@ export function resolveAllowAlwaysPatternEntriesFromPlan(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
+  trustedSafeBinDirs?: ReadonlySet<string>;
   strictInlineEval?: boolean;
 }): AllowAlwaysPattern[] {
   if (params.plan.kind === "unanalyzable") {
@@ -1374,6 +1409,7 @@ export function resolveAllowAlwaysPatternEntriesFromPlan(params: {
     cwd: params.cwd,
     env: params.env,
     platform: params.platform,
+    trustedSafeBinDirs: params.trustedSafeBinDirs,
     strictInlineEval: params.strictInlineEval,
   });
 }
@@ -1391,6 +1427,7 @@ async function collectAllowAlwaysPatternsAsync(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
+  trustedSafeBinDirs?: ReadonlySet<string>;
   strictInlineEval?: boolean;
   depth: number;
   out: AllowAlwaysPattern[];
@@ -1406,15 +1443,12 @@ async function collectAllowAlwaysPatternsAsync(params: {
   if (hasSemanticDispatchWrapper(params.segment)) {
     return;
   }
-  const segment =
-    trustPlan.argv === params.segment.argv
-      ? params.segment
-      : {
-          raw: trustPlan.argv.join(" "),
-          argv: trustPlan.argv,
-          sourceArgv: params.segment.sourceArgv,
-          resolution: resolveCommandResolutionFromArgv(trustPlan.argv, params.cwd, params.env),
-        };
+  const segment = createAllowAlwaysTrustPlanSegment({
+    segment: params.segment,
+    trustPlan,
+    cwd: params.cwd,
+    env: params.env,
+  });
 
   if (isShellBuiltinCommandCarrier(segment.argv)) {
     return;
@@ -1452,6 +1486,7 @@ async function collectAllowAlwaysPatternsAsync(params: {
           segment,
           cwd: params.cwd,
           env: params.env,
+          trustedSafeBinDirs: params.trustedSafeBinDirs,
         })
       : undefined;
   if (positionalArgvCandidate) {
@@ -1501,6 +1536,7 @@ async function collectAllowAlwaysPatternsAsync(params: {
       cwd: params.cwd,
       env: params.env,
       platform: params.platform,
+      trustedSafeBinDirs: params.trustedSafeBinDirs,
       strictInlineEval: params.strictInlineEval,
       depth: params.depth + 1,
       out: params.out,
@@ -1581,6 +1617,7 @@ export async function resolveAllowAlwaysPatternEntriesFromPlanAsync(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
+  trustedSafeBinDirs?: ReadonlySet<string>;
   strictInlineEval?: boolean;
 }): Promise<AllowAlwaysPattern[]> {
   if (params.plan.kind === "unanalyzable") {
@@ -1608,6 +1645,7 @@ export async function resolveAllowAlwaysPatternEntriesFromPlanAsync(params: {
       cwd: params.cwd,
       env: params.env,
       platform: params.platform,
+      trustedSafeBinDirs: params.trustedSafeBinDirs,
       strictInlineEval: params.strictInlineEval,
       depth: 0,
       out: patterns,
@@ -1621,6 +1659,7 @@ export function resolveAllowAlwaysPatterns(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
+  trustedSafeBinDirs?: ReadonlySet<string>;
   strictInlineEval?: boolean;
 }): string[] {
   return resolveAllowAlwaysPatternEntries(params).map((pattern) => pattern.pattern);

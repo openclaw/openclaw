@@ -5,7 +5,7 @@ import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
 } from "../infra/command-analysis/inline-eval.js";
-import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { detectPolicyInlineEvalForCommand } from "../infra/command-analysis/policy.js";
 import type { CommandAuthorizationPlan } from "../infra/command-authorization/index.js";
 import {
   addDurableCommandApproval,
@@ -40,6 +40,7 @@ import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-pol
 import {
   applyOutputTruncation,
   evaluateSystemRunAllowlist,
+  isDirectPosixShellPositionalCarrierTransport,
   resolvePlannedAllowlistArgv,
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
@@ -120,6 +121,7 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   segmentSatisfiedBy: import("../infra/exec-approvals.js").ExecSegmentSatisfiedBy[];
   authorizationPlan?: CommandAuthorizationPlan;
   plannedAllowlistArgv: string[] | undefined;
+  trustedSafeBinDirs: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["trustedSafeBinDirs"];
   isWindows: boolean;
   approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
 };
@@ -420,7 +422,16 @@ async function evaluateSystemRunPolicyPhase(
   });
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
-  const inlineEvalHit = strictInlineEval ? detectPolicyInlineEval(segments) : null;
+  const inlineEvalHit = strictInlineEval
+    ? await detectPolicyInlineEvalForCommand({
+        segments,
+        shellCommand: parsed.shellPayload,
+        commandText: parsed.commandText,
+        cwd: parsed.cwd,
+        env: parsed.env,
+        platform: process.platform,
+      })
+    : null;
   const isWindows = process.platform === "win32";
   // Detect Windows wrapper transport from the same shell-wrapper view used to
   // derive the inner payload. That keeps `cmd.exe /c` approval-gated even when
@@ -544,6 +555,7 @@ async function evaluateSystemRunPolicyPhase(
     segmentSatisfiedBy,
     authorizationPlan,
     plannedAllowlistArgv: plannedAllowlistArgv ?? undefined,
+    trustedSafeBinDirs,
     isWindows,
     approvedCwdSnapshot,
   };
@@ -666,17 +678,27 @@ async function executeSystemRunPhase(
   }
 
   if (phase.policy.approvalDecision === "allow-always" && phase.inlineEvalHit === null) {
+    const directPositionalCarrierShellPayload =
+      phase.shellPayload !== null &&
+      isDirectPosixShellPositionalCarrierTransport({
+        argv: phase.argv,
+        shellCommand: phase.shellPayload,
+      });
     const patterns = phase.policy.analysisOk
       ? await persistAllowAlwaysPatterns({
           approvals: phase.approvals.file,
           agentId: phase.agentId,
           analysisOk: phase.policy.analysisOk,
-          commandText: phase.shellPayload ?? undefined,
+          commandText:
+            phase.shellPayload && !directPositionalCarrierShellPayload
+              ? phase.shellPayload
+              : undefined,
           segments: phase.segments,
           segmentSatisfiedBy: phase.segmentSatisfiedBy,
           cwd: phase.cwd,
           env: phase.env,
           platform: process.platform,
+          trustedSafeBinDirs: phase.trustedSafeBinDirs,
           strictInlineEval: phase.strictInlineEval,
         })
       : [];

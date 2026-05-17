@@ -373,6 +373,35 @@ describe("command authorization planner corpus", () => {
     },
   );
 
+  it("makes decoded shell-wrapper control operators prompt-only", async () => {
+    const plan = await planCommandForAuthorization({
+      dialect: "posix-shell",
+      command: "sh -c $'false \\x26\\x26 echo ok'",
+    });
+
+    expect(plan.kind).toBe("prompt-only");
+    if (plan.kind !== "prompt-only") {
+      throw new Error(`expected prompt-only plan, got ${plan.kind}`);
+    }
+    expect(plan.promptOnlyReasons).toContain("unsupported-shell-syntax");
+    expect(plan.units.map((unit) => unit.argv)).toEqual([["false"], ["echo", "ok"]]);
+    expect(plan.units.every((unit) => !unit.allowlistEligible)).toBe(true);
+    expect(plan.units.every((unit) => !unit.allowAlwaysEligible)).toBe(true);
+
+    const analysis = createExecCommandAnalysisFromAuthorizationPlan({ plan });
+    expect(analysis?.ok).toBe(true);
+    if (!analysis) {
+      throw new Error("expected command analysis");
+    }
+    expect(
+      renderAuthorizationShellCommand({
+        plan,
+        segments: analysis.segments,
+        mode: "enforced",
+      }),
+    ).toEqual({ ok: false, reason: "prompt-only command" });
+  });
+
   it("fails closed when planner render segment metadata does not match", async () => {
     const plan = await planCommandForAuthorization({
       dialect: "posix-shell",
@@ -483,6 +512,42 @@ describe("command authorization planner corpus", () => {
     ]);
   });
 
+  it("preserves semantic dispatch wrappers around POSIX shell payloads", async () => {
+    const command = "/usr/bin/timeout 1 /bin/bash -c 'echo ok'";
+    const plan = await planCommandForAuthorization({
+      dialect: "posix-shell",
+      command,
+    });
+
+    expect(plan.kind).toBe("analyzable");
+    if (plan.kind !== "analyzable") {
+      throw new Error(`expected analyzable plan, got ${plan.kind}`);
+    }
+    expect(plan.units).toEqual([
+      expect.objectContaining({
+        raw: command,
+        argv: ["/usr/bin/timeout", "1", "/bin/bash", "-c", "echo ok"],
+        relationship: "simple",
+      }),
+    ]);
+
+    const analysis = createExecCommandAnalysisFromAuthorizationPlan({ plan });
+    expect(analysis?.ok).toBe(true);
+    if (!analysis) {
+      throw new Error("expected command analysis");
+    }
+    const rendered = renderAuthorizationShellCommand({
+      plan,
+      segments: analysis.segments,
+      mode: "enforced",
+    });
+
+    expect(rendered).toEqual({
+      ok: false,
+      reason: "allowlist wrapper preservation unavailable",
+    });
+  });
+
   it("makes shell wrapper payloads with evaluated outer arguments prompt-only", async () => {
     for (const command of ["sh -c 'echo safe' $(id)", `sh -c '$0 "$@"' tool $(id)`]) {
       const plan = await planCommandForAuthorization({
@@ -505,7 +570,7 @@ describe("command authorization planner corpus", () => {
     }
   });
 
-  it.each([`sh -c 'echo "$HOME"'`, `sh -c 'echo "$1"' sh ignored dynamic`])(
+  it.each([`sh -c 'echo "$HOME"'`, `sh -c 'echo "$1"' sh ignored dynamic`, `sh -c "rm $TARGET"`])(
     "makes dynamic shell wrapper payload arguments prompt-only: %s",
     async (command) => {
       const plan = await planCommandForAuthorization({
@@ -644,6 +709,40 @@ describe("command authorization planner corpus", () => {
     expect(rendered.command).not.toContain("/rm");
   });
 
+  it("preserves nested semantic dispatch wrappers instead of leaf planning payloads", async () => {
+    const command = `sh -c 'timeout 1 sh -c "echo ok"'`;
+    const plan = await planCommandForAuthorization({
+      dialect: "posix-shell",
+      command,
+    });
+
+    expect(plan.kind).toBe("analyzable");
+    if (plan.kind !== "analyzable") {
+      throw new Error(`expected analyzable plan, got ${plan.kind}`);
+    }
+    expect(plan.units).toEqual([
+      expect.objectContaining({
+        raw: command,
+        argv: ["sh", "-c", 'timeout 1 sh -c "echo ok"'],
+        relationship: "simple",
+      }),
+    ]);
+
+    const analysis = createExecCommandAnalysisFromAuthorizationPlan({ plan });
+    if (!analysis) {
+      throw new Error("expected analysis");
+    }
+    const rendered = renderAuthorizationShellCommand({
+      plan,
+      segments: analysis.segments,
+      mode: "enforced",
+    });
+
+    expect(rendered.ok).toBe(true);
+    expect(rendered.command).toContain(`'timeout 1 sh -c "echo ok"'`);
+    expect(rendered.command).not.toContain("/echo");
+  });
+
   it.each(["sh -c './tool'", "sh -c 'true; ./tool'", "sh -c 'env ./tool'"])(
     "makes relative shell wrapper payload executables prompt-only: %s",
     async (command) => {
@@ -661,26 +760,38 @@ describe("command authorization planner corpus", () => {
     },
   );
 
-  it("keeps interpreter inline eval prompt-only through shell positional carriers", async () => {
-    const plan = await planCommandForAuthorization({
-      dialect: "posix-shell",
+  it.each([
+    {
       command: `sh -c '$0 "$@"' python -c 'print(1)'`,
-    });
+      argv: ["sh", "-c", '$0 "$@"', "python", "-c", "print(1)"],
+    },
+    {
+      command: `sh -c '$0 $*' python -c 'print(1)'`,
+      argv: ["sh", "-c", "$0 $*", "python", "-c", "print(1)"],
+    },
+  ])(
+    "keeps interpreter inline eval prompt-only through shell positional carriers: $command",
+    async ({ command, argv }) => {
+      const plan = await planCommandForAuthorization({
+        dialect: "posix-shell",
+        command,
+      });
 
-    expect(plan.kind).toBe("prompt-only");
-    if (plan.kind !== "prompt-only") {
-      throw new Error(`expected prompt-only plan, got ${plan.kind}`);
-    }
-    expect(plan.promptOnlyReasons).toContain("interpreter-inline-eval");
-    expect(plan.units).toEqual([
-      expect.objectContaining({
-        argv: ["sh", "-c", '$0 "$@"', "python", "-c", "print(1)"],
-        allowlistEligible: false,
-        allowAlwaysEligible: false,
-        promptOnlyReasons: ["interpreter-inline-eval"],
-      }),
-    ]);
-  });
+      expect(plan.kind).toBe("prompt-only");
+      if (plan.kind !== "prompt-only") {
+        throw new Error(`expected prompt-only plan, got ${plan.kind}`);
+      }
+      expect(plan.promptOnlyReasons).toContain("interpreter-inline-eval");
+      expect(plan.units).toEqual([
+        expect.objectContaining({
+          argv,
+          allowlistEligible: false,
+          allowAlwaysEligible: false,
+          promptOnlyReasons: expect.arrayContaining(["interpreter-inline-eval"]),
+        }),
+      ]);
+    },
+  );
 
   it("keeps surrounding POSIX chain commands when planning shell wrapper payloads", async () => {
     const plan = await planCommandForAuthorization({
@@ -854,6 +965,13 @@ describe("command authorization planner corpus", () => {
     "builtin umask 000; touch file",
     "ulimit -f 1; ./tool",
     "unalias ls; ls",
+    "pushd /tmp; ./tool",
+    "popd; ./tool",
+    "shopt -s nullglob; echo *",
+    "builtin shopt -s nullglob; echo *",
+    "enable -n echo; echo hi",
+    "let PATH=0; ls",
+    "readarray VALUES; ./tool",
   ])("makes shell state mutation prompt-only: %s", async (command) => {
     const plan = await planCommandForAuthorization({
       dialect: "posix-shell",

@@ -1,3 +1,9 @@
+import type {
+  CommandExplanation,
+  CommandRisk,
+  CommandStep,
+  SourceSpan,
+} from "../command-explainer/types.js";
 import {
   analyzeArgvCommand,
   analyzeShellCommand,
@@ -5,6 +11,8 @@ import {
   type ExecCommandAnalysis,
   type ExecCommandSegment,
 } from "../exec-approvals-analysis.js";
+import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
+import type { InterpreterInlineEvalHit } from "./inline-eval.js";
 import { detectInlineEvalInSegments } from "./risks.js";
 
 export type CommandPolicyAnalysis =
@@ -93,4 +101,69 @@ async function analyzeShellCommandForPolicy(params: {
 
 export function detectPolicyInlineEval(segments: readonly ExecCommandSegment[]) {
   return detectInlineEvalInSegments(segments);
+}
+
+function spansOverlap(left: SourceSpan, right: SourceSpan): boolean {
+  return left.startIndex < right.endIndex && right.startIndex < left.endIndex;
+}
+
+function resolveInlineEvalRiskStep(
+  risk: Extract<CommandRisk, { kind: "inline-eval" }>,
+  explanation: CommandExplanation,
+): CommandStep | null {
+  const commands = [...explanation.topLevelCommands, ...explanation.nestedCommands];
+  return (
+    commands.find(
+      (step) => spansOverlap(step.span, risk.span) && step.executable === risk.command,
+    ) ??
+    commands.find((step) => spansOverlap(step.span, risk.span)) ??
+    null
+  );
+}
+
+function inlineEvalHitFromRisk(
+  risk: Extract<CommandRisk, { kind: "inline-eval" }>,
+  explanation: CommandExplanation,
+): InterpreterInlineEvalHit {
+  const step = resolveInlineEvalRiskStep(risk, explanation);
+  return {
+    executable: risk.command,
+    normalizedExecutable: normalizeExecutableToken(risk.command),
+    flag: risk.flag,
+    argv: step?.argv ?? [risk.command, risk.flag],
+  };
+}
+
+export async function detectPolicyInlineEvalForCommand(params: {
+  segments: readonly ExecCommandSegment[];
+  shellCommand?: string | null;
+  commandText?: string | null;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+}): Promise<InterpreterInlineEvalHit | null> {
+  const segmentHit = detectPolicyInlineEval(params.segments);
+  if (segmentHit || isWindowsPlatform(params.platform)) {
+    return segmentHit;
+  }
+
+  const fallbackCommands = [params.shellCommand, params.commandText]
+    .map((command) => command?.trim())
+    .filter((command): command is string => Boolean(command));
+  for (const command of [...new Set(fallbackCommands)]) {
+    try {
+      const { explainShellCommand } = await import("../command-explainer/extract.js");
+      const explanation = await explainShellCommand(command);
+      const risk = explanation.risks.find(
+        (entry): entry is Extract<CommandRisk, { kind: "inline-eval" }> =>
+          entry.kind === "inline-eval",
+      );
+      if (risk) {
+        return inlineEvalHitFromRisk(risk, explanation);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }

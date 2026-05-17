@@ -24,14 +24,25 @@ export type CommandCarrierHit = {
 };
 
 export const SHELL_STATE_MUTATING_BUILTINS = new Set([
+  "bind",
   "cd",
   "declare",
+  "disown",
+  "enable",
   "export",
+  "fc",
   "hash",
+  "let",
+  "local",
+  "mapfile",
+  "popd",
+  "pushd",
   "readonly",
   "read",
+  "readarray",
   "set",
   "shift",
+  "shopt",
   "typeset",
   "umask",
   "ulimit",
@@ -103,7 +114,7 @@ type ShellPositionalCarrierPlan = { kind: "all" } | { kind: "indexes"; indexes: 
 
 function normalizeShellPositionalToken(
   token: string,
-): { kind: "all" | "star" | "zero" } | { kind: "index"; index: number } | null {
+): { kind: "all" | "zero" } | { kind: "index"; index: number } | null {
   const unquoted =
     token.length >= 2 && token.startsWith('"') && token.endsWith('"') ? token.slice(1, -1) : token;
   const match = unquoted.match(/^\$(?:([0-9@*])|\{([0-9@*])\})$/u);
@@ -115,7 +126,7 @@ function normalizeShellPositionalToken(
     return { kind: "all" };
   }
   if (value === "*") {
-    return { kind: "star" };
+    return { kind: "all" };
   }
   if (value === "0") {
     return { kind: "zero" };
@@ -158,7 +169,7 @@ function resolveShellPositionalCarrierPlan(command: string): ShellPositionalCarr
   const indexes = [0];
   for (; index < tokens.length; index += 1) {
     const positional = normalizeShellPositionalToken(tokens[index] ?? "");
-    if (positional === null || positional.kind === "zero" || positional.kind === "star") {
+    if (positional === null || positional.kind === "zero") {
       return null;
     }
     if (positional.kind === "all") {

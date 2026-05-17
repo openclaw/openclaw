@@ -1230,9 +1230,13 @@ export async function persistAllowAlwaysPatterns(params: {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
+  trustedSafeBinDirs?: ReadonlySet<string>;
   strictInlineEval?: boolean;
 }): Promise<ReturnType<typeof resolveAllowAlwaysPatternEntries>> {
   const commandText = params.commandText?.trim();
+  if (params.analysisOk === false && commandText && !isWindowsPlatform(params.platform)) {
+    return [];
+  }
   const usePlanner =
     params.analysisOk !== false && Boolean(commandText) && !isWindowsPlatform(params.platform);
   const plan = usePlanner
@@ -1256,6 +1260,7 @@ export async function persistAllowAlwaysPatterns(params: {
         cwd: params.cwd,
         env: params.env,
         platform: params.platform,
+        trustedSafeBinDirs: params.trustedSafeBinDirs,
         strictInlineEval: params.strictInlineEval,
       })
     : resolveAllowAlwaysPatternEntries({
@@ -1263,6 +1268,7 @@ export async function persistAllowAlwaysPatterns(params: {
         cwd: params.cwd,
         env: params.env,
         platform: params.platform,
+        trustedSafeBinDirs: params.trustedSafeBinDirs,
         strictInlineEval: params.strictInlineEval,
       });
   for (const pattern of patterns) {

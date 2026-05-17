@@ -719,6 +719,44 @@ describe("exec approvals store helpers", () => {
     expect(patterns).not.toEqual([{ pattern: earlyTool, argPattern: undefined }]);
   });
 
+  it("preserves approval-time resolution through transparent wrappers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = createHomeDir();
+    const earlyBinDir = path.join(dir, "early-bin");
+    const lateBinDir = path.join(dir, "late-bin");
+    fs.mkdirSync(earlyBinDir, { recursive: true });
+    fs.mkdirSync(lateBinDir, { recursive: true });
+    const lateTool = makeExecutable(lateBinDir, "tool");
+    const env = { PATH: `${earlyBinDir}${path.delimiter}${lateBinDir}` };
+    const analysis = await evaluateShellAllowlist({
+      command: "env tool --version",
+      allowlist: [],
+      safeBins: resolveSafeBins([]),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    const earlyTool = makeExecutable(earlyBinDir, "tool");
+    const approvals = ensureExecApprovals();
+    const patterns = await persistAllowAlwaysPatterns({
+      approvals,
+      agentId: "worker",
+      analysisOk: analysis.analysisOk,
+      commandText: "env tool --version",
+      segments: analysis.segments,
+      segmentSatisfiedBy: analysis.segmentSatisfiedBy,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(patterns).toEqual([{ pattern: lateTool, argPattern: undefined }]);
+    expect(patterns).not.toEqual([{ pattern: earlyTool, argPattern: undefined }]);
+  });
+
   it("blocks exact-command allow-always fallback for unsafe POSIX shell", async () => {
     if (process.platform === "win32") {
       return;
@@ -861,6 +899,44 @@ describe("exec approvals store helpers", () => {
     ]);
     await expect(persistCommand("pnpm test \\\n --filter foo")).resolves.toStrictEqual([]);
     await expect(persistCommand("python -c 'print(1)'")).resolves.toStrictEqual([]);
+  });
+
+  it("does not persist allow-always patterns when POSIX shell analysis fails", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = createHomeDir();
+    const binDir = path.join(dir, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    makeExecutable(binDir, "echo");
+    makeExecutable(binDir, "git");
+    makeExecutable(binDir, "python");
+    const env = { PATH: binDir };
+    const commandText = "echo $(python -c 'print(1)') && git status";
+    const analysis = await evaluateShellAllowlist({
+      command: commandText,
+      allowlist: [],
+      safeBins: resolveSafeBins([]),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    const patterns = await persistAllowAlwaysPatterns({
+      approvals: ensureExecApprovals(),
+      agentId: "worker",
+      analysisOk: analysis.analysisOk,
+      commandText,
+      segments: analysis.segments,
+      segmentSatisfiedBy: analysis.segmentSatisfiedBy,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(analysis.analysisOk).toBe(false);
+    expect(patterns).toStrictEqual([]);
+    expect(allowlistEntries(dir, "worker")).toStrictEqual([]);
   });
 
   it("returns null when approval socket credentials are missing", async () => {

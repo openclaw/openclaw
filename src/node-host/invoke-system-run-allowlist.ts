@@ -7,6 +7,7 @@ import {
   evaluateExecAllowlist,
   evaluateShellAllowlist,
   resolvePlannedSegmentArgv,
+  resolveExecutionTargetResolution,
   resolveExecApprovals,
   type ExecAllowlistEntry,
   type ExecAllowlistPinnedArgvToken,
@@ -53,7 +54,13 @@ export async function evaluateSystemRunAllowlist(params: {
   skillBins: SkillBinTrustEntry[];
   autoAllowSkills: boolean;
 }): Promise<SystemRunAllowlistAnalysis> {
-  if (params.shellCommand) {
+  const directPositionalCarrierShellPayload =
+    params.shellCommand !== null &&
+    isDirectPosixShellPositionalCarrierTransport({
+      argv: params.argv,
+      shellCommand: params.shellCommand,
+    });
+  if (params.shellCommand && !directPositionalCarrierShellPayload) {
     const allowlistEval = await evaluateShellAllowlist({
       command: params.shellCommand,
       allowlist: params.approvals.allowlist,
@@ -149,18 +156,34 @@ export function resolveSystemRunExecArgv(params: {
   env: Record<string, string> | undefined;
 }): string[] | null {
   let execArgv = params.plannedAllowlistArgv ?? params.argv;
+  const directPositionalCarrierShellPayload =
+    params.shellCommand !== null &&
+    isDirectPosixShellPositionalCarrierTransport({
+      argv: params.argv,
+      shellCommand: params.shellCommand,
+    });
   if (
     params.security === "allowlist" &&
     !params.isWindows &&
     !params.policy.approvedByAsk &&
-    !params.shellCommand &&
+    (!params.shellCommand || directPositionalCarrierShellPayload) &&
     params.policy.analysisOk &&
     params.policy.allowlistSatisfied
   ) {
+    const pinnedArgvTokens = resolveSystemRunPinnedArgvTokens({
+      directPositionalCarrierShellPayload,
+      argv: params.argv,
+      shellCommand: params.shellCommand,
+      segments: params.segments,
+      segmentPinnedArgvTokens: params.segmentPinnedArgvTokens,
+    });
+    if (!pinnedArgvTokens) {
+      return null;
+    }
     const pinnedExecArgv = applyPinnedArgvTokens({
       execArgv,
       sourceArgv: params.argv,
-      pinnedArgvTokens: params.segmentPinnedArgvTokens,
+      pinnedArgvTokens,
     });
     if (!pinnedExecArgv) {
       return null;
@@ -186,6 +209,7 @@ export function resolveSystemRunExecArgv(params: {
     params.shellCommand &&
     params.policy.analysisOk &&
     params.policy.allowlistSatisfied &&
+    !directPositionalCarrierShellPayload &&
     params.segmentSatisfiedBy.some(
       (entry) => entry === "allowlist" || entry === "safeBins" || entry === "inlineChain",
     ) &&
@@ -193,6 +217,18 @@ export function resolveSystemRunExecArgv(params: {
   ) {
     if (!params.authorizationPlan) {
       return null;
+    }
+    if (
+      !authorizationPlanSourceMatchesShellCommand(params.authorizationPlan, params.shellCommand)
+    ) {
+      const wholePlanArgv = resolveWholeAuthorizationPlanExecArgv({
+        segments: params.segments,
+      });
+      if (!wholePlanArgv) {
+        return null;
+      }
+      execArgv = wholePlanArgv;
+      return execArgv;
     }
     const rebuilt = renderAuthorizationShellCommand({
       plan: params.authorizationPlan,
@@ -216,6 +252,76 @@ export function resolveSystemRunExecArgv(params: {
     execArgv = rewrittenArgv;
   }
   return execArgv;
+}
+
+function authorizationPlanSourceMatchesShellCommand(
+  plan: CommandAuthorizationPlan,
+  shellCommand: string,
+): boolean {
+  return plan.source.trim() === shellCommand.trim();
+}
+
+function resolveWholeAuthorizationPlanExecArgv(params: {
+  segments: readonly ExecCommandSegment[];
+}): string[] | null {
+  if (params.segments.length !== 1) {
+    return null;
+  }
+  const argv = resolvePlannedSegmentArgv(params.segments[0]);
+  return argv && argv.length > 0 ? argv : null;
+}
+
+function resolveSystemRunPinnedArgvTokens(params: {
+  directPositionalCarrierShellPayload: boolean;
+  argv: string[];
+  shellCommand: string | null;
+  segments: readonly ExecCommandSegment[];
+  segmentPinnedArgvTokens: readonly (ExecAllowlistPinnedArgvToken | null)[];
+}): readonly (ExecAllowlistPinnedArgvToken | null)[] | null {
+  if (!params.directPositionalCarrierShellPayload) {
+    return params.segmentPinnedArgvTokens;
+  }
+  const shellPinnedArgvToken = resolveDirectPositionalCarrierShellPinnedArgvToken({
+    argv: params.argv,
+    shellCommand: params.shellCommand,
+    segments: params.segments,
+  });
+  if (!shellPinnedArgvToken) {
+    return null;
+  }
+  return [shellPinnedArgvToken, ...params.segmentPinnedArgvTokens];
+}
+
+function resolveDirectPositionalCarrierShellPinnedArgvToken(params: {
+  argv: string[];
+  shellCommand: string | null;
+  segments: readonly ExecCommandSegment[];
+}): ExecAllowlistPinnedArgvToken | null {
+  if (
+    params.shellCommand === null ||
+    !isDirectPosixShellPositionalCarrierTransport({
+      argv: params.argv,
+      shellCommand: params.shellCommand,
+    })
+  ) {
+    return null;
+  }
+
+  const transportArgv = resolveShellWrapperTransportArgv(params.argv);
+  if (
+    !transportArgv ||
+    !POSIX_SHELL_WRAPPER_NAMES.has(normalizeExecutableToken(transportArgv[0] ?? ""))
+  ) {
+    return null;
+  }
+  const transportStart = findSubsequence(params.argv, transportArgv);
+  if (transportStart < 0 || params.argv[transportStart] !== transportArgv[0]) {
+    return null;
+  }
+
+  const execution = resolveExecutionTargetResolution(params.segments[0]?.resolution ?? null);
+  const replacement = execution?.resolvedRealPath?.trim() ?? execution?.resolvedPath?.trim() ?? "";
+  return replacement.length > 0 ? { tokenIndex: transportStart, replacement } : null;
 }
 
 function applyPinnedArgvTokens(params: {
@@ -271,6 +377,47 @@ function isPosixShellInlineCommandTransport(argv: string[]): boolean {
     transportArgv &&
     POSIX_SHELL_WRAPPER_NAMES.has(normalizeExecutableToken(transportArgv[0] ?? "")),
   );
+}
+
+export function isDirectPosixShellPositionalCarrierTransport(params: {
+  argv: string[];
+  shellCommand: string;
+}): boolean {
+  const transportArgv = resolveShellWrapperTransportArgv(params.argv);
+  if (
+    !transportArgv ||
+    !POSIX_SHELL_WRAPPER_NAMES.has(normalizeExecutableToken(transportArgv[0] ?? ""))
+  ) {
+    return false;
+  }
+  const match = resolveInlineCommandMatch(transportArgv, POSIX_INLINE_COMMAND_FLAGS, {
+    allowCombinedC: true,
+  });
+  if (match.valueTokenIndex === null || !match.command) {
+    return false;
+  }
+  if (match.command !== params.shellCommand) {
+    return false;
+  }
+  if (!isDirectShellPositionalCarrierInvocation(match.command)) {
+    return false;
+  }
+  return transportArgv.slice(match.valueTokenIndex + 1).some((token) => token.trim().length > 0);
+}
+
+function isDirectShellPositionalCarrierInvocation(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+
+  const shellWhitespace = String.raw`[^\S\r\n]+`;
+  const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
+  const positionalArg = String.raw`(?:\$(?:@|[1-9]|\{[@1-9]\})|"\$(?:@|[1-9]|\{[@1-9]\})")`;
+  return new RegExp(
+    `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}(?:${shellWhitespace}${positionalArg})*$`,
+    "u",
+  ).test(trimmed);
 }
 
 function findSubsequence(haystack: readonly string[], needle: readonly string[]): number {

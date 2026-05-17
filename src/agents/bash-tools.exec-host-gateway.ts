@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
-import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { detectPolicyInlineEvalForCommand } from "../infra/command-analysis/policy.js";
 import { renderAuthorizationShellCommand } from "../infra/command-authorization/index.js";
 import {
   addDurableCommandApproval,
@@ -303,7 +303,15 @@ export async function processGatewayAllowlist(
     exactCommandDurableApprovalAllowed,
   });
   const inlineEvalHit =
-    params.strictInlineEval === true ? detectPolicyInlineEval(allowlistEval.segments) : null;
+    params.strictInlineEval === true
+      ? await detectPolicyInlineEvalForCommand({
+          segments: allowlistEval.segments,
+          shellCommand: params.command,
+          cwd: params.workdir,
+          env: params.env,
+          platform: process.platform,
+        })
+      : null;
   if (inlineEvalHit) {
     params.warnings.push(
       `Warning: strict inline-eval mode requires explicit approval for ${describeInterpreterInlineEval(
@@ -523,6 +531,7 @@ export async function processGatewayAllowlist(
             cwd: params.workdir,
             env: params.env,
             platform: process.platform,
+            trustedSafeBinDirs: params.trustedSafeBinDirs,
             strictInlineEval: params.strictInlineEval === true,
           });
           if (

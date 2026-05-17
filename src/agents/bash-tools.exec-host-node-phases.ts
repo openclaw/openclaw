@@ -4,7 +4,7 @@ import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
 } from "../infra/command-analysis/inline-eval.js";
-import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { detectPolicyInlineEvalForCommand } from "../infra/command-analysis/policy.js";
 import {
   canPersistExactCommandAllowAlways,
   type ExecApprovalsFile,
@@ -314,7 +314,13 @@ export async function analyzeNodeApprovalRequirement(params: {
   let durableApprovalSatisfied = false;
   const inlineEvalHit =
     params.request.strictInlineEval === true
-      ? detectPolicyInlineEval(baseAllowlistEval.segments)
+      ? await detectPolicyInlineEvalForCommand({
+          segments: baseAllowlistEval.segments,
+          shellCommand: params.request.command,
+          cwd: params.request.workdir,
+          env: params.request.env,
+          platform: params.target.platform,
+        })
       : null;
   if (inlineEvalHit) {
     params.request.warnings.push(
