@@ -107,6 +107,23 @@ Deep ranking uses six weighted base signals plus phase reinforcement:
 
 Light and REM phase hits add a small recency-decayed boost from `memory/.dreams/phase-signals.json`.
 
+## Shadow trial reports
+
+Shadow trials are report-only reviews for candidate memories before they become
+durable. A shadow trial compares how a future prompt would be answered without a
+candidate memory and with that candidate memory available, then records whether
+the candidate looks helpful, neutral, or harmful.
+
+Shadow trial reports are useful when a memory candidate is plausible but risky:
+it may improve future answers, but it may also over-personalize, encode a stale
+preference, or conflict with older context. The report belongs in the dreaming
+review surface, not in `MEMORY.md` itself. Promotion still happens through the
+deep phase and its thresholds.
+
+The first QA coverage for this behavior is intentionally narrow: it verifies a
+local report artifact with baseline outcome, candidate outcome, verdict, reason,
+and risk flags. It does not change the promotion engine.
+
 ## Scheduling
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep. Each sweep runs phases in order: light → REM → deep.
