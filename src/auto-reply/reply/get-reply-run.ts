@@ -60,6 +60,7 @@ import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
 import {
   buildDirectChatContext,
+  buildDirectChatContextForReuseHash,
   buildGroupChatContext,
   buildGroupIntro,
   resolveGroupSilentReplyBehavior,
@@ -539,8 +540,19 @@ export async function runPreparedReply(
     }),
   ].filter(Boolean);
   // Static parts only (no per-message inbound metadata) for CLI session reuse hashing.
+  // #83250: substitute the channel-neutral direct-chat context here. The live
+  // prompt above still carries the real provider label, but under
+  // `session.dmScope:"main"` one CLI binding can serve direct messages from
+  // multiple channels — and the provider token flipping between e.g.
+  // "Telegram" and "WebChat" was the entire cause of the spurious
+  // `reuse=invalidated:system-prompt` resets on channel switch.
+  const directChatContextForReuseHash = isDirectChat
+    ? buildDirectChatContextForReuseHash({
+        sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
+      })
+    : "";
   const extraSystemPromptStaticParts = [
-    directChatContext,
+    directChatContextForReuseHash,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,

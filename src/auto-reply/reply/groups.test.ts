@@ -63,6 +63,44 @@ describe("group runtime loading", () => {
     vi.doUnmock("./groups.runtime.js");
   });
 
+  it("emits channel-neutral reuse-hash direct chat context across providers (#83250)", () => {
+    // The live prompt carries the real provider label and so flips between
+    // channels:
+    const telegramLive = groups.buildDirectChatContext({
+      sessionCtx: { ChatType: "direct", Provider: "telegram" },
+    });
+    const webchatLive = groups.buildDirectChatContext({
+      sessionCtx: { ChatType: "direct", Provider: "webchat" },
+    });
+    expect(telegramLive).toContain("Telegram");
+    expect(webchatLive).toContain("WebChat");
+    expect(telegramLive).not.toBe(webchatLive);
+
+    // The reuse-hash variant MUST be byte-identical regardless of provider,
+    // so a `session.dmScope:"main"` CLI binding's extraSystemPromptHash does
+    // not flip on channel switch.
+    const telegramHash = groups.buildDirectChatContextForReuseHash({});
+    const webchatHash = groups.buildDirectChatContextForReuseHash({});
+    expect(telegramHash).toBe(webchatHash);
+    expect(telegramHash).not.toContain("Telegram");
+    expect(telegramHash).not.toContain("WebChat");
+    expect(telegramHash).toContain("direct conversation");
+
+    // sourceReplyDeliveryMode parity is preserved between the live builder
+    // and the reuse-hash builder (so the hash still reflects message-tool
+    // mode changes, which are legitimate identity differences):
+    const liveToolOnly = groups.buildDirectChatContext({
+      sessionCtx: { ChatType: "direct", Provider: "telegram" },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    const hashToolOnly = groups.buildDirectChatContextForReuseHash({
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(liveToolOnly).toContain("message tool with action=send");
+    expect(hashToolOnly).toContain("message tool with action=send");
+    expect(hashToolOnly).not.toBe(telegramHash);
+  });
+
   it("builds direct chat context without silent-token guidance", () => {
     expect(
       groups.buildDirectChatContext({

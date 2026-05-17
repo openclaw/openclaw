@@ -75,6 +75,7 @@ vi.mock("./body.js", () => ({
 
 vi.mock("./groups.js", () => ({
   buildDirectChatContext: vi.fn().mockReturnValue(""),
+  buildDirectChatContextForReuseHash: vi.fn().mockReturnValue(""),
   buildGroupIntro: vi.fn().mockReturnValue(""),
   buildGroupChatContext: vi.fn().mockReturnValue(""),
   resolveGroupSilentReplyBehavior: vi.fn(

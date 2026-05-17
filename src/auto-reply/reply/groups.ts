@@ -281,9 +281,42 @@ export function buildDirectChatContext(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
+  return renderDirectChatContext({
+    providerLabel,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+  });
+}
+
+/**
+ * Channel-neutral variant of {@link buildDirectChatContext} for inclusion in
+ * the CLI session reuse hash. See #83250: under `session.dmScope:"main"`, a
+ * single CLI session binding can serve direct messages from multiple
+ * channels. The live prompt should still carry the real provider label, but
+ * the reuse-hash identity must not flip between e.g. "Telegram" and "WebChat"
+ * on the same logical DM — otherwise every channel switch invalidates the
+ * session with `reason=system-prompt` and wipes conversational context.
+ *
+ * Sibling of the #82812 mitigation that excluded per-turn `inboundMetaPrompt`
+ * from the hash; this excludes the provider token from the channel context.
+ */
+export function buildDirectChatContextForReuseHash(params: {
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+}): string {
+  return renderDirectChatContext({
+    providerLabel: REUSE_HASH_PROVIDER_LABEL,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+  });
+}
+
+const REUSE_HASH_PROVIDER_LABEL = "chat";
+
+function renderDirectChatContext(params: {
+  providerLabel: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+}): string {
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const lines: string[] = [];
-  lines.push(`You are in a ${providerLabel} direct conversation.`);
+  lines.push(`You are in a ${params.providerLabel} direct conversation.`);
   if (messageToolOnly) {
     lines.push(
       "Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation.",
