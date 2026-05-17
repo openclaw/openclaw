@@ -1046,7 +1046,7 @@ export async function dispatchReplyFromConfig(
     const shouldSendToolStartStatuses = false;
     const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
       suppressAutomaticSourceDelivery &&
-      chatType === "direct" &&
+      sourceReplyDeliveryMode === "message_tool_only" &&
       ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
       shouldEmitVerboseProgress() &&

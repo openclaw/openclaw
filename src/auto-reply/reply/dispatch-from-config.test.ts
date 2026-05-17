@@ -2024,7 +2024,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("keeps verbose tool summaries suppressed for channel message-tool-only turns", async () => {
+  it("delivers verbose tool summaries for Discord channel message-tool-only turns", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -2056,7 +2056,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "🛠️ `pwd (agent)`" });
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
