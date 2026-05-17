@@ -47,7 +47,7 @@ struct GeneralSettings: View {
                     self.connectionPage
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: 620, alignment: .leading)
             .padding(.bottom, 16)
         }
         .onAppear {

@@ -49,6 +49,7 @@ struct SettingsRootView: View {
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(SettingsWindowChromeConfigurator())
+        .toolbar(removing: .sidebarToggle)
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
@@ -279,22 +280,72 @@ enum SettingsTab: CaseIterable, Identifiable, Hashable {
 }
 
 private struct SettingsWindowChromeConfigurator: NSViewRepresentable {
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
-        self.configureWindow(for: view)
+        self.configureWindow(for: view, coordinator: context.coordinator)
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        self.configureWindow(for: nsView)
+        self.configureWindow(for: nsView, coordinator: context.coordinator)
     }
 
-    private func configureWindow(for view: NSView) {
+    private func configureWindow(for view: NSView, coordinator: Coordinator) {
         DispatchQueue.main.async {
             guard let window = view.window else { return }
             window.styleMask.remove(.fullSizeContentView)
             window.titleVisibility = .visible
             window.titlebarAppearsTransparent = true
+            window.toolbarStyle = .unifiedCompact
+            coordinator.installToolbar(on: window)
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSToolbarDelegate {
+        private static let toolbarIdentifier = NSToolbar.Identifier("OpenClawSettingsToolbar")
+        private let items: [NSToolbarItem.Identifier] = [
+            .toggleSidebar,
+            .flexibleSpace,
+        ]
+
+        func installToolbar(on window: NSWindow) {
+            if window.toolbar?.identifier == Self.toolbarIdentifier {
+                return
+            }
+
+            let toolbar = NSToolbar(identifier: Self.toolbarIdentifier)
+            toolbar.delegate = self
+            toolbar.displayMode = .iconOnly
+            window.toolbar = toolbar
+        }
+
+        func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+            self.items
+        }
+
+        func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+            self.items
+        }
+
+        func toolbar(
+            _ toolbar: NSToolbar,
+            itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+            willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem?
+        {
+            guard itemIdentifier == .toggleSidebar else { return nil }
+            let item = NSToolbarItem(itemIdentifier: .toggleSidebar)
+            item.label = "Toggle Sidebar"
+            item.paletteLabel = "Toggle Sidebar"
+            item.toolTip = "Toggle Sidebar"
+            item.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Toggle Sidebar")
+            item.action = #selector(NSSplitViewController.toggleSidebar(_:))
+            item.target = nil
+            return item
         }
     }
 }
