@@ -454,6 +454,60 @@ describe("readTranscriptFileState", () => {
     ]);
   });
 
+  it("preserves legacy compaction keep indexes across JSON-valid non-object rows", async () => {
+    const root = await makeRoot("openclaw-transcript-state-v1-compaction-null-row-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 1,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user", content: "legacy prelude" },
+        }),
+        "null",
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { role: "user", content: "legacy kept suffix" },
+        }),
+        JSON.stringify({
+          type: "compaction",
+          timestamp: "2026-05-16T00:00:03.000Z",
+          summary: "summary",
+          firstKeptEntryIndex: 3,
+          tokensBefore: 200,
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+    const kept = state
+      .getEntries()
+      .find(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message.role === "user" &&
+          entry.message.content === "legacy kept suffix",
+      );
+    const compaction = state.getEntries().find((entry) => entry.type === "compaction");
+
+    expect(kept).toBeDefined();
+    expect(compaction).toMatchObject({ firstKeptEntryId: kept?.id });
+    expect(state.buildSessionContext().messages).toMatchObject([
+      { role: "compactionSummary", summary: "summary" },
+      { role: "user", content: "legacy kept suffix" },
+    ]);
+  });
+
   it("relinks valid current rows past malformed parents", async () => {
     const root = await makeRoot("openclaw-transcript-state-current-suffix-");
     const sessionFile = path.join(root, "session.jsonl");
@@ -851,7 +905,10 @@ describe("readTranscriptFileState", () => {
       rewriteTranscriptEntriesInState({
         state,
         replacements: [
-          { entryId: "user-1", message: { role: "user", content: "replacement prompt" } },
+          {
+            entryId: "user-1",
+            message: { role: "user", content: "replacement prompt", timestamp: 1 },
+          },
         ],
       }),
     ).not.toThrow();

@@ -45,6 +45,8 @@ const repairableToolCallContentTypes = new Set([
   "tool_use",
 ]);
 
+const invalidJsonlSlotType = "__openclaw_invalid_jsonl_slot";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -412,6 +414,18 @@ function serializeTranscriptFileEntries(entries: FileEntry[]): string {
   return `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
 }
 
+function fileEntryOrMigrationSlot(value: unknown, index: number): FileEntry {
+  if (isRecord(value)) {
+    return value as unknown as FileEntry;
+  }
+  return {
+    type: invalidJsonlSlotType,
+    id: `__openclaw_invalid_jsonl_slot_${index}`,
+    parentId: null,
+    timestamp: "1970-01-01T00:00:00.000Z",
+  } as unknown as FileEntry;
+}
+
 export class TranscriptFileState {
   readonly header: SessionHeader | null;
   readonly entries: SessionEntry[];
@@ -647,7 +661,7 @@ export class TranscriptFileState {
 
 export async function readTranscriptFileState(sessionFile: string): Promise<TranscriptFileState> {
   const raw = await fs.readFile(sessionFile, "utf-8");
-  const fileEntries = parseSessionEntries(raw).filter(isRecord);
+  const fileEntries = (parseSessionEntries(raw) as unknown[]).map(fileEntryOrMigrationSlot);
   const headerBeforeMigration =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const headerVersionBeforeMigration = sessionHeaderVersion(headerBeforeMigration);
