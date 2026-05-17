@@ -90,7 +90,8 @@ npm run plugin:validate
 `defineToolPlugin`. `plugins build` imports that entry, reads its static tool
 metadata, writes `openclaw.plugin.json`, and keeps `package.json`
 `openclaw.extensions` aligned. `plugins validate` checks that the generated
-manifest, package metadata, and current entry export still agree.
+manifest, package metadata, and current entry export still agree. See
+[Tool Plugins](/plugins/tool-plugins) for the full authoring workflow.
 
 The scaffold writes TypeScript source but generates metadata from the built
 `./dist/index.js` entry so the workflow also works with the published CLI. Use
