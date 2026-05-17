@@ -495,6 +495,43 @@ describe("createCodexDynamicToolBridge", () => {
     expectContextFields(callArg(handler, 0, 1, "middleware context"), { runtime: "codex" });
   });
 
+  it("preserves nested toolResult content after no-op middleware", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(async () => undefined);
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: handler,
+      handler,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const bridge = createBridgeWithToolResult("message", {
+      content: [
+        {
+          type: "toolResult",
+          toolUseId: "call-1",
+          content: [{ type: "text", text: "message sent: msg_123" }],
+        } as never,
+      ],
+      details: { messageId: "msg_123" },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "message",
+      arguments: { text: "hello" },
+    });
+
+    expect(result).toEqual(expectInputText("message sent: msg_123"));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it("passes raw tool failure state into agent tool result middleware", async () => {
     const registry = createEmptyPluginRegistry();
     const handler = vi.fn(async (_event: { isError?: boolean }) => undefined);

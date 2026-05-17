@@ -50,6 +50,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: preserve replied-to bot messages, captions, and media metadata in group reply chains so follow-up replies understand what the user is reacting to. (#82863)
 - Providers/Together: update PI runtime packages to 0.74.1 and emit Together-style `reasoning.enabled`/`max_tokens` controls for reasoning-capable OpenAI-completions models.
 - Agents/diagnostics: split slow embedded-run `attempt-dispatch` startup summaries into workspace, prompt, runtime-plan, and final dispatch subspans so traces identify the delayed setup phase. Fixes #82782. (#82783) Thanks @galiniliev.
+- Agents/Codex: flatten nested tool-result middleware blocks into bounded text so successful message sends are no longer replaced with `Tool output unavailable due to post-processing error`. Fixes #82912. Thanks @joeykrug.
 - CLI/media: accept HTTP(S) URLs in `openclaw infer image describe --file`, fetching remote images through the guarded media path instead of treating URLs as local files. Fixes #82837. (#82854) Thanks @neeravmakwana.
 - Agents/subagents: keep session-backed parent runs active when the child wait call times out before the child session has actually settled, so late subagent completions are reconciled instead of being lost. Fixes #82787. Thanks @ramitrkar-hash.
 - Control UI: advertise shared Gateway protocol constants in browser connect frames, fixing protocol mismatch handshakes after protocol constant drift. Fixes #82882. Thanks @galiniliev.
