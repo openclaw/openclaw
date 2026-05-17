@@ -9,9 +9,11 @@ import {
   type CommandSecretAssignment,
 } from "./command-config.js";
 import { getPath, setPathExistingStrict } from "./path-utils.js";
+import { resolveSecretRefValue } from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
 import { getActiveSecretsRuntimeEnv, getActiveSecretsRuntimeSnapshot } from "./runtime.js";
+import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
 
 export type { CommandSecretAssignment } from "./command-config.js";
@@ -162,6 +164,7 @@ function restoreInactiveWebCommandSecretTargets(params: {
   providerOverrides: CommandSecretProviderOverrides | undefined;
   allowedPaths?: ReadonlySet<string>;
   forcedActivePaths?: ReadonlySet<string>;
+  optionalActivePaths?: ReadonlySet<string>;
 }): string[] {
   if (!hasProviderOverrides(params.providerOverrides)) {
     return params.inactiveRefPaths;
@@ -183,7 +186,10 @@ function restoreInactiveWebCommandSecretTargets(params: {
     if (!ref) {
       continue;
     }
-    if (params.forcedActivePaths?.has(target.path)) {
+    if (
+      params.forcedActivePaths?.has(target.path) ||
+      params.optionalActivePaths?.has(target.path)
+    ) {
       continue;
     }
     if (
@@ -207,12 +213,13 @@ function filterInactiveRefPaths(params: {
   providerOverrides: CommandSecretProviderOverrides | undefined;
   allowedPaths?: ReadonlySet<string>;
   forcedActivePaths?: ReadonlySet<string>;
+  optionalActivePaths?: ReadonlySet<string>;
 }): string[] {
   return params.inactiveRefPaths.filter((path) => {
     if (params.allowedPaths && !params.allowedPaths.has(path)) {
       return false;
     }
-    if (params.forcedActivePaths?.has(path)) {
+    if (params.forcedActivePaths?.has(path) || params.optionalActivePaths?.has(path)) {
       return false;
     }
     if (!hasProviderOverrides(params.providerOverrides)) {
@@ -328,11 +335,68 @@ function mirrorResolvedProviderCredentialToDirectPaths(params: {
   }
 }
 
+async function resolveForcedActiveCommandSecretTargets(params: {
+  sourceConfig: OpenClawConfig;
+  resolvedConfig: OpenClawConfig;
+  targetIds: ReadonlySet<string>;
+  allowedPaths?: ReadonlySet<string>;
+  forcedActivePaths?: ReadonlySet<string>;
+  optionalActivePaths?: ReadonlySet<string>;
+}): Promise<void> {
+  const activePaths = new Set([
+    ...(params.forcedActivePaths ?? []),
+    ...(params.optionalActivePaths ?? []),
+  ]);
+  if (activePaths.size === 0) {
+    return;
+  }
+  const context = createResolverContext({
+    sourceConfig: params.sourceConfig,
+    env: getActiveSecretsRuntimeEnv(),
+  });
+  const defaults = params.sourceConfig.secrets?.defaults;
+  for (const target of discoverConfigSecretTargetsByIds(params.sourceConfig, params.targetIds)) {
+    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
+      continue;
+    }
+    if (!activePaths.has(target.path)) {
+      continue;
+    }
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults,
+    });
+    if (!ref) {
+      continue;
+    }
+    try {
+      const resolved = await resolveSecretRefValue(ref, {
+        config: params.sourceConfig,
+        env: context.env,
+        cache: context.cache,
+      });
+      assertExpectedResolvedSecretValue({
+        value: resolved,
+        expected: target.entry.expectedResolvedValue,
+        errorMessage:
+          target.entry.expectedResolvedValue === "string"
+            ? `${target.path} resolved to a non-string or empty value.`
+            : `${target.path} resolved to an unsupported value type.`,
+      });
+      setPathExistingStrict(params.resolvedConfig, target.pathSegments, resolved);
+    } catch {
+      // Leave unresolved; the CLI can still attempt local fallback for incomplete gateway snapshots.
+    }
+  }
+}
+
 export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
   commandName: string;
   targetIds: ReadonlySet<string>;
   allowedPaths?: ReadonlySet<string>;
   forcedActivePaths?: ReadonlySet<string>;
+  optionalActivePaths?: ReadonlySet<string>;
   providerOverrides?: CommandSecretProviderOverrides;
 }): Promise<{
   assignments: CommandSecretAssignment[];
@@ -352,6 +416,7 @@ export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
     targetIds: params.targetIds,
     allowedPaths: params.allowedPaths,
     forcedActivePaths: params.forcedActivePaths,
+    optionalActivePaths: params.optionalActivePaths,
     providerOverrides: params.providerOverrides,
   });
 }
@@ -362,6 +427,7 @@ async function resolveCommandSecretsFromSnapshot(params: {
   targetIds: ReadonlySet<string>;
   allowedPaths?: ReadonlySet<string>;
   forcedActivePaths?: ReadonlySet<string>;
+  optionalActivePaths?: ReadonlySet<string>;
   providerOverrides?: CommandSecretProviderOverrides;
 }): Promise<{
   assignments: CommandSecretAssignment[];
@@ -395,6 +461,14 @@ async function resolveCommandSecretsFromSnapshot(params: {
     resolvedConfig,
     providerOverrides: params.providerOverrides,
   });
+  await resolveForcedActiveCommandSecretTargets({
+    sourceConfig,
+    resolvedConfig,
+    targetIds: params.targetIds,
+    allowedPaths: params.allowedPaths,
+    forcedActivePaths: params.forcedActivePaths,
+    optionalActivePaths: params.optionalActivePaths,
+  });
 
   const warningSource = context?.warnings ?? params.activeSnapshot.warnings;
   let inactiveRefPaths = filterInactiveRefPaths({
@@ -402,6 +476,7 @@ async function resolveCommandSecretsFromSnapshot(params: {
     providerOverrides: params.providerOverrides,
     allowedPaths: params.allowedPaths,
     forcedActivePaths: params.forcedActivePaths,
+    optionalActivePaths: params.optionalActivePaths,
     inactiveRefPaths: [
       ...new Set(
         warningSource
@@ -418,6 +493,7 @@ async function resolveCommandSecretsFromSnapshot(params: {
     providerOverrides: params.providerOverrides,
     allowedPaths: params.allowedPaths,
     forcedActivePaths: params.forcedActivePaths,
+    optionalActivePaths: params.optionalActivePaths,
   });
 
   let analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
@@ -450,6 +526,19 @@ async function resolveCommandSecretsFromSnapshot(params: {
       });
     }
   }
+  const optionalActiveUnresolvedPaths = analyzed.unresolved
+    .filter((entry) => params.optionalActivePaths?.has(entry.path))
+    .map((entry) => entry.path);
+  if (optionalActiveUnresolvedPaths.length > 0) {
+    inactiveRefPaths = [...new Set([...inactiveRefPaths, ...optionalActiveUnresolvedPaths])];
+    analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
+      sourceConfig,
+      resolvedConfig,
+      targetIds: params.targetIds,
+      inactiveRefPaths: new Set(inactiveRefPaths),
+      ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
+    });
+  }
   const selectedProviderUnresolved = analyzed.unresolved.filter((entry) =>
     isProviderOverridePath({
       config: sourceConfig,
@@ -457,7 +546,10 @@ async function resolveCommandSecretsFromSnapshot(params: {
       providerOverrides: params.providerOverrides,
     }),
   );
-  if (selectedProviderUnresolved.length > 0) {
+  const forcedActiveUnresolved = analyzed.unresolved.filter((entry) =>
+    params.forcedActivePaths?.has(entry.path),
+  );
+  if (selectedProviderUnresolved.length > 0 || forcedActiveUnresolved.length > 0) {
     return {
       assignments: analyzed.assignments,
       diagnostics: analyzed.diagnostics,

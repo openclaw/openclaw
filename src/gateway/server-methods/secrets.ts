@@ -14,7 +14,13 @@ function errorMessage(error: unknown): string {
 
 function invalidSecretsResolveField(
   errors: ErrorObject[] | null | undefined,
-): "allowedPaths" | "commandName" | "forcedActivePaths" | "providerOverrides" | "targetIds" {
+):
+  | "allowedPaths"
+  | "commandName"
+  | "forcedActivePaths"
+  | "optionalActivePaths"
+  | "providerOverrides"
+  | "targetIds" {
   for (const issue of errors ?? []) {
     if (
       issue.instancePath === "/commandName" ||
@@ -28,6 +34,9 @@ function invalidSecretsResolveField(
     }
     if (issue.instancePath.startsWith("/forcedActivePaths")) {
       return "forcedActivePaths";
+    }
+    if (issue.instancePath.startsWith("/optionalActivePaths")) {
+      return "optionalActivePaths";
     }
     if (issue.instancePath.startsWith("/providerOverrides")) {
       return "providerOverrides";
@@ -43,6 +52,7 @@ export function createSecretsHandlers(params: {
     targetIds: string[];
     allowedPaths?: string[];
     forcedActivePaths?: string[];
+    optionalActivePaths?: string[];
     providerOverrides?: {
       webSearch?: string;
       webFetch?: string;
@@ -98,6 +108,9 @@ export function createSecretsHandlers(params: {
       const forcedActivePaths = requestParams.forcedActivePaths
         ?.map((entry) => entry.trim())
         .filter((entry) => entry.length > 0);
+      const optionalActivePaths = requestParams.optionalActivePaths
+        ?.map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
       const providerOverrides = {
         ...(requestParams.providerOverrides?.webSearch?.trim()
           ? { webSearch: requestParams.providerOverrides.webSearch.trim() }
@@ -127,6 +140,7 @@ export function createSecretsHandlers(params: {
           targetIds,
           ...(allowedPaths ? { allowedPaths } : {}),
           ...(forcedActivePaths ? { forcedActivePaths } : {}),
+          ...(optionalActivePaths ? { optionalActivePaths } : {}),
           ...(Object.keys(providerOverrides).length > 0 ? { providerOverrides } : {}),
         });
         const payload = {

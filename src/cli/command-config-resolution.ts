@@ -13,6 +13,7 @@ export async function resolveCommandConfigWithSecrets<TConfig extends OpenClawCo
   mode?: CommandSecretResolutionMode;
   allowedPaths?: Set<string>;
   forcedActivePaths?: Set<string>;
+  optionalActivePaths?: Set<string>;
   runtime?: RuntimeEnv;
   autoEnable?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -28,6 +29,7 @@ export async function resolveCommandConfigWithSecrets<TConfig extends OpenClawCo
     ...(params.mode ? { mode: params.mode } : {}),
     ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
     ...(params.forcedActivePaths ? { forcedActivePaths: params.forcedActivePaths } : {}),
+    ...(params.optionalActivePaths ? { optionalActivePaths: params.optionalActivePaths } : {}),
   });
   if (params.runtime) {
     for (const entry of diagnostics) {
