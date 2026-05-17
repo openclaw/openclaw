@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { withResolvedCdpUrl } from "./browserbase-session.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
@@ -110,8 +111,9 @@ export function createProfileSelectionOps({
       const focusPageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
         ?.focusPageByTargetIdViaPlaywright;
       if (typeof focusPageByTargetIdViaPlaywright === "function") {
+        const live = await withResolvedCdpUrl(profile);
         await focusPageByTargetIdViaPlaywright({
-          cdpUrl: profile.cdpUrl,
+          cdpUrl: live.cdpUrl,
           targetId: resolvedTargetId,
           ssrfPolicy: getCdpControlPolicy(),
         });
@@ -146,8 +148,9 @@ export function createProfileSelectionOps({
       const closePageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
         ?.closePageByTargetIdViaPlaywright;
       if (typeof closePageByTargetIdViaPlaywright === "function") {
+        const live = await withResolvedCdpUrl(profile);
         await closePageByTargetIdViaPlaywright({
-          cdpUrl: profile.cdpUrl,
+          cdpUrl: live.cdpUrl,
           targetId: resolvedTargetId,
           ssrfPolicy: getCdpControlPolicy(),
         });

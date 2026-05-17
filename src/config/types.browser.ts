@@ -10,7 +10,20 @@ export type BrowserProfileConfig = {
   /** Extra Chrome MCP arguments for existing-session profiles. */
   mcpArgs?: string[];
   /** Profile driver (default: openclaw). */
-  driver?: "openclaw" | "clawd" | "existing-session";
+  driver?: "openclaw" | "clawd" | "existing-session" | "browserbase";
+  /**
+   * Browserbase keep-alive session id (UUID). Required when driver=browserbase.
+   * Resolves a fresh CDP connectUrl via GET /v1/sessions/<id> on every attach,
+   * which sidesteps the short-lived signingKey embedded in the static URL.
+   */
+  browserbaseSessionId?: string;
+  /**
+   * Name of the environment variable holding the Browserbase API key.
+   * Required when driver=browserbase. Must match /^[A-Z][A-Z0-9_]*$/.
+   * The value is read at CDP attach time (not at config load time) and
+   * sent as the X-BB-API-Key header.
+   */
+  browserbaseApiKeyEnv?: string;
   /** If true, launch this profile in headless mode. Falls back to browser.headless. */
   headless?: boolean;
   /** Browser executable path for this profile. Falls back to browser.executablePath. */

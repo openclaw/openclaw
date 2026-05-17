@@ -1,4 +1,10 @@
 import fs from "node:fs";
+import {
+  BrowserbaseAuthConfigError,
+  BrowserbaseSessionMalformedError,
+  BrowserbaseSessionUnavailableError,
+  fetchBrowserbaseConnectUrl,
+} from "./browserbase-session.js";
 import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
 import {
   CHROME_MCP_ATTACH_READY_POLL_MS,
@@ -153,10 +159,40 @@ export function createProfileAvailability({
 
   const getCdpReachabilityPolicy = () =>
     resolveCdpReachabilityPolicy(profile, state().resolved.ssrfPolicy);
+  const probeBrowserbaseReachability = async (timeoutMs?: number): Promise<boolean> => {
+    // For driver=browserbase, "reachable" means: the Browserbase control
+    // plane responds and the session is RUNNING. We do not connect over
+    // CDP here (too expensive for a probe); the session metadata call is
+    // the cheapest faithful signal.
+    const sessionId = profile.browserbaseSessionId ?? "";
+    const apiKeyEnv = profile.browserbaseApiKeyEnv ?? "";
+    if (!sessionId || !apiKeyEnv) {
+      return false;
+    }
+    try {
+      await fetchBrowserbaseConnectUrl(sessionId, apiKeyEnv, {
+        timeoutMs: typeof timeoutMs === "number" ? timeoutMs : undefined,
+      });
+      return true;
+    } catch (err) {
+      if (
+        err instanceof BrowserbaseAuthConfigError ||
+        err instanceof BrowserbaseSessionUnavailableError ||
+        err instanceof BrowserbaseSessionMalformedError
+      ) {
+        return false;
+      }
+      return false;
+    }
+  };
+
   const isReachable = async (
     timeoutMs?: number,
     options?: { ephemeral?: boolean; signal?: AbortSignal },
   ) => {
+    if (profile.driver === "browserbase") {
+      return await probeBrowserbaseReachability(timeoutMs);
+    }
     if (capabilities.usesChromeMcp) {
       // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required.
       // Status probes opt into ephemeral so they reuse a cached attach session if one exists,
@@ -197,6 +233,9 @@ export function createProfileAvailability({
   };
 
   const isHttpReachable = async (timeoutMs?: number) => {
+    if (profile.driver === "browserbase") {
+      return await probeBrowserbaseReachability(timeoutMs);
+    }
     if (capabilities.usesChromeMcp) {
       return await isTransportAvailable(timeoutMs);
     }

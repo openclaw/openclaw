@@ -101,11 +101,15 @@ export type ResolvedBrowserProfile = {
   mcpCommand?: string;
   mcpArgs?: string[];
   color: string;
-  driver: "openclaw" | "existing-session";
+  driver: "openclaw" | "existing-session" | "browserbase";
   executablePath?: string;
   headless: boolean;
   headlessSource?: "profile" | "config" | "default";
   attachOnly: boolean;
+  /** Only populated when driver === "browserbase". */
+  browserbaseSessionId?: string;
+  /** Only populated when driver === "browserbase". */
+  browserbaseApiKeyEnv?: string;
 };
 
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
@@ -206,6 +210,15 @@ function normalizeExistingSessionCdpUrl(
     cdpHost: parsed.hostname,
     cdpIsLoopback: isLoopbackHost(parsed.hostname),
   };
+}
+
+// Loose UUID v4-ish shape check. The Browserbase API itself rejects bad ids;
+// this catches obvious copy-paste mistakes (extra quotes, env-var-name pasted
+// in by accident, etc.) at config load time so the failure mode is legible.
+const UUID_SHAPE_RE =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+function isUuidShaped(value: string): boolean {
+  return UUID_SHAPE_RE.test(value);
 }
 
 function hasLinuxDisplay(env: NodeJS.ProcessEnv): boolean {
@@ -463,11 +476,60 @@ export function resolveProfile(
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
-  const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
+  const driver: "openclaw" | "existing-session" | "browserbase" =
+    profile.driver === "existing-session"
+      ? "existing-session"
+      : profile.driver === "browserbase"
+        ? "browserbase"
+        : "openclaw";
   const headless = profile.headless ?? resolved.headless;
   const headlessSource =
     typeof profile.headless === "boolean" ? "profile" : resolved.headlessSource;
   const executablePath = normalizeExecutablePath(profile.executablePath) ?? resolved.executablePath;
+
+  if (driver === "browserbase") {
+    // Validation: we do NOT compute a cdpUrl here. The URL is fetched fresh
+    // on every CDP attach via `withResolvedCdpUrl` (see browserbase-session.ts).
+    // We only check that the static config is well-formed so that operator
+    // errors surface at config load, not on the first hot-path attach.
+    const sessionId = normalizeOptionalString(profile.browserbaseSessionId);
+    if (!sessionId) {
+      throw new Error(
+        `browser.profiles.${profileName}.browserbaseSessionId is required when driver="browserbase".`,
+      );
+    }
+    if (!isUuidShaped(sessionId)) {
+      throw new Error(
+        `browser.profiles.${profileName}.browserbaseSessionId must be a UUID-shaped string.`,
+      );
+    }
+    const apiKeyEnv = normalizeOptionalString(profile.browserbaseApiKeyEnv);
+    if (!apiKeyEnv) {
+      throw new Error(
+        `browser.profiles.${profileName}.browserbaseApiKeyEnv is required when driver="browserbase".`,
+      );
+    }
+    if (!/^[A-Z][A-Z0-9_]*$/.test(apiKeyEnv)) {
+      throw new Error(
+        `browser.profiles.${profileName}.browserbaseApiKeyEnv must be an UPPER_SNAKE_CASE env var name (matching /^[A-Z][A-Z0-9_]*$/).`,
+      );
+    }
+    return {
+      name: profileName,
+      cdpPort: 0,
+      cdpUrl: "",
+      cdpHost: "",
+      cdpIsLoopback: false,
+      color: profile.color,
+      driver,
+      executablePath,
+      headless,
+      headlessSource,
+      attachOnly: true,
+      browserbaseSessionId: sessionId,
+      browserbaseApiKeyEnv: apiKeyEnv,
+    };
+  }
 
   if (driver === "existing-session") {
     const existingSessionCdp = normalizeExistingSessionCdpUrl(rawProfileUrl, profileName);

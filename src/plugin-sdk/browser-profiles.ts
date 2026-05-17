@@ -54,9 +54,13 @@ export type ResolvedBrowserProfile = {
   cdpIsLoopback: boolean;
   userDataDir?: string;
   color: string;
-  driver: "openclaw" | "existing-session";
+  driver: "openclaw" | "existing-session" | "browserbase";
   headless?: boolean;
   attachOnly: boolean;
+  /** Only populated when driver === "browserbase". */
+  browserbaseSessionId?: string;
+  /** Only populated when driver === "browserbase". */
+  browserbaseApiKeyEnv?: string;
 };
 
 type BrowserProfilesSurface = {
