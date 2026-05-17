@@ -953,10 +953,16 @@ export function createAgentEventHandler({
       if (
         !isAborted &&
         evt.stream === "assistant" &&
-        typeof evt.data?.text === "string" &&
+        (typeof evt.data?.text === "string" || typeof evt.data?.delta === "string") &&
         !shouldSuppressAssistantEventForLiveChat(evt.data)
       ) {
-        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
+        // #82988: assistant events can arrive as delta-only (no `text`).
+        // The merge helper already supports delta-only chunks (see
+        // resolveMergedAssistantText), and the SDK normalizer classifies
+        // these as `assistant.delta`. Promote them to chat-delta projection
+        // by passing an empty string for `text` when only `delta` is set.
+        const textForDelta = typeof evt.data?.text === "string" ? evt.data.text : "";
+        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, textForDelta, evt.data.delta);
       }
     }
 

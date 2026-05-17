@@ -531,11 +531,15 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (
       evt.stream === "assistant" &&
       !run.isBtw &&
-      typeof evt.data?.text === "string" &&
+      (typeof evt.data?.text === "string" || typeof evt.data?.delta === "string") &&
       !shouldSuppressAssistantEventForLiveChat(evt.data)
     ) {
+      // #82988: accept delta-only assistant events; the merge helper supports
+      // delta-only chunks and the SDK normalizer classifies these as
+      // assistant.delta. Fall through to the existing normalize+merge path
+      // with an empty `text` when only `delta` is set.
       const cleaned = normalizeLiveAssistantEventText({
-        text: evt.data.text,
+        text: typeof evt.data.text === "string" ? evt.data.text : "",
         delta: evt.data.delta,
       });
       run.buffer = resolveMergedAssistantText({
