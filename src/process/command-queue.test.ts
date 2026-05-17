@@ -1,7 +1,7 @@
 // Command queue tests cover bounded command execution and queue ordering.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { CommandLane } from "./lanes.js";
+import { CommandLane, STARVATION_PROMOTION_MS } from "./lanes.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
   logLaneEnqueue: vi.fn(),
@@ -872,6 +872,42 @@ describe("command queue", () => {
     } finally {
       blocker.resolve();
       commandQueueA.resetAllLanes();
+    }
+  });
+
+  it("promotes aged background entry above steady foreground stream", async () => {
+    vi.useFakeTimers();
+    try {
+      const { task: blocker, release } = enqueueBlockedMainTask();
+      const calls: string[] = [];
+
+      // Enqueue a background task while the blocker is active
+      const bgTask = enqueueCommand(
+        async () => {
+          calls.push("background");
+        },
+        { priority: "background" },
+      );
+
+      // Advance time past the starvation threshold
+      vi.advanceTimersByTime(STARVATION_PROMOTION_MS + 1);
+
+      // Now enqueue a foreground task — it has higher static priority but
+      // the background entry has been waiting long enough to be promoted
+      const fgTask = enqueueCommand(
+        async () => {
+          calls.push("foreground");
+        },
+        { priority: "foreground" },
+      );
+
+      release();
+      await Promise.all([bgTask, fgTask]);
+
+      // The aged background entry should run before the fresh foreground one
+      expect(calls).toEqual(["background", "foreground"]);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
