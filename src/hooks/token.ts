@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import type { HooksConfig } from "../config/types.hooks.js";
+import { readSecretFileSync } from "../infra/secret-file.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export function resolveHookTokenFromConfig(
@@ -16,5 +16,5 @@ export function resolveHookTokenFromConfig(
   if (!tokenFile) {
     return "";
   }
-  return fs.readFileSync(tokenFile, "utf8").trim();
+  return readSecretFileSync(tokenFile, "Hooks token", { rejectSymlink: true });
 }

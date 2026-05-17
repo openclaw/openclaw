@@ -103,6 +103,30 @@ describe("gateway hooks helpers", () => {
     }
   });
 
+  test("resolveHooksConfig rejects symlinked hook tokenFile", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-token-link-"));
+    const tokenFile = path.join(dir, "hooks.token");
+    const linkFile = path.join(dir, "hooks-link.token");
+    fs.writeFileSync(tokenFile, "file-secret\n", { mode: 0o600 });
+    fs.symlinkSync(tokenFile, linkFile);
+    try {
+      expect(() =>
+        resolveHooksConfig({
+          hooks: {
+            enabled: true,
+            tokenFile: linkFile,
+            path: "hooks///",
+          },
+        } as OpenClawConfig),
+      ).toThrow(`Hooks token file at ${linkFile} must not be a symlink.`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("resolveHooksConfig rejects root path", () => {
     const cfg = {
       hooks: { enabled: true, token: "x", path: "/" },
