@@ -84,16 +84,41 @@ describe("describeStickerImage", () => {
       capability: "image",
       includeConfiguredImageModels: false,
     });
-    expect(mocks.resolveAutoImageModel).toHaveBeenCalledWith({
-      cfg: {},
-      agentDir: "/tmp/agent",
-      activeModel: undefined,
-    });
+    expect(mocks.resolveAutoImageModel).not.toHaveBeenCalled();
     expect(mocks.describeImageFileWithModel).toHaveBeenCalledWith(
       expect.objectContaining({
         filePath: "/tmp/sticker.webp",
         provider: "minimax-cn",
         model: "MiniMax-VL-01",
+      }),
+    );
+  });
+
+  it("keeps MiniMax chat defaults on MiniMax VLM when other vision providers are configured", async () => {
+    mocks.resolveAutoMediaKeyProviders.mockReturnValue(["openai", "minimax-cn", "minimax"]);
+    mocks.loadModelCatalog.mockResolvedValue([
+      { provider: "openai", id: "gpt-5.4", input: ["text", "image"] },
+      { provider: "minimax-cn", id: "MiniMax-M2.7", input: ["text", "image"] },
+      { provider: "minimax-cn", id: "MiniMax-VL-01", input: ["image"] },
+    ]);
+
+    await expect(
+      describeStickerImage({
+        imagePath: "/tmp/sticker.webp",
+        cfg: {},
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toBe("vlm ok");
+
+    expect(mocks.describeImageFileWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax-cn",
+        model: "MiniMax-VL-01",
+      }),
+    );
+    expect(mocks.describeImageFileWithModel).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
       }),
     );
   });

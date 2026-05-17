@@ -59,8 +59,18 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
     catalog = await loadModelCatalog({ config: cfg });
     const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
     const supportsVision = modelSupportsVision(entry);
-    if (supportsVision && !isMinimaxVlmProvider(defaultModel.provider)) {
-      activeModel = { provider: defaultModel.provider, model: defaultModel.model };
+    if (supportsVision) {
+      const model = isMinimaxVlmProvider(defaultModel.provider)
+        ? resolveDefaultMediaModel({
+            cfg,
+            providerId: defaultModel.provider,
+            capability: "image",
+            includeConfiguredImageModels: false,
+          })
+        : defaultModel.model;
+      if (model) {
+        activeModel = { provider: defaultModel.provider, model };
+      }
     }
   } catch {
     // Ignore catalog failures; fall back to auto selection.
