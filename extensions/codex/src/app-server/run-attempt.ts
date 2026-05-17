@@ -2797,6 +2797,13 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     }),
     suppressManagedWebSearch: false,
     currentChannelId: params.currentChannelId,
+    hookChannelId: buildAgentHookContextChannelFields({
+      sessionKey: input.sandboxSessionKey,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
+      currentChannelId: params.currentChannelId,
+      messageTo: params.messageTo,
+    }).channelId,
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
     replyToMode: params.replyToMode,

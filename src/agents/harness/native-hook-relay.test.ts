@@ -889,6 +889,54 @@ describe("native hook relay registry", () => {
     });
   });
 
+  it("prefers Codex exec_command cmd over a stale command field", async () => {
+    const beforeToolCall = vi.fn(async (event: unknown) => {
+      const command = (event as { params?: { command?: string } }).params?.command;
+      return command === "rm -rf dist"
+        ? { block: true, blockReason: "destructive command blocked" }
+        : undefined;
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "exec_command",
+        tool_use_id: "native-exec-command-stale-command",
+        tool_input: { command: "echo safe", cmd: "rm -rf dist" },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "destructive command blocked",
+      },
+    });
+    const event = getMockCallArg(beforeToolCall, 0, 0, "before tool call event");
+    expectRecordFields(event, {
+      toolName: "exec",
+      params: {
+        cmd: "rm -rf dist",
+        command: "rm -rf dist",
+      },
+      toolCallId: "native-exec-command-stale-command",
+    });
+  });
+
   it("normalizes Codex exec_command argv cmd input before running OpenClaw policy", async () => {
     const beforeToolCall = vi.fn(async () => ({
       block: true,

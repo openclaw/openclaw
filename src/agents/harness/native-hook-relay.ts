@@ -1442,7 +1442,7 @@ function normalizeCodexToolInput(
   toolInput: Record<string, JsonValue>,
 ): Record<string, JsonValue> {
   const command = normalizeCodexCommand(toolInput.cmd);
-  if (toolName !== "exec" || command === undefined || typeof toolInput.command === "string") {
+  if (toolName !== "exec" || command === undefined) {
     return toolInput;
   }
   return {

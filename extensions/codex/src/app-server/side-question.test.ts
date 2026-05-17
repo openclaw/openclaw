@@ -865,6 +865,9 @@ describe("runCodexAppServerSideQuestion", () => {
     ).resolves.toEqual({ text: "Tool answer." });
 
     expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hookChannelId: "voice-room" }),
+    );
     expect(toolExecuteMock).toHaveBeenCalledTimes(1);
   });
 

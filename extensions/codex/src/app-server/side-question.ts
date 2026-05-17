@@ -513,6 +513,12 @@ async function createCodexSideToolBridge(input: {
         ? { messageProvider: input.params.messageProvider ?? input.params.messageChannel }
         : {}),
       ...(input.params.currentChannelId ? { currentChannelId: input.params.currentChannelId } : {}),
+      hookChannelId: buildAgentHookContextChannelFields({
+        sessionKey: input.params.sessionKey,
+        messageChannel: input.params.messageChannel,
+        messageProvider: input.params.messageProvider,
+        currentChannelId: input.params.currentChannelId,
+      }).channelId,
       sandbox,
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       requireExplicitMessageTarget: true,
