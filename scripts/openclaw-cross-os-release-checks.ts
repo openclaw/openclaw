@@ -3094,7 +3094,7 @@ function buildReleaseAgentTurnArgs(sessionId) {
     "--message",
     "Reply with exact ASCII text OK only.",
     "--thinking",
-    "minimal",
+    "off",
     "--timeout",
     String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS),
     "--json",

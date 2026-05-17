@@ -802,11 +802,13 @@ describe("subagent registry steer restarts", () => {
 
         await vi.advanceTimersByTimeAsync(4_001);
         expect(announceSpy).toHaveBeenCalledTimes(3);
-        const run = listMainRuns()[0];
-        expect(run?.pendingFinalDelivery).toBe(true);
-        expect(run?.deliverySuspendedAt).toBeTypeOf("number");
-        expect(run?.deliverySuspendedReason).toBe("retry-limit");
-        expect(run?.cleanupCompletedAt).toBeUndefined();
+        await waitForRegistrySideEffect(() => {
+          const run = listMainRuns()[0];
+          expect(run?.pendingFinalDelivery).toBe(true);
+          expect(run?.deliverySuspendedAt).toBeTypeOf("number");
+          expect(run?.deliverySuspendedReason).toBe("retry-limit");
+          expect(run?.cleanupCompletedAt).toBeUndefined();
+        });
       } finally {
         vi.useRealTimers();
       }
