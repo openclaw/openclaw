@@ -761,6 +761,35 @@ describe("qa cli runtime", () => {
     });
   });
 
+  it("expands the personal-agent pack onto the suite scenario list", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      pack: "personal-agent",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      scenarioIds: [
+        "channel-chat-baseline",
+        "personal-reminder-roundtrip",
+        "personal-channel-thread-reply",
+        "personal-memory-preference-recall",
+        "personal-redaction-no-secret-leak",
+        "personal-tool-safety-followthrough",
+      ],
+    });
+  });
+
+  it("rejects unknown suite packs", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        pack: "personal-admin",
+      }),
+    ).rejects.toThrow('--pack must be one of personal-agent, got "personal-admin"');
+  });
+
   it("rejects unknown suite CLI auth modes", async () => {
     await expect(
       runQaSuiteCommand({

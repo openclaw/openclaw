@@ -1,5 +1,5 @@
 ---
-summary: "Generate music via music_generate across Google Lyria, MiniMax, and ComfyUI workflows"
+summary: "Generate music via music_generate across ComfyUI, fal, Google Lyria, MiniMax, and OpenRouter workflows"
 read_when:
   - Generating music or audio via the agent
   - Configuring music-generation providers and models
@@ -9,8 +9,8 @@ sidebarTitle: "Music generation"
 ---
 
 The `music_generate` tool lets the agent create music or audio through the
-shared music-generation capability with configured providers — Google,
-MiniMax, and workflow-configured ComfyUI today.
+shared music-generation capability with configured providers — ComfyUI,
+fal, Google, MiniMax, and OpenRouter today.
 
 For session-backed agent runs, OpenClaw starts music generation as a
 background task, tracks it in the task ledger, then wakes the agent again
@@ -94,22 +94,26 @@ Generate an energetic chiptune loop about launching a rocket at sunrise.
 
 ## Supported providers
 
-| Provider | Default model          | Reference inputs | Supported controls                                        | Auth                                   |
-| -------- | ---------------------- | ---------------- | --------------------------------------------------------- | -------------------------------------- |
-| ComfyUI  | `workflow`             | Up to 1 image    | Workflow-defined music or audio                           | `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY` |
-| Google   | `lyria-3-clip-preview` | Up to 10 images  | `lyrics`, `instrumental`, `format`                        | `GEMINI_API_KEY`, `GOOGLE_API_KEY`     |
-| MiniMax  | `music-2.6`            | None             | `lyrics`, `instrumental`, `durationSeconds`, `format=mp3` | `MINIMAX_API_KEY` or MiniMax OAuth     |
+| Provider   | Default model                | Reference inputs | Supported controls                                        | Auth                                   |
+| ---------- | ---------------------------- | ---------------- | --------------------------------------------------------- | -------------------------------------- |
+| ComfyUI    | `workflow`                   | Up to 1 image    | Workflow-defined music or audio                           | `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY` |
+| fal        | `fal-ai/minimax-music/v2.6`  | None             | `lyrics`, `instrumental`, `durationSeconds`, `format`     | `FAL_KEY` or `FAL_API_KEY`             |
+| Google     | `lyria-3-clip-preview`       | Up to 10 images  | `lyrics`, `instrumental`, `format`                        | `GEMINI_API_KEY`, `GOOGLE_API_KEY`     |
+| MiniMax    | `music-2.6`                  | None             | `lyrics`, `instrumental`, `durationSeconds`, `format=mp3` | `MINIMAX_API_KEY` or MiniMax OAuth     |
+| OpenRouter | `google/lyria-3-pro-preview` | Up to 1 image    | `lyrics`, `instrumental`, `durationSeconds`, `format`     | `OPENROUTER_API_KEY`                   |
 
 ### Capability matrix
 
 The explicit mode contract used by `music_generate`, contract tests, and the
 shared live sweep:
 
-| Provider | `generate` | `edit` | Edit limit | Shared live lanes                                                         |
-| -------- | :--------: | :----: | ---------- | ------------------------------------------------------------------------- |
-| ComfyUI  |     ✓      |   ✓    | 1 image    | Not in the shared sweep; covered by `extensions/comfy/comfy.live.test.ts` |
-| Google   |     ✓      |   ✓    | 10 images  | `generate`, `edit`                                                        |
-| MiniMax  |     ✓      |   —    | None       | `generate`                                                                |
+| Provider   | `generate` | `edit` | Edit limit | Shared live lanes                                                         |
+| ---------- | :--------: | :----: | ---------- | ------------------------------------------------------------------------- |
+| ComfyUI    |     ✓      |   ✓    | 1 image    | Not in the shared sweep; covered by `extensions/comfy/comfy.live.test.ts` |
+| fal        |     ✓      |   —    | None       | `generate`                                                                |
+| Google     |     ✓      |   ✓    | 10 images  | `generate`, `edit`                                                        |
+| MiniMax    |     ✓      |   —    | None       | `generate`                                                                |
+| OpenRouter |     ✓      |   ✓    | 1 image    | `generate`, `edit`                                                        |
 
 Use `action: "list"` to inspect available shared providers and models at
 runtime:
@@ -225,7 +229,7 @@ openclaw tasks cancel <taskId>
     defaults: {
       musicGenerationModel: {
         primary: "google/lyria-3-clip-preview",
-        fallbacks: ["minimax/music-2.6"],
+        fallbacks: ["fal/fal-ai/minimax-music/v2.6", "minimax/music-2.6"],
       },
     },
   },
@@ -258,6 +262,12 @@ explicit `model`, `primary`, and `fallbacks` entries.
     shared `music_generate` tool through the music-generation provider
     registry.
   </Accordion>
+  <Accordion title="fal">
+    Uses fal model endpoints through the shared provider auth path. The
+    bundled provider defaults to `fal-ai/minimax-music/v2.6` and also exposes
+    `fal-ai/ace-step/prompt-to-audio` and
+    `fal-ai/stable-audio-25/text-to-audio` for prompt-to-audio requests.
+  </Accordion>
   <Accordion title="Google (Lyria 3)">
     Uses Lyria 3 batch generation. The current bundled flow supports
     prompt, optional lyrics text, and optional reference images.
@@ -266,6 +276,11 @@ explicit `model`, `primary`, and `fallbacks` entries.
     Uses the batch `music_generation` endpoint. Supports prompt, optional
     lyrics, instrumental mode, duration steering, and mp3 output through
     either `minimax` API-key auth or `minimax-portal` OAuth.
+  </Accordion>
+  <Accordion title="OpenRouter">
+    Uses OpenRouter chat completions audio output with streaming enabled. The
+    bundled provider defaults to `google/lyria-3-pro-preview` and also exposes
+    `openrouter/google/lyria-3-clip-preview`.
   </Accordion>
 </AccordionGroup>
 
@@ -278,8 +293,8 @@ explicit `model`, `primary`, and `fallbacks` entries.
 
 If you are debugging ComfyUI-specific behavior, see
 [ComfyUI](/providers/comfy). If you are debugging shared provider
-behavior, start with [Google (Gemini)](/providers/google) or
-[MiniMax](/providers/minimax).
+behavior, start with [fal](/providers/fal), [Google (Gemini)](/providers/google),
+[MiniMax](/providers/minimax), or [OpenRouter](/providers/openrouter).
 
 ## Provider capability modes
 
@@ -331,7 +346,9 @@ profiles by default, and runs both `generate` and declared `edit` coverage when
 the provider enables edit mode. Coverage today:
 
 - `google`: `generate` plus `edit`
+- `fal`: `generate` only
 - `minimax`: `generate` only
+- `openrouter`: `generate` plus `edit`
 - `comfy`: separate Comfy live coverage, not the shared provider sweep
 
 Opt-in live coverage for the bundled ComfyUI music path:

@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/types.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
-import { isLoopbackHost } from "../gateway/net.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import {
   pickMatchingExternalInterfaceAddress,
@@ -16,6 +15,7 @@ import {
   isCarrierGradeNatIpv4Address,
   isIpv4Address,
   isIpv6Address,
+  isLoopbackIpAddress,
   isRfc1918Ipv4Address,
   parseCanonicalIpAddress,
 } from "../shared/net/ip.js";
@@ -124,7 +124,12 @@ function isPrivateLanHost(host: string): boolean {
 
 function isMobilePairingCleartextAllowedHost(host: string): boolean {
   const normalized = normalizeMobilePairingHost(host);
-  return isLoopbackHost(normalized) || normalized === "10.0.2.2" || isPrivateLanHost(normalized);
+  return (
+    normalized === "localhost" ||
+    isLoopbackIpAddress(normalized) ||
+    normalized === "10.0.2.2" ||
+    isPrivateLanHost(normalized)
+  );
 }
 
 function validateMobilePairingUrl(url: string, source?: string): string | null {

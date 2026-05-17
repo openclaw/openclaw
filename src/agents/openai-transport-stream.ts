@@ -767,6 +767,7 @@ function convertResponsesMessages(
   const messages: ResponseInput = [];
   const shouldReplayReasoningItems = options?.replayReasoningItems ?? true;
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
+  const shouldNormalizeSameModelToolCallIds = model.provider === "github-copilot";
   const normalizeIdPart = (part: string) => {
     const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
     const normalized = sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
@@ -802,6 +803,7 @@ function convertResponsesMessages(
     context.messages,
     model,
     normalizeToolCallId,
+    { normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds },
   );
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
@@ -1692,7 +1694,7 @@ export function buildOpenAIResponsesParams(
   const messages = convertResponsesMessages(
     model,
     context,
-    new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
+    new Set(["openai", "openai-codex", "opencode", "azure-openai-responses", "github-copilot"]),
     {
       includeSystemPrompt: !isCodexResponses,
       supportsDeveloperRole,

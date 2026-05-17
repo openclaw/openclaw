@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -47,9 +48,8 @@ describe("bundled plugin public surface loader", () => {
         moduleExport: { marker: "windows-dist-ok" },
       }),
     }));
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    try {
+    await withMockedWindowsPlatform(async () => {
       const publicSurfaceLoader = await importFreshModule<
         typeof import("./public-surface-loader.js")
       >(import.meta.url, "./public-surface-loader.js?scope=windows-dist-jiti");
@@ -68,9 +68,7 @@ describe("bundled plugin public surface loader", () => {
         }).marker,
       ).toBe("windows-dist-ok");
       expect(createJiti).not.toHaveBeenCalled();
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("prefers source require for bundled source public artifacts when a ts require hook exists", async () => {

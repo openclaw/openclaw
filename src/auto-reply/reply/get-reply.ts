@@ -163,6 +163,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   activeModel: { provider: string; model: string };
 }): Promise<boolean> {
   if (!hasInboundMedia(params.ctx)) {
@@ -355,6 +356,7 @@ export async function getReplyFromConfig(
         ctx: finalized,
         cfg,
         agentDir,
+        workspaceDir,
         activeModel: { provider, model },
       }),
     );

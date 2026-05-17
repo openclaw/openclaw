@@ -48,3 +48,9 @@ export function withMockedPlatform<T>(
 ): T | Promise<T> {
   return withRestoredMocks([vi.spyOn(process, "platform", "get").mockReturnValue(platform)], run);
 }
+
+export function withMockedWindowsPlatform<T>(run: () => Promise<T>): Promise<T>;
+export function withMockedWindowsPlatform<T>(run: () => T): T;
+export function withMockedWindowsPlatform<T>(run: () => T | Promise<T>): T | Promise<T> {
+  return withMockedPlatform("win32", run);
+}
