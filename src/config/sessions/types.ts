@@ -12,6 +12,8 @@ export type SessionChannelId = ChannelId;
 
 export type SessionChatType = ChatType;
 
+export const DEFAULT_PAUSED_SESSION_RESUME_TTL_MS = 30 * 60 * 1_000;
+
 export type SessionOrigin = {
   label?: string;
   provider?: string;
@@ -195,6 +197,12 @@ export type SessionEntry = {
   pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;
   updatedAt: number;
+  /** Session id of a yielded/paused run that should be resumed before route rollover. */
+  pausedSessionId?: string;
+  /** Timestamp (ms) when pausedSessionId was recorded. */
+  pausedSessionAt?: number;
+  /** Timestamp (ms) after which pausedSessionId must no longer be preferred. */
+  pausedSessionExpiresAt?: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
@@ -522,6 +530,21 @@ export function mergeSessionEntry(
   patch: Partial<SessionEntry>,
 ): SessionEntry {
   return mergeSessionEntryWithPolicy(existing, patch);
+}
+
+export function resolvePausedSessionIdForResume(
+  entry: SessionEntry | undefined,
+  now = Date.now(),
+): string | undefined {
+  const pausedSessionId = normalizeOptionalString(entry?.pausedSessionId);
+  if (!pausedSessionId) {
+    return undefined;
+  }
+  const expiresAt = entry?.pausedSessionExpiresAt;
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= now) {
+    return undefined;
+  }
+  return pausedSessionId;
 }
 
 export function mergeSessionEntryPreserveActivity(

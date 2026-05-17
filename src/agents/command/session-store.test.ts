@@ -77,6 +77,7 @@ vi.mock("../../config/sessions.js", async () => {
     await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
   };
   return {
+    DEFAULT_PAUSED_SESSION_RESUME_TTL_MS: 30 * 60 * 1_000,
     mergeSessionEntry: (existing: SessionEntry | undefined, patch: Partial<SessionEntry>) => ({
       ...existing,
       ...patch,
@@ -223,6 +224,148 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       expect(sessionStore[sessionKey]?.contextTokens).toBe(400_000);
       expect(loadSessionStore(storePath)[sessionKey]?.contextTokens).toBe(400_000);
+    });
+  });
+
+  it("records a bounded paused session binding for yielded runs", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:telegram:default:direct:yielded-parent";
+      const sessionId = "yielded-parent-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 1,
+          yielded: true,
+          livenessState: "paused",
+          agentMeta: {
+            sessionId,
+            provider: "openai-codex",
+            model: "gpt-5.5",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-5.5",
+        result,
+      });
+
+      const persisted = loadSessionStore(storePath)[sessionKey];
+      expect(sessionStore[sessionKey]?.pausedSessionId).toBe(sessionId);
+      expect(persisted?.pausedSessionId).toBe(sessionId);
+      expect(typeof persisted?.pausedSessionAt).toBe("number");
+      expect(typeof persisted?.pausedSessionExpiresAt).toBe("number");
+      expect((persisted?.pausedSessionExpiresAt ?? 0) - (persisted?.pausedSessionAt ?? 0)).toBe(
+        30 * 60 * 1_000,
+      );
+    });
+  });
+
+  it("clears the paused session binding after the yielded session resumes and finishes", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:telegram:default:direct:resumed-parent";
+      const sessionId = "resumed-parent-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          pausedSessionId: sessionId,
+          pausedSessionAt: Date.now() - 1_000,
+          pausedSessionExpiresAt: Date.now() + 60_000,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 1,
+          livenessState: "idle",
+          agentMeta: {
+            sessionId,
+            provider: "openai-codex",
+            model: "gpt-5.5",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-5.5",
+        result,
+      });
+
+      const persisted = loadSessionStore(storePath)[sessionKey];
+      expect(sessionStore[sessionKey]?.pausedSessionId).toBeUndefined();
+      expect(persisted?.pausedSessionId).toBeUndefined();
+      expect(persisted?.pausedSessionAt).toBeUndefined();
+      expect(persisted?.pausedSessionExpiresAt).toBeUndefined();
+    });
+  });
+
+  it("does not clear a valid paused binding from an unrelated non-yield run", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:telegram:default:direct:unrelated-run";
+      const pausedSessionId = "still-paused-parent-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId: "route-session",
+          updatedAt: 1,
+          pausedSessionId,
+          pausedSessionAt: Date.now() - 1_000,
+          pausedSessionExpiresAt: Date.now() + 60_000,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 1,
+          livenessState: "idle",
+          agentMeta: {
+            sessionId: "background-heartbeat-session",
+            provider: "openai-codex",
+            model: "gpt-5.5",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId: "background-heartbeat-session",
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-5.5",
+        result,
+        preserveRuntimeModel: true,
+        touchInteraction: false,
+      });
+
+      const persisted = loadSessionStore(storePath)[sessionKey];
+      expect(sessionStore[sessionKey]?.pausedSessionId).toBe(pausedSessionId);
+      expect(persisted?.pausedSessionId).toBe(pausedSessionId);
     });
   });
 

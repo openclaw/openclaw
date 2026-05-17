@@ -1,4 +1,5 @@
 import {
+  DEFAULT_PAUSED_SESSION_RESUME_TTL_MS,
   mergeSessionEntry,
   setSessionRuntimeModel,
   type SessionEntry,
@@ -126,6 +127,18 @@ export async function updateSessionStoreAfterAgentRun(params: {
           contextTokens,
         }),
   };
+  if (result.meta.yielded === true || result.meta.livenessState === "paused") {
+    next.pausedSessionId = sessionId;
+    next.pausedSessionAt = now;
+    next.pausedSessionExpiresAt = now + DEFAULT_PAUSED_SESSION_RESUME_TTL_MS;
+  } else if (
+    entry.pausedSessionId === sessionId ||
+    (typeof entry.pausedSessionExpiresAt === "number" && entry.pausedSessionExpiresAt <= now)
+  ) {
+    next.pausedSessionId = undefined;
+    next.pausedSessionAt = undefined;
+    next.pausedSessionExpiresAt = undefined;
+  }
   if (preserveRuntimeModel) {
     // Keep the pre-existing runtime model and context window so a background
     // heartbeat turn using a different model does not bleed into the main

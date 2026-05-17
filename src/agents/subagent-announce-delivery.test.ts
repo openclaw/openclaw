@@ -18,6 +18,7 @@ import {
   dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess,
   sendMessage as runtimeSendMessage,
 } from "./subagent-announce-delivery.runtime.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 
 afterEach(() => {
@@ -130,6 +131,7 @@ async function deliverSlackThreadAnnouncement(params: {
   callGateway: typeof runtimeCallGateway;
   isActive: boolean;
   sessionId: string;
+  requesterEntry?: SessionEntry;
   expectsCompletionMessage: boolean;
   directIdempotencyKey: string;
   queueEmbeddedPiMessageWithOutcome?: QueueEmbeddedPiMessageWithOutcome;
@@ -143,6 +145,15 @@ async function deliverSlackThreadAnnouncement(params: {
       sessionId: params.sessionId,
       isActive: params.isActive,
     }),
+    ...(params.requesterEntry
+      ? {
+          loadRequesterSessionEntry: (requesterSessionKey: string) => ({
+            cfg: {} as never,
+            canonicalKey: requesterSessionKey,
+            entry: params.requesterEntry,
+          }),
+        }
+      : {}),
     getRuntimeConfig: () => ({}) as never,
     ...(params.queueEmbeddedPiMessageWithOutcome
       ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
@@ -1457,6 +1468,60 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("pins completion direct fallback to the yielded requester session", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "continued parent run" }],
+      },
+    });
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(false);
+    const pausedSessionExpiresAt = Date.now() + 60_000;
+
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sessionId: "current-route-session",
+      requesterEntry: {
+        sessionId: "current-route-session",
+        updatedAt: Date.now() - 60_000,
+        pausedSessionId: "yielded-parent-session",
+        pausedSessionAt: Date.now() - 1_000,
+        pausedSessionExpiresAt,
+      },
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-yielded-parent-session",
+      queueEmbeddedPiMessageWithOutcome,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "yielded parent smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Continue the parent task.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      sessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      sessionId: "yielded-parent-session",
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "171.222",
+    });
   });
 
   it("reports failure for completion DMs when announce-agent returns no visible output", async () => {

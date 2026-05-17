@@ -145,6 +145,53 @@ describe("agent session resolution", () => {
     });
   });
 
+  it("resumes a bounded paused session even after the route entry is stale", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const now = Date.now();
+      writeSessionStoreSeed(store, {
+        main: {
+          sessionId: "stale-route-session",
+          updatedAt: now - 2 * 24 * 60 * 60_000,
+          sessionStartedAt: now - 2 * 24 * 60 * 60_000,
+          pausedSessionId: "yielded-parent-session",
+          pausedSessionAt: now - 60_000,
+          pausedSessionExpiresAt: now + 60_000,
+        },
+      });
+      const cfg = mockConfig(home, store);
+
+      const resolution = resolveSession({ cfg, sessionKey: "main" });
+
+      expect(resolution.sessionId).toBe("yielded-parent-session");
+      expect(resolution.isNewSession).toBe(false);
+    });
+  });
+
+  it("does not resume an expired paused session binding", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const now = Date.now();
+      writeSessionStoreSeed(store, {
+        main: {
+          sessionId: "stale-route-session",
+          updatedAt: now - 2 * 24 * 60 * 60_000,
+          sessionStartedAt: now - 2 * 24 * 60 * 60_000,
+          pausedSessionId: "expired-yielded-parent-session",
+          pausedSessionAt: now - 2 * 60_000,
+          pausedSessionExpiresAt: now - 60_000,
+        },
+      });
+      const cfg = mockConfig(home, store);
+
+      const resolution = resolveSession({ cfg, sessionKey: "main" });
+
+      expect(resolution.sessionId).not.toBe("expired-yielded-parent-session");
+      expect(resolution.sessionId).not.toBe("stale-route-session");
+      expect(resolution.isNewSession).toBe(true);
+    });
+  });
+
   it("forwards resolved outbound session context when resuming by sessionId", async () => {
     await withCrossAgentResumeFixture(async ({ sessionId, sessionKey, cfg }) => {
       const resolution = resolveSession({ cfg, sessionId });

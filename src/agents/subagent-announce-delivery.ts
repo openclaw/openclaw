@@ -1,4 +1,8 @@
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
+import {
+  resolvePausedSessionIdForResume,
+  type SessionEntry,
+} from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
@@ -68,6 +72,11 @@ const AGENT_MEDIATED_COMPLETION_TOOLS = new Set([
 type SubagentAnnounceDeliveryDeps = {
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
+  loadRequesterSessionEntry: (requesterSessionKey: string) => {
+    cfg: OpenClawConfig;
+    entry?: SessionEntry;
+    canonicalKey: string;
+  };
   getRequesterSessionActivity: (requesterSessionKey: string) => {
     sessionId?: string;
     isActive: boolean;
@@ -82,10 +91,13 @@ type SubagentAnnounceDeliveryDeps = {
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
   dispatchGatewayMethodInProcess,
   getRuntimeConfig,
+  loadRequesterSessionEntry: loadRequesterSessionEntryFromStore,
   getRequesterSessionActivity: (requesterSessionKey: string) => {
+    const { entry } = loadRequesterSessionEntry(requesterSessionKey);
     const sessionId =
       resolveActiveEmbeddedRunSessionId(requesterSessionKey) ??
-      loadRequesterSessionEntry(requesterSessionKey).entry?.sessionId;
+      resolvePausedSessionIdForResume(entry) ??
+      entry?.sessionId;
     return {
       sessionId,
       isActive: Boolean(sessionId && isEmbeddedPiRunActive(sessionId)),
@@ -197,7 +209,7 @@ function resolveRequesterSessionActivity(requesterSessionKey: string) {
     return activity;
   }
   const { entry } = loadRequesterSessionEntry(requesterSessionKey);
-  const sessionId = entry?.sessionId;
+  const sessionId = resolvePausedSessionIdForResume(entry) ?? entry?.sessionId;
   return {
     sessionId,
     isActive: Boolean(sessionId && isEmbeddedPiRunActive(sessionId)),
@@ -430,7 +442,7 @@ export async function resolveSubagentCompletionOrigin(params: {
   }
 }
 
-export function loadRequesterSessionEntry(requesterSessionKey: string) {
+function loadRequesterSessionEntryFromStore(requesterSessionKey: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
   const agentId = resolveAgentIdFromSessionKey(canonicalKey);
@@ -438,6 +450,10 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
   const store = loadSessionStore(storePath);
   const entry = store[canonicalKey];
   return { cfg, entry, canonicalKey };
+}
+
+export function loadRequesterSessionEntry(requesterSessionKey: string) {
+  return subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(requesterSessionKey);
 }
 
 export function loadSessionEntryByKey(sessionKey: string) {
@@ -639,6 +655,7 @@ async function sendSubagentAnnounceDirectly(params: {
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
     const requesterEntry = loadRequesterSessionEntry(params.targetRequesterSessionKey).entry;
+    const pausedRequesterSessionId = resolvePausedSessionIdForResume(requesterEntry);
     const deliveryTarget = !params.requesterIsSubagent
       ? resolveExternalBestEffortDeliveryTarget({
           channel: effectiveDirectOrigin?.channel,
@@ -727,6 +744,9 @@ async function sendSubagentAnnounceDirectly(params: {
     }
     const directAgentParams: Record<string, unknown> = {
       sessionKey: canonicalRequesterSessionKey,
+      ...(params.expectsCompletionMessage && pausedRequesterSessionId
+        ? { sessionId: pausedRequesterSessionId }
+        : {}),
       message: params.triggerMessage,
       deliver: shouldDeliverAgentFinal,
       bestEffortDeliver: params.bestEffortDeliver,

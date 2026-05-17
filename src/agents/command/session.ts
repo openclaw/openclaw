@@ -19,7 +19,10 @@ import {
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  resolvePausedSessionIdForResume,
+  type SessionEntry,
+} from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
@@ -325,9 +328,14 @@ export function resolveSession(opts: {
         policy: resetPolicy,
       }).fresh
     : false;
+  const pausedSessionId = resolvePausedSessionIdForResume(sessionEntry, now);
+  const resumesPausedSession = Boolean(!opts.sessionId && pausedSessionId);
   const sessionId =
-    opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
-  const isNewSession = !fresh && !opts.sessionId;
+    opts.sessionId?.trim() ||
+    pausedSessionId ||
+    (fresh ? sessionEntry?.sessionId : undefined) ||
+    crypto.randomUUID();
+  const isNewSession = !fresh && !opts.sessionId && !pausedSessionId;
 
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,
@@ -335,11 +343,11 @@ export function resolveSession(opts: {
   });
 
   const persistedThinking =
-    fresh && sessionEntry?.thinkingLevel
+    (fresh || resumesPausedSession) && sessionEntry?.thinkingLevel
       ? normalizeThinkLevel(sessionEntry.thinkingLevel)
       : undefined;
   const persistedVerbose =
-    fresh && sessionEntry?.verboseLevel
+    (fresh || resumesPausedSession) && sessionEntry?.verboseLevel
       ? normalizeVerboseLevel(sessionEntry.verboseLevel)
       : undefined;
 
