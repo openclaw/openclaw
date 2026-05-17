@@ -171,6 +171,10 @@ describe("gateway control-plane write rate limit", () => {
     },
   );
 
+  it("includes tools.invoke in startup-gated RPC methods", () => {
+    expect(STARTUP_UNAVAILABLE_GATEWAY_METHODS).toContain("tools.invoke");
+  });
+
   it("uses connId fallback when both device and client IP are unknown", () => {
     const key = resolveControlPlaneRateLimitKey({
       connect: buildConnect(),

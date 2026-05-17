@@ -10,6 +10,10 @@ import {
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
+import {
+  gatewayStartupUnavailableDetails,
+  GATEWAY_STARTUP_RETRY_AFTER_MS,
+} from "./protocol/startup-unavailable.js";
 import { invokeGatewayTool, type ToolsInvokeInput } from "./tools-invoke-shared.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
@@ -23,6 +27,7 @@ export async function handleToolsInvokeHttpRequest(
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
+    unavailableGatewayMethods?: ReadonlySet<string>;
   },
 ): Promise<boolean> {
   let url: URL;
@@ -59,6 +64,20 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
   const { cfg, requestAuth } = authResult;
+
+  if (opts.unavailableGatewayMethods?.has("tools.invoke")) {
+    sendJson(res, 503, {
+      ok: false,
+      error: {
+        type: "plugins_not_ready",
+        message: "tools.invoke unavailable during gateway startup",
+        retryable: true,
+        retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+        details: { ...gatewayStartupUnavailableDetails(), method: "tools.invoke" },
+      },
+    });
+    return true;
+  }
 
   const bodyUnknown = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? DEFAULT_BODY_BYTES);
   if (bodyUnknown === undefined) {

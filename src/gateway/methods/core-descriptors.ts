@@ -88,7 +88,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "models.authLogout", scope: "operator.admin", controlPlaneWrite: true },
   { name: "tools.catalog", scope: "operator.read" },
   { name: "tools.effective", scope: "operator.read", startup: true },
-  { name: "tools.invoke", scope: "operator.write" },
+  { name: "tools.invoke", scope: "operator.write", startup: true },
   { name: "tasks.list", scope: "operator.read" },
   { name: "tasks.get", scope: "operator.read" },
   { name: "tasks.cancel", scope: "operator.write" },
