@@ -5,7 +5,11 @@ import {
 
 export type InteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
-export type InteractiveReplyButton = {
+export type MessagePresentationTone = "info" | "success" | "warning" | "danger" | "neutral";
+
+export type MessagePresentationButtonStyle = InteractiveButtonStyle;
+
+export type MessagePresentationButton = {
   label: string;
   value?: string;
   url?: string;
@@ -23,43 +27,60 @@ export type InteractiveReplyButton = {
   style?: InteractiveButtonStyle;
 };
 
-export type InteractiveReplyOption = {
+export type MessagePresentationOption = {
   label: string;
   value: string;
 };
 
+/**
+ * @deprecated Use MessagePresentationButton.
+ */
+export type InteractiveReplyButton = MessagePresentationButton;
+
+/**
+ * @deprecated Use MessagePresentationOption.
+ */
+export type InteractiveReplyOption = MessagePresentationOption;
+
+/**
+ * @deprecated Use MessagePresentationTextBlock.
+ */
 export type InteractiveReplyTextBlock = {
   type: "text";
   text: string;
 };
 
+/**
+ * @deprecated Use MessagePresentationButtonsBlock.
+ */
 type InteractiveReplyButtonsBlock = {
   type: "buttons";
   buttons: InteractiveReplyButton[];
 };
 
+/**
+ * @deprecated Use MessagePresentationSelectBlock.
+ */
 export type InteractiveReplySelectBlock = {
   type: "select";
   placeholder?: string;
   options: InteractiveReplyOption[];
 };
 
+/**
+ * @deprecated Use MessagePresentationBlock.
+ */
 export type InteractiveReplyBlock =
   | InteractiveReplyTextBlock
   | InteractiveReplyButtonsBlock
   | InteractiveReplySelectBlock;
 
+/**
+ * @deprecated Use MessagePresentation.
+ */
 export type InteractiveReply = {
   blocks: InteractiveReplyBlock[];
 };
-
-export type MessagePresentationTone = "info" | "success" | "warning" | "danger" | "neutral";
-
-export type MessagePresentationButtonStyle = InteractiveButtonStyle;
-
-export type MessagePresentationButton = InteractiveReplyButton;
-
-export type MessagePresentationOption = InteractiveReplyOption;
 
 export type MessagePresentationTextBlock = {
   type: "text";
@@ -215,6 +236,9 @@ function normalizeInteractiveBlock(raw: unknown): InteractiveReplyBlock | undefi
   return undefined;
 }
 
+/**
+ * @deprecated Use normalizeMessagePresentation.
+ */
 export function normalizeInteractiveReply(raw: unknown): InteractiveReply | undefined {
   const record = toRecord(raw);
   if (!record) {
@@ -271,6 +295,9 @@ export function normalizeMessagePresentation(raw: unknown): MessagePresentation 
   };
 }
 
+/**
+ * @deprecated Use hasMessagePresentationBlocks.
+ */
 export function hasInteractiveReplyBlocks(value: unknown): value is InteractiveReply {
   return Boolean(normalizeInteractiveReply(value));
 }
@@ -279,6 +306,9 @@ export function hasMessagePresentationBlocks(value: unknown): value is MessagePr
   return Boolean(normalizeMessagePresentation(value));
 }
 
+/**
+ * @deprecated Avoid producing InteractiveReply payloads; send MessagePresentation directly.
+ */
 export function presentationToInteractiveReply(
   presentation: MessagePresentation,
 ): InteractiveReply | undefined {
@@ -339,6 +369,9 @@ export function isMessagePresentationInteractiveBlock(
   return block.type === "buttons" || block.type === "select";
 }
 
+/**
+ * @deprecated Avoid producing InteractiveReply payloads; send MessagePresentation directly.
+ */
 export function presentationToInteractiveControlsReply(
   presentation: MessagePresentation,
 ): InteractiveReply | undefined {
@@ -347,6 +380,9 @@ export function presentationToInteractiveControlsReply(
   });
 }
 
+/**
+ * @deprecated Legacy bridge for old InteractiveReply payloads. New producers should send MessagePresentation.
+ */
 export function interactiveReplyToPresentation(
   interactive: InteractiveReply,
 ): MessagePresentation | undefined {
@@ -466,6 +502,9 @@ export function hasReplyPayloadContent(
   });
 }
 
+/**
+ * @deprecated Use renderMessagePresentationFallbackText with MessagePresentation.
+ */
 export function resolveInteractiveTextFallback(params: {
   text?: string;
   interactive?: InteractiveReply;

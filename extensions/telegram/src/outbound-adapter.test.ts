@@ -216,6 +216,32 @@ describe("telegramOutbound", () => {
     ]);
   });
 
+  it("preserves explicit Telegram buttons when rendering presentation payloads", async () => {
+    const rendered = await telegramOutbound.renderPresentation?.({
+      payload: {
+        text: "Use native buttons:",
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Native", callback_data: "native" }]],
+          },
+        },
+      },
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Generic", value: "generic" }],
+          },
+        ],
+      },
+      ctx: {} as never,
+    });
+
+    expect((rendered?.channelData?.telegram as { buttons?: unknown })?.buttons).toEqual([
+      [{ text: "Native", callback_data: "native" }],
+    ]);
+  });
+
   it("lets allow-always approval callbacks reach Telegram's callback rewrite", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({
       messageId: "tg-approval",

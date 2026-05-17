@@ -5,6 +5,9 @@ export {
   presentationPageSize,
 } from "./presentation-limits.js";
 
+/**
+ * @deprecated Use MessagePresentation helpers for new rendering paths.
+ */
 export function reduceInteractiveReply<TState>(
   interactive: InteractiveReply | undefined,
   initialState: TState,
