@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord/auto-thread-title: raise `DISCORD_THREAD_TITLE_MAX_TOKENS` 512 → 4096 and `DEFAULT_THREAD_TITLE_TIMEOUT_MS` 10 s → 60 s so reasoning models with sizable thinking budgets can still emit a short title, and clamp the effective request to the selected model's output cap (`min(4096, model.maxTokens)`) so a smaller-cap model no longer receives an over-limit request that silently skips the fire-and-forget rename. Thanks @hanamizuki.
 - Channels/outbound: keep channel sends durable when transcript mirroring fails, stop schema-padded poll modifiers from blocking normal sends, preserve WebChat `sessions_send` handoffs, preserve Discord channel-label suppression while hiding internal agent failure traces, match Discord libopus error shapes, and sanitize Discord tool progress scaffolding. (#89626, #89812, #89601) Thanks @Petru2224, @codezz, and @takhoffman.
 - Telegram/Feishu: require admin rights for Telegram target writeback, keep Telegram DM exec approval allowlists working with `ask:off`, prevent Telegram preview duplication across streaming modes, isolate verbose status after streamed finals, cancel clean restart stop timers, slow polling restart storms, and wire Feishu setup runtime setters. (#88973, #89035, #89813, #89814) Thanks @pgondhi987, @zhangguiping-xydt, and @takhoffman.
 - Feishu: preserve full streaming card content by sending the merged text on each update instead of only the latest delta, so card readers see complete output when intermediate frames are missed. (#90181) Thanks @mushuiyu886.
