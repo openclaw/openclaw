@@ -44,6 +44,7 @@ type SlackChannelStatus = {
 
 const SLACK_QA_READY_TIMEOUT_MS = 45_000;
 const SLACK_QA_READY_STABILITY_MS = 3_000;
+const SLACK_QA_GATEWAY_STOP_SETTLE_MS = 3_000;
 
 type SlackQaScenarioId =
   | "slack-allowlist-block"
@@ -1058,6 +1059,7 @@ export async function runSlackQaLive(params: {
           await gatewayHarness.stop().catch((error) => {
             appendLiveLaneIssue(cleanupIssues, "gateway stop failed", error);
           });
+          await new Promise((resolve) => setTimeout(resolve, SLACK_QA_GATEWAY_STOP_SETTLE_MS));
         }
       }
     }
