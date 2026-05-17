@@ -380,10 +380,10 @@ final class AppState {
         {
             self.remoteTarget = configRemoteTarget
         } else if resolvedConnectionMode == .remote,
-           configRemoteTransport != .direct,
-           storedRemoteTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           let host = AppState.remoteHost(from: configRemoteUrl),
-           !LoopbackHost.isLoopbackHost(host)
+                  configRemoteTransport != .direct,
+                  storedRemoteTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let host = AppState.remoteHost(from: configRemoteUrl),
+                  !LoopbackHost.isLoopbackHost(host)
         {
             self.remoteTarget = "\(NSUserName())@\(host)"
         } else {

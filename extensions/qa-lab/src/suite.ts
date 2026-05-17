@@ -281,6 +281,7 @@ function isRuntimeParityPass(result: RuntimeParityResult) {
 
 function formatRuntimeParityCellDetails(cell: RuntimeParityCell) {
   const errors = [cell.transportErrorClass, cell.runtimeErrorClass].filter(Boolean).join(", ");
+  const sentinels = cell.sentinelFindings?.map((finding) => finding.kind).join(", ");
   return [
     `runtime=${cell.runtime}`,
     `wallMs=${cell.wallClockMs}`,
@@ -288,6 +289,7 @@ function formatRuntimeParityCellDetails(cell: RuntimeParityCell) {
     `finalChars=${cell.finalText.length}`,
     `tokens=${cell.usage.totalTokens}`,
     ...(errors ? [`errors=${errors}`] : []),
+    ...(sentinels ? [`sentinels=${sentinels}`] : []),
   ].join(" ");
 }
 

@@ -26,6 +26,7 @@ import {
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
+  resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type {
@@ -35,6 +36,10 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import {
+  normalizeMessagePresentation,
+  presentationToInteractiveReply,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
@@ -82,7 +87,7 @@ import {
   type TelegramNativeQuoteCandidateByMessageId,
 } from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
-import type { TelegramInlineButtons } from "./button-types.js";
+import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import {
   buildTelegramErrorScopeKey,
@@ -96,8 +101,6 @@ import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-de
 import {
   createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
-  isPotentialTruncatedFinal,
-  selectLongerFinalText,
   type DraftLaneState,
   type LaneDeliveryResult,
   type LaneName,
@@ -133,6 +136,22 @@ function resolveDraftPartialText(
     return undefined;
   }
   return nextText;
+}
+
+function resolvePayloadTelegramInlineButtons(
+  payload: ReplyPayload,
+): TelegramInlineButtons | undefined {
+  const telegramData = payload.channelData?.telegram as
+    | { buttons?: TelegramInlineButtons }
+    | undefined;
+  const presentation = normalizeMessagePresentation(payload.presentation);
+  const interactive =
+    payload.interactive ??
+    (presentation ? presentationToInteractiveReply(presentation) : undefined);
+  return resolveTelegramInlineButtons({
+    buttons: telegramData?.buttons,
+    interactive,
+  });
 }
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
@@ -1263,12 +1282,10 @@ export const dispatchTelegramMessage = async ({
       return delivered ? { kind: "sent" } : { kind: "skipped" };
     };
     const resolveTranscriptBackedFinalText = async (text: string): Promise<string> =>
-      isPotentialTruncatedFinal(text)
-        ? (selectLongerFinalText({
-            finalText: text,
-            candidateTexts: [await resolveCurrentTurnTranscriptFinalText()],
-          }) ?? text)
-        : text;
+      await resolveTranscriptBackedChannelFinalText({
+        finalText: text,
+        resolveCandidateText: resolveCurrentTurnTranscriptFinalText,
+      });
 
     if (isDmTopic) {
       try {
@@ -1375,11 +1392,7 @@ export const dispatchTelegramMessage = async ({
                       queuedFinal = true;
                       return;
                     }
-                    const telegramButtons = (
-                      effectivePayload.channelData?.telegram as
-                        | { buttons?: TelegramInlineButtons }
-                        | undefined
-                    )?.buttons;
+                    const telegramButtons = resolvePayloadTelegramInlineButtons(effectivePayload);
                     const split = splitTextIntoLaneSegments(
                       { text: effectivePayload.text },
                       payload.isReasoning,
@@ -1412,11 +1425,7 @@ export const dispatchTelegramMessage = async ({
                       if (!buffered) {
                         return;
                       }
-                      const bufferedButtons = (
-                        buffered.payload.channelData?.telegram as
-                          | { buttons?: TelegramInlineButtons }
-                          | undefined
-                      )?.buttons;
+                      const bufferedButtons = resolvePayloadTelegramInlineButtons(buffered.payload);
                       await deliverFinalAnswerText(
                         buffered.payload,
                         buffered.text,

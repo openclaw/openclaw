@@ -182,6 +182,11 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
         trigger: params.trigger,
         ...buildAgentHookContextChannelFields(params),
       } as const;
+      params.onExecutionPhase?.({
+        phase: "before_agent_reply",
+        provider: params.provider,
+        model: params.model ?? "",
+      });
       const hookResult = await hookRunner.runBeforeAgentReply(
         { cleanedBody: params.prompt },
         hookContext,
@@ -201,6 +206,11 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
           },
         };
       }
+      params.onExecutionPhase?.({
+        phase: "runtime_plugins",
+        provider: params.provider,
+        model: params.model ?? "",
+      });
     }
   }
   const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");

@@ -81,6 +81,7 @@ import {
   applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
   collectExplicitDenylist,
+  expandToolGroups,
   hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
   normalizeToolName,
@@ -545,10 +546,17 @@ export function createOpenClawCodingTools(options?: {
   const mergeToolSearchControlAllowlist = <TPolicy extends { allow?: string[] }>(
     policy: TPolicy | undefined,
   ) => mergeAlsoAllowPolicy(policy, toolSearchControlAllowlist);
+  const runtimeToolAllowlistIncludesMessage = expandToolGroups(
+    options?.runtimeToolAllowlist ?? [],
+  ).some((toolName) => {
+    const normalized = normalizeToolName(toolName);
+    return normalized === "*" || normalized === "message";
+  });
   const runtimeProfileAlsoAllow = [
     ...(options?.forceMessageTool || options?.sourceReplyDeliveryMode === "message_tool_only"
       ? ["message"]
       : []),
+    ...(runtimeToolAllowlistIncludesMessage ? ["message"] : []),
     ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
     ...toolSearchControlAllowlist,
   ];

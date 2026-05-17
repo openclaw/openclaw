@@ -12,7 +12,7 @@ import {
   hasDurableExecApproval,
   persistAllowAlwaysPatterns,
   recordAllowlistMatchesUse,
-  resolveApprovalAuditCandidatePath,
+  resolveApprovalAuditTrustPath,
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
@@ -499,7 +499,7 @@ export async function processGatewayAllowlist(
           agentId: params.agentId,
           sessionKey: params.sessionKey,
         }),
-        resolvedPath: resolveApprovalAuditCandidatePath(
+        resolvedPath: resolveApprovalAuditTrustPath(
           allowlistEval.segments[0]?.resolution ?? null,
           params.workdir,
         ),
@@ -549,7 +549,7 @@ export async function processGatewayAllowlist(
       }
 
       recordMatchedAllowlistUse(
-        resolveApprovalAuditCandidatePath(
+        resolveApprovalAuditTrustPath(
           allowlistEval.segments[0]?.resolution ?? null,
           params.workdir,
         ),
@@ -559,7 +559,7 @@ export async function processGatewayAllowlist(
         allowWithoutEnforcedCommand: enforcedCommand === undefined,
       };
     }
-    const resolvedPath = resolveApprovalAuditCandidatePath(
+    const resolvedPath = resolveApprovalAuditTrustPath(
       allowlistEval.segments[0]?.resolution ?? null,
       params.workdir,
     );
@@ -736,10 +736,7 @@ export async function processGatewayAllowlist(
   }
 
   recordMatchedAllowlistUse(
-    resolveApprovalAuditCandidatePath(
-      allowlistEval.segments[0]?.resolution ?? null,
-      params.workdir,
-    ),
+    resolveApprovalAuditTrustPath(allowlistEval.segments[0]?.resolution ?? null, params.workdir),
   );
 
   return { execCommandOverride: enforcedCommand };

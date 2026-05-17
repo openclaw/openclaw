@@ -227,6 +227,7 @@ export type QaBootstrapScenarioCatalog = {
 export {
   QA_PERSONAL_AGENT_SCENARIO_IDS,
   QA_SCENARIO_PACKS,
+  resolveQaScenarioPackScenarioIds,
   type QaScenarioPackDefinition,
 } from "./scenario-packs.js";
 

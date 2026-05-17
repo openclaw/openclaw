@@ -55,7 +55,10 @@ actor RemoteTunnelManager {
         if let create = self.createInFlight {
             self.logger.info("control tunnel create in flight; joining")
             let tunnel = try await create.task.value
-            return try await self.installCreatedTunnel(tunnel, token: create.token, fallbackPort: UInt16(GatewayEnvironment.gatewayPort()))
+            return try await self.installCreatedTunnel(
+                tunnel,
+                token: create.token,
+                fallbackPort: UInt16(GatewayEnvironment.gatewayPort()))
         }
         await self.waitForRestartBackoffIfNeeded()
 
@@ -80,7 +83,11 @@ actor RemoteTunnelManager {
         return try await self.installCreatedTunnel(tunnel, token: token, fallbackPort: desiredPort)
     }
 
-    private func installCreatedTunnel(_ tunnel: RemotePortTunnel, token: UUID, fallbackPort: UInt16) async throws -> UInt16 {
+    private func installCreatedTunnel(
+        _ tunnel: RemotePortTunnel,
+        token: UUID,
+        fallbackPort: UInt16) async throws -> UInt16
+    {
         if self.createInFlight?.token == token {
             self.createInFlight = nil
         }

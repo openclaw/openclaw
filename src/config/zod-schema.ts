@@ -9,6 +9,7 @@ import {
   isValidControlUiChatMessageMaxWidth,
   normalizeControlUiChatMessageMaxWidth,
 } from "./control-ui-css.js";
+import type { GatewayRemoteConfig } from "./types.gateway.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
@@ -49,6 +50,24 @@ const NodeHostSchema = z
   })
   .strict()
   .optional();
+
+type ConfigSchemaShape<T extends object> = {
+  [Key in keyof T]-?: z.ZodType<T[Key]>;
+};
+
+const GatewayRemoteSchemaShape = {
+  enabled: z.boolean().optional(),
+  url: z.string().optional(),
+  transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
+  remotePort: z.number().int().min(1).max(65_535).optional(),
+  token: SecretInputSchema.optional().register(sensitive),
+  password: SecretInputSchema.optional().register(sensitive),
+  tlsFingerprint: z.string().optional(),
+  sshTarget: z.string().optional(),
+  sshIdentity: z.string().optional(),
+} satisfies ConfigSchemaShape<GatewayRemoteConfig>;
+
+const GatewayRemoteConfigSchema = z.object(GatewayRemoteSchemaShape).strict().optional();
 
 const LegacyCanvasHostSchema = z
   .object({
@@ -959,18 +978,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
-        remote: z
-          .object({
-            url: z.string().optional(),
-            transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
-            token: SecretInputSchema.optional().register(sensitive),
-            password: SecretInputSchema.optional().register(sensitive),
-            tlsFingerprint: z.string().optional(),
-            sshTarget: z.string().optional(),
-            sshIdentity: z.string().optional(),
-          })
-          .strict()
-          .optional(),
+        remote: GatewayRemoteConfigSchema,
         reload: z
           .object({
             mode: z
