@@ -11,6 +11,7 @@ import { isRestartEnabled } from "../config/commands.flags.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
@@ -106,6 +107,23 @@ async function disposeMcpRuntimesWithTimeout(params: {
   if (result === "timeout") {
     params.onWarn(`${params.label} exceeded ${params.timeoutMs}ms; continuing`);
   }
+}
+
+async function collectChannelOperationFailures(params: {
+  channels: Iterable<ChannelKind>;
+  run: (channel: ChannelKind) => Promise<void>;
+  onFailure: (channel: ChannelKind, err: unknown) => void;
+}): Promise<ChannelKind[]> {
+  const failures: ChannelKind[] = [];
+  for (const channel of params.channels) {
+    try {
+      await params.run(channel);
+    } catch (err) {
+      failures.push(channel);
+      params.onFailure(channel, err);
+    }
+  }
+  return failures;
 }
 
 type GatewayReloadHandlerParams = {
@@ -329,13 +347,49 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           return;
         }
         await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig);
-        for (const channel of channelsToRestart) {
-          if (channelsStoppedBeforePluginReload.has(channel)) {
-            continue;
-          }
-          params.logChannels.info(`stopping ${channel} channel before plugin reload`);
-          await params.stopChannel(channel);
-          channelsStoppedBeforePluginReload.add(channel);
+        const stoppedChannels: ChannelKind[] = [];
+        const stopFailures = await collectChannelOperationFailures({
+          channels: channelsToRestart,
+          run: async (channel) => {
+            if (channelsStoppedBeforePluginReload.has(channel)) {
+              return;
+            }
+            params.logChannels.info(`stopping ${channel} channel before plugin reload`);
+            stoppedChannels.push(channel);
+            await params.stopChannel(channel);
+            channelsStoppedBeforePluginReload.add(channel);
+          },
+          onFailure: (channel, err) => {
+            params.logChannels.error(
+              `failed to stop ${channel} channel before plugin reload: ${formatErrorMessage(err)}`,
+            );
+          },
+        });
+        if (stopFailures.length > 0) {
+          const rollbackFailures = await collectChannelOperationFailures({
+            channels: stoppedChannels,
+            run: async (channel) => {
+              params.logChannels.info(
+                `restarting ${channel} channel after failed plugin reload pre-stop`,
+              );
+              await params.startChannel(channel);
+              channelsStoppedBeforePluginReload.delete(channel);
+            },
+            onFailure: (channel, err) => {
+              params.logChannels.error(
+                `failed to restart ${channel} channel after failed plugin reload pre-stop: ${formatErrorMessage(
+                  err,
+                )}`,
+              );
+            },
+          });
+          const rollbackSuffix =
+            rollbackFailures.length > 0
+              ? `; rollback restart failed for: ${rollbackFailures.join(", ")}`
+              : "";
+          throw new Error(
+            `failed to stop channels before plugin reload: ${stopFailures.join(", ")}${rollbackSuffix}`,
+          );
         }
       };
       const pluginReloadResult = await params.reloadPlugins({
@@ -429,8 +483,19 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           }
           await params.startChannel(name);
         };
-        for (const channel of channelsToRestart) {
-          await restartChannel(channel);
+        const restartFailures = await collectChannelOperationFailures({
+          channels: channelsToRestart,
+          run: restartChannel,
+          onFailure: (channel, err) => {
+            params.logChannels.error(
+              `failed to restart ${channel} channel during hot reload: ${formatErrorMessage(err)}`,
+            );
+          },
+        });
+        if (restartFailures.length > 0) {
+          throw new Error(
+            `failed to restart channels during hot reload: ${restartFailures.join(", ")}`,
+          );
         }
       }
     }
