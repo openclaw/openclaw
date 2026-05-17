@@ -296,14 +296,33 @@ For the full import map, see [Plugin SDK overview](/plugins/sdk-overview).
 5. Open a PR to `main` titled `fix(<plugin-id>): beta blocker - <summary>` and link the issue in both the PR and your Discord thread. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation. Blockers with a PR get merged; blockers without one might ship anyway. Maintainers watch these threads during beta testing.
 6. Silence means green. If you miss the window, your fix likely lands in the next cycle.
 
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Channel Plugins" icon="messages-square" href="/plugins/sdk-channel-plugins">
+    Build a messaging channel plugin
+  </Card>
+  <Card title="Provider Plugins" icon="cpu" href="/plugins/sdk-provider-plugins">
+    Build a model provider plugin
+  </Card>
+  <Card title="CLI Backend Plugins" icon="terminal" href="/plugins/cli-backend-plugins">
+    Register a local AI CLI backend
+  </Card>
+  <Card title="SDK Overview" icon="book-open" href="/plugins/sdk-overview">
+    Import map and registration API reference
+  </Card>
+  <Card title="Runtime Helpers" icon="settings" href="/plugins/sdk-runtime">
+    TTS, search, subagent via api.runtime
+  </Card>
+  <Card title="Testing" icon="test-tubes" href="/plugins/sdk-testing">
+    Test utilities and patterns
+  </Card>
+  <Card title="Plugin Manifest" icon="file-json" href="/plugins/manifest">
+    Full manifest schema reference
+  </Card>
+</CardGroup>
+
 ## Related
 
-- [Building channel plugins](/plugins/sdk-channel-plugins)
-- [Building provider plugins](/plugins/sdk-provider-plugins)
-- [Building CLI backend plugins](/plugins/cli-backend-plugins)
 - [Plugin hooks](/plugins/hooks)
-- [Plugin SDK overview](/plugins/sdk-overview)
-- [Runtime helpers](/plugins/sdk-runtime)
-- [Plugin manifest](/plugins/manifest)
 - [Plugin architecture](/plugins/architecture)
-- [SDK testing](/plugins/sdk-testing)
