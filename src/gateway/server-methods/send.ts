@@ -373,6 +373,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           ),
           toolContext: request.toolContext,
           dryRun: false,
+          gatewayClientScopes: client?.connect?.scopes ?? [],
         });
         if (!handled) {
           const error = errorShape(

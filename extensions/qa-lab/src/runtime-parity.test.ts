@@ -101,11 +101,7 @@ async function createRuntimeParityGatewayTempRoot(
       },
     ]),
   );
-  await fs.writeFile(
-    path.join(sessionsDir, "sessions.json"),
-    JSON.stringify(store),
-    "utf8",
-  );
+  await fs.writeFile(path.join(sessionsDir, "sessions.json"), JSON.stringify(store), "utf8");
   await Promise.all(
     fixtures.map((entry) =>
       fs.writeFile(
@@ -670,5 +666,73 @@ describe("runtime parity", () => {
 
     expect(cell.finalText).toBe("scenario final");
     expect(cell.transcriptBytes).not.toContain("deployment ok");
+  });
+
+  it("marks captured cells failed when gateway logs contain QA sentinel signatures", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRoot(
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          content: "scenario final",
+        },
+      }),
+    );
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: {
+        tempRoot,
+        logs: () => "codex_app_server progress stalled for run abc123",
+      },
+      scenarioResult: {
+        status: "pass",
+      },
+      wallClockMs: 42,
+    });
+
+    expect(cell.runtimeErrorClass).toBe("sentinel:stalled-agent-run");
+    expect(cell.sentinelFindings?.map((finding) => finding.kind)).toEqual(["stalled-agent-run"]);
+  });
+
+  it("marks direct-reply self-message transcripts as captured cell failures", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRoot(
+      [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                name: "message",
+                input: { action: "send", conversationId: "qa-operator", text: "hello" },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "Sent.",
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "pi",
+      gateway: {
+        tempRoot,
+      },
+      scenarioResult: {
+        status: "pass",
+      },
+      wallClockMs: 42,
+    });
+
+    expect(cell.finalText).toBe("Sent.");
+    expect(cell.runtimeErrorClass).toBe("sentinel:direct-reply-self-message");
+    expect(cell.sentinelFindings?.map((finding) => finding.kind)).toEqual([
+      "direct-reply-self-message",
+    ]);
   });
 });

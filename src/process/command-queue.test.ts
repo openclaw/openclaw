@@ -161,6 +161,64 @@ describe("command queue", () => {
     expect(getQueueSize()).toBe(0);
   });
 
+  it("runs foreground work before already queued background work", async () => {
+    const { task: blocker, release } = enqueueBlockedMainTask(async () => "blocker");
+    const calls: string[] = [];
+
+    const background = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("background");
+        return "background";
+      },
+      { priority: "background" },
+    );
+    const normal = enqueueCommandInLane(CommandLane.Main, async () => {
+      calls.push("normal");
+      return "normal";
+    });
+    const foreground = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("foreground");
+        return "foreground";
+      },
+      { priority: "foreground" },
+    );
+
+    release();
+    await expect(blocker).resolves.toBe("blocker");
+    await expect(foreground).resolves.toBe("foreground");
+    await expect(normal).resolves.toBe("normal");
+    await expect(background).resolves.toBe("background");
+    expect(calls).toEqual(["foreground", "normal", "background"]);
+  });
+
+  it("preserves FIFO order within each priority", async () => {
+    const { task: blocker, release } = enqueueBlockedMainTask(async () => "blocker");
+    const calls: string[] = [];
+
+    const first = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("first");
+      },
+      { priority: "foreground" },
+    );
+    const second = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("second");
+      },
+      { priority: "foreground" },
+    );
+
+    release();
+    await blocker;
+    await Promise.all([first, second]);
+    expect(calls).toEqual(["first", "second"]);
+  });
+
   it("logs enqueue depth after push", async () => {
     const task = enqueueCommand(async () => {});
 
