@@ -1008,6 +1008,23 @@ export async function spawnSubagentDirect(
     }
     threadBindingReady = true;
     hasBoundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(bindResult.deliveryOrigin);
+    if (spawnMode === "session" && !hasBoundThreadDeliveryOrigin) {
+      try {
+        await callSubagentGateway({
+          method: "sessions.delete",
+          params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
+          timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
+        });
+      } catch {
+        // Best-effort cleanup only.
+      }
+      return {
+        status: "error",
+        error:
+          "Thread-bound session hook returned threadBindingReady=true without a routable deliveryOrigin; refusing to mix bound-session delivery with auto-announce.",
+        childSessionKey,
+      };
+    }
     childSessionOrigin =
       mergeDeliveryContext(bindResult.deliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
   }

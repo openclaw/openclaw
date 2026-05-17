@@ -33,6 +33,12 @@ const hookRunnerMocks = vi.hoisted(() => ({
     return {
       status: "ok" as const,
       threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "discord",
+        to: "channel:123",
+        accountId: "work",
+        threadId: "thread-1",
+      },
     };
   }),
   runSubagentSpawned: vi.fn(async () => {}),
@@ -408,6 +414,24 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     });
 
     expectThreadBindFailureCleanup(result, /unable to create or bind a thread/i);
+  });
+
+  it("returns error when persistent thread binding lacks a routable delivery origin", async () => {
+    hookRunnerMocks.runSubagentSpawning.mockResolvedValueOnce({
+      status: "ok",
+      threadBindingReady: true,
+    });
+    const result = await spawn({
+      toolCallId: "call4c",
+      runTimeoutSeconds: 1,
+      thread: true,
+      mode: "session",
+      agentAccountId: "work",
+      agentTo: "channel:123",
+      context: "isolated",
+    });
+
+    expectThreadBindFailureCleanup(result, /without a routable deliveryOrigin/i);
   });
 
   it("rejects mode=session when thread=true is not requested", async () => {

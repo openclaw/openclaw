@@ -32,10 +32,12 @@ describe("thread binding spawn policy helpers", () => {
     );
   });
 
-  it("treats child-placement channels as automatic child-thread spawn channels", () => {
+  it("treats child-placement channels and Telegram as automatic child-thread spawn channels", () => {
     expect(supportsAutomaticThreadBindingSpawn("child-chat")).toBe(true);
     expect(supportsAutomaticThreadBindingSpawn("current-chat")).toBe(false);
     expect(supportsAutomaticThreadBindingSpawn("unknown-chat")).toBe(false);
+    expect(supportsAutomaticThreadBindingSpawn("telegram")).toBe(true);
+    expect(supportsAutomaticThreadBindingSpawn("Telegram")).toBe(true);
   });
 
   it("allows thread-here on threadless conversation channels without a native thread id", () => {

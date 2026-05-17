@@ -548,6 +548,38 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.result).not.toContain("grep output");
   });
 
+  it("does not expose raw web fetch tool JSON as timeout output", async () => {
+    chatHistoryMessages = [
+      {
+        role: "toolResult",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              url: "https://example.test/page",
+              status: 200,
+              contentType: "text/html",
+              text: "SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source",
+              externalContent: { untrusted: true },
+            }),
+          },
+        ],
+      },
+    ];
+
+    await runAnnounceFlowForTest("run-timeout-unsafe-raw-output", {
+      outcome: { status: "timeout" },
+      roundOneReply: undefined,
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
+    expect(internalEvents[0]?.result).toBe("(no output)");
+    expect(directAgentCall?.params?.message).not.toContain("SECURITY NOTICE");
+    expect(directAgentCall?.params?.message).not.toContain("example.test");
+  });
+
   it("preserves NO_REPLY when timeout partial-progress history mixes prior text and later silence", async () => {
     chatHistoryMessages = [
       ...createTimeoutHistoryWithNoReply(),
