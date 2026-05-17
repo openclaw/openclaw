@@ -161,6 +161,64 @@ describe("command queue", () => {
     expect(getQueueSize()).toBe(0);
   });
 
+  it("runs foreground work before already queued background work", async () => {
+    const { task: blocker, release } = enqueueBlockedMainTask(async () => "blocker");
+    const calls: string[] = [];
+
+    const background = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("background");
+        return "background";
+      },
+      { priority: "background" },
+    );
+    const normal = enqueueCommandInLane(CommandLane.Main, async () => {
+      calls.push("normal");
+      return "normal";
+    });
+    const foreground = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("foreground");
+        return "foreground";
+      },
+      { priority: "foreground" },
+    );
+
+    release();
+    await expect(blocker).resolves.toBe("blocker");
+    await expect(foreground).resolves.toBe("foreground");
+    await expect(normal).resolves.toBe("normal");
+    await expect(background).resolves.toBe("background");
+    expect(calls).toEqual(["foreground", "normal", "background"]);
+  });
+
+  it("preserves FIFO order within each priority", async () => {
+    const { task: blocker, release } = enqueueBlockedMainTask(async () => "blocker");
+    const calls: string[] = [];
+
+    const first = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("first");
+      },
+      { priority: "foreground" },
+    );
+    const second = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("second");
+      },
+      { priority: "foreground" },
+    );
+
+    release();
+    await blocker;
+    await Promise.all([first, second]);
+    expect(calls).toEqual(["first", "second"]);
+  });
+
   it("logs enqueue depth after push", async () => {
     const task = enqueueCommand(async () => {});
 
@@ -386,6 +444,72 @@ describe("command queue", () => {
         activeCount: 0,
         queuedCount: 0,
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("task timeout renews from progress timestamps", async () => {
+    const lane = `timeout-progress-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      let progressAtMs = Date.now();
+      const blocker = createDeferred();
+      const first = enqueueCommandInLane(
+        lane,
+        async () => {
+          await blocker.promise;
+          return "first";
+        },
+        {
+          taskTimeoutMs: 25,
+          taskTimeoutProgressAtMs: () => progressAtMs,
+        },
+      );
+      let secondRan = false;
+      const second = enqueueCommandInLane(lane, async () => {
+        secondRan = true;
+        return "second";
+      });
+
+      await vi.advanceTimersByTimeAsync(20);
+      progressAtMs = Date.now();
+      await vi.advanceTimersByTimeAsync(20);
+      expect(secondRan).toBe(false);
+
+      blocker.resolve();
+      await expect(first).resolves.toBe("first");
+      await expect(second).resolves.toBe("second");
+      expect(secondRan).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("task timeout falls back when progress timestamp callback throws", async () => {
+    const lane = `timeout-progress-throw-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
+        taskTimeoutMs: 25,
+        taskTimeoutProgressAtMs: () => {
+          throw new Error("progress failed");
+        },
+      });
+      const firstRejected = expect(first).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+
+      await vi.advanceTimersByTimeAsync(25);
+      await firstRejected;
+
+      expect(
+        diagnosticMocks.diag.warn.mock.calls.some(([message]) =>
+          String(message).includes("lane task timeout progress callback failed"),
+        ),
+      ).toBe(true);
     } finally {
       vi.useRealTimers();
     }

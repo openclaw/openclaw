@@ -61,7 +61,11 @@ import {
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
-import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
+import {
+  listOpenAIAuthProfileProvidersForAgentRuntime,
+  resolveContextConfigProviderForRuntime,
+  resolveSelectedOpenAIPiRuntimeProvider,
+} from "../openai-codex-routing.js";
 import {
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
@@ -205,6 +209,23 @@ function withEmbeddedRunLaneTimeout(
     return opts;
   }
   return { ...opts, taskTimeoutMs: laneTaskTimeoutMs };
+}
+
+function resolveEmbeddedRunSessionQueuePriority(
+  trigger: RunEmbeddedPiAgentParams["trigger"],
+): CommandQueueEnqueueOptions["priority"] {
+  switch (trigger) {
+    case "user":
+    case "manual":
+      return "foreground";
+    case "cron":
+    case "heartbeat":
+    case "memory":
+    case "overflow":
+      return "background";
+    default:
+      return "normal";
+  }
 }
 
 function normalizeEmbeddedRunAttemptResult(
@@ -374,15 +395,30 @@ export async function runEmbeddedPiAgent(
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
+  const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(params.trigger);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
+  let laneTaskProgressAtMs = Date.now();
+  const noteLaneTaskProgress = () => {
+    laneTaskProgressAtMs = Date.now();
+  };
   const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
-    withEmbeddedRunLaneTimeout(opts, laneTaskTimeoutMs);
+    withEmbeddedRunLaneTimeout(
+      {
+        ...opts,
+        taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
+      },
+      laneTaskTimeoutMs,
+    );
   const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>
     params.enqueue
       ? params.enqueue(task, withLaneTimeout(opts))
       : enqueueCommandInLane(globalLane, task, withLaneTimeout(opts));
-  const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>
-    params.enqueue ? params.enqueue(task, opts) : enqueueCommandInLane(sessionLane, task, opts);
+  const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
+    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
+    return params.enqueue
+      ? params.enqueue(task, sessionOpts)
+      : enqueueCommandInLane(sessionLane, task, sessionOpts);
+  };
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??
@@ -425,7 +461,14 @@ export async function runEmbeddedPiAgent(
           "phase"
         >,
       ) => {
+        noteLaneTaskProgress();
         params.onExecutionPhase?.({ phase, ...extra });
+      };
+      const notifyRunProgress = (
+        info: Parameters<NonNullable<RunEmbeddedPiAgentParams["onRunProgress"]>>[0],
+      ) => {
+        noteLaneTaskProgress();
+        params.onRunProgress?.(info);
       };
       const emitStartupStageSummary = (phase: string) => {
         const summary = startupStages.snapshot();
@@ -552,6 +595,16 @@ export async function runEmbeddedPiAgent(
         agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
       });
       const pluginHarnessOwnsTransport = agentHarness.id !== "pi";
+      const modelConfigProvider = provider;
+      const selectedPiRuntimeProvider = resolveSelectedOpenAIPiRuntimeProvider({
+        provider,
+        harnessRuntime: agentHarness.id,
+        agentHarnessId: agentHarness.id,
+        authProfileProvider: params.authProfileId?.split(":", 1)[0],
+        authProfileId: params.authProfileId,
+        config: params.config,
+        workspaceDir: resolvedWorkspace,
+      });
       const dynamicModelResolution = await resolveModelAsync(
         provider,
         modelId,
@@ -565,7 +618,7 @@ export async function runEmbeddedPiAgent(
           workspaceDir: resolvedWorkspace,
         },
       );
-      const modelResolution =
+      let modelResolution =
         dynamicModelResolution.model || pluginHarnessOwnsTransport
           ? dynamicModelResolution
           : await (async () => {
@@ -576,6 +629,22 @@ export async function runEmbeddedPiAgent(
                 workspaceDir: resolvedWorkspace,
               });
             })();
+      if (selectedPiRuntimeProvider !== provider && modelResolution.model) {
+        const runtimeModelResolution = await resolveModelAsync(
+          selectedPiRuntimeProvider,
+          modelId,
+          agentDir,
+          params.config,
+          {
+            skipPiDiscovery: true,
+            workspaceDir: resolvedWorkspace,
+          },
+        );
+        if (runtimeModelResolution.model) {
+          provider = selectedPiRuntimeProvider;
+          modelResolution = runtimeModelResolution;
+        }
+      }
       const { model, error, authStorage, modelRegistry } = modelResolution;
       if (!model) {
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
@@ -592,7 +661,7 @@ export async function runEmbeddedPiAgent(
         cfg: params.config,
         provider,
         contextConfigProvider: resolveContextConfigProviderForRuntime({
-          provider,
+          provider: modelConfigProvider,
           runtimeId: agentHarness.id,
         }),
         modelId,
@@ -719,12 +788,23 @@ export async function runEmbeddedPiAgent(
       }
       const profileOrder = shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
         ? []
-        : resolveAuthProfileOrder({
-            cfg: params.config,
-            store: authStore,
-            provider,
-            preferredProfile: preferredProfileId,
-          });
+        : [
+            ...new Set(
+              listOpenAIAuthProfileProvidersForAgentRuntime({
+                provider,
+                harnessRuntime: agentHarness.id,
+                agentHarnessId: agentHarness.id,
+                config: params.config,
+              }).flatMap((authProvider) =>
+                resolveAuthProfileOrder({
+                  cfg: params.config,
+                  store: authStore,
+                  provider: authProvider,
+                  preferredProfile: preferredProfileId,
+                }),
+              ),
+            ),
+          ];
       const providerPreferredProfileId = lockedProfileId
         ? undefined
         : resolveProviderAuthProfileId({
@@ -1296,8 +1376,8 @@ export async function runEmbeddedPiAgent(
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             transcriptPrompt: params.transcriptPrompt,
-            currentTurnKind: params.currentTurnKind,
-            currentTurnContext: params.currentTurnContext,
+            currentInboundEventKind: params.currentInboundEventKind,
+            currentInboundContext: params.currentInboundContext,
             images: params.images,
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,
@@ -1329,6 +1409,7 @@ export async function runEmbeddedPiAgent(
             legacyBeforeAgentStartResult,
             thinkLevel,
             onToolOutcome: observePostCompactionToolOutcome,
+            onRunProgress: notifyRunProgress,
             fastMode: params.fastMode,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
@@ -2517,6 +2598,7 @@ export async function runEmbeddedPiAgent(
             toolMediaUrls: attempt.toolMediaUrls,
             toolAudioAsVoice: attempt.toolAudioAsVoice,
             toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
+            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           });
           const timedOutDuringPrompt =
             timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;

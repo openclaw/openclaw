@@ -1849,7 +1849,8 @@ export async function maybeApplyTtsToPayload(params: {
       mediaUrl: result.audioPath,
       audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
       spokenText: textForAudio,
-    };
+      trustedLocalMedia: true,
+    } as ReplyPayload;
   }
 
   lastTtsAttempt = {
