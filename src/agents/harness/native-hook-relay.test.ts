@@ -16,6 +16,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   __testing,
   buildNativeHookRelayCommand,
+  hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
   invokeNativeHookRelayBridge,
   registerNativeHookRelay,
@@ -111,6 +112,70 @@ describe("native hook relay registry", () => {
     expect(relay.commandForEvent("pre_tool_use")).toBe(
       "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
         `${relay.relayId} --event pre_tool_use --timeout 1234`,
+    );
+  });
+
+  it("preserves safety relays while marking hook-only events without handlers inactive", () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      command: {
+        executable: "/opt/Open Claw/openclaw.mjs",
+        nodeExecutable: "/usr/local/bin/node",
+        timeoutMs: 1234,
+      },
+    });
+
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
+    expect(relay.shouldRelayEvent("post_tool_use")).toBe(false);
+    expect(relay.shouldRelayEvent("before_agent_finalize")).toBe(false);
+    expect(relay.shouldRelayEvent("permission_request")).toBe(true);
+  });
+
+  it("builds relay commands only for native events with matching local hooks", () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: vi.fn() }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      command: {
+        executable: "/opt/Open Claw/openclaw.mjs",
+        nodeExecutable: "/usr/local/bin/node",
+        timeoutMs: 1234,
+      },
+    });
+
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
+    expect(relay.shouldRelayEvent("post_tool_use")).toBe(true);
+    expect(relay.shouldRelayEvent("before_agent_finalize")).toBe(false);
+    expect(relay.commandForEvent("post_tool_use")).toBe(
+      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
+        `${relay.relayId} --event post_tool_use --timeout 1234`,
+    );
+  });
+
+  it("builds relay commands for before-agent-finalize hooks", () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_agent_finalize", handler: vi.fn() }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      command: {
+        executable: "/opt/Open Claw/openclaw.mjs",
+        nodeExecutable: "/usr/local/bin/node",
+        timeoutMs: 1234,
+      },
+    });
+
+    expect(relay.shouldRelayEvent("before_agent_finalize")).toBe(true);
+    expect(relay.commandForEvent("before_agent_finalize")).toBe(
+      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
+        `${relay.relayId} --event before_agent_finalize --timeout 1234`,
     );
   });
 
@@ -385,6 +450,56 @@ describe("native hook relay registry", () => {
     expect(readRecordField(invocation, "rawPayload", "invocation raw payload").tool_input).toEqual({
       command: "pnpm test",
     });
+  });
+
+  it("reports whether a relay already observed a tool use invocation", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use", "post_tool_use"],
+    });
+
+    expect(
+      hasNativeHookRelayInvocation({
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        toolUseId: "call-1",
+      }),
+    ).toBe(false);
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_use_id: "call-1",
+        tool_input: { command: "pnpm test" },
+      },
+    });
+
+    expect(
+      hasNativeHookRelayInvocation({
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        toolUseId: "call-1",
+      }),
+    ).toBe(true);
+    expect(
+      hasNativeHookRelayInvocation({
+        relayId: relay.relayId,
+        event: "post_tool_use",
+        toolUseId: "call-1",
+      }),
+    ).toBe(false);
+    expect(
+      hasNativeHookRelayInvocation({
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+      }),
+    ).toBe(false);
   });
 
   it("retains bounded payload snapshots in invocation history", async () => {
@@ -681,6 +796,7 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      channelId: "telegram",
     });
 
     const response = await invokeNativeHookRelay({
@@ -718,9 +834,322 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      channelId: "telegram",
       toolName: "exec",
       toolCallId: "native-call-1",
     });
+  });
+
+  it("normalizes Codex exec_command cmd input before running OpenClaw policy", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      block: true,
+      blockReason: "shell command blocked",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      channelId: "telegram",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        cwd: "/repo",
+        tool_name: "exec_command",
+        tool_use_id: "native-exec-command-1",
+        tool_input: { cmd: "cat /tmp/private_key", yield_time_ms: 1000 },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "shell command blocked",
+      },
+    });
+    const event = getMockCallArg(beforeToolCall, 0, 0, "before tool call event");
+    expectRecordFields(event, {
+      toolName: "exec",
+      params: {
+        cmd: "cat /tmp/private_key",
+        command: "cat /tmp/private_key",
+        yield_time_ms: 1000,
+      },
+      runId: "run-1",
+      toolCallId: "native-exec-command-1",
+    });
+  });
+
+  it("prefers Codex exec_command cmd over a stale command field", async () => {
+    const beforeToolCall = vi.fn(async (event: unknown) => {
+      const command = (event as { params?: { command?: string } }).params?.command;
+      return command === "rm -rf dist"
+        ? { block: true, blockReason: "destructive command blocked" }
+        : undefined;
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      channelId: "telegram",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "exec_command",
+        tool_use_id: "native-exec-command-stale-command",
+        tool_input: { command: "echo safe", cmd: "rm -rf dist" },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "destructive command blocked",
+      },
+    });
+    const event = getMockCallArg(beforeToolCall, 0, 0, "before tool call event");
+    expectRecordFields(event, {
+      toolName: "exec",
+      params: {
+        cmd: "rm -rf dist",
+        command: "rm -rf dist",
+      },
+      toolCallId: "native-exec-command-stale-command",
+    });
+  });
+
+  it("normalizes Codex exec_command argv cmd input before running OpenClaw policy", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      block: true,
+      blockReason: "argv command blocked",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        cwd: "/repo",
+        tool_name: "exec_command",
+        tool_use_id: "native-exec-command-array-1",
+        tool_input: { cmd: ["cat", "/tmp/private key"] },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "argv command blocked",
+      },
+    });
+    const event = getMockCallArg(beforeToolCall, 0, 0, "before tool call event");
+    expectRecordFields(event, {
+      toolName: "exec",
+      params: {
+        cmd: ["cat", "/tmp/private key"],
+        command: "cat '/tmp/private key'",
+      },
+      runId: "run-1",
+      toolCallId: "native-exec-command-array-1",
+    });
+  });
+
+  it("blocks Codex app-server report-mode pre-tool calls when policy rewrites params", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      params: { command: "echo rewritten" },
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        openclaw_approval_mode: "report",
+        cwd: "/repo",
+        tool_name: "exec_command",
+        tool_use_id: "native-report-rewrite-1",
+        tool_input: { cmd: "cat /tmp/private_key" },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+      },
+    });
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks ordinary Codex native pre-tool calls when policy rewrites params", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      params: { command: "echo rewritten" },
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        cwd: "/repo",
+        tool_name: "exec_command",
+        tool_use_id: "native-rewrite-1",
+        tool_input: { cmd: "cat /tmp/private_key" },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+      },
+    });
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks Codex native pre-tool calls when policy mutates params in place", async () => {
+    const beforeToolCall = vi.fn(async (event: unknown) => {
+      const params = requireRecord(
+        requireRecord(event, "before tool call event").params,
+        "before tool call params",
+      );
+      params.command = "echo rewritten";
+      return { params };
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        cwd: "/repo",
+        tool_name: "exec_command",
+        tool_use_id: "native-in-place-rewrite-1",
+        tool_input: { cmd: "cat /tmp/private_key" },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+      },
+    });
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports synthetic app-server PreToolUse approval requirements without opening plugin approvals", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      requireApproval: {
+        title: "Needs approval",
+        description: "native command needs approval",
+      },
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        openclaw_approval_mode: "report",
+        cwd: "/repo",
+        tool_name: "exec_command",
+        tool_use_id: "native-approval-report-1",
+        tool_input: { cmd: "cat /tmp/private_key" },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "native command needs approval",
+      },
+    });
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
   });
 
   it("passes config to trusted policies for native pre-tool session extension reads", async () => {
@@ -857,7 +1286,7 @@ describe("native hook relay registry", () => {
     });
   });
 
-  it("does not rewrite Codex native tool input when before_tool_call adjusts params", async () => {
+  it("blocks Codex native Bash pre-tool calls when policy rewrites params", async () => {
     const beforeToolCall = vi.fn(async () => ({
       params: { command: "echo replaced" },
     }));
@@ -882,7 +1311,16 @@ describe("native hook relay registry", () => {
       },
     });
 
-    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+      },
+    });
+    expect(response.stderr).toBe("");
+    expect(response.exitCode).toBe(0);
     expect(beforeToolCall).toHaveBeenCalledTimes(1);
   });
 
@@ -897,6 +1335,7 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      channelId: "telegram",
     });
 
     const response = await invokeNativeHookRelay({
@@ -927,6 +1366,7 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      channelId: "telegram",
       toolName: "exec",
       toolCallId: "native-call-1",
     });
@@ -1158,6 +1598,7 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      channelId: "telegram",
     });
 
     const response = await invokeNativeHookRelay({
@@ -1204,6 +1645,7 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      channelId: "telegram",
       workspaceDir: "/repo",
       modelId: "gpt-5.4",
     });

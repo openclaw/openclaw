@@ -266,7 +266,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const providerOverride = "models.providers.${params.providerConfig.extensionId}";
 
     expect(CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE).toBe("minimal");
-    expect(source).toContain('"--thinking",\n    "minimal"');
+    expect(source).toContain('"--thinking",\n    "off"');
     expect(source.match(/"tools\.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE/g)).toHaveLength(2);
     expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(600);
     expect(source).toContain("buildReleaseProviderConfigOverride");

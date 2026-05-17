@@ -9,7 +9,10 @@ import {
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
 import { doctorCommand } from "../../commands/doctor.js";
-import { UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV } from "../../commands/doctor/shared/update-phase.js";
+import {
+  UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
+  UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
+} from "../../commands/doctor/shared/update-phase.js";
 import { createPreUpdateConfigSnapshot } from "../../config/backup-rotation.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
@@ -144,8 +147,6 @@ const POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_SOURC
 const POST_CORE_UPDATE_STARTED_AT_ENV = "OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS";
 const POST_CORE_UPDATE_RESULT_POLL_MS = 100;
 const PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
-  "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
@@ -2733,6 +2734,14 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       postCoreConfigSnapshot,
       preUpdateSourceConfig,
     );
+    const parentPluginInstallRecords =
+      await readPostCorePluginInstallRecordsFile(postCoreInstallRecordsPath);
+    // The updated doctor may have repaired plugin installs before this fresh process resumed.
+    const currentPluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+    const pluginInstallRecords =
+      Object.keys(currentPluginInstallRecords).length > 0
+        ? currentPluginInstallRecords
+        : parentPluginInstallRecords;
 
     const pluginUpdate = await runPostCorePluginUpdate({
       root,
@@ -2742,7 +2751,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       restoredAuthoredChannels: restoredPostCoreConfig.authoredChannels,
       opts,
       timeoutMs: updateStepTimeoutMs,
-      pluginInstallRecords: await readPostCorePluginInstallRecordsFile(postCoreInstallRecordsPath),
+      pluginInstallRecords,
     });
     if (process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
       await writePostCorePluginUpdateResultFile(

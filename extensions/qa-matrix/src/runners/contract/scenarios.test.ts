@@ -790,7 +790,7 @@ describe("matrix live qa scenarios", () => {
     const scenarios = new Map(MATRIX_QA_SCENARIOS.map((scenario) => [scenario.id, scenario]));
 
     expect(scenarios.get("matrix-subagent-thread-spawn")?.timeoutMs).toBeGreaterThanOrEqual(
-      120_000,
+      180_000,
     );
     expect(scenarios.get("matrix-room-generated-image-delivery")?.timeoutMs).toBeGreaterThanOrEqual(
       180_000,
@@ -2766,7 +2766,7 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.threadRootEventId).toBe("$subagent-thread-root");
 
     expectSentTextMessage(sendTextMessage, {
-      bodyIncludes: ["Call sessions_spawn now for this QA check", "runTimeoutSeconds=60"],
+      bodyIncludes: ["Call sessions_spawn now for this QA check", "runTimeoutSeconds=120"],
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });
@@ -2986,6 +2986,88 @@ describe("matrix live qa scenarios", () => {
 
     expectSentTextMessage(sendTextMessage, {
       bodyIncludes: "Partial streaming QA check",
+      mentionUserIds: ["@sut:matrix-qa.test"],
+      roomId: "!main:matrix-qa.test",
+    });
+  });
+
+  it("accepts final-only partial streaming replies without a draft replacement", async () => {
+    const fallbackFinalText = "MATRIX_QA_PARTIAL_STREAM_PREVIEW_COMPLETE";
+    const { sendTextMessage, waitForRoomEvent } = mockMatrixQaRoomClient({
+      driverEventId: "$partial-stream-trigger",
+      events: [
+        {
+          event: ({ sendTextMessage }) =>
+            matrixQaMessageEvent({
+              kind: "message",
+              eventId: "$partial-final-only",
+              body: readMatrixQaReplyDirective(
+                mockMessageBody(sendTextMessage, "sendTextMessage"),
+                fallbackFinalText,
+              ),
+            }),
+          since: "driver-sync-final",
+        },
+      ],
+    });
+
+    const scenario = requireMatrixQaScenario("matrix-room-partial-streaming-preview");
+
+    const result = await runMatrixQaScenario(scenario, matrixQaScenarioContext());
+    const artifacts = result.artifacts as {
+      driverEventId?: unknown;
+      previewEventId?: unknown;
+      reply?: { eventId?: unknown };
+    };
+    expect(artifacts.driverEventId).toBe("$partial-stream-trigger");
+    expect(artifacts.previewEventId).toBeUndefined();
+    expect(artifacts.reply?.eventId).toBe("$partial-final-only");
+    expect(result.details).toContain("final delivered without draft replacement");
+    expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
+
+    expectSentTextMessage(sendTextMessage, {
+      bodyIncludes: "Partial streaming QA check",
+      mentionUserIds: ["@sut:matrix-qa.test"],
+      roomId: "!main:matrix-qa.test",
+    });
+  });
+
+  it("accepts final-only quiet streaming replies without a draft replacement", async () => {
+    const fallbackFinalText = "MATRIX_QA_QUIET_STREAM_PREVIEW_COMPLETE";
+    const { sendTextMessage, waitForRoomEvent } = mockMatrixQaRoomClient({
+      driverEventId: "$quiet-stream-trigger",
+      events: [
+        {
+          event: ({ sendTextMessage }) =>
+            matrixQaMessageEvent({
+              kind: "message",
+              eventId: "$quiet-final-only",
+              body: readMatrixQaReplyDirective(
+                mockMessageBody(sendTextMessage, "sendTextMessage"),
+                fallbackFinalText,
+              ),
+            }),
+          since: "driver-sync-final",
+        },
+      ],
+    });
+
+    const scenario = requireMatrixQaScenario("matrix-room-quiet-streaming-preview");
+
+    const result = await runMatrixQaScenario(scenario, matrixQaScenarioContext());
+    const artifacts = result.artifacts as {
+      driverEventId?: unknown;
+      previewEventId?: unknown;
+      reply?: { eventId?: unknown };
+    };
+    expect(artifacts.driverEventId).toBe("$quiet-stream-trigger");
+    expect(artifacts.previewEventId).toBeUndefined();
+    expect(artifacts.reply?.eventId).toBe("$quiet-final-only");
+    expect(result.details).toContain("final delivered without draft replacement");
+    expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
+
+    expectSentTextMessage(sendTextMessage, {
+      bodyIncludes: "Quiet streaming QA check",
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });
@@ -3425,11 +3507,12 @@ describe("matrix live qa scenarios", () => {
   it("preserves separate finalized block events when Matrix block streaming is enabled", async () => {
     const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
     const sendTextMessage = vi.fn().mockResolvedValue("$block-stream-trigger");
-    const readBlockText = (label: "ONE" | "TWO") =>
-      mockMessageBody(sendTextMessage, "sendTextMessage")
-        .split("\n")
-        .find((line) => line.startsWith(`MATRIX_QA_BLOCK_${label}_`)) ??
-      `MATRIX_QA_BLOCK_${label}_FIXED`;
+    const readBlockText = (label: "ONE" | "TWO") => {
+      const match = mockMessageBody(sendTextMessage, "sendTextMessage").match(
+        new RegExp(`MATRIX_QA_BLOCK_${label}_[A-F0-9]{8}`),
+      );
+      return match?.[0] ?? `MATRIX_QA_BLOCK_${label}_FIXED`;
+    };
     const waitForRoomEvent = vi
       .fn()
       .mockImplementationOnce(async () => ({
@@ -3511,8 +3594,13 @@ describe("matrix live qa scenarios", () => {
     });
     const body = mockMessageBody(sendTextMessage, "sendTextMessage");
     expect(body).toMatch(
-      /reply with exactly this two-line body and no extra text:\nMATRIX_QA_BLOCK_ONE_[A-F0-9]{8}\nMATRIX_QA_BLOCK_TWO_[A-F0-9]{8}$/,
+      /first reply with only this exact marker: `MATRIX_QA_BLOCK_ONE_[A-F0-9]{8}`/,
     );
+    expect(body).toContain("Then use the read tool exactly once on `QA_KICKOFF_TASK.md`.");
+    expect(body).toMatch(
+      /After that read completes, reply with only this exact marker: `MATRIX_QA_BLOCK_TWO_[A-F0-9]{8}`/,
+    );
+    expect(scenario.configOverrides?.toolProfile).toBe("coding");
     expect(mockObjectArg(waitForRoomEvent, "waitForRoomEvent", 1).since).toBe(
       "driver-sync-block-one",
     );
@@ -5135,23 +5223,30 @@ describe("matrix live qa scenarios", () => {
             }),
           };
         }
-        if (joined === "matrix verify status --account cli-add-e2ee --json") {
+        if (
+          joined ===
+          "matrix verify status --account cli-add-e2ee --allow-degraded-local-state --json"
+        ) {
           return {
             args,
             exitCode: 0,
             stderr: "",
             stdout: JSON.stringify({
               backup: {
-                decryptionKeyCached: true,
+                decryptionKeyCached: null,
                 keyLoadError: null,
-                matchesDecryptionKey: true,
-                trusted: true,
+                matchesDecryptionKey: null,
+                trusted: null,
               },
-              crossSigningVerified: true,
+              backupVersion: "backup-v1",
+              crossSigningVerified: false,
               deviceId: "CLIADDDEVICE",
-              signedByOwner: true,
-              userId: "@driver:matrix-qa.test",
-              verified: true,
+              encryptionEnabled: true,
+              recoveryKeyStored: true,
+              serverDeviceKnown: true,
+              signedByOwner: false,
+              userId: "@cli-add:matrix-qa.test",
+              verified: false,
             }),
           };
         }
@@ -5207,7 +5302,15 @@ describe("matrix live qa scenarios", () => {
           "--enable-e2ee",
           "--json",
         ],
-        ["matrix", "verify", "status", "--account", "cli-add-e2ee", "--json"],
+        [
+          "matrix",
+          "verify",
+          "status",
+          "--account",
+          "cli-add-e2ee",
+          "--allow-degraded-local-state",
+          "--json",
+        ],
       ]);
       expect(mockObjectArg(registerWithToken, "registerWithToken").deviceName).toBe(
         "OpenClaw Matrix QA CLI Account Add Owner",
@@ -5222,7 +5325,7 @@ describe("matrix live qa scenarios", () => {
       ).resolves.toContain('"encryptionEnabled":true');
       await expect(
         readFile(path.join(cliArtifactDir, "verify-status.stdout.txt"), "utf8"),
-      ).resolves.toContain('"verified":true');
+      ).resolves.toContain('"recoveryKeyStored":true');
     } finally {
       await rm(outputDir, { force: true, recursive: true });
     }
