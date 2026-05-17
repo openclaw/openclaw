@@ -1,5 +1,7 @@
-import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
-import { resolveConfiguredRuntimePluginInstallCandidate } from "../commands/doctor/shared/configured-runtime-plugin-installs.js";
+import {
+  collectConfiguredRuntimePluginIds,
+  resolveConfiguredRuntimePluginInstallCandidate,
+} from "../commands/doctor/shared/configured-runtime-plugin-installs.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   getRuntimeConfig,
@@ -125,7 +127,7 @@ function collectConfiguredRuntimePluginWarnings(params: {
       .filter((plugin) => plugin.enabled !== false && plugin.status !== "disabled")
       .map((plugin) => plugin.id),
   );
-  return collectConfiguredAgentHarnessRuntimes(params.cfg, params.env, {
+  return collectConfiguredRuntimePluginIds(params.cfg, params.env, {
     includeEnvRuntime: false,
     includeImplicitRuntimePreferences: false,
     includeLegacyAgentRuntimes: false,
@@ -141,17 +143,17 @@ function collectConfiguredRuntimePluginWarnings(params: {
     });
     if (blockedGuidance) {
       return [
-        `- Configured agentRuntime.id="${runtimeId}" requires the ${candidate.label} plugin, but "${runtimeId}" is blocked by plugin configuration. ${blockedGuidance}`,
+        `- Configured runtime "${runtimeId}" requires the ${candidate.label} plugin, but "${runtimeId}" is blocked by plugin configuration. ${blockedGuidance}`,
       ];
     }
     if (disabledPluginRecord) {
       return [
-        `- Configured agentRuntime.id="${runtimeId}" requires the ${candidate.label} plugin, but "${runtimeId}" is disabled. ${formatDisabledRuntimePluginGuidance({ cfg: params.cfg, pluginId: runtimeId })}`,
+        `- Configured runtime "${runtimeId}" requires the ${candidate.label} plugin, but "${runtimeId}" is disabled. ${formatDisabledRuntimePluginGuidance({ cfg: params.cfg, pluginId: runtimeId })}`,
       ];
     }
     const installSpec = formatConfiguredRuntimePluginInstallSpec(candidate);
     return [
-      `- Configured agentRuntime.id="${runtimeId}" requires the ${candidate.label} plugin, but no enabled "${runtimeId}" plugin was found. Run "openclaw doctor --fix" to install ${installSpec}, or install it manually with "openclaw plugins install ${installSpec}".`,
+      `- Configured runtime "${runtimeId}" requires the ${candidate.label} plugin, but no enabled "${runtimeId}" plugin was found. Run "openclaw doctor --fix" to install ${installSpec}, or install it manually with "openclaw plugins install ${installSpec}".`,
     ];
   });
 }

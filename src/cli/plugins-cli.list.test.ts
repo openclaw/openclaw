@@ -175,12 +175,34 @@ describe("plugins cli list", () => {
 
     const output = runtimeLogs.join("\n");
     expect(output).toContain("Plugin configuration:");
-    expect(output).toContain('Configured agentRuntime.id="codex" requires the Codex plugin');
+    expect(output).toContain('Configured runtime "codex" requires the Codex plugin');
     expect(output).toContain("openclaw doctor --fix");
     expect(output).toContain("openclaw plugins install @openclaw/codex");
     expect(output).toContain(
       "No plugin install-tree issues detected; configuration warnings remain.",
     );
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
+  it("reports missing configured ACPX runtime plugin in doctor output", async () => {
+    const sourceConfig = {
+      acp: {
+        backend: "acpx",
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("Plugin configuration:");
+    expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
+    expect(output).toContain("openclaw doctor --fix");
+    expect(output).toContain("openclaw plugins install @openclaw/acpx");
     expect(output).not.toContain("No plugin issues detected.");
   });
 
@@ -201,7 +223,7 @@ describe("plugins cli list", () => {
     await runPluginsCommand(["plugins", "doctor"]);
 
     const output = runtimeLogs.join("\n");
-    expect(output).not.toContain('Configured agentRuntime.id="codex"');
+    expect(output).not.toContain('Configured runtime "codex"');
     expect(output).toContain("No plugin issues detected.");
   });
 
@@ -249,7 +271,7 @@ describe("plugins cli list", () => {
     await runPluginsCommand(["plugins", "doctor"]);
 
     const output = runtimeLogs.join("\n");
-    expect(output).toContain('Configured agentRuntime.id="codex" requires the Codex plugin');
+    expect(output).toContain('Configured runtime "codex" requires the Codex plugin');
     expect(output).toContain('but "codex" is disabled');
     expect(output).toContain('Enable the "codex" plugin');
     expect(output).not.toContain("openclaw plugins install @openclaw/codex");
@@ -280,7 +302,7 @@ describe("plugins cli list", () => {
     await runPluginsCommand(["plugins", "doctor"]);
 
     const output = runtimeLogs.join("\n");
-    expect(output).toContain('Configured agentRuntime.id="codex" requires the Codex plugin');
+    expect(output).toContain('Configured runtime "codex" requires the Codex plugin');
     expect(output).toContain('but "codex" is blocked by plugin configuration');
     expect(output).toContain('Remove "codex" from plugins.deny');
     expect(output).not.toContain('Run "openclaw doctor --fix" to install');
@@ -314,7 +336,7 @@ describe("plugins cli list", () => {
     await runPluginsCommand(["plugins", "doctor"]);
 
     const output = runtimeLogs.join("\n");
-    expect(output).toContain('Configured agentRuntime.id="codex" requires the Codex plugin');
+    expect(output).toContain('Configured runtime "codex" requires the Codex plugin');
     expect(output).toContain('but "codex" is blocked by plugin configuration');
     expect(output).toContain("Set plugins.entries.codex.enabled=true");
     expect(output).not.toContain('Run "openclaw doctor --fix" to install');
