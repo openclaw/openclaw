@@ -1245,6 +1245,16 @@ back through the existing Slack interaction event path. Keep them for old
 prompts and Slack-specific escape hatches; use shared presentation for new
 portable controls.
 
+The directive compiler APIs are also deprecated for new producer code:
+
+- `compileSlackInteractiveReplies(...)`
+- `parseSlackOptionsLine(...)`
+- `isSlackInteractiveRepliesEnabled(...)`
+- `buildSlackInteractiveBlocks(...)`
+
+Use `presentation` payloads and `buildSlackPresentationBlocks(...)` for new
+Slack-rendered controls.
+
 Notes:
 
 - This is Slack-specific legacy UI. Other channels do not translate Slack Block

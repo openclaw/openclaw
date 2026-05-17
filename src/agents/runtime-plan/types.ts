@@ -82,18 +82,31 @@ export type AgentRuntimeProviderHandle = {
 
 export type AgentRuntimeInteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
-export type AgentRuntimeInteractiveReplyButton = {
+export type AgentRuntimeMessagePresentationButton = {
   label: string;
   value?: string;
   url?: string;
   style?: AgentRuntimeInteractiveButtonStyle;
 };
 
-export type AgentRuntimeInteractiveReplyOption = {
+export type AgentRuntimeMessagePresentationOption = {
   label: string;
   value: string;
 };
 
+/**
+ * @deprecated Use AgentRuntimeMessagePresentationButton.
+ */
+export type AgentRuntimeInteractiveReplyButton = AgentRuntimeMessagePresentationButton;
+
+/**
+ * @deprecated Use AgentRuntimeMessagePresentationOption.
+ */
+export type AgentRuntimeInteractiveReplyOption = AgentRuntimeMessagePresentationOption;
+
+/**
+ * @deprecated Use AgentRuntimeMessagePresentationBlock.
+ */
 export type AgentRuntimeInteractiveReplyBlock =
   | {
       type: "text";
@@ -109,6 +122,9 @@ export type AgentRuntimeInteractiveReplyBlock =
       options: AgentRuntimeInteractiveReplyOption[];
     };
 
+/**
+ * @deprecated Use AgentRuntimeMessagePresentation.
+ */
 export type AgentRuntimeInteractiveReply = {
   blocks: AgentRuntimeInteractiveReplyBlock[];
 };
@@ -134,12 +150,12 @@ export type AgentRuntimeMessagePresentationBlock =
     }
   | {
       type: "buttons";
-      buttons: AgentRuntimeInteractiveReplyButton[];
+      buttons: AgentRuntimeMessagePresentationButton[];
     }
   | {
       type: "select";
       placeholder?: string;
-      options: AgentRuntimeInteractiveReplyOption[];
+      options: AgentRuntimeMessagePresentationOption[];
     };
 
 export type AgentRuntimeMessagePresentation = {
@@ -166,6 +182,9 @@ export type AgentRuntimeReplyPayload = {
   sensitiveMedia?: boolean;
   presentation?: AgentRuntimeMessagePresentation;
   delivery?: AgentRuntimeReplyPayloadDelivery;
+  /**
+   * @deprecated Use presentation.
+   */
   interactive?: AgentRuntimeInteractiveReply;
   btw?: {
     question: string;

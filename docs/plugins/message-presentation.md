@@ -391,12 +391,33 @@ New code should accept or produce `MessagePresentation` directly. Existing
 `interactive` payloads are a deprecated subset of `presentation`; runtime
 support remains for older producers.
 
-`presentationToInteractiveReply(...)` preserves visible presentation text by
-mapping the title, text, context, buttons, and selects into the older
-`InteractiveReply` shape. Component renderers that already draw title, text,
-context, and divider blocks natively should use
-`presentationToInteractiveControlsReply(...)` instead, then append only the
-button and select controls.
+The legacy `InteractiveReply*` types and conversion helpers are marked
+`@deprecated` in the SDK:
+
+- `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`,
+  `InteractiveReplyOption`, `InteractiveReplySelectBlock`, and
+  `InteractiveReplyTextBlock`
+- `normalizeInteractiveReply(...)`
+- `hasInteractiveReplyBlocks(...)`
+- `interactiveReplyToPresentation(...)`
+- `presentationToInteractiveReply(...)`
+- `presentationToInteractiveControlsReply(...)`
+- `resolveInteractiveTextFallback(...)`
+- `reduceInteractiveReply(...)`
+
+`presentationToInteractiveReply(...)` and
+`presentationToInteractiveControlsReply(...)` remain available as renderer
+bridges for legacy channel implementations. New producer code should not call
+them; send `presentation` and let core/channel adaptation handle rendering.
+
+Approval helpers also have presentation-first replacements:
+
+- use `buildApprovalPresentationFromActionDescriptors(...)` instead of
+  `buildApprovalInteractiveReplyFromActionDescriptors(...)`
+- use `buildApprovalPresentation(...)` instead of
+  `buildApprovalInteractiveReply(...)`
+- use `buildExecApprovalPresentation(...)` instead of
+  `buildExecApprovalInteractiveReply(...)`
 
 `renderMessagePresentationFallbackText(...)` returns an empty string for
 presentation blocks that have no text fallback, such as a divider-only

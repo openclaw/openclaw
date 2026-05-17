@@ -36,10 +36,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
-import {
-  normalizeMessagePresentation,
-  presentationToInteractiveReply,
-} from "openclaw/plugin-sdk/interactive-runtime";
+import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
@@ -145,12 +142,10 @@ function resolvePayloadTelegramInlineButtons(
     | { buttons?: TelegramInlineButtons }
     | undefined;
   const presentation = normalizeMessagePresentation(payload.presentation);
-  const interactive =
-    payload.interactive ??
-    (presentation ? presentationToInteractiveReply(presentation) : undefined);
   return resolveTelegramInlineButtons({
     buttons: telegramData?.buttons,
-    interactive,
+    presentation,
+    interactive: payload.interactive,
   });
 }
 

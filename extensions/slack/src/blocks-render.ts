@@ -85,6 +85,9 @@ export function resolveSlackInteractiveBlockOffsets(
   return { buttonIndexOffset, selectIndexOffset };
 }
 
+/**
+ * @deprecated Use buildSlackPresentationBlocks with MessagePresentation.
+ */
 export function buildSlackInteractiveBlocks(
   interactive?: InteractiveReply,
   options: SlackInteractiveBlockRenderOptions = {},
