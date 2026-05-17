@@ -1,5 +1,10 @@
+import path from "node:path";
 import chokidar from "chokidar";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
+import {
+  collectDirectIncludePaths,
+  collectIncludePathsRecursive,
+} from "../config/includes-scan.js";
 import type { ConfigWriteNotification } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
@@ -85,6 +90,7 @@ export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash?: string | null;
+  initialSnapshot?: ConfigFileSnapshot;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
@@ -115,10 +121,102 @@ export function startGatewayConfigReloader(opts: {
     afterWrite?: ConfigWriteNotification["afterWrite"];
   } | null = null;
   let lastAppliedWriteHash = opts.initialInternalWriteHash ?? null;
+  let pendingIncludeWatchEvent = false;
+  const rootWatchPath = path.normalize(opts.watchPath);
+  const normalizeWatchPath = (watchPath: string) => path.normalize(watchPath);
+  let watchedIncludePaths = new Set<string>();
+  const suppressIncludeAddEvents = new Set<string>();
+  let syncingIncludeWatchPaths = false;
+  const watcher = chokidar.watch(opts.watchPath, {
+    ignoreInitial: true,
+    awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+    usePolling: Boolean(process.env.VITEST),
+  });
   let currentPluginInstallRecords =
     opts.initialPluginInstallRecords ?? loadInstalledPluginIndexInstallRecordsSync();
   const readPluginInstallRecords =
     opts.readPluginInstallRecords ?? loadInstalledPluginIndexInstallRecords;
+
+  const normalizeIncludeWatchPaths = (includePaths: string[]): string[] =>
+    Array.from(
+      new Set(
+        includePaths.map(normalizeWatchPath).filter((includePath) => includePath !== rootWatchPath),
+      ),
+    ).sort();
+
+  const collectDirectIncludeWatchPaths = (snapshot: ConfigFileSnapshot): string[] => {
+    if (!snapshot.exists || !snapshot.valid) {
+      return [];
+    }
+    return normalizeIncludeWatchPaths(
+      collectDirectIncludePaths({
+        configPath: snapshot.path,
+        parsed: snapshot.parsed,
+      }),
+    );
+  };
+
+  const collectIncludeWatchPaths = async (snapshot: ConfigFileSnapshot): Promise<string[]> => {
+    if (!snapshot.exists || !snapshot.valid) {
+      return [];
+    }
+    const includePaths = await collectIncludePathsRecursive({
+      configPath: snapshot.path,
+      parsed: snapshot.parsed,
+    });
+    return normalizeIncludeWatchPaths(includePaths);
+  };
+
+  const applyIncludeWatchPaths = (nextIncludePaths: string[], reason: string) => {
+    if (stopped) {
+      return;
+    }
+    const nextIncludePathSet = new Set(nextIncludePaths);
+    const toAdd = nextIncludePaths.filter((includePath) => !watchedIncludePaths.has(includePath));
+    const toRemove = Array.from(watchedIncludePaths)
+      .filter((includePath) => !nextIncludePathSet.has(includePath))
+      .toSorted();
+    if (toAdd.length === 0 && toRemove.length === 0) {
+      return;
+    }
+    syncingIncludeWatchPaths = true;
+    try {
+      if (toAdd.length > 0) {
+        for (const includePath of toAdd) {
+          suppressIncludeAddEvents.add(includePath);
+        }
+        watcher.add(toAdd);
+      }
+      if (toRemove.length > 0) {
+        watcher.unwatch(toRemove);
+      }
+      watchedIncludePaths = nextIncludePathSet;
+    } catch (err) {
+      opts.log.warn(`config reload include watch sync failed (${reason}): ${String(err)}`);
+    } finally {
+      syncingIncludeWatchPaths = false;
+    }
+  };
+
+  const syncIncludeWatchPaths = async (snapshot: ConfigFileSnapshot, reason: string) => {
+    if (stopped) {
+      return;
+    }
+    try {
+      applyIncludeWatchPaths(collectDirectIncludeWatchPaths(snapshot), `${reason}-direct`);
+    } catch (err) {
+      opts.log.warn(`config reload include watch sync failed (${reason}): ${String(err)}`);
+      return;
+    }
+    let nextIncludePaths: string[];
+    try {
+      nextIncludePaths = await collectIncludeWatchPaths(snapshot);
+    } catch (err) {
+      opts.log.warn(`config reload include watch sync failed (${reason}): ${String(err)}`);
+      return;
+    }
+    applyIncludeWatchPaths(nextIncludePaths, reason);
+  };
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -298,17 +396,17 @@ export function startGatewayConfigReloader(opts: {
   };
 
   const promoteAcceptedInProcessWrite = async (persistedHash: string) => {
-    if (!opts.promoteSnapshot) {
-      return;
-    }
     try {
       const snapshot = await opts.readSnapshot();
       if (snapshot.hash !== persistedHash || !snapshot.valid) {
         return;
       }
-      await promoteAcceptedSnapshot(snapshot, "in-process-write");
+      await syncIncludeWatchPaths(snapshot, "in-process-write");
+      if (opts.promoteSnapshot) {
+        await promoteAcceptedSnapshot(snapshot, "in-process-write");
+      }
     } catch (err) {
-      opts.log.warn(`config reload in-process last-known-good promotion failed: ${String(err)}`);
+      opts.log.warn(`config reload in-process snapshot handling failed: ${String(err)}`);
     }
   };
 
@@ -321,6 +419,8 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
     running = true;
+    const includeTriggeredReload = pendingIncludeWatchEvent;
+    pendingIncludeWatchEvent = false;
     if (debounceTimer) {
       clearTimeout(debounceTimer);
       debounceTimer = null;
@@ -340,7 +440,7 @@ export function startGatewayConfigReloader(opts: {
       }
       let snapshot = await opts.readSnapshot();
       if (lastAppliedWriteHash && typeof snapshot.hash === "string") {
-        if (snapshot.hash === lastAppliedWriteHash) {
+        if (snapshot.hash === lastAppliedWriteHash && !includeTriggeredReload) {
           return;
         }
         lastAppliedWriteHash = null;
@@ -352,6 +452,7 @@ export function startGatewayConfigReloader(opts: {
         handleInvalidSnapshot(snapshot);
         return;
       }
+      await syncIncludeWatchPaths(snapshot, "valid-config");
       await applySnapshot(snapshot.config, snapshot.sourceConfig);
       await promoteAcceptedSnapshot(snapshot, "valid-config");
     } catch (err) {
@@ -365,13 +466,22 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
-  const watcher = chokidar.watch(opts.watchPath, {
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-    usePolling: Boolean(process.env.VITEST),
-  });
-
-  const scheduleFromWatcher = () => {
+  const scheduleFromWatcher = (eventKind: "add" | "change" | "unlink") => (eventPath?: string) => {
+    if (syncingIncludeWatchPaths) {
+      return;
+    }
+    const normalizedEventPath =
+      typeof eventPath === "string" ? normalizeWatchPath(eventPath) : null;
+    if (
+      eventKind === "add" &&
+      normalizedEventPath &&
+      suppressIncludeAddEvents.delete(normalizedEventPath)
+    ) {
+      return;
+    }
+    if (normalizedEventPath && watchedIncludePaths.has(normalizedEventPath)) {
+      pendingIncludeWatchEvent = true;
+    }
     schedule();
   };
 
@@ -390,9 +500,13 @@ export function startGatewayConfigReloader(opts: {
       scheduleAfter(0);
     }) ?? (() => {});
 
-  watcher.on("add", scheduleFromWatcher);
-  watcher.on("change", scheduleFromWatcher);
-  watcher.on("unlink", scheduleFromWatcher);
+  watcher.on("add", scheduleFromWatcher("add"));
+  watcher.on("change", scheduleFromWatcher("change"));
+  watcher.on("unlink", scheduleFromWatcher("unlink"));
+  if (opts.initialSnapshot) {
+    applyIncludeWatchPaths(collectDirectIncludeWatchPaths(opts.initialSnapshot), "startup");
+    void syncIncludeWatchPaths(opts.initialSnapshot, "startup");
+  }
   let watcherClosed = false;
   watcher.on("error", (err) => {
     if (watcherClosed) {

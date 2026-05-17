@@ -9,7 +9,7 @@ import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.
 import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import { getRuntimeConfig } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
@@ -136,6 +136,7 @@ type ManagedGatewayConfigReloaderParams = Omit<
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash: string | null;
+  initialSnapshot?: ConfigFileSnapshot;
   watchPath: string;
   readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
   promoteSnapshot: typeof import("../config/config.js").promoteConfigSnapshotToLastKnownGood;
@@ -579,6 +580,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     initialConfig: params.initialConfig,
     initialCompareConfig: params.initialCompareConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
+    initialSnapshot: params.initialSnapshot,
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,

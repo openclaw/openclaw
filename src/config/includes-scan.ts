@@ -45,6 +45,13 @@ function resolveIncludePath(baseConfigPath: string, includePath: string): string
   );
 }
 
+export function collectDirectIncludePaths(params: {
+  configPath: string;
+  parsed: unknown;
+}): string[] {
+  return listDirectIncludes(params.parsed).map((raw) => resolveIncludePath(params.configPath, raw));
+}
+
 export async function collectIncludePathsRecursive(params: {
   configPath: string;
   parsed: unknown;

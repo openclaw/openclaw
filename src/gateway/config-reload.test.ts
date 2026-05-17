@@ -505,7 +505,7 @@ describe("resolveGatewayReloadSettings", () => {
   });
 });
 
-type WatcherHandler = () => void;
+type WatcherHandler = (eventPath?: string) => void;
 type WatcherEvent = "add" | "change" | "unlink" | "error";
 
 function createWatcherMock() {
@@ -517,11 +517,13 @@ function createWatcherMock() {
       handlers.set(event, existing);
       return this;
     },
-    emit(event: WatcherEvent) {
+    emit(event: WatcherEvent, eventPath?: string) {
       for (const handler of handlers.get(event) ?? []) {
-        handler();
+        handler(eventPath);
       }
     },
+    add: vi.fn(() => {}),
+    unwatch: vi.fn(() => {}),
     close: vi.fn(async () => {}),
   };
 }
@@ -591,6 +593,7 @@ function createReloaderHarness(
     promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
     initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
     readPluginInstallRecords?: () => Promise<Record<string, PluginInstallRecord>>;
+    initialSnapshot?: ConfigFileSnapshot;
   } = {},
 ) {
   const watcher = createWatcherMock();
@@ -615,6 +618,7 @@ function createReloaderHarness(
     initialConfig: { gateway: { reload: { debounceMs: 0 } } },
     initialCompareConfig: options.initialCompareConfig,
     initialInternalWriteHash: options.initialInternalWriteHash,
+    initialSnapshot: options.initialSnapshot,
     readSnapshot,
     promoteSnapshot: options.promoteSnapshot,
     initialPluginInstallRecords: options.initialPluginInstallRecords ?? {},
@@ -676,6 +680,135 @@ describe("startGatewayConfigReloader", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("watches $include files from the startup snapshot", async () => {
+    const startupSnapshot = makeSnapshot({
+      path: "/tmp/openclaw.json",
+      parsed: { $include: "includes/models.json" },
+    });
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+    const { watcher, reloader } = createReloaderHarness(readSnapshot, {
+      initialSnapshot: startupSnapshot,
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(readSnapshot).not.toHaveBeenCalled();
+    expect(watcher.add).toHaveBeenCalledWith(["/tmp/includes/models.json"]);
+
+    await reloader.stop();
+  });
+
+  it("refreshes watched $include files after an accepted config snapshot", async () => {
+    const startupSnapshot = makeSnapshot({
+      path: "/tmp/openclaw.json",
+      parsed: { $include: "includes/old.json" },
+    });
+    const nextSnapshot = makeSnapshot({
+      path: "/tmp/openclaw.json",
+      parsed: { $include: "includes/next.json" },
+      config: {
+        gateway: { reload: { debounceMs: 0 } },
+        hooks: { enabled: true },
+      },
+      hash: "next-root-hash",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(nextSnapshot);
+    const { watcher, reloader } = createReloaderHarness(readSnapshot, {
+      initialSnapshot: startupSnapshot,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    watcher.add.mockClear();
+    watcher.unwatch.mockClear();
+
+    watcher.emit("change", "/tmp/openclaw.json");
+    await vi.runAllTimersAsync();
+
+    expect(watcher.add).toHaveBeenCalledWith(["/tmp/includes/next.json"]);
+    expect(watcher.unwatch).toHaveBeenCalledWith(["/tmp/includes/old.json"]);
+
+    await reloader.stop();
+  });
+
+  it("refreshes watched $include files after an accepted in-process write", async () => {
+    const startupSnapshot = makeSnapshot({
+      path: "/tmp/openclaw.json",
+      parsed: { $include: "includes/old.json" },
+    });
+    const nextConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: true },
+    } satisfies OpenClawConfig;
+    const acceptedSnapshot = makeSnapshot({
+      path: "/tmp/openclaw.json",
+      parsed: { $include: "includes/next.json" },
+      sourceConfig: nextConfig,
+      runtimeConfig: nextConfig,
+      config: nextConfig,
+      hash: "internal-include-hash",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(acceptedSnapshot);
+    const { watcher, reloader, emitWrite } = createReloaderHarness(readSnapshot, {
+      initialSnapshot: startupSnapshot,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    watcher.add.mockClear();
+    watcher.unwatch.mockClear();
+
+    emitWrite({
+      ...makeZeroDebounceHookWrite("internal-include-hash"),
+      sourceConfig: nextConfig,
+      runtimeConfig: nextConfig,
+    });
+    await vi.runAllTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(watcher.add).toHaveBeenCalledWith(["/tmp/includes/next.json"]);
+    expect(watcher.unwatch).toHaveBeenCalledWith(["/tmp/includes/old.json"]);
+
+    await reloader.stop();
+  });
+
+  it("reloads include-only changes even when the root config hash matches a recent write", async () => {
+    const startupSnapshot = makeSnapshot({
+      path: "/tmp/openclaw.json",
+      parsed: { $include: "includes/runtime.json" },
+    });
+    const includeConfig = {
+      gateway: { reload: { debounceMs: 0 }, channelHealthCheckMinutes: 5 },
+    } satisfies OpenClawConfig;
+    const includeChangedSnapshot = makeSnapshot({
+      path: "/tmp/openclaw.json",
+      parsed: { $include: "includes/runtime.json" },
+      sourceConfig: includeConfig,
+      runtimeConfig: includeConfig,
+      config: includeConfig,
+      hash: "root-hash",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(includeChangedSnapshot);
+    const { watcher, reloader } = createReloaderHarness(readSnapshot, {
+      initialInternalWriteHash: "root-hash",
+      initialSnapshot: startupSnapshot,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    watcher.emit("change", "/tmp/includes/runtime.json");
+    await vi.runAllTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+
+    await reloader.stop();
   });
 
   it("retries missing snapshots and reloads once config file reappears", async () => {
