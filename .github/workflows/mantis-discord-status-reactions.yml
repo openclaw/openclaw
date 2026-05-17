@@ -573,3 +573,44 @@ jobs:
             --artifact-url "$ARTIFACT_URL" \
             --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --request-source "$REQUEST_SOURCE"
+
+  clear_issue_comment_reaction:
+    name: Clear Mantis command reaction
+    needs: [resolve_request, validate_refs, run_status_reactions]
+    if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Remove workflow eyes reaction
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const commentId = context.payload.comment?.id;
+            if (!commentId) {
+              core.info("No issue comment id found; skipping reaction cleanup.");
+              return;
+            }
+
+            const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
+              owner,
+              repo,
+              comment_id: commentId,
+              per_page: 100,
+            });
+            const eyes = reactions.filter(
+              (reaction) => reaction.content === "eyes" && reaction.user?.login === "github-actions[bot]",
+            );
+            for (const reaction of eyes) {
+              await github.rest.reactions.deleteForIssueComment({
+                owner,
+                repo,
+                comment_id: commentId,
+                reaction_id: reaction.id,
+              });
+              core.info(`Removed eyes reaction ${reaction.id} from comment ${commentId}.`);
+            }
+            if (eyes.length === 0) {
+              core.info(`No workflow eyes reaction found on comment ${commentId}.`);
+            }

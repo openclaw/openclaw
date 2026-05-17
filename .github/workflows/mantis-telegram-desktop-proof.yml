@@ -3,7 +3,7 @@ name: Mantis Telegram Desktop Proof
 on:
   issue_comment:
     types: [created]
-  pull_request_target:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned Mantis label trigger; trusted base workflow validates refs before checkout/use
     types: [labeled]
   workflow_dispatch:
     inputs:
@@ -120,6 +120,7 @@ jobs:
       publish_run_id: ${{ steps.resolve.outputs.publish_run_id }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       request_source: ${{ steps.resolve.outputs.request_source }}
+      should_run: ${{ steps.resolve.outputs.should_run }}
     steps:
       - name: Resolve refs and target PR
         id: resolve
@@ -145,24 +146,52 @@ jobs:
               return;
             }
 
-            const { owner, repo } = context.repo;
-            const { data: pr } = await github.rest.pulls.get({
-              owner,
-              repo,
-              pull_number: Number(prNumber),
-            });
             const body =
               eventName === "workflow_dispatch"
                 ? inputs.instructions || ""
                 : eventName === "issue_comment"
                   ? context.payload.comment?.body || ""
                   : "";
+            if (eventName === "issue_comment") {
+              const normalized = body.toLowerCase();
+              const requestedDesktopProof =
+                (normalized.includes("@openclaw-mantis") || normalized.includes("/openclaw-mantis")) &&
+                (normalized.includes("desktop proof") ||
+                  normalized.includes("desktop-proof") ||
+                  normalized.includes("telegram desktop") ||
+                  normalized.includes("native telegram") ||
+                  normalized.includes("visible proof") ||
+                  normalized.includes("visible-proof") ||
+                  normalized.includes("telegram-visible-proof"));
+              if (!requestedDesktopProof) {
+                core.notice("Comment mentioned Mantis but did not request Telegram desktop proof.");
+                setOutput("should_run", "false");
+                setOutput("baseline_ref", "");
+                setOutput("candidate_ref", "");
+                setOutput("pr_number", "");
+                setOutput("instructions", "");
+                setOutput("crabbox_provider", "");
+                setOutput("lease_id", "");
+                setOutput("publish_artifact_name", "");
+                setOutput("publish_run_id", "");
+                setOutput("request_source", "unsupported_issue_comment");
+                return;
+              }
+            }
+
+            const { owner, repo } = context.repo;
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: Number(prNumber),
+            });
             const provider = inputs.crabbox_provider || "aws";
             if (!["aws", "hetzner"].includes(provider)) {
               core.setFailed(`Unsupported Crabbox provider for Mantis Telegram desktop proof: ${provider}`);
               return;
             }
 
+            setOutput("should_run", "true");
             setOutput("baseline_ref", pr.base.sha);
             setOutput("candidate_ref", pr.head.sha);
             setOutput("pr_number", String(pr.number));
@@ -185,7 +214,7 @@ jobs:
   validate_refs:
     name: Validate selected refs
     needs: resolve_request
-    if: needs.resolve_request.outputs.publish_artifact_name == ''
+    if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''
     runs-on: ubuntu-24.04
     outputs:
       baseline_revision: ${{ steps.validate.outputs.baseline_revision }}
@@ -264,7 +293,7 @@ jobs:
   run_telegram_desktop_proof:
     name: Run agentic native Telegram proof
     needs: [resolve_request, validate_refs]
-    if: needs.resolve_request.outputs.publish_artifact_name == ''
+    if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 360
     environment: qa-live-shared
@@ -513,7 +542,7 @@ jobs:
   publish_existing_telegram_desktop_proof:
     name: Publish existing native Telegram proof
     needs: resolve_request
-    if: needs.resolve_request.outputs.publish_artifact_name != ''
+    if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name != ''
     runs-on: ubuntu-24.04
     environment: qa-live-shared
     steps:
@@ -598,3 +627,44 @@ jobs:
             --artifact-url "$PUBLISH_ARTIFACT_URL" \
             --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${PUBLISH_RUN_ID}" \
             --request-source "$REQUEST_SOURCE"
+
+  clear_issue_comment_reaction:
+    name: Clear Mantis command reaction
+    needs: [resolve_request, validate_refs, run_telegram_desktop_proof]
+    if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Remove workflow eyes reaction
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const commentId = context.payload.comment?.id;
+            if (!commentId) {
+              core.info("No issue comment id found; skipping reaction cleanup.");
+              return;
+            }
+
+            const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
+              owner,
+              repo,
+              comment_id: commentId,
+              per_page: 100,
+            });
+            const eyes = reactions.filter(
+              (reaction) => reaction.content === "eyes" && reaction.user?.login === "github-actions[bot]",
+            );
+            for (const reaction of eyes) {
+              await github.rest.reactions.deleteForIssueComment({
+                owner,
+                repo,
+                comment_id: commentId,
+                reaction_id: reaction.id,
+              });
+              core.info(`Removed eyes reaction ${reaction.id} from comment ${commentId}.`);
+            }
+            if (eyes.length === 0) {
+              core.info(`No workflow eyes reaction found on comment ${commentId}.`);
+            }

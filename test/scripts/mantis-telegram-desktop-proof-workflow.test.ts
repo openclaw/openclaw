@@ -110,9 +110,14 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
   it("uses the OpenClaw Mantis mention as the comment trigger", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
+    const liveWorkflow = readFileSync(LIVE_WORKFLOW, "utf8");
     expect(workflow).toContain("@openclaw-mantis");
     expect(workflow).toContain("/openclaw-mantis");
     expect(workflow).toContain("mantis: telegram-visible-proof");
+    expect(workflow).toContain('setOutput("should_run", "false")');
+    expect(workflow).toContain('normalized.includes("telegram desktop")');
+    expect(liveWorkflow).toContain('normalized.includes("telegram desktop")');
+    expect(liveWorkflow).toContain("!requestedDesktopProof");
     expect(workflow).not.toContain("@Mantis");
     expect(workflow).not.toContain("@mantis");
     expect(workflow).not.toContain('"/mantis"');
@@ -138,9 +143,15 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
     expect(workflow.on?.workflow_dispatch?.inputs?.publish_artifact_name?.required).toBe(false);
     expect(workflow.on?.workflow_dispatch?.inputs?.publish_run_id?.required).toBe(false);
-    expect(captureJob?.if).toBe("needs.resolve_request.outputs.publish_artifact_name == ''");
-    expect(validateJob?.if).toBe("needs.resolve_request.outputs.publish_artifact_name == ''");
-    expect(publishJob?.if).toBe("needs.resolve_request.outputs.publish_artifact_name != ''");
+    expect(captureJob?.if).toBe(
+      "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''",
+    );
+    expect(validateJob?.if).toBe(
+      "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''",
+    );
+    expect(publishJob?.if).toBe(
+      "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name != ''",
+    );
     expect(workflowText).toContain("publish_run_id is required when publish_artifact_name is set.");
     expect(workflowText).toContain('gh run download "$run_id"');
     expect(workflowText).toContain(
