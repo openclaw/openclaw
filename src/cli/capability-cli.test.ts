@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
     writeStdout: vi.fn(),
   },
   loadConfig: vi.fn(() => ({})),
+  getRuntimeConfigSourceSnapshot: vi.fn(() => null),
+  setRuntimeConfigSnapshot: vi.fn(),
   loadAuthProfileStoreForRuntime: vi.fn(() => ({ profiles: {}, order: {} })),
   listProfilesForProvider: vi.fn(() => []),
   updateAuthProfileStoreWithLock: vi.fn(
@@ -154,8 +156,12 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfigSourceSnapshot:
+    mocks.getRuntimeConfigSourceSnapshot as typeof import("../config/config.js").getRuntimeConfigSourceSnapshot,
   getRuntimeConfig: mocks.loadConfig as typeof import("../config/config.js").getRuntimeConfig,
   loadConfig: mocks.loadConfig as typeof import("../config/config.js").loadConfig,
+  setRuntimeConfigSnapshot:
+    mocks.setRuntimeConfigSnapshot as typeof import("../config/config.js").setRuntimeConfigSnapshot,
 }));
 
 vi.mock("./command-config-resolution.js", () => ({
@@ -395,6 +401,8 @@ describe("capability cli", () => {
       .mockResolvedValue([{ id: "gpt-5.4", provider: "openai", name: "GPT-5.4" }] as never);
     mocks.loadAuthProfileStoreForRuntime.mockReset().mockReturnValue({ profiles: {}, order: {} });
     mocks.listProfilesForProvider.mockReset().mockReturnValue([]);
+    mocks.getRuntimeConfigSourceSnapshot.mockReset().mockReturnValue(null);
+    mocks.setRuntimeConfigSnapshot.mockClear();
     mocks.updateAuthProfileStoreWithLock
       .mockReset()
       .mockImplementation(async ({ updater }: { updater: (store: any) => boolean }) => {
@@ -440,6 +448,13 @@ describe("capability cli", () => {
     mocks.registerBuiltInMemoryEmbeddingProviders.mockClear();
     mocks.isWebSearchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.isWebFetchProviderConfigured.mockReset().mockReturnValue(false);
+    mocks.resolveCommandConfigWithSecrets
+      .mockReset()
+      .mockImplementation(async ({ config }: { config: Record<string, unknown> }) => ({
+        resolvedConfig: config,
+        effectiveConfig: config,
+        diagnostics: [],
+      }));
     mocks.modelsStatusCommand.mockClear();
     mocks.callGateway.mockImplementation((async ({ method }: { method: string }) => {
       if (method === "tts.status") {
@@ -498,6 +513,7 @@ describe("capability cli", () => {
   };
   type ImageDescribeParams = {
     filePath?: string;
+    mediaUrl?: string;
     model?: unknown;
     prompt?: unknown;
     provider?: unknown;
@@ -525,6 +541,13 @@ describe("capability cli", () => {
 
   function firstJsonOutput() {
     const calls = mocks.runtime.writeJson.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    return calls[0]?.[0];
+  }
+
+  function firstCommandConfigResolutionCall() {
+    const calls = mocks.resolveCommandConfigWithSecrets.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
     return calls[0]?.[0];
   }
 
@@ -559,7 +582,7 @@ describe("capability cli", () => {
 
   function firstAudioTranscriptionCall() {
     const calls = mocks.transcribeAudioFile.mock.calls as unknown as Array<
-      [{ filePath?: string; language?: unknown; prompt?: unknown }]
+      [{ cfg?: unknown; filePath?: string; language?: unknown; prompt?: unknown }]
     >;
     return calls[0]?.[0];
   }
@@ -1204,6 +1227,26 @@ describe("capability cli", () => {
     expect(describeCall?.timeoutMs).toBe(90000);
   });
 
+  it("keeps image describe URL files as remote media references", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "describe",
+        "--file",
+        "https://example.com/photo.png",
+        "--json",
+      ],
+    });
+
+    const describeCall = imageDescribeCall();
+    expect(describeCall?.filePath).toBe("https://example.com/photo.png");
+    expect(describeCall?.mediaUrl).toBe("https://example.com/photo.png");
+    const outputs = firstJsonOutput()?.outputs as Array<Record<string, unknown>>;
+    expect(outputs[0]?.path).toBe("https://example.com/photo.png");
+  });
+
   it("uses the explicit media-understanding provider for image describe model overrides", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -1808,6 +1851,35 @@ describe("capability cli", () => {
     expect(outputs[0]?.kind).toBe("audio.transcription");
   });
 
+  it("resolves command SecretRefs before local audio transcription", async () => {
+    const rawConfig = { models: { providers: { openai: { apiKey: "raw-ref" } } } };
+    const resolvedConfig = { models: { providers: { openai: { apiKey: "resolved-key" } } } };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig,
+      effectiveConfig: resolvedConfig,
+      diagnostics: [],
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
+    });
+
+    expect(firstCommandConfigResolutionCall()).toEqual(
+      expect.objectContaining({
+        config: rawConfig,
+        commandName: "infer audio transcribe",
+      }),
+    );
+    expect(
+      (firstCommandConfigResolutionCall()?.targetIds as Set<string>).has(
+        "models.providers.*.apiKey",
+      ),
+    ).toBe(true);
+    expect(firstAudioTranscriptionCall()?.cfg).toBe(resolvedConfig);
+  });
+
   it("fails audio transcribe when no transcript text is returned", async () => {
     mocks.transcribeAudioFile.mockResolvedValueOnce({ text: undefined } as never);
 
@@ -1989,6 +2061,37 @@ describe("capability cli", () => {
     expect(firstJsonOutput()?.capability).toBe("embedding.create");
     expect(firstJsonOutput()?.provider).toBe("openai");
     expect(firstJsonOutput()?.model).toBe("text-embedding-3-small");
+  });
+
+  it("resolves command SecretRefs before local model capability execution", async () => {
+    const rawConfig = { agents: { defaults: { model: "openai/gpt-5.4" } } };
+    const resolvedConfig = { agents: { defaults: { model: "openai/gpt-5.4" } }, resolved: true };
+    mocks.loadConfig.mockReturnValue(rawConfig);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig,
+      effectiveConfig: resolvedConfig,
+      diagnostics: [],
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
+    });
+
+    expect(firstCommandConfigResolutionCall()).toEqual(
+      expect.objectContaining({
+        config: rawConfig,
+        commandName: "infer model run",
+        runtime: mocks.runtime,
+      }),
+    );
+    expect(
+      (firstCommandConfigResolutionCall()?.targetIds as Set<string>).has(
+        "models.providers.*.apiKey",
+      ),
+    ).toBe(true);
+    expect(firstPreparedModelParams()?.cfg).toBe(resolvedConfig);
+    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig);
   });
 
   it("derives the embedding provider from a provider/model override", async () => {

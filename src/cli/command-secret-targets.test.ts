@@ -22,6 +22,7 @@ const REGISTRY_IDS = [
   "plugins.entries.other-fetch.config.webFetch.apiKey",
   "plugins.entries.other-fetch.config.webSearch.apiKey",
   "skills.entries.demo.apiKey",
+  "tools.web.fetch.firecrawl.apiKey",
   "tools.web.search.apiKey",
   "tools.web.search.*.apiKey",
 ] as const;
@@ -120,7 +121,8 @@ vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
           }
         )?.plugins?.entries?.firecrawl?.config?.webSearch?.apiKey,
       }),
-      getCredentialValue: (): undefined => undefined,
+      getCredentialValue: (fetchConfig?: { firecrawl?: { apiKey?: unknown } }) =>
+        fetchConfig?.firecrawl?.apiKey,
     },
     {
       pluginId: "other-fetch",
@@ -219,6 +221,14 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
       }),
       getCredentialValue: (): undefined => undefined,
     },
+    {
+      pluginId: "ollama",
+      id: "ollama",
+      credentialPath: "",
+      getConfiguredCredentialValue: (): undefined => undefined,
+      getConfiguredCredentialFallback: (): undefined => undefined,
+      getCredentialValue: (): undefined => undefined,
+    },
   ]),
 }));
 
@@ -273,6 +283,7 @@ describe("command secret target ids", () => {
   it("scopes capability web fetch commands to fetch credential surfaces only", () => {
     const ids = getCapabilityWebFetchCommandSecretTargetIds();
     expect(ids.has("tools.web.search.apiKey")).toBe(false);
+    expect(ids.has("tools.web.fetch.firecrawl.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(false);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.voice-call.config.twilio.authToken")).toBe(false);
@@ -441,6 +452,23 @@ describe("command secret target ids", () => {
     expect(scoped.forcedActivePaths).toEqual(new Set(["models.providers.google.apiKey"]));
   });
 
+  it("maps selected Ollama web search to its model provider key", () => {
+    const scoped = getCapabilityWebSearchCommandSecretTargets({
+      tools: { web: { search: { provider: "ollama", enabled: true } } },
+      models: {
+        providers: {
+          ollama: {
+            apiKey: { source: "env", provider: "default", id: "OLLAMA_API_KEY" },
+          },
+        },
+      },
+    } as never);
+
+    expect(scoped.targetIds).toEqual(new Set(["models.providers.*.apiKey"]));
+    expect(scoped.allowedPaths).toEqual(new Set(["models.providers.ollama.apiKey"]));
+    expect(scoped.forcedActivePaths).toEqual(new Set(["models.providers.ollama.apiKey"]));
+  });
+
   it("uses Firecrawl web fetch credentials as search fallback targets", () => {
     const scoped = getCapabilityWebSearchCommandSecretTargets({
       tools: { web: { search: { provider: "firecrawl", enabled: true } } },
@@ -607,6 +635,31 @@ describe("command secret target ids", () => {
     );
     expect(fetchConfigured.allowedPaths).toBeUndefined();
     expect(fetchConfigured.forcedActivePaths).toBeUndefined();
+  });
+
+  it("keeps selected legacy Firecrawl web fetch refs in command targets", () => {
+    const scoped = getCapabilityWebFetchCommandSecretTargets({
+      tools: {
+        web: {
+          fetch: {
+            provider: "firecrawl",
+            enabled: true,
+            firecrawl: {
+              apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(scoped.targetIds).toEqual(
+      new Set([
+        "plugins.entries.firecrawl.config.webFetch.apiKey",
+        "tools.web.fetch.firecrawl.apiKey",
+      ]),
+    );
+    expect(scoped.allowedPaths).toBeUndefined();
+    expect(scoped.forcedActivePaths).toBeUndefined();
   });
 
   it("does not add fallback credential paths for non-selected fetch providers", () => {

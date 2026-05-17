@@ -14,7 +14,7 @@ function errorMessage(error: unknown): string {
 
 function invalidSecretsResolveField(
   errors: ErrorObject[] | null | undefined,
-): "allowedPaths" | "commandName" | "forcedActivePaths" | "targetIds" {
+): "allowedPaths" | "commandName" | "forcedActivePaths" | "providerOverrides" | "targetIds" {
   for (const issue of errors ?? []) {
     if (
       issue.instancePath === "/commandName" ||
@@ -29,6 +29,9 @@ function invalidSecretsResolveField(
     if (issue.instancePath.startsWith("/forcedActivePaths")) {
       return "forcedActivePaths";
     }
+    if (issue.instancePath.startsWith("/providerOverrides")) {
+      return "providerOverrides";
+    }
   }
   return "targetIds";
 }
@@ -40,6 +43,10 @@ export function createSecretsHandlers(params: {
     targetIds: string[];
     allowedPaths?: string[];
     forcedActivePaths?: string[];
+    providerOverrides?: {
+      webSearch?: string;
+      webFetch?: string;
+    };
   }) => Promise<{
     assignments: Array<{
       path: string;
@@ -91,6 +98,14 @@ export function createSecretsHandlers(params: {
       const forcedActivePaths = requestParams.forcedActivePaths
         ?.map((entry) => entry.trim())
         .filter((entry) => entry.length > 0);
+      const providerOverrides = {
+        ...(requestParams.providerOverrides?.webSearch?.trim()
+          ? { webSearch: requestParams.providerOverrides.webSearch.trim() }
+          : {}),
+        ...(requestParams.providerOverrides?.webFetch?.trim()
+          ? { webFetch: requestParams.providerOverrides.webFetch.trim() }
+          : {}),
+      };
 
       for (const targetId of targetIds) {
         if (!isKnownSecretTargetId(targetId)) {
@@ -112,6 +127,7 @@ export function createSecretsHandlers(params: {
           targetIds,
           ...(allowedPaths ? { allowedPaths } : {}),
           ...(forcedActivePaths ? { forcedActivePaths } : {}),
+          ...(Object.keys(providerOverrides).length > 0 ? { providerOverrides } : {}),
         });
         const payload = {
           ok: true,
