@@ -2173,12 +2173,16 @@ describe("installPluginFromArchive", () => {
         JSON.stringify({ name: "plain-crypto-js" }),
       );
       const originalReaddir = fsPromises.readdir.bind(fsPromises);
-      const readdirSpy = vi.spyOn(fsPromises, "readdir").mockImplementation((async (...args) => {
-        const [target] = args;
+      const readdirSpy = vi.spyOn(fsPromises, "readdir").mockImplementation((async (
+        target: Parameters<typeof fsPromises.readdir>[0],
+        options?: Parameters<typeof fsPromises.readdir>[1],
+      ) => {
         if (path.resolve(String(target)) === blockedDir) {
           throw new Error("EACCES: permission denied, scandir 'vendor/sealed'");
         }
-        return await originalReaddir(...args);
+        return options === undefined
+          ? await originalReaddir(target)
+          : await originalReaddir(target, options as never);
       }) as typeof fsPromises.readdir);
 
       try {
