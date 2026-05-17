@@ -794,7 +794,7 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      if (skippedCount > 0 && allMedia.length > 0) {
+      if (skippedCount > 0) {
         const total = entry.messages.length;
         const wasOrWere = skippedCount === 1 ? "was" : "were";
         await withTelegramApiErrorLogging({
