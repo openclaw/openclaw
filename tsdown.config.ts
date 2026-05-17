@@ -143,8 +143,12 @@ function buildCoreDistEntries(): Record<string, string> {
 const coreDistEntries = buildCoreDistEntries();
 
 function buildUnifiedDistEntries(): Record<string, string> {
+  const includeBundledPluginEntries = process.env.OPENCLAW_BUILD_BUNDLED_PLUGINS !== "0";
+  const includeDockerE2eHarnessEntries = process.env.OPENCLAW_BUILD_DOCKER_E2E !== "0";
+
   return {
     ...coreDistEntries,
+    ...(includeDockerE2eHarnessEntries ? dockerE2eHarnessEntries : {}),
     // Internal compat artifact for the root-alias.cjs lazy loader.
     "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     ...Object.fromEntries(
@@ -153,7 +157,15 @@ function buildUnifiedDistEntries(): Record<string, string> {
         source,
       ]),
     ),
-    ...bundledPluginBuildEntries,
+    ...(shouldBuildPrivateQaEntries
+      ? {
+          "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
+          "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
+        }
+      : {}),
+    ...(includeBundledPluginEntries
+      ? listBundledPluginEntrySources(rootBundledPluginBuildEntries)
+      : {}),
     ...bundledHookEntries,
   };
 }
