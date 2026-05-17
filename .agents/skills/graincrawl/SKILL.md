@@ -9,7 +9,7 @@ metadata:
         - graincrawl
     install:
       - kind: go
-        module: github.com/openclaw/graincrawl/cmd/graincrawl@latest
+        module: github.com/vincentkoc/graincrawl/cmd/graincrawl@latest
         bins:
           - graincrawl
 ---

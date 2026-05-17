@@ -9,7 +9,7 @@ metadata:
         - slacrawl
     install:
       - kind: go
-        module: github.com/openclaw/slacrawl/cmd/slacrawl@latest
+        module: github.com/vincentkoc/slacrawl/cmd/slacrawl@latest
         bins:
           - slacrawl
 ---
