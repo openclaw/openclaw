@@ -89,6 +89,20 @@ export function classifyEmbeddedPiRunResultForModelFallback(params: {
     return harnessClassification;
   }
 
+  const errorKind = params.result.meta.error?.kind;
+  if (errorKind === "context_overflow" || errorKind === "compaction_failure") {
+    const message =
+      params.result.meta.error?.message?.trim() ||
+      `${params.provider}/${params.model} exhausted context overflow recovery`;
+    return {
+      message,
+      reason: "context_overflow",
+      status: 413,
+      code: errorKind,
+      rawError: message,
+    };
+  }
+
   const payloads = params.result.payloads ?? [];
   const errorText = payloads
     .filter((payload) => payload?.isError === true)

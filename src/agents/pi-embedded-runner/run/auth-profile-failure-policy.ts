@@ -20,7 +20,8 @@ export function resolveAuthProfileFailureReason(params: {
     !params.failoverReason ||
     params.failoverReason === "timeout" ||
     params.failoverReason === "server_error" ||
-    params.failoverReason === "format"
+    params.failoverReason === "format" ||
+    params.failoverReason === "context_overflow"
   ) {
     return null;
   }

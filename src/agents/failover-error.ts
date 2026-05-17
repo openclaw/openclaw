@@ -88,6 +88,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 403;
     case "timeout":
       return 408;
+    case "context_overflow":
+      return 413;
     case "format":
       return 400;
     case "model_not_found":

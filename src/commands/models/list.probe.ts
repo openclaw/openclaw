@@ -127,7 +127,7 @@ export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProb
   if (reason === "timeout") {
     return "timeout";
   }
-  if (reason === "model_not_found") {
+  if (reason === "model_not_found" || reason === "context_overflow") {
     return "format";
   }
   if (reason === "format") {

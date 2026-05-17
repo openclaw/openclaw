@@ -63,4 +63,12 @@ describe("resolveAuthProfileFailureReason", () => {
       }),
     ).toBeNull();
   });
+
+  it("does not persist context overflow as auth-profile health", () => {
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "context_overflow",
+      }),
+    ).toBeNull();
+  });
 });

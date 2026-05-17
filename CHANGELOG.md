@@ -243,6 +243,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/auth: honor `OPENCLAW_GATEWAY_TOKEN` as the remote interactive fallback when no remote token is configured, keeping remote TUI setup aligned with documented auth precedence.
 - Providers/xAI: continue polling video generations while xAI reports in-flight jobs as `pending`, so Grok video requests no longer fail before the final `done` response. (#82610) Thanks @Manzojunior.
 - Logs: redact raw Basic auth and named security headers from `logs.tail` output before returning lines to read-scoped clients. Fixes #66832. Thanks @Magicray1217.
+- Agents/model fallback: route exhausted context overflow runs to configured larger-context fallback models when their known effective window can fit the turn. Fixes #9986. Thanks @amknight.
 - CLI/gateway: emit structured JSON for gateway transport close/timeout failures when `--json` is requested by health, gateway health, and devices list commands. Fixes #79108. Thanks @TurboTheTurtle.
 - Agents/Telegram: retry Bedrock non-visible terminal turns and mark non-deliverable attempts as trajectory errors instead of silent success. Fixes #82394. (#82905) Thanks @joshavant.
 - Telegram: normalize announce group targets via a new `resolveSessionTarget` channel hook so scheduled announcements resolve consistently against the same Telegram session conversation registry as inbound turns. Fixes #81229. Thanks @giodl73-repo.

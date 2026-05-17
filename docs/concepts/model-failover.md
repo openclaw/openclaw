@@ -255,7 +255,7 @@ Defaults:
 
 ## Model fallback
 
-If all profiles for a provider fail, OpenClaw moves to the next model in `agents.defaults.model.fallbacks`. This applies to auth failures, rate limits, and timeouts that exhausted profile rotation (other errors do not advance fallback). Provider errors that do not expose enough detail are still labeled precisely in fallback state: `empty_response` means the provider returned no usable message or status, `no_error_details` means the provider explicitly returned `Unknown error (no error details in response)`, and `unclassified` means OpenClaw preserved the raw preview but no classifier matched it yet.
+If all profiles for a provider fail, OpenClaw moves to the next model in `agents.defaults.model.fallbacks`. This applies to auth failures, rate limits, timeouts that exhausted profile rotation, and context overflow after active-model compaction and oversized-tool-result recovery are exhausted when a later candidate has a known larger effective context window. Other errors do not advance fallback. Provider errors that do not expose enough detail are still labeled precisely in fallback state: `empty_response` means the provider returned no usable message or status, `no_error_details` means the provider explicitly returned `Unknown error (no error details in response)`, and `unclassified` means OpenClaw preserved the raw preview but no classifier matched it yet.
 
 Overloaded and rate-limit errors are handled more aggressively than billing cooldowns. By default, OpenClaw allows one same-provider auth-profile retry, then switches to the next configured model fallback without waiting. Provider-busy signals such as `ModelNotReadyException` land in that overloaded bucket. Tune this with `auth.cooldowns.overloadedProfileRotations`, `auth.cooldowns.overloadedBackoffMs`, and `auth.cooldowns.rateLimitedProfileRotations`.
 
@@ -285,6 +285,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - rate limits and cooldown exhaustion
     - overloaded/provider-busy errors
     - timeout-shaped failover errors
+    - context overflow after compaction/truncation recovery, only to a later candidate with a known larger effective context window
     - billing disables
     - `LiveSessionModelSwitchError`, which is normalized into a failover path so a stale persisted model does not create an outer retry loop
     - other unrecognized errors when there are still remaining candidates
@@ -292,7 +293,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
   </Tab>
   <Tab title="Does not continue on">
     - explicit aborts that are not timeout/failover-shaped
-    - context overflow errors that should stay inside compaction/retry logic (for example `request_too_large`, `INVALID_ARGUMENT: input exceeds the maximum number of tokens`, `input token count exceeds the maximum number of input tokens`, `The input is too long for the model`, or `ollama error: context length exceeded`)
+    - context overflow when no later candidate has a known larger effective context window, or when the observed overflow token count would still exceed that candidate
     - a final unknown error when there are no candidates left
 
   </Tab>

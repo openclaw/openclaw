@@ -13,6 +13,7 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveContextTokensForModel } from "./context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   FailoverError,
@@ -20,6 +21,7 @@ import {
   describeFailoverError,
   isFailoverError,
   isTimeoutError,
+  resolveFailoverStatus,
 } from "./failover-error.js";
 import {
   shouldAllowCooldownProbeForReason,
@@ -45,8 +47,12 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
-import { isLikelyContextOverflowError } from "./pi-embedded-helpers/errors.js";
+import {
+  extractObservedOverflowTokenCount,
+  isLikelyContextOverflowError,
+} from "./pi-embedded-helpers/errors.js";
 import type { FailoverReason } from "./pi-embedded-helpers/types.js";
+import { findNormalizedProviderValue } from "./provider-id.js";
 import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
@@ -188,6 +194,20 @@ type ModelFallbackRunResult<T> = {
   attempts: FallbackAttempt[];
 };
 
+type ContextOverflowFallbackTarget = {
+  candidate: ModelCandidate;
+  index: number;
+  currentContextTokens?: number;
+  nextContextTokens: number;
+  observedTokenCount?: number;
+};
+
+type ContextFallbackProviderConfig = {
+  contextTokens?: number;
+  contextWindow?: number;
+  models?: Array<{ id?: string; contextTokens?: number; contextWindow?: number }>;
+};
+
 type ModelFallbackAuthRuntime = typeof import("./model-fallback-auth.runtime.js");
 
 const modelFallbackAuthRuntimeLoader = createLazyImportLoader<ModelFallbackAuthRuntime>(
@@ -256,7 +276,7 @@ async function runFallbackAttempt<T>(params: {
   attempt: number;
   total: number;
   attribution?: FailoverAttribution;
-}): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
+}): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown; classifiedResult?: T }> {
   const runResult = await runFallbackCandidate({
     run: params.run,
     provider: params.provider,
@@ -278,7 +298,7 @@ async function runFallbackAttempt<T>(params: {
       attribution: params.attribution,
     });
     if (classifiedError) {
-      return { error: classifiedError };
+      return { error: classifiedError, classifiedResult: runResult.result };
     }
     return {
       success: buildFallbackSuccess({
@@ -315,6 +335,125 @@ function resolveResultClassificationError(
     status: classification.status,
     code: classification.code,
     rawError: classification.rawError,
+  });
+}
+
+function normalizePositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const int = Math.floor(value);
+  return int > 0 ? int : undefined;
+}
+
+function resolveConfiguredCandidateContextTokens(params: {
+  cfg: OpenClawConfig | undefined;
+  candidate: ModelCandidate;
+}): number | undefined {
+  const providers = (
+    params.cfg?.models as
+      | { providers?: Record<string, ContextFallbackProviderConfig | undefined> }
+      | undefined
+  )?.providers;
+  const providerConfig = findNormalizedProviderValue(providers, params.candidate.provider);
+  const modelConfig = Array.isArray(providerConfig?.models)
+    ? providerConfig.models.find((model) => model?.id === params.candidate.model)
+    : undefined;
+  return (
+    normalizePositiveInteger(modelConfig?.contextTokens) ??
+    normalizePositiveInteger(modelConfig?.contextWindow) ??
+    normalizePositiveInteger(providerConfig?.contextTokens) ??
+    normalizePositiveInteger(providerConfig?.contextWindow)
+  );
+}
+
+function resolveEffectiveCandidateContextTokens(params: {
+  cfg: OpenClawConfig | undefined;
+  candidate: ModelCandidate;
+}): number | undefined {
+  const modelTokens =
+    resolveConfiguredCandidateContextTokens(params) ??
+    resolveContextTokensForModel({
+      cfg: params.cfg,
+      provider: params.candidate.provider,
+      model: params.candidate.model,
+      allowAsyncLoad: false,
+    });
+  const normalizedModelTokens = normalizePositiveInteger(modelTokens);
+  if (!normalizedModelTokens) {
+    return undefined;
+  }
+  const agentCap = normalizePositiveInteger(params.cfg?.agents?.defaults?.contextTokens);
+  return agentCap ? Math.min(normalizedModelTokens, agentCap) : normalizedModelTokens;
+}
+
+function resolveContextOverflowFallbackTarget(params: {
+  cfg: OpenClawConfig | undefined;
+  candidates: ModelCandidate[];
+  currentIndex: number;
+  errorMessage: string;
+}): ContextOverflowFallbackTarget | null {
+  const current = params.candidates[params.currentIndex];
+  if (!current) {
+    return null;
+  }
+  const currentContextTokens = resolveEffectiveCandidateContextTokens({
+    cfg: params.cfg,
+    candidate: current,
+  });
+  const observedTokenCount = extractObservedOverflowTokenCount(params.errorMessage);
+
+  for (let index = params.currentIndex + 1; index < params.candidates.length; index += 1) {
+    const candidate = params.candidates[index];
+    if (!candidate) {
+      continue;
+    }
+    const nextContextTokens = resolveEffectiveCandidateContextTokens({
+      cfg: params.cfg,
+      candidate,
+    });
+    if (!nextContextTokens) {
+      continue;
+    }
+    const growsBeyondCurrent =
+      currentContextTokens !== undefined
+        ? nextContextTokens > currentContextTokens
+        : observedTokenCount !== undefined;
+    const fitsObservedOverflow =
+      observedTokenCount === undefined || nextContextTokens > observedTokenCount;
+    if (!growsBeyondCurrent || !fitsObservedOverflow) {
+      continue;
+    }
+    return {
+      candidate,
+      index,
+      nextContextTokens,
+      ...(currentContextTokens !== undefined ? { currentContextTokens } : {}),
+      ...(observedTokenCount !== undefined ? { observedTokenCount } : {}),
+    };
+  }
+  return null;
+}
+
+function createContextOverflowFallbackError(params: {
+  message: string;
+  provider: string;
+  model: string;
+  sessionId?: string;
+  lane?: string;
+  cause: unknown;
+}): FailoverError {
+  return new FailoverError(params.message, {
+    reason: "context_overflow",
+    provider: params.provider,
+    model: params.model,
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    ...(params.lane ? { lane: params.lane } : {}),
+    status: resolveFailoverStatus("context_overflow"),
+    code:
+      isFailoverError(params.cause) && params.cause.code ? params.cause.code : "context_overflow",
+    rawError: params.message,
+    cause: params.cause instanceof Error ? params.cause : undefined,
   });
 }
 
@@ -1121,13 +1260,59 @@ export async function runWithModelFallback<T>(
           cooldownProbeUsedProviders.add(transientProbeProviderForAttempt);
         }
       }
-      // Context overflow errors should be handled by the inner runner's
-      // compaction/retry logic, not by model fallback.  If one escapes as a
-      // throw, rethrow it immediately rather than trying a different model
-      // that may have a smaller context window and fail worse.
       const errMessage = formatErrorMessage(err);
       if (isLikelyContextOverflowError(errMessage)) {
-        throw err;
+        const target = resolveContextOverflowFallbackTarget({
+          cfg: params.cfg,
+          candidates,
+          currentIndex: i,
+          errorMessage: errMessage,
+        });
+        if (!target) {
+          if ("classifiedResult" in attemptRun) {
+            return buildFallbackSuccess({
+              result: attemptRun.classifiedResult as T,
+              provider: candidate.provider,
+              model: candidate.model,
+              attempts,
+            });
+          }
+          throw err;
+        }
+        const normalized = createContextOverflowFallbackError({
+          message: errMessage,
+          provider: candidate.provider,
+          model: candidate.model,
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+          ...(params.lane ? { lane: params.lane } : {}),
+          cause: err,
+        });
+        lastError = normalized;
+        await observeFailedCandidate({
+          attempts,
+          candidate,
+          error: normalized,
+          runId: params.runId,
+          sessionId: params.sessionId,
+          lane: params.lane,
+          requestedProvider: params.provider,
+          requestedModel: params.model,
+          attempt: i + 1,
+          total: candidates.length,
+          nextCandidate: target.candidate,
+          isPrimary,
+          requestedModelMatched: requestedModel,
+          fallbackConfigured: hasFallbackCandidates,
+        });
+        await params.onError?.({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: normalized,
+          attempt: i + 1,
+          total: candidates.length,
+        });
+        i = target.index - 1;
+        continue;
       }
       const normalized =
         coerceToFailoverError(err, {
@@ -1182,8 +1367,7 @@ export async function runWithModelFallback<T>(
       }
 
       // Even unrecognized errors should not abort the fallback loop when
-      // there are remaining candidates.  Only abort/context-overflow errors
-      // (handled above) are truly non-retryable.
+      // there are remaining candidates. Only abort errors are truly non-retryable.
       const isKnownFailover = isFailoverError(normalized);
       if (!isKnownFailover && i === candidates.length - 1) {
         throw err;

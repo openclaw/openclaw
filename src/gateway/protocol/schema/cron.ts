@@ -69,6 +69,7 @@ const CronFailoverReasonSchema = Type.Union([
   Type.Literal("billing"),
   Type.Literal("server_error"),
   Type.Literal("timeout"),
+  Type.Literal("context_overflow"),
   Type.Literal("model_not_found"),
   Type.Literal("empty_response"),
   Type.Literal("no_error_details"),

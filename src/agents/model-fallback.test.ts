@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
@@ -160,6 +161,30 @@ vi.mock("./model-fallback-auth.runtime.js", () => authRuntimeMock.runtime);
 const makeCfg = makeModelFallbackCfg;
 let authTempRoot = "";
 let authTempCounter = 0;
+
+function makeContextModel(id: string, contextWindow: number): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow,
+    maxTokens: 4096,
+  };
+}
+
+function makeContextProvider(...models: ModelDefinitionConfig[]): ModelProviderConfig {
+  return {
+    baseUrl: "https://example.invalid/v1",
+    models,
+  };
+}
 
 beforeAll(() => {
   setCurrentPluginMetadataSnapshot(loadPluginMetadataSnapshot({ config: {}, env: process.env }), {
@@ -737,6 +762,228 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back on context overflow when a configured candidate has a larger known context window", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-5",
+            fallbacks: ["moonshot/kimi-k2.5"],
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: makeContextProvider(makeContextModel("claude-opus-4-5", 200_000)),
+          moonshot: makeContextProvider(makeContextModel("kimi-k2.5", 256_000)),
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error("INVALID_ARGUMENT: input exceeds the maximum number of tokens"),
+      )
+      .mockResolvedValueOnce("fallback ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      run,
+    });
+
+    expect(result.result).toBe("fallback ok");
+    expect(run.mock.calls).toEqual([
+      ["anthropic", "claude-opus-4-5"],
+      ["moonshot", "kimi-k2.5"],
+    ]);
+    expect(result.attempts[0]).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      reason: "context_overflow",
+      status: 413,
+      code: "context_overflow",
+    });
+  });
+
+  it("skips context overflow fallback candidates that cannot fit the observed token count", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-5",
+            fallbacks: ["moonshot/kimi-k2.5", "fallback-large/big-context"],
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: makeContextProvider(makeContextModel("claude-opus-4-5", 200_000)),
+          moonshot: makeContextProvider(makeContextModel("kimi-k2.5", 256_000)),
+          "fallback-large": makeContextProvider(makeContextModel("big-context", 1_048_576)),
+        },
+      },
+    });
+    const run = vi.fn().mockImplementation(async (provider, model) => {
+      if (provider === "anthropic") {
+        throw new Error("prompt is too long: 277403 tokens > 200000 maximum");
+      }
+      if (provider === "fallback-large" && model === "big-context") {
+        return "fallback ok";
+      }
+      throw new Error(`unexpected candidate: ${provider}/${model}`);
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      run,
+    });
+
+    expect(result.result).toBe("fallback ok");
+    expect(run.mock.calls).toEqual([
+      ["anthropic", "claude-opus-4-5"],
+      ["fallback-large", "big-context"],
+    ]);
+  });
+
+  it("does not fall back on context overflow to smaller known context windows", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-5",
+            fallbacks: ["ollama/qwen3.5:27b"],
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: makeContextProvider(makeContextModel("claude-opus-4-5", 200_000)),
+          ollama: makeContextProvider(makeContextModel("qwen3.5:27b", 32_000)),
+        },
+      },
+    });
+    const overflowError = new Error("ollama error: context length exceeded");
+    const run = vi.fn().mockRejectedValueOnce(overflowError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        run,
+      }),
+    ).rejects.toBe(overflowError);
+    expect(run.mock.calls).toEqual([["anthropic", "claude-opus-4-5"]]);
+  });
+
+  it("uses blocked embedded context overflow results to continue to larger fallbacks", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-5",
+            fallbacks: ["moonshot/kimi-k2.5"],
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: makeContextProvider(makeContextModel("claude-opus-4-5", 200_000)),
+          moonshot: makeContextProvider(makeContextModel("kimi-k2.5", 256_000)),
+        },
+      },
+    });
+    const primaryResult: EmbeddedPiRunResult = {
+      payloads: [{ text: "Context overflow: prompt too large for the model.", isError: true }],
+      meta: {
+        durationMs: 1,
+        livenessState: "blocked",
+        error: {
+          kind: "context_overflow",
+          message: "Context overflow: prompt too large for the model.",
+        },
+      },
+    };
+    const fallbackResult: EmbeddedPiRunResult = {
+      payloads: [{ text: "fallback ok" }],
+      meta: { durationMs: 1, finalAssistantVisibleText: "fallback ok" },
+    };
+    const run = vi.fn().mockResolvedValueOnce(primaryResult).mockResolvedValueOnce(fallbackResult);
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      run,
+      classifyResult: ({ provider, model, result }) =>
+        classifyEmbeddedPiRunResultForModelFallback({
+          provider,
+          model,
+          result,
+        }),
+    });
+
+    expect(result.result).toBe(fallbackResult);
+    expect(run.mock.calls).toEqual([
+      ["anthropic", "claude-opus-4-5"],
+      ["moonshot", "kimi-k2.5"],
+    ]);
+    expect(result.attempts[0]?.reason).toBe("context_overflow");
+    expect(result.attempts[0]?.code).toBe("context_overflow");
+  });
+
+  it("keeps embedded context overflow results when no larger context fallback is known", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-5",
+            fallbacks: ["ollama/qwen3.5:27b"],
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: makeContextProvider(makeContextModel("claude-opus-4-5", 200_000)),
+          ollama: makeContextProvider(makeContextModel("qwen3.5:27b", 32_000)),
+        },
+      },
+    });
+    const primaryResult: EmbeddedPiRunResult = {
+      payloads: [{ text: "Context overflow: prompt too large for the model.", isError: true }],
+      meta: {
+        durationMs: 1,
+        livenessState: "blocked",
+        error: {
+          kind: "context_overflow",
+          message: "Context overflow: prompt too large for the model.",
+        },
+      },
+    };
+    const run = vi.fn().mockResolvedValueOnce(primaryResult);
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      run,
+      classifyResult: ({ provider, model, result }) =>
+        classifyEmbeddedPiRunResultForModelFallback({
+          provider,
+          model,
+          result,
+        }),
+    });
+
+    expect(result.result).toBe(primaryResult);
+    expect(result.attempts).toStrictEqual([]);
+    expect(run.mock.calls).toEqual([["anthropic", "claude-opus-4-5"]]);
+  });
+
   it("does not classify successful results when the optional classifier returns null", async () => {
     const cfg = makeProviderFallbackCfg("openai-codex");
     const run = vi.fn().mockResolvedValueOnce({ payloads: [{ text: "ok" }] });
@@ -811,6 +1058,29 @@ describe("runWithModelFallback", () => {
       classifyEmbeddedPiRunResultForModelFallback({
         provider: "atlassian-ai-gateway-openai",
         model: "gpt-5.5-2026-04-23",
+        result: runResult,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps context overflow results with outbound delivery evidence out of fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [{ text: "Context overflow: prompt too large for the model.", isError: true }],
+      messagingToolSentTexts: ["already sent"],
+      meta: {
+        durationMs: 1,
+        livenessState: "blocked",
+        error: {
+          kind: "context_overflow",
+          message: "Context overflow: prompt too large for the model.",
+        },
+      },
+    };
+
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: "anthropic",
+        model: "claude-opus-4-5",
         result: runResult,
       }),
     ).toBeNull();
