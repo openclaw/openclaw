@@ -45,7 +45,10 @@ export function transformTransportMessages(
     targetModel: Model<Api>,
     source: { provider: string; api: Api; model: string },
   ) => string,
-  options?: { preserveCrossModelToolCallThoughtSignature?: boolean },
+  options?: {
+    normalizeSameModelToolCallIds?: boolean;
+    preserveCrossModelToolCallThoughtSignature?: boolean;
+  },
 ): Context["messages"] {
   const allowSyntheticToolResults = defaultAllowSyntheticToolResults(model.api);
   const syntheticToolResultText = CODEX_STYLE_ABORTED_OUTPUT_APIS.has(model.api)
@@ -103,7 +106,10 @@ export function transformTransportMessages(
         normalizedToolCall = { ...normalizedToolCall };
         delete normalizedToolCall.thoughtSignature;
       }
-      if (!isSameModel && normalizeToolCallId) {
+      if (
+        (!isSameModel || options?.normalizeSameModelToolCallIds === true) &&
+        normalizeToolCallId
+      ) {
         const normalizedId = normalizeToolCallId(block.id, model, msg);
         if (normalizedId !== block.id) {
           toolCallIdMap.set(block.id, normalizedId);
