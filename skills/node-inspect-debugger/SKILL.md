@@ -6,7 +6,7 @@ metadata: { "openclaw": { "emoji": "🪲", "requires": { "bins": ["node"] } } }
 
 # Node Inspect Debugger
 
-Use when logs are too weak for a Node.js bug: hidden locals, async hangs, flaky tests, child processes, startup races, memory growth, or CPU hot paths.
+Use for Node.js debugging that needs inspector access: hidden locals, async hangs, flaky tests, child processes, startup races, memory growth, or CPU hot paths.
 
 Default to `node inspect` first. Use Chrome DevTools Protocol only when you need scripted breakpoints, automated state capture, heap snapshots, or CPU profiles.
 

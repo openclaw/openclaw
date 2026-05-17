@@ -14,7 +14,7 @@ Loop
 
 1. Question: state the concrete feasibility question.
 2. Research: read enough docs/source to choose credible approach.
-3. Build: create the smallest runnable artifact that proves or kills the idea.
+3. Build: create the smallest runnable artifact that validates or invalidates the idea.
 4. Stress: try one edge case or failure mode.
 5. Verdict: `VALIDATED`, `PARTIAL`, or `INVALIDATED`.
 
@@ -46,6 +46,6 @@ Recommendation: ship / adjust / avoid, with the next production step.
 
 Rules
 
-- A failed spike is useful when it kills a bad path with evidence.
+- An invalidated spike is useful when it rules out a path with evidence.
 - Do not merge spike code into production without rewriting it normally.
 - If external dependencies are evaluated, check health: recent release/commit, docs, license, install friction.
