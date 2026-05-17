@@ -950,7 +950,7 @@ function convertResponsesTools(
     transport: "responses",
     model,
   });
-  return tools.map((tool): FunctionTool => {
+  return sortTransportToolsByName(tools).map((tool): FunctionTool => {
     const base = {
       type: "function" as const,
       name: tool.name,
@@ -2686,7 +2686,7 @@ function convertTools(
       model,
     },
   );
-  return tools.map((tool) => ({
+  return sortTransportToolsByName(tools).map((tool) => ({
     type: "function",
     function: {
       name: tool.name,
@@ -2699,6 +2699,28 @@ function convertTools(
       ...(strict === undefined ? {} : { strict }),
     },
   }));
+}
+
+function compareTransportToolText(left: string | undefined, right: string | undefined): number {
+  const leftText = left ?? "";
+  const rightText = right ?? "";
+  if (leftText < rightText) {
+    return -1;
+  }
+  if (leftText > rightText) {
+    return 1;
+  }
+  return 0;
+}
+
+function sortTransportToolsByName<T extends { name?: string; description?: string }>(
+  tools: readonly T[],
+): T[] {
+  return tools.toSorted(
+    (left, right) =>
+      compareTransportToolText(left.name, right.name) ||
+      compareTransportToolText(left.description, right.description),
+  );
 }
 
 function extractGoogleThoughtSignature(toolCall: unknown): string | undefined {
