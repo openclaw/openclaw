@@ -13,8 +13,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import { runBeforeToolCallHook } from "../pi-tools.before-tool-call.js";
+import { stableStringify } from "../stable-stringify.js";
 import { normalizeToolName } from "../tool-policy.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
@@ -76,12 +78,14 @@ export type NativeHookRelayRegistration = {
   sessionKey?: string;
   config?: OpenClawConfig;
   runId: string;
+  channelId?: string;
   allowedEvents: readonly NativeHookRelayEvent[];
   expiresAtMs: number;
   signal?: AbortSignal;
 };
 
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
+  shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
   commandForEvent: (event: NativeHookRelayEvent) => string;
   renew: (ttlMs?: number) => void;
   unregister: () => void;
@@ -95,6 +99,7 @@ export type RegisterNativeHookRelayParams = {
   sessionKey?: string;
   config?: OpenClawConfig;
   runId: string;
+  channelId?: string;
   allowedEvents?: readonly NativeHookRelayEvent[];
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
@@ -230,6 +235,10 @@ type NativeHookRelayBridgeRecord = {
 let nativeHookRelayPermissionApprovalRequester: NativeHookRelayPermissionApprovalRequester =
   requestNativeHookRelayPermissionApproval;
 
+const NATIVE_HOOK_TOOL_NAME_ALIASES: Record<string, string> = {
+  exec_command: "exec",
+};
+
 const nativeHookRelayProviderAdapters: Record<
   NativeHookRelayProvider,
   NativeHookRelayProviderAdapter
@@ -304,6 +313,7 @@ export function registerNativeHookRelay(
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
+    ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents,
     expiresAtMs: Date.now() + normalizePositiveInteger(params.ttlMs, DEFAULT_RELAY_TTL_MS),
     ...(params.signal ? { signal: params.signal } : {}),
@@ -312,6 +322,7 @@ export function registerNativeHookRelay(
   registerNativeHookRelayBridge(registration);
   const handle: NativeHookRelayRegistrationHandle = {
     ...registration,
+    shouldRelayEvent: nativeHookRelayEventHasLocalWork,
     commandForEvent: (event) =>
       buildNativeHookRelayCommand({
         provider: params.provider,
@@ -386,6 +397,19 @@ export function buildNativeHookRelayCommand(params: {
   ]);
 }
 
+function nativeHookRelayEventHasLocalWork(event: NativeHookRelayEvent): boolean {
+  if (event === "pre_tool_use") {
+    return true;
+  }
+  if (event === "post_tool_use") {
+    return hasGlobalHooks("after_tool_call");
+  }
+  if (event === "before_agent_finalize") {
+    return hasGlobalHooks("before_agent_finalize");
+  }
+  return true;
+}
+
 export async function invokeNativeHookRelay(
   params: InvokeNativeHookRelayParams,
 ): Promise<NativeHookRelayProcessResponse> {
@@ -423,6 +447,23 @@ export async function invokeNativeHookRelay(
     invocation: normalized,
     adapter: getNativeHookRelayProviderAdapter(provider),
   });
+}
+
+export function hasNativeHookRelayInvocation(params: {
+  relayId: string;
+  event: NativeHookRelayEvent;
+  toolUseId?: string;
+}): boolean {
+  const toolUseId = params.toolUseId?.trim();
+  if (!toolUseId) {
+    return false;
+  }
+  return invocations.some(
+    (invocation) =>
+      invocation.relayId === params.relayId &&
+      invocation.event === params.event &&
+      invocation.toolUseId === toolUseId,
+  );
 }
 
 export async function invokeNativeHookRelayBridge(
@@ -889,10 +930,14 @@ async function runNativeHookRelayPreToolUse(params: {
 }): Promise<NativeHookRelayProcessResponse> {
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
+  const originalToolInputFingerprint = stableStringify(toolInput);
   const outcome = await runBeforeToolCallHook({
     toolName,
     params: toolInput,
     ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
+    ...(readNativeHookRelayApprovalMode(params.invocation.rawPayload) === "report"
+      ? { approvalMode: "report" }
+      : {}),
     signal: params.registration.signal,
     ctx: {
       ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
@@ -900,14 +945,20 @@ async function runNativeHookRelayPreToolUse(params: {
       ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
       ...(params.registration.config ? { config: params.registration.config } : {}),
       runId: params.registration.runId,
+      ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
       ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
     },
   });
   if (outcome.blocked) {
     return params.adapter.renderPreToolUseBlockResponse(outcome.reason);
   }
-  // Codex PreToolUse supports block/allow, not argument mutation. If an
-  // OpenClaw plugin returns adjusted params here, we intentionally ignore them.
+  if (nativeHookRelayParamsWereRewritten(originalToolInputFingerprint, outcome.params)) {
+    // @openai/codex@0.130.0 treats PreToolUse updatedInput as unsupported and
+    // continues with the original params, so rewrites must fail closed here.
+    return params.adapter.renderPreToolUseBlockResponse(
+      "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+    );
+  }
   return params.adapter.renderNoopResponse(params.invocation.event);
 }
 
@@ -926,6 +977,7 @@ async function runNativeHookRelayPostToolUse(params: {
     ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
     sessionId: params.registration.sessionId,
     ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+    ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
     startArgs: params.adapter.readToolInput(params.invocation.rawPayload),
     result: params.adapter.readToolResponse(params.invocation.rawPayload),
   });
@@ -1016,6 +1068,7 @@ async function runNativeHookRelayBeforeAgentFinalize(params: {
       sessionId: params.registration.sessionId,
       ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
       runId: params.registration.runId,
+      ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
       ...(params.invocation.cwd ? { workspaceDir: params.invocation.cwd } : {}),
       ...(params.invocation.model ? { modelId: params.invocation.model } : {}),
     },
@@ -1375,7 +1428,11 @@ function readCodexToolInput(rawPayload: JsonValue): Record<string, JsonValue> {
   const payload = isJsonObject(rawPayload) ? rawPayload : {};
   const toolInput = payload.tool_input;
   if (isJsonObject(toolInput)) {
-    return toolInput as Record<string, JsonValue>;
+    const toolName = readOptionalString(payload.tool_name);
+    return normalizeCodexToolInput(
+      normalizeNativeHookToolName(toolName),
+      toolInput as Record<string, JsonValue>,
+    );
   }
   if (toolInput === undefined) {
     return {};
@@ -1383,13 +1440,53 @@ function readCodexToolInput(rawPayload: JsonValue): Record<string, JsonValue> {
   return { value: toolInput as JsonValue };
 }
 
+function normalizeCodexToolInput(
+  toolName: string,
+  toolInput: Record<string, JsonValue>,
+): Record<string, JsonValue> {
+  const command = normalizeCodexCommand(toolInput.cmd);
+  if (toolName !== "exec" || command === undefined) {
+    return toolInput;
+  }
+  return {
+    ...toolInput,
+    command,
+  };
+}
+
+function normalizeCodexCommand(value: JsonValue | undefined): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value) && value.every((part): part is string => typeof part === "string")) {
+    return shellQuoteArgs(value);
+  }
+  return undefined;
+}
+
+function nativeHookRelayParamsWereRewritten(
+  originalFingerprint: string,
+  candidate: unknown,
+): boolean {
+  if (candidate === undefined) {
+    return false;
+  }
+  return stableStringify(candidate) !== originalFingerprint;
+}
+
 function readCodexToolResponse(rawPayload: JsonValue): unknown {
   const payload = isJsonObject(rawPayload) ? rawPayload : {};
   return payload.tool_response;
 }
 
+function readNativeHookRelayApprovalMode(rawPayload: JsonValue): "report" | undefined {
+  const payload = isJsonObject(rawPayload) ? rawPayload : {};
+  return payload.openclaw_approval_mode === "report" ? "report" : undefined;
+}
+
 function normalizeNativeHookToolName(toolName: string | undefined): string {
-  return normalizeToolName(toolName ?? "tool");
+  const normalized = normalizeToolName(toolName ?? "tool");
+  return NATIVE_HOOK_TOOL_NAME_ALIASES[normalized] ?? normalized;
 }
 
 async function requestNativeHookRelayPermissionApproval(

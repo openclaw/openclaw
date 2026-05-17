@@ -1040,6 +1040,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const stopChannel = vi.fn(async () => {});
     const pluginServices = { stop: vi.fn(async () => {}) };
     const { createGatewayCloseHandler } = await import("./server-close.js");
+    const { createChatRunState } = await import("./server-chat-state.js");
 
     const close = createGatewayCloseHandler({
       bonjourStop: null,
@@ -1060,7 +1061,11 @@ describe("startGatewayPostAttachRuntime", () => {
       heartbeatUnsub: null,
       transcriptUnsub: null,
       lifecycleUnsub: null,
-      chatRunState: { clear: vi.fn() },
+      chatRunState: createChatRunState(),
+      chatAbortControllers: new Map(),
+      removeChatRun: vi.fn(),
+      agentRunSeq: new Map(),
+      nodeSendToSession: vi.fn(),
       clients: new Set(),
       configReloader: { stop: vi.fn(async () => {}) },
       wss: { close: vi.fn((callback: () => void) => callback()) } as never,

@@ -576,6 +576,9 @@ jobs:
     needs: [authorize_actor, validate_selected_ref]
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
+    concurrency:
+      group: qa-live-whatsapp-shared
+      cancel-in-progress: false
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref

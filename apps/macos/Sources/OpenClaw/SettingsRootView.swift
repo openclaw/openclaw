@@ -7,15 +7,18 @@ struct SettingsRootView: View {
     private let permissionMonitor = PermissionMonitor.shared
     @State private var monitoringPermissions = false
     @State private var selectedTab: SettingsTab = .general
+    @State private var cachedTabs: Set<SettingsTab>
     @State private var snapshotPaths: (configPath: String?, stateDir: String?) = (nil, nil)
     let updater: UpdaterProviding?
     private let isPreview = ProcessInfo.processInfo.isPreview
     private let isNixMode = ProcessInfo.processInfo.isNixMode
 
     init(state: AppState, updater: UpdaterProviding?, initialTab: SettingsTab? = nil) {
+        let initial = initialTab ?? .general
         self.state = state
         self.updater = updater
-        self._selectedTab = State(initialValue: initialTab ?? .general)
+        self._selectedTab = State(initialValue: initial)
+        self._cachedTabs = State(initialValue: [initial])
     }
 
     var body: some View {
@@ -37,7 +40,7 @@ struct SettingsRootView: View {
                 if self.isNixMode {
                     self.nixManagedBanner
                 }
-                self.detailView(for: self.selectedTab)
+                self.cachedDetailViews
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(.horizontal, 22)
@@ -45,10 +48,11 @@ struct SettingsRootView: View {
         }
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(SettingsWindowChromeConfigurator())
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
-                    self.selectedTab = tab
+                    self.selectedTab = self.validTab(for: tab)
                 }
             }
         }
@@ -56,6 +60,7 @@ struct SettingsRootView: View {
             if let pending = SettingsTabRouter.consumePending() {
                 self.selectedTab = self.validTab(for: pending)
             }
+            self.cacheSelectedTab()
             self.updatePermissionMonitoring(for: self.selectedTab)
         }
         .onChange(of: self.state.debugPaneEnabled) { _, enabled in
@@ -64,6 +69,7 @@ struct SettingsRootView: View {
             }
         }
         .onChange(of: self.selectedTab) { _, newValue in
+            self.cachedTabs.insert(newValue)
             self.updatePermissionMonitoring(for: newValue)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -75,12 +81,6 @@ struct SettingsRootView: View {
             guard !self.isPreview else { return }
             await self.refreshPerms()
         }
-        .task {
-            guard !self.isPreview else { return }
-            async let schemaLoad: Void = ChannelsStore.shared.loadConfigSchema()
-            async let configLoad: Void = ChannelsStore.shared.loadConfig(force: false)
-            _ = await (schemaLoad, configLoad)
-        }
         .task(id: self.state.connectionMode) {
             guard !self.isPreview else { return }
             await self.refreshSnapshotPaths()
@@ -89,6 +89,11 @@ struct SettingsRootView: View {
 
     private var visibleGroups: [SettingsTabGroup] {
         SettingsTabGroup.defaultGroups(showDebug: self.state.debugPaneEnabled)
+    }
+
+    private var cachedDetailTabs: [SettingsTab] {
+        let cached = self.cachedTabs.union([self.selectedTab])
+        return self.visibleGroups.flatMap(\.tabs).filter { cached.contains($0) }
     }
 
     private var nixManagedBanner: some View {
@@ -121,44 +126,61 @@ struct SettingsRootView: View {
         .cornerRadius(10)
     }
 
-    @ViewBuilder
-    private func detailView(for tab: SettingsTab) -> some View {
+    private var cachedDetailViews: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(self.cachedDetailTabs) { tab in
+                self.detailView(for: tab)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .opacity(tab == self.selectedTab ? 1 : 0)
+                    .allowsHitTesting(tab == self.selectedTab)
+                    .disabled(tab != self.selectedTab)
+                    .accessibilityHidden(tab != self.selectedTab)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func detailView(for tab: SettingsTab) -> AnyView {
         switch tab {
         case .general:
-            GeneralSettings(state: self.state, page: .general)
+            AnyView(GeneralSettings(state: self.state, page: .general, isActive: self.selectedTab == tab))
         case .connection:
-            GeneralSettings(state: self.state, page: .connection)
+            AnyView(GeneralSettings(state: self.state, page: .connection, isActive: self.selectedTab == tab))
         case .permissions:
-            PermissionsSettings(
+            AnyView(PermissionsSettings(
                 status: self.permissionMonitor.status,
                 refresh: self.refreshPerms,
-                showOnboarding: { DebugActions.restartOnboarding() })
+                showOnboarding: { DebugActions.restartOnboarding() }))
         case .voiceWake:
-            VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
+            AnyView(VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake))
         case .channels:
-            ChannelsSettings()
+            AnyView(ChannelsSettings(isActive: self.selectedTab == tab))
         case .skills:
-            SkillsSettings(state: self.state)
+            AnyView(SkillsSettings(state: self.state))
         case .cron:
-            CronSettings()
+            AnyView(CronSettings(isActive: self.selectedTab == tab))
         case .execApprovals:
-            ExecApprovalsSettings()
+            AnyView(ExecApprovalsSettings())
         case .sessions:
-            SessionsSettings()
+            AnyView(SessionsSettings())
         case .instances:
-            InstancesSettings()
+            AnyView(InstancesSettings(isActive: self.selectedTab == tab))
         case .config:
-            ConfigSettings()
+            AnyView(ConfigSettings())
         case .debug:
-            DebugSettings(state: self.state)
+            AnyView(DebugSettings(state: self.state))
         case .about:
-            AboutSettings(updater: self.updater)
+            AnyView(AboutSettings(updater: self.updater))
         }
     }
 
     private func validTab(for requested: SettingsTab) -> SettingsTab {
         if requested == .debug, !self.state.debugPaneEnabled { return .general }
         return requested
+    }
+
+    private func cacheSelectedTab() {
+        self.cachedTabs.insert(self.selectedTab)
     }
 
     @MainActor
@@ -251,6 +273,28 @@ enum SettingsTab: CaseIterable, Identifiable, Hashable {
         case .config: "slider.horizontal.3"
         case .debug: "ant"
         case .about: "info.circle"
+        }
+    }
+}
+
+private struct SettingsWindowChromeConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        self.configureWindow(for: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        self.configureWindow(for: nsView)
+    }
+
+    private func configureWindow(for view: NSView) {
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.styleMask.remove(.fullSizeContentView)
+            window.titleVisibility = .visible
+            window.titlebarAppearsTransparent = true
+            window.toolbarStyle = .unifiedCompact
         }
     }
 }
