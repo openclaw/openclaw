@@ -5,7 +5,6 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { info, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { resolveOAuthDir } from "./auth-store.runtime.js";
 import {
   hasWebCredsSync,
@@ -18,6 +17,7 @@ import {
 } from "./creds-files.js";
 import {
   waitForCredsSaveQueueWithTimeout,
+  writeWebCredsRawAtomically,
   type CredsQueueWaitResult,
 } from "./creds-persistence.js";
 import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
@@ -88,11 +88,9 @@ export async function restoreCredsFromBackupIfNeeded(authDir: string): Promise<b
 
     // Ensure backup is parseable before restoring.
     JSON.parse(backupRaw);
-    await replaceFileAtomic({
+    await writeWebCredsRawAtomically({
       filePath: credsPath,
       content: backupRaw,
-      dirMode: 0o700,
-      mode: 0o600,
       tempPrefix: ".creds.restore",
     });
     logger.warn({ credsPath }, "restored corrupted WhatsApp creds.json from backup");
