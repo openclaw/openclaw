@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
+  buildAgentHookContextChannelFields,
   buildHarnessContextEngineRuntimeContext,
   buildHarnessContextEngineRuntimeContextFromUsage,
   buildEmbeddedAttemptToolRunContext,
@@ -861,6 +862,7 @@ export async function runCodexAppServerAttempt(
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
+  const hookChannelId = resolveCodexAppServerHookChannelId(params, sandboxSessionKey);
   let yieldDetected = false;
   const tools = await buildDynamicTools({
     params,
@@ -886,6 +888,7 @@ export async function runCodexAppServerAttempt(
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       runId: params.runId,
+      channelId: hookChannelId,
     },
   });
   const hadSessionFile = await pathExists(activeSessionFile);
@@ -911,7 +914,7 @@ export async function runCodexAppServerAttempt(
     workspaceDir: params.workspaceDir,
     messageProvider: params.messageProvider ?? undefined,
     trigger: params.trigger,
-    channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+    channelId: hookChannelId,
     ...hookContextWindowFields,
   };
   const activeContextEnginePluginId = activeContextEngine
@@ -1112,6 +1115,7 @@ export async function runCodexAppServerAttempt(
       sessionKey: sandboxSessionKey,
       config: params.config,
       runId: params.runId,
+      channelId: hookChannelId,
       attemptTimeoutMs: params.timeoutMs,
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,
@@ -1958,6 +1962,7 @@ export async function runCodexAppServerAttempt(
             paramsForRun: params,
             threadId: thread.threadId,
             turnId,
+            nativeHookRelay,
             signal: runAbortController.signal,
           });
         }
@@ -2824,6 +2829,7 @@ function createCodexNativeHookRelay(params: {
   sessionKey: string | undefined;
   config: EmbeddedRunAttemptParams["config"];
   runId: string;
+  channelId?: string;
   attemptTimeoutMs: number;
   startupTimeoutMs: number;
   turnStartTimeoutMs: number;
@@ -2844,6 +2850,7 @@ function createCodexNativeHookRelay(params: {
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
+    ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents: params.events,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options?.ttlMs,
@@ -2976,6 +2983,19 @@ function resolveOpenClawCodingToolsSessionKeys(
   };
 }
 
+function resolveCodexAppServerHookChannelId(
+  params: EmbeddedRunAttemptParams,
+  sandboxSessionKey: string,
+): string | undefined {
+  return buildAgentHookContextChannelFields({
+    sessionKey: sandboxSessionKey,
+    messageChannel: params.messageChannel,
+    messageProvider: params.messageProvider,
+    currentChannelId: params.currentChannelId,
+    messageTo: params.messageTo,
+  }).channelId;
+}
+
 async function buildDynamicTools(input: DynamicToolBuildParams) {
   const { params } = input;
   if (params.disableTools || !supportsModelTools(params.model)) {
@@ -3035,6 +3055,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     }),
     suppressManagedWebSearch: false,
     currentChannelId: params.currentChannelId,
+    hookChannelId: resolveCodexAppServerHookChannelId(params, input.sandboxSessionKey),
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
     replyToMode: params.replyToMode,
@@ -4166,6 +4187,7 @@ function handleApprovalRequest(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   threadId: string;
   turnId: string;
+  nativeHookRelay?: NativeHookRelayRegistrationHandle;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
   return handleCodexAppServerApprovalRequest({
@@ -4174,6 +4196,7 @@ function handleApprovalRequest(params: {
     paramsForRun: params.paramsForRun,
     threadId: params.threadId,
     turnId: params.turnId,
+    nativeHookRelay: params.nativeHookRelay,
     signal: params.signal,
   });
 }

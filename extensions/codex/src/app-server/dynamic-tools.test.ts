@@ -49,7 +49,11 @@ function textToolResult(text: string, details: unknown = {}): AgentToolResult<un
   };
 }
 
-function createBridgeWithToolResult(toolName: string, toolResult: AgentToolResult<unknown>) {
+function createBridgeWithToolResult(
+  toolName: string,
+  toolResult: AgentToolResult<unknown>,
+  hookContext?: Parameters<typeof createCodexDynamicToolBridge>[0]["hookContext"],
+) {
   return createCodexDynamicToolBridge({
     tools: [
       createTool({
@@ -58,6 +62,7 @@ function createBridgeWithToolResult(toolName: string, toolResult: AgentToolResul
       }),
     ],
     signal: new AbortController().signal,
+    hookContext,
   });
 }
 
@@ -923,10 +928,20 @@ describe("createCodexDynamicToolBridge", () => {
       createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
     );
 
-    const bridge = createBridgeWithToolResult("exec", {
-      content: [{ type: "text", text: "done" }],
-      details: {},
-    });
+    const bridge = createBridgeWithToolResult(
+      "exec",
+      {
+        content: [{ type: "text", text: "done" }],
+        details: {},
+      },
+      {
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: "agent:agent-1:session-1",
+        runId: "run-1",
+        channelId: "voice-room",
+      },
+    );
 
     await bridge.handleToolCall({
       threadId: "thread-1",
@@ -949,6 +964,11 @@ describe("createCodexDynamicToolBridge", () => {
       details: {},
     });
     expectContextFields(callArg(afterToolCall, 0, 1, "after_tool_call context"), {
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+      runId: "run-1",
+      channelId: "voice-room",
       toolName: "exec",
       toolCallId: "call-1",
     });

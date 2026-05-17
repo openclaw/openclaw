@@ -118,6 +118,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Codex/app-server: cover `/btw` side-question native hooks and app-server command approvals without relying on unsupported turn-scoped hook config. (#82559) Thanks @Kaspre.
 - Gateway/Docker: fail closed for non-loopback gateway starts without explicit shared-secret or trusted-proxy auth, and stop the image default command from bypassing config validation. Fixes #82865. (#82866) Thanks @coygeek.
 - Agents/followups: route queued followup turns through CLI runtime backends instead of embedded harness lookup, preventing `claude-cli`/`google-gemini-cli` followups from failing before delivery. Fixes #82847. (#82857) Thanks @hclsys.
 - CLI/sessions: let `openclaw sessions cleanup --fix-missing` prune malformed rows with unresolvable transcript metadata instead of throwing. Fixes #80970. (#82745) Thanks @IWhatsskill.

@@ -26,6 +26,7 @@ function queueActiveRunMessageForTest(
 }
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
+import * as approvalBridge from "./approval-bridge.js";
 import * as authBridge from "./auth-bridge.js";
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
@@ -1492,6 +1493,58 @@ describe("runCodexAppServerAttempt", () => {
       tool: "message",
       toolCallId: "call-1",
     });
+  });
+
+  it("passes normalized channel context to app-server dynamic tool result hooks", async () => {
+    const harness = createStartedThreadHarness();
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+    __testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("echo")]);
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.messageChannel = "telegram";
+    params.messageProvider = "telegram";
+    params.currentChannelId = "telegram:-100123";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+
+    await harness.handleServerRequest({
+      id: "request-echo-tool",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-echo-1",
+        namespace: null,
+        tool: "echo",
+        arguments: {},
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(afterToolCall).toHaveBeenCalledTimes(1);
+    });
+    expect(afterToolCall.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        channelId: "-100123",
+        toolName: "echo",
+        toolCallId: "call-echo-1",
+      }),
+    );
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
   });
 
   it("releases the session when Codex never completes after a dynamic tool response", async () => {
@@ -3758,6 +3811,68 @@ describe("runCodexAppServerAttempt", () => {
     expect(preToolUseState?.enabled).toBe(true);
     expect(preToolUseState?.trusted_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("forwards command approval requests through the active native hook relay", async () => {
+    const approvalSpy = vi
+      .spyOn(approvalBridge, "handleCodexAppServerApprovalRequest")
+      .mockResolvedValue({ decision: "decline" });
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.messageChannel = "discord";
+    params.currentChannelId = "channel:target";
+
+    const run = runCodexAppServerAttempt(params, {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeDefined();
+
+    const response = await harness.handleServerRequest({
+      id: "request-command-approval",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-1",
+        command: "/bin/bash -lc 'node -v'",
+        cwd: workspaceDir,
+      },
+    });
+
+    expect(response).toEqual({ decision: "decline" });
+    expect(approvalSpy).toHaveBeenCalledTimes(1);
+    const approvalArgs = approvalSpy.mock.calls[0]?.[0];
+    expect(approvalArgs).toMatchObject({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-1",
+        command: "/bin/bash -lc 'node -v'",
+        cwd: workspaceDir,
+      },
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    expect(approvalArgs?.nativeHookRelay).toMatchObject({
+      relayId,
+      allowedEvents: expect.arrayContaining(["pre_tool_use"]),
+    });
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
+      channelId: "target",
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
