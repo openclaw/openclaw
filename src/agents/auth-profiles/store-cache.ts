@@ -12,12 +12,21 @@ const loadedAuthStoreCache = new Map<
   }
 >();
 
+/**
+ * Read a cached auth profile store entry.
+ *
+ * `cacheKey` is an opaque, option-sensitive key built by the caller (typically a
+ * stable JSON serialization of authPath + load-options). Keying by authPath alone
+ * caused option-set poisoning: a caller asking for read-only / no-external-cli
+ * sync could observe a store cached by a caller that did sync external CLI
+ * profiles, and vice versa.
+ */
 export function readCachedAuthProfileStore(params: {
-  authPath: string;
+  cacheKey: string;
   authMtimeMs: number | null;
   stateMtimeMs: number | null;
 }): AuthProfileStore | null {
-  const cached = loadedAuthStoreCache.get(params.authPath);
+  const cached = loadedAuthStoreCache.get(params.cacheKey);
   if (
     !cached ||
     cached.authMtimeMs !== params.authMtimeMs ||
@@ -32,12 +41,12 @@ export function readCachedAuthProfileStore(params: {
 }
 
 export function writeCachedAuthProfileStore(params: {
-  authPath: string;
+  cacheKey: string;
   authMtimeMs: number | null;
   stateMtimeMs: number | null;
   store: AuthProfileStore;
 }): void {
-  loadedAuthStoreCache.set(params.authPath, {
+  loadedAuthStoreCache.set(params.cacheKey, {
     authMtimeMs: params.authMtimeMs,
     stateMtimeMs: params.stateMtimeMs,
     syncedAtMs: Date.now(),

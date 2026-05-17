@@ -196,7 +196,20 @@ const internalHooksEnabledState = resolveGlobalSingleton<{ enabled: boolean }>(
   INTERNAL_HOOKS_ENABLED_KEY,
   () => ({ enabled: true }),
 );
+const INTERNAL_HOOK_REGISTRY_VERSION_KEY = Symbol.for("openclaw.internalHookRegistryVersion");
+const internalHookRegistryVersion = resolveGlobalSingleton<{ value: number }>(
+  INTERNAL_HOOK_REGISTRY_VERSION_KEY,
+  () => ({ value: 0 }),
+);
 const log = createSubsystemLogger("internal-hooks");
+
+function bumpInternalHookRegistryVersion(): void {
+  internalHookRegistryVersion.value += 1;
+}
+
+export function getInternalHookRegistryVersion(): number {
+  return internalHookRegistryVersion.value;
+}
 
 /**
  * Register a hook handler for a specific event type or event:action combination
@@ -222,6 +235,7 @@ export function registerInternalHook(eventKey: string, handler: InternalHookHand
     handlers.set(eventKey, []);
   }
   handlers.get(eventKey)!.push(handler);
+  bumpInternalHookRegistryVersion();
 }
 
 /**
@@ -239,6 +253,7 @@ export function unregisterInternalHook(eventKey: string, handler: InternalHookHa
   const index = eventHandlers.indexOf(handler);
   if (index !== -1) {
     eventHandlers.splice(index, 1);
+    bumpInternalHookRegistryVersion();
   }
 
   // Clean up empty handler arrays
@@ -251,7 +266,10 @@ export function unregisterInternalHook(eventKey: string, handler: InternalHookHa
  * Clear all registered hooks (useful for testing)
  */
 export function clearInternalHooks(): void {
-  handlers.clear();
+  if (handlers.size > 0) {
+    handlers.clear();
+    bumpInternalHookRegistryVersion();
+  }
 }
 
 export function setInternalHooksEnabled(enabled: boolean): void {

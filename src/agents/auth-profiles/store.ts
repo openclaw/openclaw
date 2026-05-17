@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
+import { stableStringify } from "../stable-stringify.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import {
@@ -51,6 +52,39 @@ type LoadAuthProfileStoreOptions = {
   externalCliProviderIds?: Iterable<string>;
   externalCliProfileIds?: Iterable<string>;
 };
+
+/**
+ * Build an option-sensitive cache key for the auth-profile store.
+ *
+ * Keying by authPath alone meant two callers with different option sets could
+ * poison each other's results (e.g. one syncing external CLI, another reading
+ * the result without sync). The cache key now mixes in the option fields that
+ * actually change the loaded store contents.
+ */
+function buildAuthStoreCacheKey(params: {
+  authPath: string;
+  options?: LoadAuthProfileStoreOptions;
+}): string {
+  return stableStringify({
+    version: 2,
+    authPath: params.authPath,
+    config: params.options?.config
+      ? {
+          models: params.options.config.models ?? null,
+          plugins: params.options.config.plugins ?? null,
+        }
+      : null,
+    externalCli: params.options?.externalCli?.mode ?? null,
+    externalCliProviderIds: params.options?.externalCliProviderIds
+      ? Array.from(params.options.externalCliProviderIds).toSorted()
+      : null,
+    externalCliProfileIds: params.options?.externalCliProfileIds
+      ? Array.from(params.options.externalCliProfileIds).toSorted()
+      : null,
+    syncExternalCli: params.options?.syncExternalCli ?? null,
+    allowKeychainPrompt: params.options?.allowKeychainPrompt ?? null,
+  });
+}
 
 type SaveAuthProfileStoreOptions = {
   filterExternalAuthProfiles?: boolean;
@@ -463,9 +497,10 @@ function loadAuthProfileStoreForAgent(
   const statePath = resolveAuthStatePath(agentDir);
   const authMtimeMs = readAuthStoreMtimeMs(authPath);
   const stateMtimeMs = readAuthStoreMtimeMs(statePath);
+  const cacheKey = buildAuthStoreCacheKey({ authPath, options });
   if (!readOnly) {
     const cached = readCachedAuthProfileStore({
-      authPath,
+      cacheKey,
       authMtimeMs,
       stateMtimeMs,
     });
@@ -482,7 +517,7 @@ function loadAuthProfileStoreForAgent(
     });
     if (!readOnly && synced.cacheable) {
       writeCachedAuthProfileStore({
-        authPath,
+        cacheKey,
         authMtimeMs: readAuthStoreMtimeMs(authPath),
         stateMtimeMs: readAuthStoreMtimeMs(statePath),
         store: synced.store,
@@ -532,7 +567,7 @@ function loadAuthProfileStoreForAgent(
 
   if (!readOnly && synced.cacheable) {
     writeCachedAuthProfileStore({
-      authPath,
+      cacheKey,
       authMtimeMs: readAuthStoreMtimeMs(authPath),
       stateMtimeMs: readAuthStoreMtimeMs(statePath),
       store: synced.store,
@@ -709,7 +744,7 @@ export function saveAuthProfileStore(
   saveJsonFile(authPath, payload);
   savePersistedAuthProfileState(localStore, agentDir);
   writeCachedAuthProfileStore({
-    authPath,
+    cacheKey: buildAuthStoreCacheKey({ authPath }),
     authMtimeMs: readAuthStoreMtimeMs(authPath),
     stateMtimeMs: readAuthStoreMtimeMs(statePath),
     store: localStore,
