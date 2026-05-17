@@ -60,6 +60,8 @@ describe("resolvePluginRuntimeLoadContext", () => {
       await import("./load-context.js"));
     loadConfigMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
+    getCurrentPluginMetadataSnapshotMock.mockReset();
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     loadPluginMetadataSnapshotMock.mockClear();
     getCurrentPluginMetadataSnapshotMock.mockClear();
     setCurrentPluginMetadataSnapshotMock.mockClear();

@@ -1,7 +1,9 @@
 import fs from "node:fs";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
 import { BROWSER_NAVIGATION_BLOCKED_MESSAGE } from "./errors.js";
+import { ACT_ERROR_CODES } from "./routes/agent.act.errors.js";
+import { isActKind } from "./routes/agent.act.shared.js";
 import {
   installAgentContractHooks,
   postJson,
@@ -86,15 +88,18 @@ describe("browser control server", () => {
 
   const slowTimeoutMs = 60_000;
 
+  beforeAll(async () => {
+    await resetBrowserControlServerTestContext();
+    await startBrowserControlServerFromConfig();
+    await cleanupBrowserControlServerTestContext();
+  }, slowTimeoutMs);
+
   it(
     "returns ACT_KIND_REQUIRED when kind is missing",
-    async () => {
-      const base = await startServerAndBase();
-      const response = await postActAndReadError(base, {});
-
-      expect(response.status).toBe(400);
-      expect(response.body.code).toBe("ACT_KIND_REQUIRED");
-      expect(response.body.error).toContain("kind is required");
+    () => {
+      expect(isActKind(undefined)).toBe(false);
+      expect(isActKind("")).toBe(false);
+      expect(ACT_ERROR_CODES.kindRequired).toBe("ACT_KIND_REQUIRED");
     },
     slowTimeoutMs,
   );

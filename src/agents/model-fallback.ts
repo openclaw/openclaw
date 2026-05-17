@@ -850,6 +850,7 @@ export async function runWithModelFallback<T>(
     onError?: ModelFallbackErrorHandler;
     onFallbackStep?: ModelFallbackStepHandler;
     classifyResult?: ModelFallbackResultClassifier<T>;
+    skipAuthProfileRuntime?: boolean;
   } & ModelManifestNormalizationContext,
 ): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
@@ -860,7 +861,7 @@ export async function runWithModelFallback<T>(
     manifestPlugins: params.manifestPlugins,
   });
   const authRuntime =
-    params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)
+    !params.skipAuthProfileRuntime && params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)
       ? await loadModelFallbackAuthRuntime()
       : null;
   const authStore = authRuntime
