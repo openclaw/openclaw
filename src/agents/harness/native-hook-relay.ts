@@ -1068,6 +1068,7 @@ async function runNativeHookRelayBeforeAgentFinalize(params: {
       sessionId: params.registration.sessionId,
       ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
       runId: params.registration.runId,
+      ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
       ...(params.invocation.cwd ? { workspaceDir: params.invocation.cwd } : {}),
       ...(params.invocation.model ? { modelId: params.invocation.model } : {}),
     },

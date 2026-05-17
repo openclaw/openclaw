@@ -906,6 +906,7 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      channelId: "telegram",
     });
 
     const response = await invokeNativeHookRelay({
@@ -1597,6 +1598,7 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      channelId: "telegram",
     });
 
     const response = await invokeNativeHookRelay({
@@ -1643,6 +1645,7 @@ describe("native hook relay registry", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       runId: "run-1",
+      channelId: "telegram",
       workspaceDir: "/repo",
       modelId: "gpt-5.4",
     });
