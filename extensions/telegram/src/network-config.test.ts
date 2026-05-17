@@ -244,6 +244,14 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
     expect(decision).toEqual({ value: "ipv4first", source: "default-node22" });
   });
 
+  it("prefers the Telegram Node 22 ipv4first default over the process verbatim default", () => {
+    const decision = resolveTelegramDnsResultOrderDecision({
+      defaultResultOrder: "verbatim",
+      nodeMajor: 22,
+    });
+    expect(decision).toEqual({ value: "ipv4first", source: "default-node22" });
+  });
+
   it("returns null when no dns decision applies", () => {
     const decision = resolveTelegramDnsResultOrderDecision({
       defaultResultOrder: null,

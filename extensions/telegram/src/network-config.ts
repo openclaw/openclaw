@@ -67,8 +67,9 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
  * Priority:
  * 1. Environment variable OPENCLAW_TELEGRAM_DNS_RESULT_ORDER
  * 2. Config: channels.telegram.network.dnsResultOrder
- * 3. Process default: dns.getDefaultResultOrder()
+ * 3. Process default: dns.getDefaultResultOrder() when it already prefers IPv4
  * 4. Default: "ipv4first" on Node 22+ (to work around common IPv6 issues)
+ * 5. Other process defaults on older Node versions
  */
 export function resolveTelegramDnsResultOrderDecision(params?: {
   network?: TelegramNetworkConfig;
@@ -101,13 +102,17 @@ export function resolveTelegramDnsResultOrderDecision(params?: {
       ? params.defaultResultOrder
       : dns.getDefaultResultOrder?.(),
   );
-  if (processDefaultValue === "ipv4first" || processDefaultValue === "verbatim") {
+  if (processDefaultValue === "ipv4first") {
     return { value: processDefaultValue, source: "process-default" };
   }
 
   // Default to ipv4first on Node 22+ to avoid IPv6 issues
   if (Number.isFinite(nodeMajor) && nodeMajor >= 22) {
     return { value: "ipv4first", source: "default-node22" };
+  }
+
+  if (processDefaultValue === "verbatim") {
+    return { value: processDefaultValue, source: "process-default" };
   }
 
   return { value: null };
