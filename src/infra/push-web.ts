@@ -36,7 +36,13 @@ const WEB_PUSH_STATE_FILENAME = "push/web-push-subscriptions.json";
 const VAPID_KEYS_FILENAME = "push/vapid-keys.json";
 const MAX_ENDPOINT_LENGTH = 2048;
 const MAX_KEY_LENGTH = 512;
-const DEFAULT_VAPID_SUBJECT = "mailto:openclaw@localhost";
+// #83134: Apple Web Push (Safari + iOS PWA) rejects VAPID `aud` JWTs whose
+// `sub` is `mailto:openclaw@localhost` with `BadJwtToken`. The upstream
+// `web-push` README documents the same restriction. Use the project's public
+// `https://openclaw.ai` as the contact URL so Apple's push endpoint accepts
+// the JWT out of the box on first install; operators who want a real contact
+// can still override with `OPENCLAW_VAPID_SUBJECT=mailto:...`.
+const DEFAULT_VAPID_SUBJECT = "https://openclaw.ai";
 
 const withLock = createAsyncLock();
 
