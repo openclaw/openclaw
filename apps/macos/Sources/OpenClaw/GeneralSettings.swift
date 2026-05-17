@@ -45,6 +45,8 @@ struct GeneralSettings: View {
             }
             .frame(maxWidth: 760, alignment: .leading)
             .padding(.bottom, 16)
+            .padding(.leading, 18)
+            .padding(.trailing, SettingsLayout.scrollbarGutter)
         }
         .onAppear {
             self.updateActiveWork(active: self.isActive)
@@ -538,7 +540,7 @@ struct GeneralSettings: View {
             {
                 SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 520)
+                    .frame(width: 360)
             }
             if self.state.remoteTokenUnsupported {
                 Text(
