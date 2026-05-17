@@ -318,7 +318,7 @@ describe("kimi tool-call markup wrapper", () => {
             {
               id: "call_1",
               type: "function",
-              function: { name: "exec", arguments: '{"command":"pwd"}' },
+              function: { name: "exec", arguments: "{\"command\":\"pwd\"}" },
             },
           ],
         },
@@ -359,7 +359,7 @@ describe("kimi tool-call markup wrapper", () => {
             {
               id: "call_1",
               type: "function",
-              function: { name: "exec", arguments: '{"command":"pwd"}' },
+              function: { name: "exec", arguments: "{\"command\":\"pwd\"}" },
             },
           ],
         },
@@ -391,7 +391,7 @@ describe("kimi tool-call markup wrapper", () => {
             {
               id: "call_1",
               type: "function",
-              function: { name: "exec", arguments: '{"command":"pwd"}' },
+              function: { name: "exec", arguments: "{\"command\":\"pwd\"}" },
             },
           ],
         },
@@ -418,7 +418,7 @@ describe("kimi tool-call markup wrapper", () => {
             {
               id: "call_1",
               type: "function",
-              function: { name: "exec", arguments: '{"command":"pwd"}' },
+              function: { name: "exec", arguments: "{\"command\":\"pwd\"}" },
             },
           ],
         },

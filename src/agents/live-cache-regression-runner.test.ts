@@ -144,9 +144,7 @@ describe("live cache regression runner", () => {
   });
 
   it("classifies Anthropic tool-only probe misses as provider drift", () => {
-    expect(__testing.isAnthropicToolProbeDrift(new Error("expected tool call for noop"))).toBe(
-      true,
-    );
+    expect(__testing.isAnthropicToolProbeDrift(new Error("expected tool call for noop"))).toBe(true);
     expect(
       __testing.isAnthropicToolProbeDrift(
         new Error('expected tool-only response for noop, got "ok"'),

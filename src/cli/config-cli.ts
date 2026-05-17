@@ -1425,11 +1425,7 @@ function collectDryRunRefs(params: {
     if (!ref) {
       continue;
     }
-    if (
-      includeAllDiscoveredRefs ||
-      targetPaths.has(target.path) ||
-      providerAliases.has(ref.provider)
-    ) {
+    if (includeAllDiscoveredRefs || targetPaths.has(target.path) || providerAliases.has(ref.provider)) {
       refsByKey.set(secretRefKey(ref), ref);
     }
   }
