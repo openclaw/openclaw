@@ -69,9 +69,6 @@ function resolveConfiguredImageProviderModel(params: {
   providerId: string;
 }): string | undefined {
   const normalizedProviderId = normalizeMediaProviderId(params.providerId);
-  if (normalizedProviderId === "minimax" || normalizedProviderId === "minimax-portal") {
-    return undefined;
-  }
   const providers = params.cfg?.models?.providers;
   if (!providers || typeof providers !== "object") {
     return undefined;
@@ -145,6 +142,15 @@ export function resolveDefaultMediaModel(params: {
   workspaceDir?: string;
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): string | undefined {
+  const registry =
+    params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
+  const provider = registry.get(normalizeMediaProviderId(params.providerId));
+  const manifestDefaultModel = normalizeOptionalString(
+    provider?.defaultModels?.[params.capability],
+  );
+  if (manifestDefaultModel) {
+    return manifestDefaultModel;
+  }
   if (!params.providerRegistry) {
     const configuredImageModel =
       params.capability === "image"
@@ -157,10 +163,7 @@ export function resolveDefaultMediaModel(params: {
       return configuredImageModel;
     }
   }
-  const registry =
-    params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
-  const provider = registry.get(normalizeMediaProviderId(params.providerId));
-  return normalizeOptionalString(provider?.defaultModels?.[params.capability]);
+  return undefined;
 }
 
 export function resolveAutoMediaKeyProviders(params: {
