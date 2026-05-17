@@ -36,6 +36,10 @@ import type {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
+  normalizeMessagePresentation,
+  presentationToInteractiveReply,
+} from "openclaw/plugin-sdk/interactive-runtime";
+import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/outbound-runtime";
@@ -82,7 +86,7 @@ import {
   type TelegramNativeQuoteCandidateByMessageId,
 } from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
-import type { TelegramInlineButtons } from "./button-types.js";
+import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import {
   buildTelegramErrorScopeKey,
@@ -92,7 +96,7 @@ import {
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { markdownToTelegramChunks, renderTelegramHtmlText } from "./format.js";
-import { beginTelegramInboundTurnDeliveryCorrelation } from "./inbound-turn-delivery.js";
+import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import {
   createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
@@ -133,6 +137,22 @@ function resolveDraftPartialText(
     return undefined;
   }
   return nextText;
+}
+
+function resolvePayloadTelegramInlineButtons(
+  payload: ReplyPayload,
+): TelegramInlineButtons | undefined {
+  const telegramData = payload.channelData?.telegram as
+    | { buttons?: TelegramInlineButtons }
+    | undefined;
+  const presentation = normalizeMessagePresentation(payload.presentation);
+  const interactive =
+    payload.interactive ??
+    (presentation ? presentationToInteractiveReply(presentation) : undefined);
+  return resolveTelegramInlineButtons({
+    buttons: telegramData?.buttons,
+    interactive,
+  });
 }
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
@@ -189,7 +209,7 @@ function normalizeTelegramFenceKey(value: unknown): string | undefined {
 }
 
 function resolveTelegramReplyFenceKey(params: {
-  ctxPayload: { SessionKey?: string; CommandTargetSessionKey?: string; InboundTurnKind?: string };
+  ctxPayload: { SessionKey?: string; CommandTargetSessionKey?: string; InboundEventKind?: string };
   chatId: number | string;
   threadSpec: { id?: number | string | null; scope?: string };
 }): TelegramReplyFenceKey {
@@ -199,7 +219,7 @@ function resolveTelegramReplyFenceKey(params: {
     `telegram:${String(params.chatId)}:${params.threadSpec.scope ?? "default"}:${params.threadSpec.id ?? "root"}`;
   const roomEventKey = `${baseKey}:room_event`;
   return {
-    activeKey: params.ctxPayload.InboundTurnKind === "room_event" ? roomEventKey : baseKey,
+    activeKey: params.ctxPayload.InboundEventKind === "room_event" ? roomEventKey : baseKey,
     roomEventKey,
   };
 }
@@ -468,7 +488,7 @@ export const dispatchTelegramMessage = async ({
     removeAckAfterReply,
     statusReactionController: rawStatusReactionController,
   } = context;
-  const isRoomEvent = ctxPayload.InboundTurnKind === "room_event";
+  const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
   const statusReactionController = isRoomEvent ? null : rawStatusReactionController;
   const statusReactionTiming = {
     ...DEFAULT_TIMING,
@@ -950,21 +970,21 @@ export const dispatchTelegramMessage = async ({
     }
   };
   const beginDeliveryCorrelation = () =>
-    beginTelegramInboundTurnDeliveryCorrelation(
+    beginTelegramInboundEventDeliveryCorrelation(
       ctxPayload.SessionKey,
       {
         outboundTo: historyKey || String(chatId),
         outboundAccountId: route.accountId,
-        markInboundTurnDelivered: () => {
+        markInboundEventDelivered: () => {
           deliveryState.markDelivered();
           if (isRoomEvent) {
             clearGroupHistory();
           }
         },
       },
-      { inboundTurnKind: ctxPayload.InboundTurnKind },
+      { inboundEventKind: ctxPayload.InboundEventKind },
     );
-  const endTelegramInboundTurnDeliveryCorrelation = beginDeliveryCorrelation();
+  const endTelegramInboundEventDeliveryCorrelation = beginDeliveryCorrelation();
   const sessionKey = ctxPayload.SessionKey;
   const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> => {
     if (!sessionKey) {
@@ -1375,11 +1395,7 @@ export const dispatchTelegramMessage = async ({
                       queuedFinal = true;
                       return;
                     }
-                    const telegramButtons = (
-                      effectivePayload.channelData?.telegram as
-                        | { buttons?: TelegramInlineButtons }
-                        | undefined
-                    )?.buttons;
+                    const telegramButtons = resolvePayloadTelegramInlineButtons(effectivePayload);
                     const split = splitTextIntoLaneSegments(
                       { text: effectivePayload.text },
                       payload.isReasoning,
@@ -1412,11 +1428,7 @@ export const dispatchTelegramMessage = async ({
                       if (!buffered) {
                         return;
                       }
-                      const bufferedButtons = (
-                        buffered.payload.channelData?.telegram as
-                          | { buttons?: TelegramInlineButtons }
-                          | undefined
-                      )?.buttons;
+                      const bufferedButtons = resolvePayloadTelegramInlineButtons(buffered.payload);
                       await deliverFinalAnswerText(
                         buffered.payload,
                         buffered.text,
@@ -1775,7 +1787,7 @@ export const dispatchTelegramMessage = async ({
   } finally {
     dispatchWasSuperseded = isDispatchSuperseded();
     releaseReplyFence();
-    endTelegramInboundTurnDeliveryCorrelation();
+    endTelegramInboundEventDeliveryCorrelation();
   }
   if (dispatchWasSuperseded) {
     if (statusReactionController) {

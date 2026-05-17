@@ -61,8 +61,11 @@ type QueueEntry = {
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
   enqueuedAt: number;
+  sequence: number;
+  priority: number;
   warnAfterMs: number;
   taskTimeoutMs?: number;
+  taskTimeoutProgressAtMs?: () => number | undefined;
   onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
@@ -106,6 +109,7 @@ function getQueueState() {
     lanes: new Map<string, LaneState>(),
     activeTaskWaiters: new Set<ActiveTaskWaiter>(),
     nextTaskId: 1,
+    nextQueueSequence: 1,
   }));
   // Schema migration: the singleton may have been created by an older code
   // version (e.g. v2026.4.2) that did not include `activeTaskWaiters`.  After
@@ -115,6 +119,27 @@ function getQueueState() {
   // valid Set instead of `undefined`.
   if (!state.activeTaskWaiters) {
     state.activeTaskWaiters = new Set<ActiveTaskWaiter>();
+  }
+  if (!state.nextQueueSequence) {
+    state.nextQueueSequence = 1;
+  }
+  let maxQueueSequence = state.nextQueueSequence - 1;
+  for (const lane of state.lanes.values()) {
+    for (const entry of lane.queue as Array<
+      QueueEntry & { priority?: number; sequence?: number }
+    >) {
+      if (typeof entry.priority !== "number") {
+        entry.priority = 0;
+      }
+      if (typeof entry.sequence !== "number") {
+        entry.sequence = state.nextQueueSequence++;
+      } else {
+        maxQueueSequence = Math.max(maxQueueSequence, entry.sequence);
+      }
+    }
+  }
+  if (state.nextQueueSequence <= maxQueueSequence) {
+    state.nextQueueSequence = maxQueueSequence + 1;
   }
   return state;
 }
@@ -203,6 +228,30 @@ function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
   return Math.max(1, Math.floor(value));
 }
 
+function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): number {
+  switch (priority) {
+    case "foreground":
+      return 1;
+    case "background":
+      return -1;
+    default:
+      return 0;
+  }
+}
+
+function enqueueLaneEntry(state: LaneState, entry: QueueEntry): void {
+  const insertAt = state.queue.findIndex(
+    (queued) =>
+      queued.priority < entry.priority ||
+      (queued.priority === entry.priority && queued.sequence > entry.sequence),
+  );
+  if (insertAt < 0) {
+    state.queue.push(entry);
+    return;
+  }
+  state.queue.splice(insertAt, 0, entry);
+}
+
 async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unknown> {
   const taskPromise = Promise.resolve().then(entry.task);
   const taskTimeoutMs = normalizeTaskTimeoutMs(entry.taskTimeoutMs);
@@ -210,14 +259,33 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
     return await taskPromise;
   }
 
+  const startedAtMs = Date.now();
+  const readLastProgressAtMs = () => {
+    let value: number | undefined;
+    try {
+      value = entry.taskTimeoutProgressAtMs?.();
+    } catch (err) {
+      diag.warn(`lane task timeout progress callback failed: lane=${lane} error="${String(err)}"`);
+    }
+    return typeof value === "number" && Number.isFinite(value) && value > 0
+      ? Math.max(startedAtMs, Math.floor(value))
+      : startedAtMs;
+  };
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => {
-      timedOut = true;
-      reject(new CommandLaneTaskTimeoutError(lane, taskTimeoutMs));
-    }, taskTimeoutMs);
-    timeoutHandle.unref?.();
+    const armTimeout = () => {
+      const elapsedMs = Math.max(0, Date.now() - readLastProgressAtMs());
+      const remainingMs = taskTimeoutMs - elapsedMs;
+      if (remainingMs <= 0) {
+        timedOut = true;
+        reject(new CommandLaneTaskTimeoutError(lane, taskTimeoutMs));
+        return;
+      }
+      timeoutHandle = setTimeout(armTimeout, remainingMs);
+      timeoutHandle.unref?.();
+    };
+    armTimeout();
   });
 
   try {
@@ -342,13 +410,16 @@ export function enqueueCommandInLane<T>(
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
-    state.queue.push({
+    enqueueLaneEntry(state, {
       task: () => task(),
       resolve: (value) => resolve(value as T),
       reject,
       enqueuedAt: Date.now(),
+      sequence: queueState.nextQueueSequence++,
+      priority: resolveQueuePriority(opts?.priority),
       warnAfterMs,
       taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
+      taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
       onWait: opts?.onWait,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
@@ -451,6 +522,7 @@ export function resetCommandQueueStateForTest(): void {
     resolveActiveTaskWaiter(waiter, { drained: true });
   }
   queueState.nextTaskId = 1;
+  queueState.nextQueueSequence = 1;
 }
 
 /**
