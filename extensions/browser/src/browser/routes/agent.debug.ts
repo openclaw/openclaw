@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
@@ -11,7 +10,12 @@ import {
 import { resolveWritableOutputPathOrRespond } from "./output-paths.js";
 import { DEFAULT_TRACE_DIR } from "./path-output.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, toBoolean, toStringOrEmpty } from "./utils.js";
+import {
+  asyncBrowserRoute,
+  normalizeResponseFilePath,
+  toBoolean,
+  toStringOrEmpty,
+} from "./utils.js";
 
 export function registerBrowserAgentDebugRoutes(
   app: BrowserRouteRegistrar,
@@ -165,7 +169,7 @@ export function registerBrowserAgentDebugRoutes(
             ok: true,
             targetId: tab.targetId,
             ...(url ? { url } : {}),
-            path: path.resolve(tracePath),
+            path: normalizeResponseFilePath(tracePath),
           });
         },
       });

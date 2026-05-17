@@ -53,6 +53,17 @@ export type DeleteProfileResult = {
 
 const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
 
+function normalizeExistingSessionUserDataDir(raw: string | undefined): string | undefined {
+  const value = normalizeOptionalString(raw);
+  if (!value) {
+    return undefined;
+  }
+  if (/^~(?=$|[\\/])/.test(value)) {
+    return resolveUserPath(value) || undefined;
+  }
+  return value;
+}
+
 const cdpPortRange = (resolved: {
   controlPort: number;
   cdpPortRangeStart?: number;
@@ -85,8 +96,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
     const name = params.name.trim();
     const rawCdpUrl = normalizeOptionalString(params.cdpUrl);
-    const rawUserDataDir = normalizeOptionalString(params.userDataDir);
-    const normalizedUserDataDir = rawUserDataDir ? resolveUserPath(rawUserDataDir) : undefined;
+    const normalizedUserDataDir = normalizeExistingSessionUserDataDir(params.userDataDir);
     const driver = params.driver === "existing-session" ? "existing-session" : undefined;
 
     if (!isValidProfileName(name)) {
