@@ -11,6 +11,7 @@ import type {
 export type RunMediaUnderstandingFileParams = {
   capability: "image" | "audio" | "video";
   filePath: string;
+  mediaUrl?: string;
   cfg: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -30,6 +31,7 @@ export type RunMediaUnderstandingFileResult = {
 
 export type DescribeImageFileParams = {
   filePath: string;
+  mediaUrl?: string;
   cfg: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -41,6 +43,7 @@ export type DescribeImageFileParams = {
 
 export type DescribeImageFileWithModelParams = {
   filePath: string;
+  mediaUrl?: string;
   cfg: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
