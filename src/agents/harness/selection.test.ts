@@ -15,7 +15,7 @@ import {
 } from "./selection.js";
 import type { AgentHarness } from "./types.js";
 
-const piRunAttempt = vi.fn(async () => createAttemptResult("pi"));
+const piRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("pi"));
 
 vi.mock("./builtin-pi.js", () => ({
   createPiAgentHarness: (): AgentHarness => ({
@@ -314,7 +314,7 @@ describe("runAgentHarnessAttempt", () => {
   });
 
   it("collapses channel group sender deny-all to empty toolsAllow for plugin harnesses", async () => {
-    const runAttempt = vi.fn(async () => createAttemptResult("codex"));
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
     registerAgentHarness(
       {
         id: "codex",
@@ -343,7 +343,7 @@ describe("runAgentHarnessAttempt", () => {
   });
 
   it("adds chat policy wording for plugin harness group deny-all", async () => {
-    const runAttempt = vi.fn(async () => createAttemptResult("codex"));
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
     registerAgentHarness(
       {
         id: "codex",
