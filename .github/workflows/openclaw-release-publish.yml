@@ -115,8 +115,12 @@ jobs:
             echo "publish_openclaw_npm=true requires full_release_validation_run_id." >&2
             exit 1
           fi
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${WORKFLOW_REF}" != "refs/heads/main" && ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
-            echo "publish_openclaw_npm=true requires dispatching this workflow from main or release/YYYY.M.D." >&2
+          tideclaw_alpha_publish=false
+          if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            tideclaw_alpha_publish=true
+          fi
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${WORKFLOW_REF}" != "refs/heads/main" && ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ && "${tideclaw_alpha_publish}" != "true" ]]; then
+            echo "publish_openclaw_npm=true requires dispatching this workflow from main, release/YYYY.M.D, or a Tideclaw alpha branch for alpha prereleases." >&2
             exit 1
           fi
           if [[ "${PLUGIN_PUBLISH_SCOPE}" == "selected" && -z "${PLUGINS}" ]]; then
@@ -279,7 +283,10 @@ jobs:
             exit 1
           fi
 
-      - name: Validate release tag is reachable from main or release branch
+      - name: Validate release tag is reachable from a trusted release branch
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          WORKFLOW_REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin \
@@ -293,7 +300,17 @@ jobs:
               exit 0
             fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
-          echo "Release tag must point to a commit reachable from main or release/*." >&2
+          if [[ "${RELEASE_TAG}" == *"-alpha."* ]]; then
+            if [[ ! "${WORKFLOW_REF_NAME}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+              echo "Alpha publish tags must be dispatched from tideclaw/alpha/YYYY-MM-DD-HHMMZ." >&2
+              exit 1
+            fi
+            git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
+            if git merge-base --is-ancestor HEAD "refs/remotes/origin/${WORKFLOW_REF_NAME}"; then
+              exit 0
+            fi
+          fi
+          echo "Release tag must point to a commit reachable from main, release/*, or the matching Tideclaw alpha branch for alpha prereleases." >&2
           exit 1
 
       - name: Summarize release target
