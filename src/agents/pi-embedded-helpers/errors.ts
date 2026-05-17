@@ -652,10 +652,11 @@ function classifyFailoverClassificationFromHttpStatus(
   }
   if (status === 429) {
     if (
-      messageReason === "billing" &&
-      (isProvider(provider, "moonshot") || isProvider(provider, "kimi"))
+      message &&
+      (isProvider(provider, "moonshot") || isProvider(provider, "kimi")) &&
+      isBillingErrorMessage(message)
     ) {
-      return messageClassification;
+      return toReasonClassification("billing");
     }
     return toReasonClassification("rate_limit");
   }
