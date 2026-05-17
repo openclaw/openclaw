@@ -6151,7 +6151,7 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     const binding = await __testing.rotateOversizedCodexAppServerStartupBinding({
-      binding: { threadId: "thread-existing", workspaceDir },
+      binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
       config: {
@@ -6189,7 +6189,7 @@ describe("runCodexAppServerAttempt", () => {
     await fs.writeFile(path.join(rolloutDir, "rollout-thread-existing.jsonl"), "x".repeat(2_000));
 
     const binding = await __testing.rotateOversizedCodexAppServerStartupBinding({
-      binding: { threadId: "thread-existing", workspaceDir },
+      binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
       config: {
@@ -6243,7 +6243,7 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     const binding = await __testing.rotateOversizedCodexAppServerStartupBinding({
-      binding: { threadId: "thread-existing", workspaceDir },
+      binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
       config: {
@@ -6295,7 +6295,7 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     const binding = await __testing.rotateOversizedCodexAppServerStartupBinding({
-      binding: { threadId: "thread-existing", workspaceDir },
+      binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
       config: {
@@ -6348,7 +6348,7 @@ describe("runCodexAppServerAttempt", () => {
     const readFileSpy = vi.spyOn(fs, "readFile");
 
     const binding = await __testing.rotateOversizedCodexAppServerStartupBinding({
-      binding: { threadId: "thread-existing", workspaceDir },
+      binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
       config: {
@@ -6390,7 +6390,7 @@ describe("runCodexAppServerAttempt", () => {
     const readFileSpy = vi.spyOn(fs, "readFile");
 
     const binding = await __testing.rotateOversizedCodexAppServerStartupBinding({
-      binding: { threadId: "thread-existing", workspaceDir },
+      binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
       config: {

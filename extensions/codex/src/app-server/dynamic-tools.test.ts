@@ -314,8 +314,8 @@ describe("createCodexDynamicToolBridge", () => {
           name: "large_lookup",
           execute: vi.fn(async () => ({
             content: [
-              { type: "text", text: "a".repeat(200) },
-              { type: "text", text: "b".repeat(200) },
+              { type: "text" as const, text: "a".repeat(200) },
+              { type: "text" as const, text: "b".repeat(200) },
             ],
             details: {},
           })),
