@@ -2991,6 +2991,94 @@ describe("memory plugin e2e", () => {
     expect(looksLikeEnvelopeSludge("")).toBe(false);
   });
 
+  test("looksLikeEnvelopeSludge detects formatInboundEnvelope bracket prefix", () => {
+    // Direct-message shapes (formatInboundEnvelope with chatType="direct"):
+    // `[<channel> <from> +<elapsed>] <body>` and timestamped variants.
+    expect(looksLikeEnvelopeSludge("[Telegram Alice +5m] I prefer dark mode")).toBe(true);
+    expect(looksLikeEnvelopeSludge("[Telegram Alice +0s] hi")).toBe(true);
+    expect(looksLikeEnvelopeSludge("[Discord user +3h] something")).toBe(true);
+    expect(
+      looksLikeEnvelopeSludge(
+        "[Telegram Alice +5m Mon 2026-05-17 14:30 EDT] I prefer dark mode",
+      ),
+    ).toBe(true);
+    expect(
+      looksLikeEnvelopeSludge("[iMessage Bob Mon 2026-05-17 14:30 EDT] hello world"),
+    ).toBe(true);
+
+    // Group-chat shapes (chatType="group" plus sender prefix on the body).
+    expect(
+      looksLikeEnvelopeSludge(
+        "[Telegram Group id:123 Alice +5m Mon 2026-05-17 14:30 EDT] Alice: I prefer dark mode",
+      ),
+    ).toBe(true);
+    expect(
+      looksLikeEnvelopeSludge("[Discord #general user +0s] user: ping"),
+    ).toBe(true);
+
+    // UTC-timestamp variant produced by formatUtcTimestamp.
+    expect(
+      looksLikeEnvelopeSludge("[Telegram Alice +5m Mon 2026-05-17T14:30Z] hello"),
+    ).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge does not false-positive on user-typed brackets", () => {
+    // No elapsed/date marker inside the bracket — should pass through.
+    expect(looksLikeEnvelopeSludge("[note] John: hi")).toBe(false);
+    expect(looksLikeEnvelopeSludge("[1] some footnote")).toBe(false);
+    expect(looksLikeEnvelopeSludge("[TODO] fix this later")).toBe(false);
+    // Mid-line quote of the marker shape is not anchored at start, so safe.
+    expect(looksLikeEnvelopeSludge("I always think +5m is too short")).toBe(false);
+    expect(looksLikeEnvelopeSludge("Meeting on Mon 2026-05-17 at 3pm")).toBe(false);
+  });
+
+  test("sanitizeForMemoryCapture strips formatInboundEnvelope direct-message prefix", () => {
+    expect(sanitizeForMemoryCapture("[Telegram Alice +5m] I prefer dark mode")).toBe(
+      "I prefer dark mode",
+    );
+    expect(
+      sanitizeForMemoryCapture("[Telegram Alice +5m Mon 2026-05-17 14:30 EDT] I prefer dark mode"),
+    ).toBe("I prefer dark mode");
+  });
+
+  test("sanitizeForMemoryCapture strips group-chat envelope prefix AND sender label", () => {
+    expect(
+      sanitizeForMemoryCapture(
+        "[Telegram Group id:123 Alice +5m Mon 2026-05-17 14:30 EDT] Alice: I prefer dark mode",
+      ),
+    ).toBe("I prefer dark mode");
+  });
+
+  test("sanitizeForMemoryCapture leaves text with no envelope prefix alone", () => {
+    // No bracket envelope: the `Name: ` sender-stripper must NOT fire on
+    // user-typed text that happens to look like `Name: body`.
+    expect(sanitizeForMemoryCapture("Alice: I prefer dark mode")).toBe(
+      "Alice: I prefer dark mode",
+    );
+  });
+
+  test("shouldCapture rejects formatInboundEnvelope-prefixed messages", () => {
+    // The agent_end hook still receives envelope-prefixed user content, so the
+    // capture gate must reject these without relying on prior sanitize.
+    expect(shouldCapture("[Telegram Alice +5m] I prefer dark mode")).toBe(false);
+    expect(
+      shouldCapture(
+        "[Telegram Group id:123 Alice +5m Mon 2026-05-17 14:30 EDT] Alice: I prefer dark mode",
+      ),
+    ).toBe(false);
+  });
+
+  test("sanitize-then-shouldCapture preserves clean body from envelope-wrapped input", () => {
+    // End-to-end shape of the real auto-capture flow: sanitize first, then
+    // shouldCapture decides on the body-only text. A genuine memory like
+    // "I prefer dark mode" wrapped in envelope metadata must survive the
+    // sanitize step as bare body and pass the gate.
+    const wrapped = "[Telegram Alice +5m] I prefer dark mode";
+    const sanitized = sanitizeForMemoryCapture(wrapped);
+    expect(sanitized).toBe("I prefer dark mode");
+    expect(shouldCapture(sanitized)).toBe(true);
+  });
+
   test("shouldCapture rejects envelope sludge", () => {
     expect(
       shouldCapture(

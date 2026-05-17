@@ -697,6 +697,44 @@ const ENVELOPE_JSON_LINE_RE =
   /^\s*\{\s*(?:\n\s*)?"(?:chat_id|message_id|reply_to_id|sender_id|conversation_label|conversation_info|sender_name|channel_id|channel_type|group_subject|group_channel|group_space|topic_id|thread_label)"\s*:/m;
 
 /**
+ * Leading bracketed envelope header injected by `formatAgentEnvelope` /
+ * `formatInboundEnvelope` (src/auto-reply/envelope.ts). Real shape, with parts
+ * joined by spaces inside a single `[...]`:
+ *
+ *   `[<channel> <from> +<elapsed>? <host>? <ip>? <Wkd YYYY-MM-DD HH:MM TZ>?] <body>`
+ *
+ * Examples:
+ *   `[Telegram Alice +5m] I prefer dark mode`
+ *   `[Telegram Group id:123 Alice +5m Mon 2026-05-17 14:30 EDT] Alice: text`
+ *   `[Discord #general user +0s Mon 2026-05-17T14:30Z] text`
+ *
+ * Detection keys on the load-bearing parts that mark this header as an
+ * envelope (rather than arbitrary user-typed `[brackets]`): an elapsed marker
+ * `+<n><unit>` produced by `formatTimeAgo({suffix:false})` (units: s/m/h/d, or
+ * the literal `just now` fallback), or a weekday + ISO date pair produced by
+ * `formatEnvelopeTimestamp`. Either marker is unique enough that quoting
+ * `[5m]` or `[Mon 2026-05-17]` mid-sentence will not look like an envelope
+ * prefix because the regex is anchored to start-of-string and requires the
+ * marker to live inside the leading bracket followed by `]<space>`.
+ *
+ * Header part length is capped at 300 chars to avoid catastrophic backtracking
+ * on pathological inputs; real envelopes are well under that.
+ */
+const INBOUND_ENVELOPE_PREFIX_RE =
+  /^\[[^\]\n]{0,300}?(?:\s\+(?:\d+[smhdwy]|just now)\b|\s[A-Za-z]{3}\s\d{4}-\d{2}-\d{2})[^\]\n]{0,200}\]\s/;
+
+/**
+ * Group-chat envelope bodies prepend `<Sender>: ` to the raw user text (see
+ * `formatInboundEnvelope`). After stripping the leading envelope bracket,
+ * this pattern removes that sender prefix so the surviving text is the user's
+ * actual intent, not channel-injected metadata. Sender label is capped at the
+ * same length as `sanitizeEnvelopeHeaderPart` would produce in practice (the
+ * envelope formatter does not truncate, but a 120-char ceiling keeps the
+ * regex bounded and matches realistic display names).
+ */
+const ENVELOPE_BODY_SENDER_PREFIX_RE = /^[^\n:]{1,120}:\s/;
+
+/**
  * Returns true if `text` looks like it contains OpenClaw-injected envelope or
  * transport metadata that should never be persisted as a long-term memory.
  */
@@ -733,6 +771,14 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
     return true;
   }
 
+  // Check for the leading `[Channel sender +elapsed ...]` bracket emitted by
+  // formatInboundEnvelope. The agent_end hook receives messages with this
+  // header still attached, so unguarded auto-capture would persist envelope
+  // metadata bytes as part of the user's "memory".
+  if (INBOUND_ENVELOPE_PREFIX_RE.test(text)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -758,6 +804,18 @@ export function sanitizeForMemoryCapture(text: string): string {
 
   // Strip leading timestamp prefix
   cleaned = cleaned.replace(LEADING_TIMESTAMP_PREFIX_RE, "");
+
+  // Strip the leading inbound-envelope bracket emitted by formatInboundEnvelope
+  // (src/auto-reply/envelope.ts). The bracket precedes the user's body text;
+  // for group-chat envelopes the body itself is prefixed with `<Sender>: ` so
+  // strip that too, but only when an envelope bracket was actually removed
+  // (don't blanket-strip user text that happens to start with `Name: `).
+  const envelopePrefixMatch = INBOUND_ENVELOPE_PREFIX_RE.exec(cleaned);
+  if (envelopePrefixMatch) {
+    cleaned = cleaned
+      .slice(envelopePrefixMatch[0].length)
+      .replace(ENVELOPE_BODY_SENDER_PREFIX_RE, "");
+  }
 
   // Strip inbound metadata blocks: sentinel line + optional ```json + content + ```
   for (const sentinel of INBOUND_META_SENTINELS) {
