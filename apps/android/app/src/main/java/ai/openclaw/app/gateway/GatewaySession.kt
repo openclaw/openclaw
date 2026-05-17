@@ -316,6 +316,22 @@ class GatewaySession(
     return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
 
+  suspend fun sendRequestFrame(
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long = 15_000,
+    onError: (ErrorShape) -> Unit = {},
+  ) {
+    val conn = currentConnection ?: throw IllegalStateException("not connected")
+    val params =
+      if (paramsJson.isNullOrBlank()) {
+        null
+      } else {
+        json.parseToJsonElement(paramsJson)
+      }
+    conn.sendRequestFrame(method = method, params = params, timeoutMs = timeoutMs, onError = onError)
+  }
+
   private data class RpcResponse(
     val id: String,
     val ok: Boolean,
@@ -360,14 +376,12 @@ class GatewaySession(
       val id = UUID.randomUUID().toString()
       val deferred = CompletableDeferred<RpcResponse>()
       pending[id] = deferred
-      val frame =
-        buildJsonObject {
-          put("type", JsonPrimitive("req"))
-          put("id", JsonPrimitive(id))
-          put("method", JsonPrimitive(method))
-          if (params != null) put("params", params)
-        }
-      sendJson(frame)
+      try {
+        sendJson(buildRequestFrame(id = id, method = method, params = params))
+      } catch (err: Throwable) {
+        pending.remove(id)
+        throw err
+      }
       return try {
         withTimeout(timeoutMs) { deferred.await() }
       } catch (err: TimeoutCancellationException) {
@@ -376,12 +390,56 @@ class GatewaySession(
       }
     }
 
+    suspend fun sendRequestFrame(
+      method: String,
+      params: JsonElement?,
+      timeoutMs: Long,
+      onError: (ErrorShape) -> Unit,
+    ) {
+      val id = UUID.randomUUID().toString()
+      val deferred = CompletableDeferred<RpcResponse>()
+      pending[id] = deferred
+      try {
+        sendJson(buildRequestFrame(id = id, method = method, params = params))
+      } catch (err: Throwable) {
+        pending.remove(id)
+        throw err
+      }
+      scope.launch(Dispatchers.IO) {
+        val response =
+          try {
+            withTimeout(timeoutMs) { deferred.await() }
+          } catch (_: TimeoutCancellationException) {
+            pending.remove(id)
+            onError(ErrorShape("UNAVAILABLE", "request timeout"))
+            return@launch
+          }
+        if (!response.ok) {
+          onError(response.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+        }
+      }
+    }
+
     suspend fun sendJson(obj: JsonObject) {
       val jsonString = obj.toString()
       writeLock.withLock {
-        socket?.send(jsonString)
+        if (socket?.send(jsonString) != true) {
+          throw IllegalStateException("gateway send failed")
+        }
       }
     }
+
+    private fun buildRequestFrame(
+      id: String,
+      method: String,
+      params: JsonElement?,
+    ): JsonObject =
+      buildJsonObject {
+        put("type", JsonPrimitive("req"))
+        put("id", JsonPrimitive(id))
+        put("method", JsonPrimitive(method))
+        if (params != null) put("params", params)
+      }
 
     suspend fun awaitClose() = closedDeferred.await()
 

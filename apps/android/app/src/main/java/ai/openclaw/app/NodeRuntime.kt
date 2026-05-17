@@ -486,6 +486,7 @@ class NodeRuntime(
       isConnected = { operatorConnected },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
+      onStoppedByRelay = { finishTalkModeAfterRelayClose() },
     )
   }
 
@@ -967,6 +968,14 @@ class NodeRuntime(
       NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
       externalAudioCaptureActive.value = false
     }
+  }
+
+  private fun finishTalkModeAfterRelayClose() {
+    if (_voiceCaptureMode.value != VoiceCaptureMode.TalkMode) return
+    _voiceCaptureMode.value = VoiceCaptureMode.Off
+    talkMode.ttsOnAllResponses = false
+    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+    externalAudioCaptureActive.value = false
   }
 
   val speakerEnabled: StateFlow<Boolean>
