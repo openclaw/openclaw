@@ -981,6 +981,8 @@ describe("sessions_spawn tool", () => {
     });
 
     const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
+    expect(registration.controllerSessionKey).toBe("agent:main:telegram:default:direct:456");
     expect(registration.requesterSessionKey).toBe("agent:main:main");
+    expect(registration.requesterDisplayKey).toBe("agent:main:main");
   });
 });

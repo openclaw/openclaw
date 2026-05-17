@@ -35,6 +35,7 @@ import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
+import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 export {
@@ -66,7 +67,6 @@ import {
   resolveParentForkDecision,
   resolveAgentConfig,
   resolveContextEngine,
-  resolveDisplaySessionKey,
   resolveGatewaySessionStoreTarget,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -771,25 +771,11 @@ export async function spawnSubagentDirect(
         mainKey,
       })
     : alias;
-  const requesterDisplayKey = resolveDisplaySessionKey({
-    key: requesterInternalKey,
-    alias,
-    mainKey,
+  const ownership = resolveSubagentSpawnOwnership({
+    cfg,
+    agentSessionKey: ctx.agentSessionKey,
+    completionOwnerKey: ctx.completionOwnerKey,
   });
-  const completionOwnerInternalKey = ctx.completionOwnerKey
-    ? resolveInternalSessionKey({
-        key: ctx.completionOwnerKey,
-        alias,
-        mainKey,
-      })
-    : undefined;
-  const completionOwnerDisplayKey = completionOwnerInternalKey
-    ? resolveDisplaySessionKey({
-        key: completionOwnerInternalKey,
-        alias,
-        mainKey,
-      })
-    : undefined;
 
   const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
   const maxSpawnDepth =
@@ -996,7 +982,7 @@ export async function spawnSubagentDirect(
       agentId: targetAgentId,
       label: label || undefined,
       mode: spawnMode,
-      requesterSessionKey: completionOwnerInternalKey ?? requesterInternalKey,
+      requesterSessionKey: ownership.threadBindingRequesterSessionKey,
       requester: {
         channel: childSessionOrigin?.channel,
         accountId: childSessionOrigin?.accountId,
@@ -1261,10 +1247,10 @@ export async function spawnSubagentDirect(
     registerSubagentRun({
       runId: childRunId,
       childSessionKey,
-      controllerSessionKey: requesterInternalKey,
-      requesterSessionKey: completionOwnerInternalKey ?? requesterInternalKey,
+      controllerSessionKey: ownership.controllerSessionKey,
+      requesterSessionKey: ownership.completionRequesterSessionKey,
       requesterOrigin,
-      requesterDisplayKey: completionOwnerDisplayKey ?? requesterDisplayKey,
+      requesterDisplayKey: ownership.completionRequesterDisplayKey,
       task,
       taskName,
       cleanup,
