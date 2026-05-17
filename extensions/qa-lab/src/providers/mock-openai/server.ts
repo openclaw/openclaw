@@ -1110,9 +1110,7 @@ function buildAssistantText(
     return "FORKED-CONTEXT-ALPHA";
   }
   const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  const isFanoutCompletionTurn =
-    /subagent fanout synthesis check/i.test(allInputText) || /^continue\.?$/i.test(prompt.trim());
-  if (scenarioState.subagentFanoutPhase === 2 && prompt && isFanoutCompletionTurn) {
+  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
     scenarioState.subagentFanoutPhase = 3;
     return fanoutCompleteReply;
   }
