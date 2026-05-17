@@ -12,6 +12,7 @@ import {
 } from "../gateway/chat-display-projection.js";
 import { augmentChatHistoryWithCliSessionImports } from "../gateway/cli-session-history.js";
 import {
+  hasLiveAssistantContent,
   normalizeLiveAssistantEventText,
   projectLiveAssistantBufferedText,
   resolveMergedAssistantText,
@@ -531,12 +532,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (
       evt.stream === "assistant" &&
       !run.isBtw &&
-      typeof evt.data?.text === "string" &&
+      hasLiveAssistantContent(evt.data) &&
       !shouldSuppressAssistantEventForLiveChat(evt.data)
     ) {
+      const eventText = typeof evt.data?.text === "string" ? evt.data.text : "";
       const cleaned = normalizeLiveAssistantEventText({
-        text: evt.data.text,
-        delta: evt.data.delta,
+        text: eventText,
+        delta: evt.data?.delta,
       });
       run.buffer = resolveMergedAssistantText({
         previousText: run.buffer,

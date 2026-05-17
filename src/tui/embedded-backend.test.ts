@@ -240,6 +240,61 @@ describe("EmbeddedTuiBackend", () => {
     ]);
   });
 
+  it("emits a chat delta for assistant events that only carry delta with no text", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+
+    backend.start();
+    await flushMicrotasks();
+
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "hello",
+      runId: "run-delta-only",
+    });
+
+    registeredListener?.({
+      runId: "run-delta-only",
+      stream: "assistant",
+      data: { delta: "hello" },
+    });
+    registeredListener?.({
+      runId: "run-delta-only",
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+
+    pending.resolve({ payloads: [{ text: "hello" }], meta: {} });
+    await flushMicrotasks();
+
+    const chatDelta = events.find(
+      (entry) =>
+        entry.event === "chat" &&
+        (entry.payload as { state?: string } | undefined)?.state === "delta",
+    );
+    expect(chatDelta).toBeDefined();
+    expect(chatDelta?.payload).toMatchObject({
+      runId: "run-delta-only",
+      sessionKey: "agent:main:main",
+      state: "delta",
+      deltaText: "hello",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "hello" }],
+      },
+    });
+  });
+
   it("keeps final short replies like No after suppressing lead-fragment deltas", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const pending = deferred<{

@@ -8,6 +8,7 @@ import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
+  hasLiveAssistantContent,
   normalizeLiveAssistantEventText,
   projectLiveAssistantBufferedText,
   resolveMergedAssistantText,
@@ -953,10 +954,11 @@ export function createAgentEventHandler({
       if (
         !isAborted &&
         evt.stream === "assistant" &&
-        typeof evt.data?.text === "string" &&
+        hasLiveAssistantContent(evt.data) &&
         !shouldSuppressAssistantEventForLiveChat(evt.data)
       ) {
-        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
+        const eventText = typeof evt.data?.text === "string" ? evt.data.text : "";
+        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, eventText, evt.data?.delta);
       }
     }
 

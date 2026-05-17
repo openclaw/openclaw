@@ -88,3 +88,11 @@ export function projectLiveAssistantBufferedText(
 export function shouldSuppressAssistantEventForLiveChat(data: unknown): boolean {
   return resolveAssistantEventPhase(data) === "commentary";
 }
+
+export function hasLiveAssistantContent(data: unknown): boolean {
+  if (typeof data !== "object" || data === null) {
+    return false;
+  }
+  const candidate = data as { text?: unknown; delta?: unknown };
+  return typeof candidate.text === "string" || typeof candidate.delta === "string";
+}
