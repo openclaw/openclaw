@@ -57,6 +57,13 @@ export async function runAgentCleanupStep(params: {
   log: AgentCleanupLogger;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  /**
+   * Optional callback evaluated on timeout. Should return a short, bounded,
+   * non-secret summary of what the cleanup step is waiting on (queued bytes,
+   * pending operation, etc.) so the timeout warning is actionable instead of
+   * just reporting the envelope. See issue #82961.
+   */
+  getCleanupDiagnostic?: () => string | undefined;
 }): Promise<void> {
   const timeoutMs = resolveAgentCleanupStepTimeoutMs({
     step: params.step,
@@ -88,8 +95,16 @@ export async function runAgentCleanupStep(params: {
     clearTimeout(timeoutHandle);
   }
   if (result === "timeout") {
+    let diagnostic: string | undefined;
+    try {
+      diagnostic = params.getCleanupDiagnostic?.();
+    } catch (error) {
+      // Diagnostic capture must never break the timeout warning itself.
+      diagnostic = `diagnosticError=${formatErrorMessage(error)}`;
+    }
+    const diagnosticSuffix = diagnostic ? ` ${diagnostic}` : "";
     params.log.warn(
-      `agent cleanup timed out: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} timeoutMs=${timeoutMs}`,
+      `agent cleanup timed out: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} timeoutMs=${timeoutMs}${diagnosticSuffix}`,
     );
     void cleanupPromise.catch((error) => {
       params.log.warn(

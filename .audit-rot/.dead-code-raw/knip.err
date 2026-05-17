@@ -1,0 +1,8 @@
+ERROR: Error loading vitest.config.ts (Cannot find module 'vitest/config')
+ERROR: Please fix or visit https://knip.dev/reference/known-issues
+ERROR: Error loading extensions/qa-lab/web/vite.config.ts (Cannot find module 'vite')
+ERROR: Please fix or visit https://knip.dev/reference/known-issues
+ERROR: Error loading ui/vite.config.ts (Cannot find module 'vite')
+ERROR: Please fix or visit https://knip.dev/reference/known-issues
+ERROR: Error loading ui/vitest.config.ts (Cannot find module '@vitest/browser-playwright')
+ERROR: Please fix or visit https://knip.dev/reference/known-issues
