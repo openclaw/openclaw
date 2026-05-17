@@ -1755,6 +1755,11 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResult.toolCallId).toBe("cmd-declined");
     expect(toolResult.status).toBe("blocked");
     expect(toolResult.isError).toBe(true);
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.lastToolError).toEqual({
+      toolName: "bash",
+      error: "codex_native_tool_blocked",
+    });
   });
 
   it("leaves Codex dynamic tool item progress to item/tool/call normalization", async () => {
