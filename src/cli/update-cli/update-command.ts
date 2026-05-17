@@ -703,10 +703,33 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   return { health, launchAgentRecovery };
 }
 
-function formatPostUpdateGatewayRecoveryInstructions(result: UpdateRunResult): string[] {
-  const lines = [
-    `Recovery: run \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\`; if macOS reports the LaunchAgent is installed but not loaded, run \`${replaceCliName(formatCliCommand("openclaw gateway install --force"), CLI_NAME)}\` from the logged-in user session, then rerun \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\`.`,
-  ];
+function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string {
+  const restartCommand = replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME);
+  const installCommand = replaceCliName(
+    formatCliCommand("openclaw gateway install --force"),
+    CLI_NAME,
+  );
+  const statusCommand = replaceCliName(
+    formatCliCommand("openclaw gateway status --deep"),
+    CLI_NAME,
+  );
+  if (platform === "darwin") {
+    return `Recovery: run \`${restartCommand}\`; if the LaunchAgent is installed but not loaded, run \`${installCommand}\` from the logged-in macOS user session, then rerun \`${statusCommand}\`.`;
+  }
+  if (platform === "linux") {
+    return `Recovery: run \`${restartCommand}\`; if the systemd user service is missing, stale, or not active, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
+  }
+  if (platform === "win32") {
+    return `Recovery: run \`${restartCommand}\`; if the gateway Scheduled Task or Windows login item is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
+  }
+  return `Recovery: run \`${restartCommand}\`; if the local service manager reports the gateway service is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
+}
+
+export function formatPostUpdateGatewayRecoveryInstructions(
+  result: UpdateRunResult,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const lines = [formatPostUpdateGatewayRecoveryLine(platform)];
   const beforeVersion = normalizeOptionalString(result.before?.version);
   if (isPackageManagerUpdateMode(result.mode) && beforeVersion) {
     lines.push(
