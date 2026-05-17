@@ -43,8 +43,8 @@ Bare package specs still install from npm during the launch cutover. Use the
   <Card title="CLI backend plugin" icon="terminal" href="/plugins/cli-backend-plugins">
     Run a local AI CLI through OpenClaw model fallback.
   </Card>
-  <Card title="Tool or hook plugin" icon="wrench" href="/plugins/hooks">
-    Register agent tools, policy hooks, delivery hooks, or lifecycle hooks.
+  <Card title="Tool plugin" icon="wrench" href="/plugins/tool-plugins">
+    Register agent tools.
   </Card>
 </CardGroup>
 
@@ -182,6 +182,8 @@ local proof.
 
   </Step>
 </Steps>
+
+<a id="registering-agent-tools"></a>
 
 ## Registering tools
 
