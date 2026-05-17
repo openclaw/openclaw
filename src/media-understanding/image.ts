@@ -21,6 +21,7 @@ import {
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
 } from "../agents/tools/image-tool.helpers.js";
+import { isSecretRef } from "../config/types.secrets.js";
 import {
   buildCopilotIdeHeaders,
   COPILOT_INTEGRATION_ID,
@@ -390,7 +391,8 @@ function hasConfiguredProviderApiKey(
   cfg: ImageDescriptionRequest["cfg"],
   provider: string,
 ): boolean {
-  return typeof cfg.models?.providers?.[provider]?.apiKey === "string";
+  const apiKey = cfg.models?.providers?.[provider]?.apiKey;
+  return (typeof apiKey === "string" && apiKey.trim().length > 0) || isSecretRef(apiKey);
 }
 
 function resolveMinimaxVlmAuthProvider(
