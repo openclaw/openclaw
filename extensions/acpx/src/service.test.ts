@@ -405,6 +405,84 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
+  it("adapts lazy runTurn-only default runtimes for startTurn callers", async () => {
+    process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const runTurn = vi.fn(async function* () {
+      yield {
+        type: "text_delta" as const,
+        stream: "output" as const,
+        text: "legacy progress",
+      };
+      yield {
+        type: "done" as const,
+        stopReason: "end_turn",
+      };
+    });
+    acpxRuntimeConstructorMock.mockImplementationOnce(function AcpxRuntime(options: unknown) {
+      return {
+        ...createMockRuntime({
+          runTurn,
+        }),
+        getCapabilities: vi.fn(async () => ({ controls: [] })),
+        getStatus: vi.fn(async () => ({ summary: "ready" })),
+        prepareFreshSession: vi.fn(async () => {}),
+        setConfigOption: vi.fn(async () => {}),
+        setMode: vi.fn(async () => {}),
+        __options: options,
+      };
+    });
+    const service = createAcpxRuntimeService();
+
+    await service.start(ctx);
+
+    const backend = getAcpRuntimeBackend("acpx");
+    if (!backend) {
+      throw new Error("expected ACPX runtime backend");
+    }
+    const backendRuntime = backend.runtime as {
+      startTurn(input: {
+        handle: { sessionKey: string; backend: string; runtimeSessionName: string };
+        text: string;
+        mode: string;
+        requestId: string;
+      }): {
+        events: AsyncIterable<unknown>;
+        result: Promise<unknown>;
+      };
+    };
+    const turn = backendRuntime.startTurn({
+      handle: {
+        sessionKey: "agent:codex:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:test",
+      },
+      text: "hello",
+      mode: "prompt",
+      requestId: "turn-1",
+    });
+    await expect(turn.result).resolves.toEqual({
+      status: "completed",
+      stopReason: "end_turn",
+    });
+    const events = [];
+    for await (const event of turn.events) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      {
+        type: "text_delta",
+        stream: "output",
+        text: "legacy progress",
+      },
+    ]);
+    expect(runTurn).toHaveBeenCalledOnce();
+
+    await service.stop?.(ctx);
+  });
+
   it("runs the embedded runtime probe at startup by default and reports health", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
