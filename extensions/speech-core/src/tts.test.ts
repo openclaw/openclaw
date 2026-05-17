@@ -10,6 +10,7 @@ import type {
   SpeechProviderPlugin,
   SpeechProviderPrepareSynthesisContext,
   SpeechSynthesisRequest,
+  SpeechSynthesisStreamRequest,
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -114,6 +115,7 @@ const {
   maybeApplyTtsToPayload,
   resolveTtsConfig,
   synthesizeSpeech,
+  textToSpeechStream,
   textToSpeechTelephony,
 } = await import("./tts.js");
 
@@ -1052,6 +1054,51 @@ describe("speech-core native voice-note routing", () => {
 
     expect(result.success).toBe(true);
     expect(synthesizeTelephony).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: {
+          instructions: "Speak in a warm, upbeat, cheerful tone.",
+        },
+      }),
+    );
+  });
+
+  it("applies auto emotion to streaming synthesis providers", async () => {
+    const streamSynthesize = vi.fn(async (_request: SpeechSynthesisStreamRequest) => ({
+      audioStream: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.close();
+        },
+      }),
+      outputFormat: "mp3",
+      fileExtension: ".mp3",
+      voiceCompatible: false,
+    }));
+    installSpeechProviders([
+      createMockSpeechProvider("openai", {
+        streamSynthesize,
+      }),
+    ]);
+
+    const result = await textToSpeechStream({
+      text: "Great news, the deployment succeeded!",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "openai",
+            autoEmotion: {
+              enabled: true,
+              allowed: ["happy", "calm", "neutral"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(streamSynthesize).toHaveBeenCalledWith(
       expect.objectContaining({
         providerOverrides: {
           instructions: "Speak in a warm, upbeat, cheerful tone.",
