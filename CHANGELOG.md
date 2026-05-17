@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Providers/Anthropic-messages: extract `reasoning_content` from `thinking` blocks during assistant replay so proxy providers that route through the Anthropic-messages transport preserve reasoning context across tool-call follow-up turns. Thanks @Sunnyone2three.
+- Agents/GitHub Copilot: normalize replayed Responses tool-call IDs before dispatch so resumed sessions with historical overlong tool IDs continue instead of failing Copilot schema validation. (#82750) Thanks @galiniliev.
 - Mac app: let menu gateway/session error text wrap across a few lines and stop rebuilding dynamic Context/Gateway menu rows while the menu is open, reducing flicker.
 - Mac app: make device pairing approval sheets friendlier, with concise Mac/device copy, shortened identifiers, friendly scope labels, and Approve as the primary action.
 - Feishu/wiki: reject numeric wiki space IDs before creating Lark clients and keep numeric-looking IDs documented as quoted opaque strings, preventing JavaScript precision loss in knowledge base calls. Fixes #45301. (#82769) Thanks @hyspacex.
