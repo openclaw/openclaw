@@ -134,7 +134,7 @@ type RegisteredHandler = (args: {
     response_url?: string;
     channel?: { id?: string };
     container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
-    message?: { ts?: string; text?: string; blocks?: unknown[] };
+    message?: { ts?: string; thread_ts?: string; text?: string; blocks?: unknown[] };
   };
   action: Record<string, unknown>;
   respond?: (payload: { text: string; response_type: string }) => Promise<void>;
@@ -461,6 +461,53 @@ describe("registerSlackInteractionEvents", () => {
     });
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to message.thread_ts when container.thread_ts is absent", async () => {
+    const { ctx, getHandler, resolveSessionKey } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        // container has no thread_ts; thread_ts is on message instead
+        container: { channel_id: "C1", message_ts: "200.300" },
+        message: {
+          ts: "200.300",
+          thread_ts: "200.100",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "fallback_block",
+              elements: [{ type: "button", action_id: "openclaw:verify" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:verify",
+        block_id: "fallback_block",
+        value: "ok",
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const payload = slackInteractionPayload();
+    expectRecordFields(payload, {
+      threadTs: "200.100",
+      channelId: "C1",
+      messageTs: "200.300",
+    });
+    expect(resolveSessionKey).toHaveBeenCalledWith(
+      expect.objectContaining({ threadTs: "200.100" }),
+    );
   });
 
   it("registers a matcher that accepts plugin action ids beyond the OpenClaw prefix", () => {
