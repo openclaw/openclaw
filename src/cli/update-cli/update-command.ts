@@ -703,6 +703,33 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   return { health, launchAgentRecovery };
 }
 
+type PostUpdateGatewayRecoveryCopy = {
+  condition: string;
+  installContext: string;
+};
+
+const POST_UPDATE_GATEWAY_RECOVERY_COPY: Partial<
+  Record<NodeJS.Platform, PostUpdateGatewayRecoveryCopy>
+> = {
+  darwin: {
+    condition: "the LaunchAgent is installed but not loaded",
+    installContext: "the logged-in macOS user session",
+  },
+  linux: {
+    condition: "the systemd user service is missing, stale, or not active",
+    installContext: "the same user account",
+  },
+  win32: {
+    condition: "the gateway Scheduled Task or Windows login item is missing, stale, or not running",
+    installContext: "the same user account",
+  },
+};
+
+const FALLBACK_POST_UPDATE_GATEWAY_RECOVERY_COPY: PostUpdateGatewayRecoveryCopy = {
+  condition: "the local gateway service is missing, stale, or not running",
+  installContext: "the same user account",
+};
+
 function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string {
   const restartCommand = replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME);
   const installCommand = replaceCliName(
@@ -713,16 +740,9 @@ function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string 
     formatCliCommand("openclaw gateway status --deep"),
     CLI_NAME,
   );
-  if (platform === "darwin") {
-    return `Recovery: run \`${restartCommand}\`; if the LaunchAgent is installed but not loaded, run \`${installCommand}\` from the logged-in macOS user session, then rerun \`${statusCommand}\`.`;
-  }
-  if (platform === "linux") {
-    return `Recovery: run \`${restartCommand}\`; if the systemd user service is missing, stale, or not active, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
-  }
-  if (platform === "win32") {
-    return `Recovery: run \`${restartCommand}\`; if the gateway Scheduled Task or Windows login item is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
-  }
-  return `Recovery: run \`${restartCommand}\`; if the local service manager reports the gateway service is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
+  const copy =
+    POST_UPDATE_GATEWAY_RECOVERY_COPY[platform] ?? FALLBACK_POST_UPDATE_GATEWAY_RECOVERY_COPY;
+  return `Recovery: run \`${restartCommand}\`; if ${copy.condition}, run \`${installCommand}\` from ${copy.installContext}, then rerun \`${statusCommand}\`.`;
 }
 
 export function formatPostUpdateGatewayRecoveryInstructions(

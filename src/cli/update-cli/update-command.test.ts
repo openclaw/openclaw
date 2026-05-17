@@ -362,10 +362,9 @@ describe("formatPostUpdateGatewayRecoveryInstructions", () => {
   it("uses systemd wording on Linux instead of macOS LaunchAgent instructions", () => {
     const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "linux");
 
-    expect(line).toContain("the systemd user service");
-    expect(line).toContain("openclaw gateway restart");
-    expect(line).toContain("openclaw gateway install --force");
-    expect(line).toContain("openclaw gateway status --deep");
+    expect(line).toBe(
+      "Recovery: run `openclaw gateway restart`; if the systemd user service is missing, stale, or not active, run `openclaw gateway install --force` from the same user account, then rerun `openclaw gateway status --deep`.",
+    );
     expect(line).not.toContain("Linux reports");
     expect(line).not.toContain("macOS");
     expect(line).not.toContain("LaunchAgent");
@@ -374,14 +373,18 @@ describe("formatPostUpdateGatewayRecoveryInstructions", () => {
   it("keeps LaunchAgent recovery wording on macOS", () => {
     const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "darwin");
 
-    expect(line).toContain("the LaunchAgent is installed but not loaded");
-    expect(line).toContain("logged-in macOS user session");
+    expect(line).toBe(
+      "Recovery: run `openclaw gateway restart`; if the LaunchAgent is installed but not loaded, run `openclaw gateway install --force` from the logged-in macOS user session, then rerun `openclaw gateway status --deep`.",
+    );
+    expect(line).not.toContain("macOS reports");
   });
 
   it("uses Windows service-manager wording on Windows", () => {
     const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "win32");
 
-    expect(line).toContain("the gateway Scheduled Task or Windows login item");
+    expect(line).toBe(
+      "Recovery: run `openclaw gateway restart`; if the gateway Scheduled Task or Windows login item is missing, stale, or not running, run `openclaw gateway install --force` from the same user account, then rerun `openclaw gateway status --deep`.",
+    );
     expect(line).not.toContain("LaunchAgent");
     expect(line).not.toContain("Startup-folder");
   });
@@ -389,7 +392,10 @@ describe("formatPostUpdateGatewayRecoveryInstructions", () => {
   it("uses generic service-manager wording for unsupported Node platforms", () => {
     const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "freebsd");
 
-    expect(line).toContain("local service manager");
+    expect(line).toBe(
+      "Recovery: run `openclaw gateway restart`; if the local gateway service is missing, stale, or not running, run `openclaw gateway install --force` from the same user account, then rerun `openclaw gateway status --deep`.",
+    );
+    expect(line).not.toContain("reports");
     expect(line).not.toContain("systemd");
     expect(line).not.toContain("LaunchAgent");
     expect(line).not.toContain("Scheduled Task");
