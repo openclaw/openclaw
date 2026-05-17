@@ -361,7 +361,7 @@ describe("before_agent_start hook default timeout (#48534)", () => {
       {
         pluginId: "hanging-plugin",
         hookName: "before_agent_start",
-        handler: async () => await new Promise<never>(() => {}),
+        handler: () => new Promise<never>(() => {}),
         source: "test",
       },
     ]);
@@ -396,7 +396,7 @@ describe("before_agent_start hook default timeout (#48534)", () => {
         pluginId: "hanging-plugin",
         hookName: "before_agent_start",
         priority: 100,
-        handler: async () => await new Promise<never>(() => {}),
+        handler: () => new Promise<never>(() => {}),
         source: "test",
       },
       {
