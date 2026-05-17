@@ -437,6 +437,8 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  agentDir?: string;
+  workspaceDir?: string;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -780,6 +782,8 @@ export function createBrowserTool(opts?: {
                   // Intentionally omit `mediaUrl`: screenshots live on local
                   // disk, so the helper should read the buffer from `filePath`
                   // rather than HTTP-fetch the local path.
+                  agentDir: opts?.agentDir,
+                  workspaceDir: opts?.workspaceDir,
                 },
                 {
                   describeImageFileWithModel: browserToolDeps.describeImageFileWithModel,
