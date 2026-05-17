@@ -195,6 +195,11 @@ describe("WhatsApp QA live runtime", () => {
 
   it("classifies WhatsApp driver connection closures as retryable", () => {
     expect(__testing.isTransientWhatsAppQaDriverError(new Error("Connection Closed"))).toBe(true);
+    expect(
+      __testing.isTransientWhatsAppQaDriverError(
+        new Error("timed out waiting for WhatsApp QA driver message"),
+      ),
+    ).toBe(true);
     expect(__testing.isTransientWhatsAppQaDriverError(new Error("timed out waiting"))).toBe(false);
   });
 });

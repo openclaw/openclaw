@@ -472,7 +472,11 @@ function messageMatches(message: WhatsAppObservedMessage, matchText: string | Re
 }
 
 function isTransientWhatsAppQaDriverError(error: unknown) {
-  return /\bConnection Closed\b/iu.test(formatErrorMessage(error));
+  const message = formatErrorMessage(error);
+  return (
+    /\bConnection Closed\b/iu.test(message) ||
+    /\btimed out waiting for WhatsApp QA driver message\b/iu.test(message)
+  );
 }
 
 async function restartWhatsAppQaDriverSession(params: {
