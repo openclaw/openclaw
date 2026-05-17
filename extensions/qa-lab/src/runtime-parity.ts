@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  scanDirectReplyTranscriptSentinels,
+  scanGatewayLogSentinels,
+  type GatewayLogSentinelFinding,
+} from "./gateway-log-sentinel.js";
 
 export type RuntimeId = "pi" | "codex";
 
@@ -30,6 +35,7 @@ export type RuntimeParityCell = {
   transportErrorClass?: string;
   runtimeErrorClass?: string;
   bootStateLines: string[];
+  sentinelFindings?: GatewayLogSentinelFinding[];
 };
 
 export type RuntimeParityDrift =
@@ -52,6 +58,23 @@ export type RuntimeParityScenarioExecution = {
   scenarioDetails?: string;
   cell: RuntimeParityCell;
 };
+
+export function runtimeParityCellStatus(
+  cell: RuntimeParityCell | undefined,
+): "pass" | "fail" | "missing" {
+  if (!cell) {
+    return "missing";
+  }
+  return cell.runtimeErrorClass || cell.transportErrorClass ? "fail" : "pass";
+}
+
+export function isRuntimeParityResultPass(result: RuntimeParityResult) {
+  return (
+    result.drift !== "failure-mode" &&
+    runtimeParityCellStatus(result.cells.pi) === "pass" &&
+    runtimeParityCellStatus(result.cells.codex) === "pass"
+  );
+}
 
 type QaGatewayLike = {
   logs?: () => string;
@@ -725,8 +748,19 @@ function isHardFailureRuntimeError(errorClass: string | undefined) {
     errorClass === "failover" ||
     errorClass === "codex-app-server" ||
     errorClass === "auth" ||
-    errorClass === "capture-missing"
+    errorClass === "capture-missing" ||
+    errorClass?.startsWith("sentinel:") === true
   );
+}
+
+function summarizeSentinelErrorClass(findings: readonly GatewayLogSentinelFinding[]) {
+  if (findings.length === 0) {
+    return undefined;
+  }
+  return `sentinel:${findings
+    .map((finding) => finding.kind)
+    .toSorted((left, right) => left.localeCompare(right))
+    .join(",")}`;
 }
 
 function classifyRuntimeParityCells(params: {
@@ -946,6 +980,13 @@ export async function captureRuntimeParityCell(
   });
   const transcriptRecords = buildTranscriptRecords(transcriptBytes);
   const mockToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl);
+  const gatewayLogs = params.gateway.logs?.();
+  const sentinelFindings = [
+    ...scanGatewayLogSentinels(gatewayLogs),
+    ...scanDirectReplyTranscriptSentinels(transcriptBytes),
+  ];
+  const scenarioErrorClass = classifyScenarioError(params.scenarioResult.details);
+  const sentinelErrorClass = summarizeSentinelErrorClass(sentinelFindings);
   return {
     runtime: params.runtime,
     transcriptBytes,
@@ -953,10 +994,11 @@ export async function captureRuntimeParityCell(
     finalText: extractFinalAssistantText(transcriptRecords),
     usage: aggregateUsage(transcriptRecords),
     wallClockMs: params.wallClockMs,
-    ...(classifyScenarioError(params.scenarioResult.details)
-      ? { runtimeErrorClass: classifyScenarioError(params.scenarioResult.details) }
+    ...(scenarioErrorClass || sentinelErrorClass
+      ? { runtimeErrorClass: scenarioErrorClass ?? sentinelErrorClass }
       : {}),
-    bootStateLines: extractBootStateLines(params.gateway.logs?.()),
+    bootStateLines: extractBootStateLines(gatewayLogs),
+    ...(sentinelFindings.length > 0 ? { sentinelFindings } : {}),
   };
 }
 

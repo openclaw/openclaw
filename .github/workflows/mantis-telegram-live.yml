@@ -56,9 +56,8 @@ jobs:
           github.event_name == 'issue_comment' &&
           github.event.issue.pull_request &&
           (
-            contains(github.event.comment.body, '@Mantis') ||
-            contains(github.event.comment.body, '@mantis') ||
-            contains(github.event.comment.body, '/mantis')
+            contains(github.event.comment.body, '@openclaw-mantis') ||
+            contains(github.event.comment.body, '/openclaw-mantis')
           )
         )
       }}
@@ -141,7 +140,7 @@ jobs:
 
             const normalized = body.toLowerCase();
             const requested =
-              (normalized.includes("@mantis") || normalized.includes("/mantis")) &&
+              (normalized.includes("@openclaw-mantis") || normalized.includes("/openclaw-mantis")) &&
               normalized.includes("telegram");
             if (!requested) {
               core.notice("Comment mentioned Mantis but did not request Telegram live QA.");
@@ -386,7 +385,7 @@ jobs:
           output_rel=".artifacts/qa-e2e/mantis/telegram-live"
           root="$candidate_repo/$output_rel"
           echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
-          model="${OPENCLAW_CI_OPENAI_MODEL:-openai/gpt-5.4}"
+          model="${OPENCLAW_CI_OPENAI_MODEL:-openai/gpt-5.5}"
 
           scenario_args=()
           if [[ -n "${SCENARIO_INPUT// }" ]]; then

@@ -42,10 +42,19 @@ import {
   type QaProviderModeInput,
 } from "./run-config.js";
 import type { RuntimeId } from "./runtime-parity.js";
-import { readQaScenarioPack } from "./scenario-catalog.js";
+import {
+  QA_RUNTIME_PARITY_TIERS,
+  readQaScenarioPack,
+  type QaRuntimeParityTier,
+} from "./scenario-catalog.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
+import {
+  buildQaToolCoverageReport,
+  renderQaToolCoverageMarkdownReport,
+  type QaToolCoverageSuiteSummary,
+} from "./tool-coverage-report.js";
 
 const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 
@@ -156,6 +165,47 @@ function parseQaRuntimePair(value: string | undefined): [RuntimeId, RuntimeId] |
     throw new Error("--runtime-pair must compare two different runtimes.");
   }
   return ["pi", "codex"];
+}
+
+function parseQaRuntimeParityTierFilters(input: string[] | undefined): QaRuntimeParityTier[] {
+  const rawValues = [
+    ...new Set(
+      (input ?? [])
+        .flatMap((value) => value.split(","))
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  const validTiers = new Set<string>(QA_RUNTIME_PARITY_TIERS);
+  for (const value of rawValues) {
+    if (!validTiers.has(value)) {
+      throw new Error(
+        `--runtime-parity-tier must be one of ${QA_RUNTIME_PARITY_TIERS.join(", ")}, got "${value}".`,
+      );
+    }
+  }
+  return rawValues as QaRuntimeParityTier[];
+}
+
+function resolveQaRuntimeParityTierScenarioIds(params: {
+  scenarioIds: string[];
+  runtimeParityTiers: readonly QaRuntimeParityTier[];
+}): string[] {
+  if (params.runtimeParityTiers.length === 0) {
+    return params.scenarioIds;
+  }
+  const tierSet = new Set(params.runtimeParityTiers);
+  const matchingScenarioIds = readQaScenarioPack()
+    .scenarios.filter(
+      (scenario) => scenario.runtimeParityTier && tierSet.has(scenario.runtimeParityTier),
+    )
+    .map((scenario) => scenario.id);
+  if (matchingScenarioIds.length === 0) {
+    throw new Error(
+      `--runtime-parity-tier matched no scenarios for ${params.runtimeParityTiers.join(", ")}.`,
+    );
+  }
+  return [...new Set([...params.scenarioIds, ...matchingScenarioIds])];
 }
 
 async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
@@ -508,16 +558,22 @@ export async function runQaSuiteCommand(opts: {
   disk?: string;
   preflight?: boolean;
   runtimePair?: string;
+  runtimeParityTier?: string[];
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
   const runner = (opts.runner ?? "host").trim().toLowerCase();
-  const scenarioIds = resolveQaScenarioPackScenarioIds({
+  const explicitScenarioIds = resolveQaScenarioPackScenarioIds({
     pack: opts.pack,
     scenarioIds: resolveQaParityPackScenarioIds({
       parityPack: opts.parityPack,
       scenarioIds: opts.scenarioIds,
     }),
+  });
+  const runtimeParityTiers = parseQaRuntimeParityTierFilters(opts.runtimeParityTier);
+  const scenarioIds = resolveQaRuntimeParityTierScenarioIds({
+    scenarioIds: explicitScenarioIds,
+    runtimeParityTiers,
   });
   const allowFailures = opts.allowFailures === true;
   if (runner !== "host" && runner !== "multipass") {
@@ -694,18 +750,39 @@ export async function runQaCoverageReportCommand(opts: {
   repoRoot?: string;
   output?: string;
   json?: boolean;
+  tools?: boolean;
+  summary?: string;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
-  const inventory = buildQaCoverageInventory(readQaScenarioPack().scenarios);
   const outputPath = opts.output ? path.resolve(repoRoot, opts.output) : undefined;
-  const body = opts.json
-    ? `${JSON.stringify(inventory, null, 2)}\n`
-    : renderQaCoverageMarkdownReport(inventory);
+  const scenarios = readQaScenarioPack().scenarios;
+  let body: string;
+  let outputLabel = "QA coverage report";
+  if (opts.tools === true) {
+    const summary = opts.summary?.trim()
+      ? (JSON.parse(
+          await fs.readFile(path.resolve(repoRoot, opts.summary), "utf8"),
+        ) as QaToolCoverageSuiteSummary)
+      : undefined;
+    const report = buildQaToolCoverageReport({ scenarios, summary });
+    body = opts.json
+      ? `${JSON.stringify(report, null, 2)}\n`
+      : renderQaToolCoverageMarkdownReport(report);
+    outputLabel = "QA tool coverage report";
+  } else {
+    if (opts.summary?.trim()) {
+      throw new Error("--summary requires --tools.");
+    }
+    const inventory = buildQaCoverageInventory(scenarios);
+    body = opts.json
+      ? `${JSON.stringify(inventory, null, 2)}\n`
+      : renderQaCoverageMarkdownReport(inventory);
+  }
 
   if (outputPath) {
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     await fs.writeFile(outputPath, body, "utf8");
-    process.stdout.write(`QA coverage report: ${outputPath}\n`);
+    process.stdout.write(`${outputLabel}: ${outputPath}\n`);
     return;
   }
 
@@ -955,7 +1032,6 @@ export async function runQaLabUiCommand(opts: {
   advertiseHost?: string;
   advertisePort?: number;
   controlUiUrl?: string;
-  controlUiToken?: string;
   controlUiProxyTarget?: string;
   uiDistDir?: string;
   autoKickoffTarget?: string;
@@ -970,7 +1046,7 @@ export async function runQaLabUiCommand(opts: {
     advertiseHost: opts.advertiseHost,
     advertisePort: Number.isFinite(opts.advertisePort) ? opts.advertisePort : undefined,
     controlUiUrl: opts.controlUiUrl,
-    controlUiToken: opts.controlUiToken,
+    controlUiProxyToken: process.env.OPENCLAW_QA_CONTROL_UI_PROXY_TOKEN,
     controlUiProxyTarget: opts.controlUiProxyTarget,
     uiDistDir: opts.uiDistDir,
     autoKickoffTarget: opts.autoKickoffTarget,

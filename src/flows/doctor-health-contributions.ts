@@ -15,6 +15,7 @@ type DoctorConfigResult = {
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
+  preservedLegacyRootKeys?: readonly string[];
 };
 
 type DoctorHealthFlowContext = {
@@ -371,7 +372,11 @@ async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise
 
 async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionLockHealth } = await import("../commands/doctor-session-locks.js");
-  await noteSessionLockHealth({ shouldRepair: ctx.prompter.shouldRepair });
+  await noteSessionLockHealth({
+    shouldRepair: ctx.prompter.shouldRepair,
+    config: ctx.cfg,
+    env: ctx.env,
+  });
 }
 
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -647,6 +652,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
         allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
         skipPluginValidation:
           ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
+        preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
       },
     });
     logConfigUpdated(ctx.runtime);
@@ -688,6 +694,7 @@ async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Pro
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const finalSnapshot = await readConfigFileSnapshot({
     skipPluginValidation: isUpdateDoctorRun(ctx.env ?? process.env),
+    preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
   });
   if (finalSnapshot.exists && !finalSnapshot.valid) {
     ctx.runtime.error("Invalid config:");

@@ -26,6 +26,7 @@ import {
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
+  resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type {
@@ -35,10 +36,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
-import {
-  normalizeMessagePresentation,
-  presentationToInteractiveReply,
-} from "openclaw/plugin-sdk/interactive-runtime";
+import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
@@ -100,8 +98,6 @@ import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-de
 import {
   createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
-  isPotentialTruncatedFinal,
-  selectLongerFinalText,
   type DraftLaneState,
   type LaneDeliveryResult,
   type LaneName,
@@ -146,12 +142,10 @@ function resolvePayloadTelegramInlineButtons(
     | { buttons?: TelegramInlineButtons }
     | undefined;
   const presentation = normalizeMessagePresentation(payload.presentation);
-  const interactive =
-    payload.interactive ??
-    (presentation ? presentationToInteractiveReply(presentation) : undefined);
   return resolveTelegramInlineButtons({
     buttons: telegramData?.buttons,
-    interactive,
+    presentation,
+    interactive: payload.interactive,
   });
 }
 
@@ -1283,12 +1277,10 @@ export const dispatchTelegramMessage = async ({
       return delivered ? { kind: "sent" } : { kind: "skipped" };
     };
     const resolveTranscriptBackedFinalText = async (text: string): Promise<string> =>
-      isPotentialTruncatedFinal(text)
-        ? (selectLongerFinalText({
-            finalText: text,
-            candidateTexts: [await resolveCurrentTurnTranscriptFinalText()],
-          }) ?? text)
-        : text;
+      await resolveTranscriptBackedChannelFinalText({
+        finalText: text,
+        resolveCandidateText: resolveCurrentTurnTranscriptFinalText,
+      });
 
     if (isDmTopic) {
       try {

@@ -175,7 +175,7 @@ For an agent/CV style desktop task, run:
 pnpm openclaw qa mantis visual-task \
   --browser-url https://example.net \
   --expect-text "Example Domain" \
-  --vision-model openai/gpt-5.4
+  --vision-model openai/gpt-5.5
 ```
 
 `visual-task` leases or reuses a Crabbox desktop/browser machine, starts
@@ -370,8 +370,8 @@ Run the Mantis status-reaction scenario explicitly:
 pnpm openclaw qa discord \
   --scenario discord-status-reactions-tool-only \
   --provider-mode live-frontier \
-  --model openai/gpt-5.4 \
-  --alt-model openai/gpt-5.4 \
+  --model openai/gpt-5.5 \
+  --alt-model openai/gpt-5.5 \
   --fast
 ```
 
@@ -780,13 +780,13 @@ pnpm openclaw qa character-eval \
   --model openai/gpt-5.5,thinking=medium,fast \
   --model openai/gpt-5.2,thinking=xhigh \
   --model openai/gpt-5,thinking=xhigh \
-  --model anthropic/claude-opus-4-6,thinking=high \
+  --model anthropic/claude-opus-4-7,thinking=high \
   --model anthropic/claude-sonnet-4-6,thinking=high \
   --model zai/glm-5.1,thinking=high \
   --model moonshot/kimi-k2.5,thinking=high \
   --model google/gemini-3.1-pro-preview,thinking=high \
   --judge-model openai/gpt-5.5,thinking=xhigh,fast \
-  --judge-model anthropic/claude-opus-4-6,thinking=high \
+  --judge-model anthropic/claude-opus-4-7,thinking=high \
   --blind-judge-models \
   --concurrency 16 \
   --judge-concurrency 16
@@ -817,13 +817,13 @@ Candidate and judge model runs both default to concurrency 16. Lower
 `--concurrency` or `--judge-concurrency` when provider limits or local gateway
 pressure make a run too noisy.
 When no candidate `--model` is passed, the character eval defaults to
-`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-6`,
+`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-7`,
 `anthropic/claude-sonnet-4-6`, `zai/glm-5.1`,
 `moonshot/kimi-k2.5`, and
 `google/gemini-3.1-pro-preview` when no `--model` is passed.
 When no `--judge-model` is passed, the judges default to
 `openai/gpt-5.5,thinking=xhigh,fast` and
-`anthropic/claude-opus-4-6,thinking=high`.
+`anthropic/claude-opus-4-7,thinking=high`.
 
 ## Related docs
 

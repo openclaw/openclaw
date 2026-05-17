@@ -186,6 +186,8 @@ jobs:
           install-bun: "true"
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run OpenAI candidate lane
@@ -196,7 +198,7 @@ jobs:
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model openai/gpt-5.5-alt \
-            --output-dir .artifacts/qa-e2e/gpt54
+            --output-dir .artifacts/qa-e2e/openai-candidate
 
       - name: Run Opus 4.7 lane
         run: |
@@ -205,15 +207,15 @@ jobs:
             --parity-pack agentic \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model anthropic/claude-opus-4-7 \
-            --alt-model anthropic/claude-sonnet-4-7 \
-            --output-dir .artifacts/qa-e2e/opus46
+            --alt-model anthropic/claude-sonnet-4-6 \
+            --output-dir .artifacts/qa-e2e/anthropic-baseline
 
       - name: Generate parity report
         run: |
           pnpm openclaw qa parity-report \
             --repo-root . \
-            --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
-            --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
+            --candidate-summary .artifacts/qa-e2e/openai-candidate/qa-suite-summary.json \
+            --baseline-summary .artifacts/qa-e2e/anthropic-baseline/qa-suite-summary.json \
             --candidate-label "${OPENCLAW_CI_OPENAI_MODEL}" \
             --baseline-label anthropic/claude-opus-4-7 \
             --output-dir .artifacts/qa-e2e/parity
@@ -262,6 +264,8 @@ jobs:
           fi
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run Matrix live lane
@@ -346,6 +350,8 @@ jobs:
           fi
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run Matrix live lane shard
@@ -428,6 +434,8 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run Telegram live lane
@@ -521,6 +529,8 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run Discord live lane
@@ -555,8 +565,8 @@ jobs:
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
-            --model openai/gpt-5.4 \
-            --alt-model openai/gpt-5.4 \
+            --model openai/gpt-5.5 \
+            --alt-model openai/gpt-5.5 \
             --fast \
             --credential-source convex \
             --credential-role ci \
@@ -576,6 +586,9 @@ jobs:
     needs: [authorize_actor, validate_selected_ref]
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
+    concurrency:
+      group: qa-live-whatsapp-shared
+      cancel-in-progress: false
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
@@ -614,6 +627,8 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run WhatsApp live lane
@@ -707,6 +722,8 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run Slack live lane

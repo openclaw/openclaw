@@ -37,6 +37,7 @@ import type {
   SessionsUsageAggregates,
   SessionsUsageResult,
 } from "../../shared/usage-types.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   ErrorCodes,
   errorShape,
@@ -56,6 +57,7 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
 const COST_USAGE_CACHE_MAX = 256;
+const SESSIONS_USAGE_CACHE_READ_CONCURRENCY = 12;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DateRange = { startMs: number; endMs: number };
@@ -744,7 +746,7 @@ async function loadCostUsageSummaryCached(params: {
     endMs: params.endMs,
     config: params.config,
     requestRefresh: true,
-    refreshMode: "sync-when-empty",
+    refreshMode: "background",
   })
     .then((summary) => {
       setCostUsageCache(cacheKey, {
@@ -1107,9 +1109,19 @@ export const usageHandlers: GatewayRequestHandlers = {
       target.missingCostEntries += source.missingCostEntries;
     };
 
-    for (const merged of limitedEntries) {
-      const agentId = merged.agentId;
-      let usage: SessionCostSummary | null = null;
+    const usageByEntryIndex: Array<SessionCostSummary | null> = Array.from(
+      { length: limitedEntries.length },
+      () => null,
+    );
+    const usageLoadTasks: Array<
+      () => Promise<{
+        entryIndex: number;
+        cacheStatus: UsageCacheStatus;
+        summary: SessionCostSummary | null;
+      }>
+    > = [];
+
+    for (const [entryIndex, merged] of limitedEntries.entries()) {
       const includedSessionIds = merged.includedSessionIds ?? [merged.sessionId];
       for (const includedSessionId of includedSessionIds) {
         const isCurrentSession = includedSessionId === merged.sessionId;
@@ -1117,33 +1129,55 @@ export const usageHandlers: GatewayRequestHandlers = {
           ? merged.sessionFile
           : resolveExistingUsageSessionFile({
               sessionId: includedSessionId,
-              agentId,
+              agentId: merged.agentId,
             });
         if (!includedSessionFile) {
           continue;
         }
-        const cachedUsage = await loadSessionCostSummaryFromCache({
-          sessionId: includedSessionId,
-          sessionEntry: isCurrentSession ? merged.storeEntry : undefined,
-          sessionFile: includedSessionFile,
-          config,
-          agentId,
-          startMs,
-          endMs,
-          refreshMode: "sync-when-empty",
+        usageLoadTasks.push(async () => {
+          const cachedUsage = await loadSessionCostSummaryFromCache({
+            sessionId: includedSessionId,
+            sessionEntry: isCurrentSession ? merged.storeEntry : undefined,
+            sessionFile: includedSessionFile,
+            config,
+            agentId: merged.agentId,
+            startMs,
+            endMs,
+            refreshMode: "background",
+          });
+          return {
+            entryIndex,
+            cacheStatus: cachedUsage.cacheStatus,
+            summary: cachedUsage.summary,
+          };
         });
-        cacheStatus = mergeUsageCacheStatus(cacheStatus, cachedUsage.cacheStatus);
-        const includedUsage = cachedUsage.summary;
-        if (!includedUsage) {
-          continue;
-        }
-        if (!usage) {
-          usage = createEmptySessionCostSummary();
-          usage.sessionId = merged.sessionId;
-          usage.sessionFile = merged.sessionFile;
-        }
-        mergeSessionUsageInto(usage, includedUsage);
       }
+    }
+
+    const usageLoadResult = await runTasksWithConcurrency({
+      tasks: usageLoadTasks,
+      limit: SESSIONS_USAGE_CACHE_READ_CONCURRENCY,
+      errorMode: "stop",
+    });
+    if (usageLoadResult.hasError) {
+      throw usageLoadResult.firstError;
+    }
+    for (const loaded of usageLoadResult.results) {
+      cacheStatus = mergeUsageCacheStatus(cacheStatus, loaded.cacheStatus);
+      if (!loaded.summary) {
+        continue;
+      }
+      const merged = limitedEntries[loaded.entryIndex];
+      const usage = usageByEntryIndex[loaded.entryIndex] ?? createEmptySessionCostSummary();
+      usage.sessionId = merged.sessionId;
+      usage.sessionFile = merged.sessionFile;
+      mergeSessionUsageInto(usage, loaded.summary);
+      usageByEntryIndex[loaded.entryIndex] = usage;
+    }
+
+    for (const [entryIndex, merged] of limitedEntries.entries()) {
+      const agentId = merged.agentId;
+      const usage = usageByEntryIndex[entryIndex];
 
       if (usage) {
         aggregateTotals.input += usage.input;

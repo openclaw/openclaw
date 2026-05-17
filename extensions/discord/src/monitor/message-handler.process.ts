@@ -1,3 +1,4 @@
+import path from "node:path";
 import { MessageFlags } from "discord-api-types/v10";
 import {
   formatReasoningMessage,
@@ -21,6 +22,7 @@ import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
   resolveChannelStreamingBlockEnabled,
+  resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
@@ -33,8 +35,19 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  buildTtsSupplementMediaPayload,
+  getReplyPayloadTtsSupplement,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  loadSessionStore,
+  readLatestAssistantTextFromSessionTranscript,
+  resolveAndPersistSessionFile,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { beginDiscordInboundEventDeliveryCorrelation } from "../inbound-event-delivery.js";
@@ -117,6 +130,7 @@ export async function processDiscordMessage(
   ctx: DiscordMessagePreflightContext,
   observer?: DiscordMessageProcessObserver,
 ) {
+  const dispatchStartedAt = Date.now();
   const {
     cfg,
     discordConfig,
@@ -447,6 +461,37 @@ export async function processDiscordMessage(
         )
       : () => {};
   const endDiscordInboundEventDeliveryCorrelation = beginDeliveryCorrelation();
+  const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> => {
+    const sessionKey = ctxPayload.SessionKey;
+    if (!sessionKey) {
+      return undefined;
+    }
+    try {
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
+      const store = loadSessionStore(storePath, { clone: false });
+      const sessionEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      if (!sessionEntry?.sessionId) {
+        return undefined;
+      }
+      const { sessionFile } = await resolveAndPersistSessionFile({
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionStore: store,
+        storePath,
+        sessionEntry,
+        agentId: route.agentId,
+        sessionsDir: path.dirname(storePath),
+      });
+      const latest = await readLatestAssistantTextFromSessionTranscript(sessionFile);
+      if (!latest?.timestamp || latest.timestamp < dispatchStartedAt) {
+        return undefined;
+      }
+      return latest.text;
+    } catch (err) {
+      logVerbose(`discord transcript final candidate lookup failed: ${String(err)}`);
+      return undefined;
+    }
+  };
 
   const deliverChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
@@ -489,9 +534,18 @@ export async function processDiscordMessage(
           // Reasoning/thinking payloads should not be delivered to Discord.
           return;
         }
+        const finalText =
+          isFinal && typeof payload.text === "string"
+            ? await resolveTranscriptBackedChannelFinalText({
+                finalText: payload.text,
+                resolveCandidateText: resolveCurrentTurnTranscriptFinalText,
+              })
+            : payload.text;
+        const effectivePayload =
+          finalText !== payload.text ? { ...payload, text: finalText } : payload;
         const draftStream = draftPreview.draftStream;
         if (draftStream && draftPreview.isProgressMode && info.kind === "block") {
-          const reply = resolveSendableOutboundReplyParts(payload);
+          const reply = resolveSendableOutboundReplyParts(effectivePayload);
           if (!reply.hasMedia && !payload.isError) {
             return;
           }
@@ -501,17 +555,20 @@ export async function processDiscordMessage(
           isFinal &&
           (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted)
         ) {
-          const reply = resolveSendableOutboundReplyParts(payload);
+          const reply = resolveSendableOutboundReplyParts(effectivePayload);
           const hasMedia = reply.hasMedia;
-          const finalText = payload.text;
-          const previewFinalText = draftPreview.resolvePreviewFinalText(finalText);
+          const ttsSupplement = getReplyPayloadTtsSupplement(effectivePayload);
+          const previewSourceText = finalText ?? ttsSupplement?.spokenText;
+          const previewFinalText = draftPreview.resolvePreviewFinalText(previewSourceText);
+          const previewReplyToId = replyReference.peek();
           const hasExplicitReplyDirective =
-            Boolean(payload.replyToTag || payload.replyToCurrent) ||
-            (typeof finalText === "string" && /\[\[\s*reply_to(?:_current|\s*:)/i.test(finalText));
+            Boolean(effectivePayload.replyToTag || effectivePayload.replyToCurrent) ||
+            (typeof previewSourceText === "string" &&
+              /\[\[\s*reply_to(?:_current|\s*:)/i.test(previewSourceText));
 
           const result = await deliverWithFinalizableLivePreviewAdapter({
             kind: info.kind,
-            payload,
+            payload: effectivePayload,
             adapter: defineFinalizableLivePreviewAdapter({
               draft: {
                 flush: () => draftPreview.flush(),
@@ -523,7 +580,7 @@ export async function processDiscordMessage(
               buildFinalEdit: () => {
                 if (
                   draftPreview.finalizedViaPreviewMessage ||
-                  hasMedia ||
+                  (hasMedia && !ttsSupplement) ||
                   typeof previewFinalText !== "string" ||
                   hasExplicitReplyDirective ||
                   payload.isError
@@ -552,6 +609,40 @@ export async function processDiscordMessage(
                 replyReference.markSent();
                 observer?.onFinalReplyDelivered?.();
               },
+              buildSupplementalPayload: () =>
+                ttsSupplement ? buildTtsSupplementMediaPayload(effectivePayload) : undefined,
+              deliverSupplemental: async (supplementalPayload) => {
+                if (isProcessAborted(abortSignal)) {
+                  return false;
+                }
+                const supplementalReplyToId =
+                  previewReplyToId ??
+                  replyReference.peek() ??
+                  (replyToMode === "all"
+                    ? typeof message.id === "string" && message.id
+                      ? message.id
+                      : ctxPayload.MessageSid
+                    : undefined);
+                await deliverDiscordReply({
+                  cfg,
+                  replies: [supplementalPayload],
+                  target: deliverTarget,
+                  token,
+                  accountId,
+                  rest: deliveryRest,
+                  runtime,
+                  replyToId: supplementalReplyToId,
+                  replyToMode,
+                  textLimit,
+                  maxLinesPerMessage,
+                  tableMode,
+                  chunkMode,
+                  sessionKey: ctxPayload.SessionKey,
+                  threadBindings,
+                  mediaLocalRoots,
+                });
+                return true;
+              },
               logPreviewEditFailure: (err) => {
                 logVerbose(
                   `discord: preview final edit failed; falling back to standard send (${String(err)})`,
@@ -562,11 +653,17 @@ export async function processDiscordMessage(
               if (isProcessAborted(abortSignal)) {
                 return false;
               }
+              const fallbackPayload =
+                ttsSupplement &&
+                ttsSupplement.visibleTextAlreadyDelivered !== true &&
+                !effectivePayload.text?.trim()
+                  ? { ...effectivePayload, text: ttsSupplement.spokenText }
+                  : effectivePayload;
               const replyToId = replyReference.use();
               notifyFinalReplyStart();
               await deliverDiscordReply({
                 cfg,
-                replies: [payload],
+                replies: [fallbackPayload],
                 target: deliverTarget,
                 token,
                 accountId,
@@ -604,7 +701,7 @@ export async function processDiscordMessage(
         }
         await deliverDiscordReply({
           cfg,
-          replies: [payload],
+          replies: [effectivePayload],
           target: deliverTarget,
           token,
           accountId,

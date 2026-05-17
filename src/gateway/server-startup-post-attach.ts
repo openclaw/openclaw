@@ -23,7 +23,6 @@ import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentin
 import type { logGatewayStartup } from "./server-startup-log.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
-const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
@@ -563,7 +562,7 @@ export async function startGatewaySidecars(params: {
         for (const sessionsDir of sessionDirs) {
           const result = await cleanStaleLockFiles({
             sessionsDir,
-            staleMs: SESSION_LOCK_STALE_MS,
+            config: params.cfg,
             removeStale: true,
             log: { warn: (message) => params.log.warn(message) },
           });
