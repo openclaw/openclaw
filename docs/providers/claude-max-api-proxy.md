@@ -43,8 +43,9 @@ The proxy:
   <Step title="Install the proxy">
     Requires Node.js 20+ and Claude Code CLI.
 
-    The published npm package still uses the original package name; source and
-    issue tracking now live in the maintained `wende` fork linked below.
+    The published npm package still uses the original package name. The `wende`
+    fork linked below is a maintained community source reference, not a package
+    ownership transfer.
 
     ```bash
     npm install -g claude-max-api-proxy
@@ -159,8 +160,7 @@ The proxy:
 ## Links
 
 - **npm package:** [https://www.npmjs.com/package/claude-max-api-proxy](https://www.npmjs.com/package/claude-max-api-proxy)
-- **Maintained source fork:** [https://github.com/wende/claude-max-api-proxy](https://github.com/wende/claude-max-api-proxy)
-- **Issues for the maintained fork:** [https://github.com/wende/claude-max-api-proxy/issues](https://github.com/wende/claude-max-api-proxy/issues)
+- **Maintained community source fork:** [https://github.com/wende/claude-max-api-proxy](https://github.com/wende/claude-max-api-proxy)
 
 ## Notes
 
