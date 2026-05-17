@@ -140,38 +140,37 @@ struct SettingsRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    @ViewBuilder
-    private func detailView(for tab: SettingsTab) -> some View {
+    private func detailView(for tab: SettingsTab) -> AnyView {
         switch tab {
         case .general:
-            GeneralSettings(state: self.state, page: .general, isActive: self.selectedTab == tab)
+            AnyView(GeneralSettings(state: self.state, page: .general, isActive: self.selectedTab == tab))
         case .connection:
-            GeneralSettings(state: self.state, page: .connection, isActive: self.selectedTab == tab)
+            AnyView(GeneralSettings(state: self.state, page: .connection, isActive: self.selectedTab == tab))
         case .permissions:
-            PermissionsSettings(
+            AnyView(PermissionsSettings(
                 status: self.permissionMonitor.status,
                 refresh: self.refreshPerms,
-                showOnboarding: { DebugActions.restartOnboarding() })
+                showOnboarding: { DebugActions.restartOnboarding() }))
         case .voiceWake:
-            VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
+            AnyView(VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake))
         case .channels:
-            ChannelsSettings(isActive: self.selectedTab == tab)
+            AnyView(ChannelsSettings(isActive: self.selectedTab == tab))
         case .skills:
-            SkillsSettings(state: self.state)
+            AnyView(SkillsSettings(state: self.state))
         case .cron:
-            CronSettings(isActive: self.selectedTab == tab)
+            AnyView(CronSettings(isActive: self.selectedTab == tab))
         case .execApprovals:
-            ExecApprovalsSettings()
+            AnyView(ExecApprovalsSettings())
         case .sessions:
-            SessionsSettings()
+            AnyView(SessionsSettings())
         case .instances:
-            InstancesSettings(isActive: self.selectedTab == tab)
+            AnyView(InstancesSettings(isActive: self.selectedTab == tab))
         case .config:
-            ConfigSettings()
+            AnyView(ConfigSettings())
         case .debug:
-            DebugSettings(state: self.state)
+            AnyView(DebugSettings(state: self.state))
         case .about:
-            AboutSettings(updater: self.updater)
+            AnyView(AboutSettings(updater: self.updater))
         }
     }
 
