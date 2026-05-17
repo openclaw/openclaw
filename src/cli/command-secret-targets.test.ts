@@ -82,6 +82,11 @@ vi.mock("../secrets/target-registry.js", () => ({
         record(`plugins.entries.${pluginId}.config.webFetch.apiKey`);
       }
     }
+    const tools = (config as { tools?: { web?: { fetch?: { firecrawl?: { apiKey?: unknown } } } } })
+      ?.tools;
+    if (tools?.web?.fetch?.firecrawl?.apiKey !== undefined) {
+      record("tools.web.fetch.firecrawl.apiKey");
+    }
     return out;
   }),
 }));
@@ -131,6 +136,7 @@ describe("command secret target ids", () => {
     expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
+    expect(ids.has("tools.web.fetch.firecrawl.apiKey")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
   });
 
@@ -153,6 +159,7 @@ describe("command secret target ids", () => {
       new Set([
         "plugins.entries.firecrawl.config.webFetch.apiKey",
         "plugins.entries.readerlab.config.webFetch.apiKey",
+        "tools.web.fetch.firecrawl.apiKey",
       ]),
     );
     expect(webFetch.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(false);
@@ -327,6 +334,25 @@ describe("command secret target ids", () => {
     expect(externalOwner.allowedPaths).toEqual(
       new Set(["plugins.entries.readerlab.config.webFetch.apiKey"]),
     );
+  });
+
+  it("keeps legacy Firecrawl web fetch targets available for selected fetch commands", () => {
+    const selected = getWebFetchCommandSecretTargets({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              provider: "firecrawl",
+              firecrawl: { apiKey: { source: "env", id: "FIRECRAWL_API_KEY" } },
+            },
+          },
+        },
+      } as never,
+      provider: "firecrawl",
+    });
+
+    expect(selected.targetIds.has("tools.web.fetch.firecrawl.apiKey")).toBe(true);
+    expect(selected.allowedPaths).toEqual(new Set(["tools.web.fetch.firecrawl.apiKey"]));
   });
 
   it("includes channel targets for agent runtime when delivery needs them", () => {
