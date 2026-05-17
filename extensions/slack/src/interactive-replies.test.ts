@@ -83,6 +83,47 @@ describe("compileSlackInteractiveReplies", () => {
     });
   });
 
+  it("ignores directives inside single-backtick code spans", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "Use the syntax `[[slack_buttons: Yes:yes, No:no]]` to add buttons.",
+    });
+
+    expect(result.text).toBe("Use the syntax `[[slack_buttons: Yes:yes, No:no]]` to add buttons.");
+    expect(result.interactive).toBeUndefined();
+  });
+
+  it("ignores directives inside triple-backtick code fences", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "Example:\n```\n[[slack_buttons: Yes:yes, No:no]]\n```\nDone.",
+    });
+
+    expect(result.text).toBe("Example:\n```\n[[slack_buttons: Yes:yes, No:no]]\n```\nDone.");
+    expect(result.interactive).toBeUndefined();
+  });
+
+  it("renders only the bare directive when one is quoted in a code span and one is live", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "Docs: `[[slack_buttons: A:a, B:b]]` and live:\n[[slack_buttons: Ok:ok, Skip:skip]]",
+    });
+
+    expect(result.text).toBe("Docs: `[[slack_buttons: A:a, B:b]]` and live:");
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "text",
+          text: "Docs: `[[slack_buttons: A:a, B:b]]` and live:",
+        },
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Ok", value: "ok" },
+            { label: "Skip", value: "skip" },
+          ],
+        },
+      ],
+    });
+  });
+
   it("leaves complex Options lines as plain text", () => {
     const result = compileSlackInteractiveReplies({
       text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",

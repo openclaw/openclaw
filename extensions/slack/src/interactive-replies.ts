@@ -126,6 +126,61 @@ function hasSlackBlocks(payload: ReplyPayload): boolean {
   return Array.isArray(blocks) && blocks.length > 0;
 }
 
+/**
+ * Returns the [start, end) byte ranges in `text` that fall inside Slack code
+ * spans (single backticks) or code fences (triple backticks). The renderer
+ * uses this to skip directive matches that appear inside quoted code, so
+ * documenting the literal syntax in chat does not produce broken blocks.
+ *
+ * Notes:
+ * - Single-backtick spans must close on the same line (Slack rule).
+ * - Triple-backtick fences are matched non-greedily across lines; if a fence
+ *   never closes, the rest of the message is treated as code.
+ */
+function buildCodeRegionMask(text: string): Array<[number, number]> {
+  const regions: Array<[number, number]> = [];
+  const len = text.length;
+  let i = 0;
+  while (i < len) {
+    if (text[i] === "`") {
+      if (text.startsWith("```", i)) {
+        const end = text.indexOf("```", i + 3);
+        if (end === -1) {
+          regions.push([i, len]);
+          break;
+        }
+        regions.push([i, end + 3]);
+        i = end + 3;
+        continue;
+      }
+      const end = text.indexOf("`", i + 1);
+      if (end === -1) {
+        i += 1;
+        continue;
+      }
+      if (text.slice(i + 1, end).includes("\n")) {
+        // Slack single-backtick spans don't span newlines; ignore this opener.
+        i += 1;
+        continue;
+      }
+      regions.push([i, end + 1]);
+      i = end + 1;
+      continue;
+    }
+    i += 1;
+  }
+  return regions;
+}
+
+function isIndexInsideRegions(index: number, regions: Array<[number, number]>): boolean {
+  for (const [start, end] of regions) {
+    if (index >= start && index < end) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function parseSimpleSlackOptions(raw: string): SlackChoice[] | null {
   const entries = raw
     .split(",")
@@ -185,6 +240,7 @@ export function compileSlackInteractiveReplies(payload: ReplyPayload): ReplyPayl
     return payload;
   }
 
+  const codeRegions = buildCodeRegionMask(text);
   const generatedBlocks: NonNullable<ReplyPayload["interactive"]>["blocks"] = [];
   const visibleTextParts: string[] = [];
   let cursor = 0;
@@ -193,11 +249,16 @@ export function compileSlackInteractiveReplies(payload: ReplyPayload): ReplyPayl
   SLACK_DIRECTIVE_RE.lastIndex = 0;
 
   for (const match of text.matchAll(SLACK_DIRECTIVE_RE)) {
-    matchedDirective = true;
     const matchText = match[0];
     const directiveType = match[1];
     const body = match[2];
     const index = match.index ?? 0;
+    if (isIndexInsideRegions(index, codeRegions)) {
+      // Directive is inside a backtick code span or triple-backtick fence:
+      // treat it as literal text so users can document the syntax in chat.
+      continue;
+    }
+    matchedDirective = true;
     const precedingText = text.slice(cursor, index);
     visibleTextParts.push(precedingText);
     const section = buildTextBlock(precedingText);
