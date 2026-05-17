@@ -139,9 +139,18 @@ jobs:
             }
 
             const normalized = body.toLowerCase();
+            const requestedDesktopProof =
+              normalized.includes("desktop proof") ||
+              normalized.includes("desktop-proof") ||
+              normalized.includes("telegram desktop") ||
+              normalized.includes("native telegram") ||
+              normalized.includes("visible proof") ||
+              normalized.includes("visible-proof") ||
+              normalized.includes("telegram-visible-proof");
             const requested =
               (normalized.includes("@openclaw-mantis") || normalized.includes("/openclaw-mantis")) &&
-              normalized.includes("telegram");
+              normalized.includes("telegram") &&
+              !requestedDesktopProof;
             if (!requested) {
               core.notice("Comment mentioned Mantis but did not request Telegram live QA.");
               setOutput("should_run", "false");
