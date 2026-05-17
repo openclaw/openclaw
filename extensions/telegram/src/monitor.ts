@@ -108,7 +108,17 @@ async function loadTelegramMonitorWebhookRuntime() {
 }
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
-  const log = opts.runtime?.error ?? console.error;
+  // `[telegram][diag] ...` lines are normal lifecycle diagnostics (polling
+  // cycle start, transport rebuild, lease wait, etc.) — they were previously
+  // routed through `runtime.error`, so normal startup looked like a gateway
+  // error in the console. Route the diagnostic prefix through the info
+  // channel (matching twitch / polling-session / zalo conventions), keep the
+  // raw `runtime.error` path for genuine failures.
+  // Fixes #82957.
+  const logInfo = opts.runtime?.log ?? console.log;
+  const logError = opts.runtime?.error ?? console.error;
+  const log = (line: string) =>
+    (line.includes("[telegram][diag]") ? logInfo : logError)(line);
   let pollingSession: TelegramPollingSessionInstance | undefined;
 
   const handlePollingNetworkFailure = (err: unknown, label: string) => {
