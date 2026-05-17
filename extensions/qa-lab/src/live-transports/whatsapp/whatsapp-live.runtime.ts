@@ -144,7 +144,7 @@ const WHATSAPP_QA_CAPTURE_CONTENT_ENV = "OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT";
 const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 const WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS = 5;
 const WHATSAPP_QA_READY_TIMEOUT_MS = 150_000;
-const WHATSAPP_QA_READY_STABILITY_MS = 8_000;
+const WHATSAPP_QA_READY_STABILITY_MS = 20_000;
 const WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS = 10_000;
 const WHATSAPP_QA_ENV_KEYS = [
   "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164",
@@ -418,7 +418,7 @@ async function waitForWhatsAppChannelRunning(
           }
         : undefined;
       if (match?.running && match.connected === true && match.restartPending !== true) {
-        return;
+        return lastStatus;
       }
     } catch {
       // retry
@@ -435,9 +435,24 @@ async function waitForWhatsAppChannelStable(
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
   accountId: string,
 ) {
-  await waitForWhatsAppChannelRunning(gateway, accountId);
-  await new Promise((resolve) => setTimeout(resolve, WHATSAPP_QA_READY_STABILITY_MS));
-  await waitForWhatsAppChannelRunning(gateway, accountId);
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < WHATSAPP_QA_READY_TIMEOUT_MS) {
+    const status = await waitForWhatsAppChannelRunning(gateway, accountId);
+    const connectedAt =
+      typeof status.lastConnectedAt === "number" && status.lastConnectedAt > 0
+        ? status.lastConnectedAt
+        : Date.now();
+    const connectedForMs = Date.now() - connectedAt;
+    if (connectedForMs >= WHATSAPP_QA_READY_STABILITY_MS) {
+      return;
+    }
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.max(750, WHATSAPP_QA_READY_STABILITY_MS - connectedForMs)),
+    );
+  }
+  throw new Error(
+    `whatsapp account "${accountId}" did not remain ready for ${WHATSAPP_QA_READY_STABILITY_MS}ms`,
+  );
 }
 
 async function listTarEntries(archivePath: string): Promise<string[]> {
