@@ -7,6 +7,7 @@ import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
+import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -682,9 +683,32 @@ export function wrapToolWorkspaceRootGuardWithOptions(
       const record = getToolParamsRecord(args);
       let normalizedRecord: Record<string, unknown> | undefined;
       for (const key of pathParamKeys) {
-        const filePath = record?.[key];
+        let filePath = record?.[key];
         if (typeof filePath !== "string" || !filePath.trim()) {
           continue;
+        }
+        // #83065: Signal/Telegram/etc. inbound media surfaces as `media://`
+        // prompt notes (see `src/media/media-reference.ts`). Without this
+        // resolver hop the structured `read` path would feed `media://inbound/...`
+        // straight to the cwd-relative sandbox guard and fail with ENOENT or
+        // "Path escapes sandbox root", even though the underlying file is in
+        // OpenClaw's managed media store. Use the existing helper that
+        // `gateway/control-ui.ts` already calls so the read tool, control UI,
+        // and `auto-reply/media-note` all resolve the same handle the same way.
+        if (filePath.startsWith("media://")) {
+          try {
+            const resolvedLocal = await resolveMediaReferenceLocalPath(filePath);
+            if (typeof resolvedLocal === "string" && resolvedLocal.trim().length > 0) {
+              filePath = resolvedLocal;
+              normalizedRecord ??= { ...record };
+              normalizedRecord[key] = resolvedLocal;
+            }
+          } catch {
+            // Fall through to the existing sandbox guard; it will surface the
+            // original error with the canonical message instead of an opaque
+            // resolver crash. Intentionally not logged at warn here: the
+            // caller already gets the structured error from the guard.
+          }
         }
         let guardedRoot = root;
         const workspaceMapping = mapContainerPathToRoot({
