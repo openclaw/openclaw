@@ -418,53 +418,12 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
 
 vi.doMock("./bot.runtime.js", () => telegramBotRuntimeForTest);
 
-type TelegramReactionForTest = {
-  type?: unknown;
-  emoji?: unknown;
-  custom_emoji_id?: unknown;
-};
-
-function collectAddedReactionValues(
-  oldReactions: TelegramReactionForTest[],
-  newReactions: TelegramReactionForTest[],
-  type: "emoji" | "custom_emoji",
-) {
-  const valueKey = type === "emoji" ? "emoji" : "custom_emoji_id";
-  const oldValues = new Set(
-    oldReactions
-      .filter((reaction) => reaction.type === type)
-      .map((reaction) => reaction[valueKey])
-      .filter((value): value is string => typeof value === "string"),
-  );
-  return newReactions
-    .filter((reaction) => reaction.type === type)
-    .map((reaction) => reaction[valueKey])
-    .filter((value): value is string => typeof value === "string" && !oldValues.has(value));
-}
-
-function buildReactionChangesForTest(ctx: Record<string, unknown>) {
-  const messageReaction = ctx.messageReaction as
-    | { old_reaction?: TelegramReactionForTest[]; new_reaction?: TelegramReactionForTest[] }
-    | undefined;
-  const oldReactions = messageReaction?.old_reaction ?? [];
-  const newReactions = messageReaction?.new_reaction ?? [];
-  return {
-    emojiAdded: collectAddedReactionValues(oldReactions, newReactions, "emoji"),
-    customEmojiAdded: collectAddedReactionValues(oldReactions, newReactions, "custom_emoji"),
-  };
-}
-
 export const getOnHandler = (event: string) => {
   const handler = onSpy.mock.calls.find((call) => call[0] === event)?.[1];
   if (!handler) {
     throw new Error(`Missing handler for event: ${event}`);
   }
-  return ((ctx: Record<string, unknown>) => {
-    if (event === "message_reaction" && typeof ctx.reactions !== "function") {
-      return handler({ ...ctx, reactions: () => buildReactionChangesForTest(ctx) });
-    }
-    return handler(ctx);
-  }) as (ctx: Record<string, unknown>) => Promise<void>;
+  return handler as (ctx: Record<string, unknown>) => Promise<void>;
 };
 
 const DEFAULT_TELEGRAM_TEST_CONFIG: OpenClawConfig = {

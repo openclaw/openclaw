@@ -1448,14 +1448,22 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      const reactionChanges = ctx.reactions();
-      const addedReactions = [
-        ...reactionChanges.emojiAdded.map((emoji) => ({ key: `emoji:${emoji}`, label: emoji })),
-        ...reactionChanges.customEmojiAdded.map((customEmojiId) => ({
-          key: `custom_emoji:${customEmojiId}`,
-          label: `custom_emoji:${customEmojiId}`,
-        })),
-      ];
+      type ReactionEntry = { key: string; label: string };
+      const toReactionEntry = (item: (typeof reaction.new_reaction)[number]) =>
+        item.type === "emoji"
+          ? { key: `emoji:${item.emoji}`, label: item.emoji }
+          : item.type === "custom_emoji"
+            ? {
+                key: `custom_emoji:${item.custom_emoji_id}`,
+                label: `custom_emoji:${item.custom_emoji_id}`,
+              }
+            : undefined;
+      const oldReactionKeys = new Set(
+        reaction.old_reaction.map(toReactionEntry).map((r) => r?.key),
+      );
+      const addedReactions = reaction.new_reaction
+        .map(toReactionEntry)
+        .filter((r): r is ReactionEntry => Boolean(r) && !oldReactionKeys.has(r.key));
 
       if (addedReactions.length === 0) {
         return;
