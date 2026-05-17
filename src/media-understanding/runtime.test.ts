@@ -467,6 +467,7 @@ describe("media-understanding runtime", () => {
       buffer: Buffer.from("remote-png"),
       fileName: "png",
       mime: "image/png",
+      size: 10,
     });
 
     await expect(
