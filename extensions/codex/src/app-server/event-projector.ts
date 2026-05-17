@@ -644,6 +644,7 @@ export class CodexAppServerEventProjector {
         this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
       }
       this.recordToolMeta(item);
+      this.emitSnapshotOnlyNativeToolProgress(item);
       this.recordNativeToolTranscriptCall(item);
       this.recordNativeToolTranscriptResult(item);
       this.emitAfterToolCallObservation(item);
@@ -652,6 +653,31 @@ export class CodexAppServerEventProjector {
     }
     this.activeCompactionItemIds.clear();
     await this.maybeEndReasoning();
+  }
+
+  private emitSnapshotOnlyNativeToolProgress(item: CodexThreadItem): void {
+    if (
+      !shouldSynthesizeToolProgressForItem(item) ||
+      !this.isCurrentTurnSnapshotItem(item) ||
+      this.completedItemIds.has(item.id) ||
+      itemStatus(item) === "running"
+    ) {
+      return;
+    }
+    const wasStarted = this.activeItemIds.has(item.id);
+    if (!wasStarted) {
+      this.emitStandardItemEvent({ phase: "start", item });
+      this.emitNormalizedToolItemEvent({ phase: "start", item });
+    }
+    this.activeItemIds.delete(item.id);
+    this.emitStandardItemEvent({ phase: "end", item });
+    this.emitNormalizedToolItemEvent({ phase: "result", item });
+    this.completedItemIds.add(item.id);
+  }
+
+  private isCurrentTurnSnapshotItem(item: CodexThreadItem): boolean {
+    const itemTurnId = readItemString(item, "turnId") ?? readItemString(item, "turn_id");
+    return itemTurnId === undefined || itemTurnId === this.turnId;
   }
 
   private handleOutputDelta(params: JsonObject, toolName: string): void {

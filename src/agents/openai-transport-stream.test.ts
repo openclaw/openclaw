@@ -3536,6 +3536,49 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("reasoning_effort");
   });
 
+  it("maps together thinking format to reasoning enabled", () => {
+    const baseModel = {
+      id: "moonshotai/Kimi-K2.5",
+      name: "Kimi K2.5",
+      api: "openai-completions",
+      provider: "together",
+      baseUrl: "https://api.together.xyz/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 32768,
+      compat: {
+        thinkingFormat: "together",
+        supportsReasoningEffort: true,
+      },
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const enabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "medium",
+    } as never) as {
+      max_completion_tokens?: unknown;
+      max_tokens?: unknown;
+      reasoning?: unknown;
+      reasoning_effort?: unknown;
+    };
+    const disabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "off",
+    } as never) as { reasoning?: unknown; reasoning_effort?: unknown };
+
+    expect(enabled.max_tokens).toBe(32768);
+    expect(enabled).not.toHaveProperty("max_completion_tokens");
+    expect(enabled.reasoning).toEqual({ enabled: true });
+    expect(enabled.reasoning_effort).toBe("medium");
+    expect(disabled.reasoning).toEqual({ enabled: false });
+    expect(disabled).not.toHaveProperty("reasoning_effort");
+  });
+
   it("omits unsupported disabled reasoning for completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {

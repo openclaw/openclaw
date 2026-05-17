@@ -276,6 +276,10 @@ import {
   shouldCreateBundleLspRuntimeForAttempt,
   shouldCreateBundleMcpRuntimeForAttempt,
 } from "./attempt-tool-construction-plan.js";
+import {
+  resolveAttemptTrajectoryTerminal,
+  resolveTerminalAssistantTexts,
+} from "./attempt-trajectory-status.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   rotateTranscriptAfterCompaction,
@@ -352,12 +356,17 @@ import {
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
+import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {
   installHistoryImagePruneContextTransform,
   pruneProcessedHistoryImages,
 } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
-import { buildAttemptReplayMetadata } from "./incomplete-turn.js";
+import {
+  buildAttemptReplayMetadata,
+  resolveSilentToolResultReplyPayload,
+  shouldTreatEmptyAssistantReplyAsSilent,
+} from "./incomplete-turn.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
 import {
@@ -756,6 +765,15 @@ function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionM
 
 export function shouldRunLlmOutputHooksForAttempt(params: { promptErrorSource: string | null }) {
   return params.promptErrorSource !== "hook:before_agent_run";
+}
+
+function hasVisiblePendingToolMediaReply(
+  reply: { mediaUrls?: string[]; audioAsVoice?: boolean } | null | undefined,
+): boolean {
+  return Boolean(
+    reply &&
+    ((reply.mediaUrls ?? []).some((url) => url.trim().length > 0) || reply.audioAsVoice === true),
+  );
 }
 
 function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boolean {
@@ -2921,6 +2939,7 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentTargets,
         getHeartbeatToolResponse,
         getPendingToolMediaReply,
+        getVisibleBlockReplyCount,
         getSuccessfulCronAdds,
         getReplayState,
         didSendViaMessagingTool,
@@ -4258,6 +4277,91 @@ export async function runEmbeddedAttempt(
       const replayMetadata = replayMetadataFromState(
         observeReplayMetadata(getReplayState(), observedReplayMetadata),
       );
+      const completedClientToolCalls = clientToolCallSlots.flatMap((slot) =>
+        slot.completed && slot.params
+          ? [
+              {
+                name: slot.name,
+                params: slot.params,
+              },
+            ]
+          : [],
+      );
+      const completedClientToolCallsForAttempt =
+        completedClientToolCalls.length > 0 ? completedClientToolCalls : undefined;
+      const didSendDeterministicApprovalPromptNow = didSendDeterministicApprovalPrompt();
+      const lastToolError = getLastToolError?.();
+      const heartbeatToolResponse = getHeartbeatToolResponse();
+      const pendingToolMediaPayloadCount = hasVisiblePendingToolMediaReply(pendingToolMediaReply)
+        ? 1
+        : 0;
+      const visibleBlockReplyCount = getVisibleBlockReplyCount();
+      const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
+        isCronTrigger: params.trigger === "cron",
+        payloadCount: pendingToolMediaPayloadCount,
+        aborted,
+        timedOut,
+        attempt: {
+          clientToolCalls: completedClientToolCallsForAttempt,
+          yieldDetected,
+          didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
+          lastToolError,
+          messagesSnapshot,
+          toolMetas: toolMetasNormalized,
+        },
+      });
+      const synthesizedPayloadCount =
+        visibleBlockReplyCount +
+        pendingToolMediaPayloadCount +
+        (silentToolResultReplyPayload ? 1 : 0);
+      const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
+        payloadCount: 0,
+        aborted,
+        timedOut,
+        attempt: {
+          assistantTexts,
+          clientToolCalls: completedClientToolCallsForAttempt,
+          currentAttemptAssistant,
+          yieldDetected,
+          didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
+          didSendViaMessagingTool: didSendViaMessagingTool(),
+          messagingToolSentTexts: getMessagingToolSentTexts(),
+          messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+          messagingToolSentTargets: getMessagingToolSentTargets(),
+          lastToolError,
+          lastAssistant,
+          replayMetadata,
+          promptErrorSource,
+          timedOutDuringCompaction,
+        },
+      });
+      const terminalAssistantTexts = resolveTerminalAssistantTexts({
+        assistantTexts,
+        lastAssistantStopReason: lastAssistant?.stopReason,
+        lastAssistantVisibleText: resolveFinalAssistantVisibleText(lastAssistant),
+      });
+      const attemptTrajectoryTerminal = resolveAttemptTrajectoryTerminal({
+        promptError,
+        aborted,
+        timedOut,
+        assistantTexts: terminalAssistantTexts,
+        toolMetas: toolMetasNormalized,
+        didSendViaMessagingTool: didSendViaMessagingTool(),
+        didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
+        messagingToolSentTexts: getMessagingToolSentTexts(),
+        messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+        messagingToolSentTargets: getMessagingToolSentTargets(),
+        successfulCronAdds: getSuccessfulCronAdds(),
+        synthesizedPayloadCount,
+        heartbeatToolResponse,
+        clientToolCalls: completedClientToolCalls,
+        yieldDetected,
+        lastToolError,
+        silentExpected: params.silentExpected,
+        emptyAssistantReplyIsSilent,
+        lastAssistantStopReason: lastAssistant?.stopReason,
+      });
       trajectoryRecorder?.recordEvent("model.completed", {
         aborted,
         externalAbort,
@@ -4267,6 +4371,7 @@ export async function runEmbeddedAttempt(
         timedOutDuringToolExecution,
         promptError: promptError ? formatErrorMessage(promptError) : undefined,
         promptErrorSource,
+        terminalError: attemptTrajectoryTerminal.terminalError,
         usage: attemptUsage,
         promptCache,
         compactionCount: getCompactionCount(),
@@ -4277,7 +4382,7 @@ export async function runEmbeddedAttempt(
       trajectoryRecorder?.recordEvent(
         "trace.artifacts",
         buildTrajectoryArtifacts({
-          status: promptError ? "error" : aborted || timedOut ? "interrupted" : "success",
+          status: attemptTrajectoryTerminal.status,
           aborted,
           externalAbort,
           timedOut,
@@ -4286,6 +4391,7 @@ export async function runEmbeddedAttempt(
           timedOutDuringToolExecution,
           promptError: promptError ? formatErrorMessage(promptError) : undefined,
           promptErrorSource,
+          terminalError: attemptTrajectoryTerminal.terminalError,
           usage: attemptUsage,
           promptCache,
           compactionCount: getCompactionCount(),
@@ -4298,11 +4404,11 @@ export async function runEmbeddedAttempt(
           messagingToolSentTexts: getMessagingToolSentTexts(),
           messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
           messagingToolSentTargets: getMessagingToolSentTargets(),
-          lastToolError: getLastToolError?.(),
+          lastToolError,
         }),
       );
       trajectoryRecorder?.recordEvent("session.ended", {
-        status: promptError ? "error" : aborted || timedOut ? "interrupted" : "success",
+        status: attemptTrajectoryTerminal.status,
         aborted,
         externalAbort,
         timedOut,
@@ -4310,19 +4416,9 @@ export async function runEmbeddedAttempt(
         timedOutDuringCompaction,
         timedOutDuringToolExecution,
         promptError: promptError ? formatErrorMessage(promptError) : undefined,
+        terminalError: attemptTrajectoryTerminal.terminalError,
       });
       trajectoryEndRecorded = true;
-
-      const completedClientToolCalls = clientToolCallSlots.flatMap((slot) =>
-        slot.completed && slot.params
-          ? [
-              {
-                name: slot.name,
-                params: slot.params,
-              },
-            ]
-          : [],
-      );
 
       return {
         replayMetadata,
@@ -4349,13 +4445,13 @@ export async function runEmbeddedAttempt(
         toolMetas: toolMetasNormalized,
         lastAssistant,
         currentAttemptAssistant,
-        lastToolError: getLastToolError?.(),
+        lastToolError,
         didSendViaMessagingTool: didSendViaMessagingTool(),
-        didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPrompt(),
+        didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
         messagingToolSentTexts: getMessagingToolSentTexts(),
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
         messagingToolSentTargets: getMessagingToolSentTargets(),
-        heartbeatToolResponse: getHeartbeatToolResponse(),
+        heartbeatToolResponse,
         toolMediaUrls: pendingToolMediaReply?.mediaUrls,
         toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
         toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
