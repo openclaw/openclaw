@@ -607,6 +607,48 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(call?.sessionKey).toBe(dispatchCall?.ctx?.CommandTargetSessionKey);
   });
 
+  it("does not mark shared-main Telegram DMs as target-timeline sharing", async () => {
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+    await handler(createTelegramPrivateCommandContext());
+
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [
+          {
+            ctx?: {
+              CommandTargetSessionKey?: string;
+              CommandTargetSharesMessageTimeline?: boolean;
+            };
+          },
+        ]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:main:main");
+    expect(dispatchCall?.ctx?.CommandTargetSharesMessageTimeline).toBeUndefined();
+  });
+
+  it("marks isolated Telegram DM peer targets as target-timeline sharing", async () => {
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: { session: { dmScope: "per-channel-peer" } },
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [
+          {
+            ctx?: {
+              CommandTargetSessionKey?: string;
+              CommandTargetSharesMessageTimeline?: boolean;
+            };
+          },
+        ]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:main:telegram:direct:200");
+    expect(dispatchCall?.ctx?.CommandTargetSharesMessageTimeline).toBe(true);
+  });
+
   it("uses the target session model when building native argument menus", async () => {
     const cfg = {
       agents: {
@@ -1157,10 +1199,18 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     });
     const dispatchCall = (
       replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
-        [{ ctx?: { CommandTargetSessionKey?: string } }]
+        [
+          {
+            ctx?: {
+              CommandTargetSessionKey?: string;
+              CommandTargetSharesMessageTimeline?: boolean;
+            };
+          },
+        ]
       >
     )[0]?.[0];
     expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:codex-acp:session-1");
+    expect(dispatchCall?.ctx?.CommandTargetSharesMessageTimeline).toBeUndefined();
     const sessionMetaCall = (
       sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
         [{ sessionKey?: string }]

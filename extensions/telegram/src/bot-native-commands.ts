@@ -31,7 +31,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { parseAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -117,6 +117,26 @@ type TelegramResolvedGroupConfig = {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
 };
+
+function telegramCommandTargetSharesMessageTimeline(params: {
+  commandTargetSessionKey: string;
+  mainSessionKey: string;
+}): boolean {
+  const targetSessionKey = normalizeLowercaseStringOrEmpty(params.commandTargetSessionKey);
+  if (
+    !targetSessionKey ||
+    targetSessionKey === normalizeLowercaseStringOrEmpty(params.mainSessionKey)
+  ) {
+    return false;
+  }
+  const parsed = parseAgentSessionKey(targetSessionKey);
+  const rest = parsed?.rest ?? "";
+  return (
+    rest.startsWith("telegram:group:") ||
+    rest.startsWith("telegram:direct:") ||
+    /^telegram:[^:]+:direct:/.test(rest)
+  );
+}
 
 type TelegramCommandAuthResult = {
   chatId: number;
@@ -1124,6 +1144,10 @@ export const registerTelegramNativeCommands = ({
             userId: String(senderId || chatId),
             targetSessionKey: sessionKey,
           });
+        const commandTargetSharesMessageTimeline = telegramCommandTargetSharesMessageTimeline({
+          commandTargetSessionKey,
+          mainSessionKey: route.mainSessionKey,
+        });
         const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
           cfg: executionCfg,
           chatId,
@@ -1174,7 +1198,9 @@ export const registerTelegramNativeCommands = ({
           SessionKey: commandSessionKey,
           AccountId: route.accountId,
           CommandTargetSessionKey: commandTargetSessionKey,
-          CommandTargetSharesMessageTimeline: true,
+          ...(commandTargetSharesMessageTimeline
+            ? { CommandTargetSharesMessageTimeline: true }
+            : {}),
           MessageThreadId: threadSpec.id,
           IsForum: isForum,
           // Originating context for sub-agent announce routing
