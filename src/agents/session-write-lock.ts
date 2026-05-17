@@ -65,6 +65,13 @@ type LockInspectionDetails = Pick<
 
 const SESSION_LOCKS = createFileLockManager("openclaw.session-write-lock");
 let resolveProcessStartTimeForLock = getProcessStartTime;
+let beforeStaleLockRemovalForTest:
+  | ((params: {
+      lockPath: string;
+      normalizedSessionFile: string;
+      payload: LockFilePayload | null;
+    }) => void | Promise<void>)
+  | null = null;
 
 function isFileLockError(error: unknown, code: string): boolean {
   return (error as { code?: unknown } | null)?.code === code;
@@ -552,27 +559,36 @@ function sessionLockHeldByThisProcess(normalizedSessionFile: string): boolean {
   );
 }
 
-async function removeReportedStaleLockIfStillStale(params: {
+async function shouldRemoveReportedStaleLock(params: {
   lockPath: string;
   normalizedSessionFile: string;
+  payload: LockFilePayload | null;
   staleMs: number;
   readOwnerProcessArgs?: SessionLockOwnerProcessArgsReader;
 }): Promise<boolean> {
   const nowMs = Date.now();
-  const payload = await readLockPayload(params.lockPath);
   const inspected = inspectLockPayloadForSession({
-    payload,
+    payload: params.payload,
     staleMs: params.staleMs,
     nowMs,
     heldByThisProcess: sessionLockHeldByThisProcess(params.normalizedSessionFile),
     reclaimLockWithoutStarttime: true,
     readOwnerProcessArgs: params.readOwnerProcessArgs ?? readProcessArgsSync,
   });
-  if (!(await shouldReclaimContendedLockFile(params.lockPath, inspected, params.staleMs, nowMs))) {
-    return false;
+  const shouldRemove = await shouldReclaimContendedLockFile(
+    params.lockPath,
+    inspected,
+    params.staleMs,
+    nowMs,
+  );
+  if (shouldRemove) {
+    await beforeStaleLockRemovalForTest?.({
+      lockPath: params.lockPath,
+      normalizedSessionFile: params.normalizedSessionFile,
+      payload: params.payload,
+    });
   }
-  await fs.rm(params.lockPath, { force: true });
-  return true;
+  return shouldRemove;
 }
 
 function shouldTreatAsOrphanSelfLock(params: {
@@ -763,21 +779,17 @@ export async function acquireSessionWriteLock(params: {
           });
           return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
         },
+        staleRecovery: "remove-if-unchanged",
+        shouldRemoveStaleLock: async ({ lockPath, normalizedTargetPath, payload }) =>
+          await shouldRemoveReportedStaleLock({
+            lockPath,
+            normalizedSessionFile: normalizedTargetPath,
+            payload: payload as LockFilePayload | null,
+            staleMs,
+          }),
       });
       return { release: lock.release };
     } catch (err) {
-      if (isFileLockError(err, "file_lock_stale")) {
-        const staleLockPath = (err as { lockPath?: string }).lockPath ?? lockPath;
-        if (
-          await removeReportedStaleLockIfStillStale({
-            lockPath: staleLockPath,
-            normalizedSessionFile,
-            staleMs,
-          })
-        ) {
-          continue;
-        }
-      }
       if (!isFileLockError(err, "file_lock_timeout")) {
         throw err;
       }
@@ -797,6 +809,17 @@ export const __testing = {
   setProcessStartTimeResolverForTest(resolver: ((pid: number) => number | null) | null): void {
     resolveProcessStartTimeForLock = resolver ?? getProcessStartTime;
   },
+  setBeforeStaleLockRemovalForTest(
+    hook:
+      | ((params: {
+          lockPath: string;
+          normalizedSessionFile: string;
+          payload: LockFilePayload | null;
+        }) => void | Promise<void>)
+      | null,
+  ): void {
+    beforeStaleLockRemovalForTest = hook;
+  },
 };
 
 export async function drainSessionWriteLockStateForTest(): Promise<void> {
@@ -810,4 +833,5 @@ export function resetSessionWriteLockStateForTest(): void {
   stopWatchdogTimer();
   unregisterCleanupHandlers();
   resolveProcessStartTimeForLock = getProcessStartTime;
+  beforeStaleLockRemovalForTest = null;
 }

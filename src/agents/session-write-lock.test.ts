@@ -264,6 +264,28 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("does not remove a changed lock file during stale acquisition recovery", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({ pid: 2 ** 30, createdAt: new Date(Date.now() - 60_000).toISOString() }),
+        "utf8",
+      );
+
+      let hookCalls = 0;
+      __testing.setBeforeStaleLockRemovalForTest(async ({ lockPath: staleLockPath }) => {
+        hookCalls += 1;
+        await fs.writeFile(staleLockPath, "{}", "utf8");
+      });
+
+      await expect(
+        acquireSessionWriteLock({ sessionFile, timeoutMs: 75, staleMs: 10_000 }),
+      ).rejects.toThrow(/session file locked/);
+      expect(hookCalls).toBe(1);
+      await expect(fs.readFile(lockPath, "utf8")).resolves.toBe("{}");
+    });
+  });
+
   it("does not reclaim fresh malformed lock files during contention", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     try {
