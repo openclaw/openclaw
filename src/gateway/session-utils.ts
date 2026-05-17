@@ -1801,7 +1801,7 @@ export function buildGatewaySessionRow(params: {
     resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
     resolvePositiveNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
-    typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
+    typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0 && entry?.totalTokensFresh !== false
       ? true
       : transcriptUsage?.totalTokensFresh === true;
   const childSessions = params.storeChildSessionsByKey

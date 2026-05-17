@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 - QA-Lab: add the personal-agent approval-denial scenario so the benchmark pack verifies denied local reads stop cleanly without tool progress or fixture leaks. (#83150) Thanks @iFiras-Max1.
 
 ### Fixes
+- Agents/sessions: return preserved totalTokens from resolveFreshSessionTotalTokens even when stale, so /context and Control UI context meter show correct utilization without affecting compaction or memory flush. Fixes #82900. (#82919) Thanks @njuboy11.
 
 - Feishu: return bound subagent delivery origins from session thread setup so Feishu subagent completions route back to the same DM or topic. (#83190) Thanks @100menotu001.
 - CLI/update: tailor post-update Gateway recovery hints by platform, showing systemd, LaunchAgent, Scheduled Task, or generic service-manager guidance instead of macOS-only recovery text. (#83096) Thanks @rubencu.
