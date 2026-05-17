@@ -59,8 +59,7 @@ function buildFileContext(params: {
     params.mediaUrl ??
     (isRemoteMediaReference(params.filePath) ? params.filePath.trim() : undefined);
   const mediaType =
-    params.mime ??
-    (remoteRef && params.capability ? `${params.capability}/*` : undefined);
+    params.mime ?? (remoteRef && params.capability ? `${params.capability}/*` : undefined);
   if (remoteRef) {
     return {
       MediaUrl: remoteRef,
@@ -75,6 +74,14 @@ function buildFileContext(params: {
 
 function isRemoteMediaReference(value: string): boolean {
   return /^https?:\/\//i.test(value.trim());
+}
+
+function concreteMime(mime: string | undefined): string | undefined {
+  const normalized = mime?.trim();
+  if (!normalized || normalized.endsWith("/*")) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function resolveFileLocalRoots(filePath: string): string[] | undefined {
@@ -257,7 +264,7 @@ async function readImageDescriptionInput(params: {
     return {
       buffer: media.buffer,
       fileName: media.fileName || basenameFromMediaReference(remoteRef),
-      mime: params.mime ?? media.mime,
+      mime: concreteMime(params.mime) ?? media.mime,
     };
   } finally {
     await cache.cleanup();

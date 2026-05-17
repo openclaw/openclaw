@@ -439,6 +439,7 @@ describe("media-understanding runtime", () => {
     await describeImageFileWithModel({
       filePath: "https://example.com/photo.png",
       mediaUrl: "https://example.com/photo.png",
+      mime: "image/*",
       provider: "zai",
       model: "glm-4.6v",
       prompt: "Describe it",
