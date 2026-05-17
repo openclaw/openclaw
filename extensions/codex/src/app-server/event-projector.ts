@@ -543,7 +543,8 @@ export class CodexAppServerEventProjector {
     }
     this.recordToolMeta(item);
     this.emitToolItemStartIfMissing(item);
-    this.emitToolItemResult(item);
+    this.emitStandardItemEvent({ phase: "end", item });
+    this.emitNormalizedToolItemEvent({ phase: "result", item });
     this.recordNativeToolTranscriptCall(item);
     this.recordNativeToolTranscriptResult(item);
     this.emitToolResultSummary(item);
@@ -650,8 +651,10 @@ export class CodexAppServerEventProjector {
         this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
       }
       this.recordToolMeta(item);
-      this.emitToolItemStartIfMissing(item);
-      this.emitToolItemResult(item);
+      if (isTerminalToolProgressItem(item)) {
+        this.emitToolItemStartIfMissing(item);
+        this.emitToolItemResult(item);
+      }
       this.recordNativeToolTranscriptCall(item);
       this.recordNativeToolTranscriptResult(item);
       this.emitAfterToolCallObservation(item);
@@ -1604,6 +1607,10 @@ function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): boolean {
     default:
       return false;
   }
+}
+
+function isTerminalToolProgressItem(item: CodexThreadItem): boolean {
+  return itemStatus(item) !== "running";
 }
 
 function isNativePostToolUseRelayItem(item: CodexThreadItem): boolean {

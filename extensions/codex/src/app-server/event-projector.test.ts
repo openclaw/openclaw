@@ -1457,6 +1457,63 @@ describe("CodexAppServerEventProjector", () => {
     ).toHaveLength(1);
   });
 
+  it("does not backfill terminal progress for running snapshot tool items", async () => {
+    const onAgentEvent = vi.fn();
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(
+      { ...(await createParams()), onAgentEvent },
+      { trajectoryRecorder },
+    );
+
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "interrupted",
+          error: null,
+          items: [
+            {
+              type: "commandExecution",
+              id: "cmd-running",
+              command: "sleep 30",
+              cwd: "/workspace",
+              processId: null,
+              source: "agent",
+              status: "inProgress",
+              commandActions: [],
+              aggregatedOutput: null,
+              exitCode: null,
+              durationMs: null,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(
+      findAgentEvents(onAgentEvent, {
+        stream: "item",
+        itemId: "cmd-running",
+      }),
+    ).toHaveLength(0);
+    expect(
+      findAgentEvents(onAgentEvent, {
+        stream: "tool",
+        itemId: "cmd-running",
+        name: "bash",
+      }),
+    ).toHaveLength(0);
+    expect(
+      trajectoryRecorder.recordEvent.mock.calls.filter(
+        ([type]) => type === "tool.call" || type === "tool.result",
+      ),
+    ).toHaveLength(0);
+  });
+
   it("orders declined native tool diagnostics after their start event", async () => {
     const projector = await createProjector();
     const diagnosticEvents: DiagnosticEventPayload[] = [];
@@ -1777,16 +1834,47 @@ describe("CodexAppServerEventProjector", () => {
     }).data;
     expect(itemStart.kind).toBe("tool");
     expect(itemStart.suppressChannelProgress).toBe(true);
-    const calls = (onAgentEvent as { mock: { calls: unknown[][] } }).mock.calls;
-    const toolStart = calls.some((call) => {
-      const event = requireRecord(call[0], "agent event");
-      if (event.stream !== "tool") {
-        return false;
-      }
-      const data = requireRecord(event.data, "agent event data");
-      return data.phase === "start" && data.name === "message";
-    });
-    expect(toolStart).toBe(false);
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "dynamicToolCall",
+          id: "call-1",
+          namespace: null,
+          tool: "message",
+          arguments: { action: "send" },
+          status: "completed",
+          contentItems: null,
+          success: true,
+          durationMs: 2,
+        },
+      }),
+    );
+
+    const itemEnd = findAgentEvent(onAgentEvent, {
+      stream: "item",
+      phase: "end",
+      itemId: "call-1",
+      name: "message",
+    }).data;
+    expect(itemEnd.kind).toBe("tool");
+    expect(itemEnd.status).toBe("completed");
+    expect(itemEnd.suppressChannelProgress).toBe(true);
+    expect(
+      findAgentEvents(onAgentEvent, {
+        stream: "tool",
+        phase: "start",
+        itemId: "call-1",
+        name: "message",
+      }),
+    ).toHaveLength(0);
+    expect(
+      findAgentEvents(onAgentEvent, {
+        stream: "tool",
+        phase: "result",
+        itemId: "call-1",
+        name: "message",
+      }),
+    ).toHaveLength(0);
   });
 
   it("emits verbose tool summaries through onToolResult", async () => {
