@@ -328,15 +328,32 @@ export function createOpenClawTools(
   });
   options?.recordToolPrepStage?.("openclaw-tools:nodes-tool");
   const embedded = isEmbeddedMode();
-  const includeMessageTool = !embedded || options?.sourceReplyDeliveryMode === "message_tool_only";
+  const explicitFactoryAllowlist = mergeFactoryPolicyList(
+    resolvedConfig?.tools?.allow,
+    resolvedConfig?.tools?.alsoAllow,
+    options?.pluginToolAllowlist,
+  );
+  const explicitFactoryDenylist = mergeFactoryPolicyList(
+    resolvedConfig?.tools?.deny,
+    options?.pluginToolDenylist,
+  );
+  const messageExplicitlyAllowed = isToolExplicitlyAllowedByFactoryPolicy({
+    toolName: "message",
+    allowlist: explicitFactoryAllowlist,
+    denylist: explicitFactoryDenylist,
+  });
+  const includeMessageTool =
+    !embedded ||
+    options?.sourceReplyDeliveryMode === "message_tool_only" ||
+    messageExplicitlyAllowed;
   const effectiveCallGateway = embedded
     ? createEmbeddedCallGateway()
     : openClawToolsDeps.callGateway;
   const includeUpdatePlanTool =
     isToolExplicitlyAllowedByFactoryPolicy({
       toolName: "update_plan",
-      allowlist: mergeFactoryPolicyList(resolvedConfig?.tools?.allow, options?.pluginToolAllowlist),
-      denylist: mergeFactoryPolicyList(resolvedConfig?.tools?.deny, options?.pluginToolDenylist),
+      allowlist: explicitFactoryAllowlist,
+      denylist: explicitFactoryDenylist,
     }) ||
     isUpdatePlanToolEnabledForOpenClawTools({
       config: resolvedConfig,
