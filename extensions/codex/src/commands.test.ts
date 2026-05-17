@@ -21,6 +21,10 @@ import {
   resetCodexDiagnosticsFeedbackStateForTests,
   type CodexCommandDeps,
 } from "./command-handlers.js";
+import type {
+  CodexPluginConfigEntry,
+  CodexPluginsManagementIO,
+} from "./command-plugins-management.js";
 import { handleCodexCommand } from "./commands.js";
 
 let tempDir: string;
@@ -70,6 +74,21 @@ function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCom
     ),
     safeCodexControlRequest: vi.fn(),
     ...overrides,
+  };
+}
+
+function inMemoryCodexPluginsIO(
+  initial: Record<string, CodexPluginConfigEntry> = {},
+): CodexPluginsManagementIO & {
+  current: () => Record<string, CodexPluginConfigEntry>;
+} {
+  const store: Record<string, CodexPluginConfigEntry> = JSON.parse(JSON.stringify(initial));
+  return {
+    current: () => JSON.parse(JSON.stringify(store)),
+    readConfig: () => Promise.resolve({ plugins: JSON.parse(JSON.stringify(store)) }),
+    mutate: async (update) => {
+      update(store);
+    },
   };
 }
 
@@ -214,6 +233,57 @@ describe("codex command", () => {
 
     expect(result.text).toContain("Codex command failed: &lt;\uff20U123&gt; loader failed");
     expect(result.text).not.toContain("<@U123>");
+  });
+
+  it("lists Codex sub-plugins through the /codex plugins command surface", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({
+      chrome: { enabled: true, marketplaceName: "openai-bundled", pluginName: "chrome" },
+      documents: {
+        enabled: false,
+        marketplaceName: "openai-primary-runtime",
+        pluginName: "documents",
+      },
+    });
+
+    const result = await handleCodexCommand(createContext("plugins list"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+
+    expectResultTextContains(result, "ON   chrome");
+    expectResultTextContains(result, "OFF  documents");
+    expectResultTextContains(result, "openclaw.json");
+  });
+
+  it("enables and disables Codex sub-plugins through the /codex plugins command surface", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({
+      chrome: { enabled: true, marketplaceName: "openai-bundled", pluginName: "chrome" },
+    });
+
+    const disabled = await handleCodexCommand(createContext("plugins disable chrome"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+    expectResultTextContains(disabled, "chrome: disabled in openclaw.json");
+    expect(codexPluginsManagementIo.current().chrome.enabled).toBe(false);
+
+    const enabled = await handleCodexCommand(createContext("plugins enable chrome"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+    expectResultTextContains(enabled, "chrome: enabled in openclaw.json");
+    expect(codexPluginsManagementIo.current().chrome.enabled).toBe(true);
+  });
+
+  it("limits /codex plugins help text to list, enable, and disable", async () => {
+    const result = await handleCodexCommand(createContext("plugins help"), {
+      deps: createDeps({ codexPluginsManagementIo: inMemoryCodexPluginsIO() }),
+    });
+
+    expectResultTextContains(result, "Unknown /codex plugins subcommand: help");
+    expectResultTextContains(result, "/codex plugins list");
+    expectResultTextContains(result, "/codex plugins enable");
+    expectResultTextContains(result, "/codex plugins disable");
+    expect(result.text).not.toContain("/codex plugins add");
+    expect(result.text).not.toContain("/codex plugins remove");
+    expect(result.text).not.toContain("/codex plugins toggle");
   });
 
   it("attaches the current session to an existing Codex thread", async () => {
