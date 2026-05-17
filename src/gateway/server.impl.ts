@@ -54,7 +54,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
-} from "../secrets/runtime.js";
+} from "../secrets/runtime-state.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -552,7 +552,6 @@ export async function startGatewayServer(
   }
   const startupTrace = createGatewayStartupTrace();
   const startupConfigModulePromise = import("./server-startup-config.js");
-  const reloadHandlersModulePromise = import("./server-reload-handlers.js");
   let startupPluginsModulePromise: Promise<typeof import("./server-startup-plugins.js")> | null =
     null;
   const loadStartupPluginsModule = () => {
@@ -1553,7 +1552,7 @@ export async function startGatewayServer(
     postAttachRuntimeReturned = true;
     activateScheduledServicesWhenReady();
 
-    const { startManagedGatewayConfigReloader } = await reloadHandlersModulePromise;
+    const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,
       initialConfig: cfgAtStart,

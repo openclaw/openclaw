@@ -39,7 +39,7 @@ function readConfiguredSearchProvider(config: unknown): string | undefined {
   return typeof provider === "string" ? provider : undefined;
 }
 
-vi.mock("../../secrets/runtime.js", () => ({
+vi.mock("../../secrets/runtime-state.js", () => ({
   getActiveSecretsRuntimeSnapshot: () => activeSecretsRuntimeSnapshot.current,
 }));
 
