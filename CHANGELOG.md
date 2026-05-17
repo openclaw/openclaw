@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/skills: apply the full effective tool policy pipeline to inline `command-dispatch: tool` skill dispatch before owner-only filtering, preserving configured allow, deny, sandbox, sender, group, and subagent restrictions. (#78525)
+- Channel accounts: keep top-level default channel accounts visible when named accounts are added alongside default credential material, so mixed legacy/new account configs keep resolving `default` instead of silently dropping it.
 - Codex/Telegram: synthesize native Codex tool progress from final turn snapshots so Telegram `/verbose` stays visible when command events arrive only at completion.
 - Mac app: make Channels settings open faster by deferring config-schema work, avoiding startup channel probes, caching decoded channel status rows, and showing only compact quick settings instead of the full generated channel schema.
 - Control UI: include the Control UI and Gateway protocol versions in protocol-mismatch errors so stale app/dashboard pairings identify which side needs rebuilding or restarting.
