@@ -349,6 +349,7 @@ export async function imageResult(params: {
       media: {
         ...detailsMedia,
         mediaUrl: params.path,
+        mediaUrls: Array.isArray(detailsMedia?.mediaUrls) ? detailsMedia.mediaUrls : [params.path],
       },
     },
   };
