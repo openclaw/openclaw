@@ -1917,7 +1917,7 @@ describe("qa mock openai server", () => {
     expect(secondSpawn.status).toBe(200);
     expect(await secondSpawn.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
 
-    const phaseOnlyFinal = await fetch(`${server.baseUrl}/v1/responses`, {
+    const betaCompletionFinal = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -1931,15 +1931,15 @@ describe("qa mock openai server", () => {
             content: [
               {
                 type: "input_text",
-                text: "Continue.",
+                text: "Continue.\nResult: BETA-OK",
               },
             ],
           },
         ],
       }),
     });
-    expect(phaseOnlyFinal.status).toBe(200);
-    expect(outputText(await phaseOnlyFinal.json())).toBe("subagent-1: ok\nsubagent-2: ok");
+    expect(betaCompletionFinal.status).toBe(200);
+    expect(outputText(await betaCompletionFinal.json())).toBe("subagent-1: ok\nsubagent-2: ok");
   });
 
   it("completes subagent fanout when beta completion arrives on a generic follow-up turn", async () => {
@@ -2044,7 +2044,7 @@ describe("qa mock openai server", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(outputText(await response.json())).toBe("");
+    expect(outputText(await response.json())).toBe("NO_REPLY");
   });
 
   it("does not answer fanout child completion announce sessions", async () => {
@@ -2075,7 +2075,7 @@ describe("qa mock openai server", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(outputText(await response.json())).toBe("");
+    expect(outputText(await response.json())).toBe("NO_REPLY");
 
     const withoutMarker = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
@@ -2095,7 +2095,166 @@ describe("qa mock openai server", () => {
     });
 
     expect(withoutMarker.status).toBe(200);
-    expect(outputText(await withoutMarker.json())).toBe("");
+    expect(outputText(await withoutMarker.json())).toBe("NO_REPLY");
+  });
+
+  it("does not answer Anthropic fanout completion announces after task args leave prompt text", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-7",
+        max_tokens: 256,
+        messages: [
+          {
+            role: "user",
+            content:
+              "Auto-announce is push-based. If a child completion event arrives AFTER your final answer, reply ONLY with NO_REPLY.",
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_fanout_alpha",
+                name: "sessions_spawn",
+                input: { task: "fanout worker alpha", label: "fanout-alpha" },
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_fanout_alpha",
+                content: "ALPHA-OK",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { content: Array<{ type: string; text?: string }> };
+    const textBlock = body.content.find((block) => block.type === "text");
+    expect(textBlock?.text).toBe("NO_REPLY");
+  });
+
+  it("continues Anthropic fanout from push completion events without the original prompt text", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const spawn = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-7",
+        max_tokens: 256,
+        tools: [SESSIONS_SPAWN_TOOL],
+        messages: [
+          {
+            role: "user",
+            content:
+              "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.",
+          },
+        ],
+      }),
+    });
+    expect(spawn.status).toBe(200);
+    const spawnBody = (await spawn.json()) as { content: Array<Record<string, unknown>> };
+    expect(spawnBody.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_use",
+          name: "sessions_spawn",
+          input: expect.objectContaining({ label: "qa-fanout-alpha" }),
+        }),
+      ]),
+    );
+
+    const betaSpawn = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-7",
+        max_tokens: 256,
+        tools: [SESSIONS_SPAWN_TOOL],
+        messages: [
+          {
+            role: "user",
+            content:
+              "Auto-announce is push-based. If a child completion event arrives AFTER your final answer, reply ONLY with NO_REPLY.",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_fanout_alpha",
+                content: "ALPHA-OK",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(betaSpawn.status).toBe(200);
+    const betaSpawnBody = (await betaSpawn.json()) as { content: Array<Record<string, unknown>> };
+    expect(betaSpawnBody.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_use",
+          name: "sessions_spawn",
+          input: expect.objectContaining({ label: "qa-fanout-beta" }),
+        }),
+      ]),
+    );
+
+    const final = await fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-opus-4-7",
+        max_tokens: 256,
+        tools: [SESSIONS_SPAWN_TOOL],
+        messages: [
+          {
+            role: "user",
+            content:
+              "Auto-announce is push-based. If a child completion event arrives AFTER your final answer, reply ONLY with NO_REPLY.",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_fanout_beta",
+                content: "BETA-OK",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(final.status).toBe(200);
+    const finalBody = (await final.json()) as { content: Array<{ type: string; text?: string }> };
+    const textBlock = finalBody.content.find((block) => block.type === "text");
+    expect(textBlock?.text).toBe("subagent-1: ok\nsubagent-2: ok");
   });
 
   it("uses full request text when planning continuation subagent tool calls", async () => {

@@ -525,6 +525,19 @@ function extractAllRequestTexts(input: ResponsesInputItem[], body: Record<string
   return texts.join("\n");
 }
 
+function isFanoutCompletionAnnounce(text: string) {
+  return (
+    (/Internal task completion event/i.test(text) || /Auto-announce is push-based/i.test(text)) &&
+    (/fanout worker (?:alpha|beta)/i.test(text) ||
+      hasFanoutResultText(text, "ALPHA-OK") ||
+      hasFanoutResultText(text, "BETA-OK"))
+  );
+}
+
+function hasFanoutResultText(text: string, marker: "ALPHA-OK" | "BETA-OK") {
+  return new RegExp(`(?:^|\\n)(?:Result:\\s*)?${marker}\\b`, "i").test(text);
+}
+
 function countImageInputs(value: unknown): number {
   const seen = new WeakSet<object>();
   const stack = [value];
@@ -1119,12 +1132,8 @@ function buildAssistantText(
   if (/subagent recovery worker/i.test(prompt)) {
     return "RECOVERED-SUBAGENT-OK";
   }
-  if (
-    (/Internal task completion event/i.test(allInputText) ||
-      /Auto-announce is push-based/i.test(allInputText)) &&
-    /fanout worker (?:alpha|beta)/i.test(allInputText)
-  ) {
-    return "";
+  if (isFanoutCompletionAnnounce(allInputText)) {
+    return "NO_REPLY";
   }
   if (/fanout worker alpha/i.test(prompt)) {
     return "ALPHA-OK";
@@ -1139,7 +1148,15 @@ function buildAssistantText(
     return "FORKED-CONTEXT-ALPHA";
   }
   const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
+  const isFanoutCompletionTurn =
+    /subagent fanout synthesis check/i.test(allInputText) || /^continue\.?$/i.test(prompt.trim());
+  if (
+    (scenarioState.subagentFanoutPhase === 2 &&
+      prompt &&
+      isFanoutCompletionTurn &&
+      /\bBETA-OK\b/.test(scenarioToolOutput)) ||
+    hasFanoutResultText(allInputText, "BETA-OK")
+  ) {
     scenarioState.subagentFanoutPhase = 3;
     return fanoutCompleteReply;
   }
@@ -1603,11 +1620,26 @@ async function buildResponsesPayload(
     return buildAssistantEvents("");
   }
   if (
-    (/Internal task completion event/i.test(allInputText) ||
-      /Auto-announce is push-based/i.test(allInputText)) &&
-    /fanout worker (?:alpha|beta)/i.test(allInputText)
+    canCallSessionsSpawn &&
+    scenarioState.subagentFanoutPhase === 1 &&
+    (/\bALPHA-OK\b/.test(toolOutput) || hasFanoutResultText(allInputText, "ALPHA-OK"))
   ) {
-    return buildAssistantEvents("");
+    scenarioState.subagentFanoutPhase = 2;
+    return buildToolCallEventsWithArgs("sessions_spawn", {
+      task: "Fanout worker beta: inspect the QA workspace and finish with exactly BETA-OK.",
+      label: "qa-fanout-beta",
+      thread: false,
+    });
+  }
+  if (
+    scenarioState.subagentFanoutPhase === 2 &&
+    (/\bBETA-OK\b/.test(toolOutput) || hasFanoutResultText(allInputText, "BETA-OK"))
+  ) {
+    scenarioState.subagentFanoutPhase = 3;
+    return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
+  }
+  if (isFanoutCompletionAnnounce(allInputText)) {
+    return buildAssistantEvents("NO_REPLY");
   }
   if (QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText)) {
     if (!toolOutput && canCallSessionsSpawn) {
@@ -2091,10 +2123,6 @@ async function buildResponsesPayload(
         thread: false,
       });
     }
-  }
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
-    scenarioState.subagentFanoutPhase = 3;
-    return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
   }
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
   if (explicitSessionsSpawnArgs && !toolOutput) {
