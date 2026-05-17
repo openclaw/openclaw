@@ -1,10 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Resolve a real photo to a stored path for "p1.jpg" while making "p2.jpg"
-// (and "p3.jpg") fail with a *real* MediaFetchError so that
-// isRecoverableMediaGroupError() (which checks `instanceof MediaFetchError`
-// against openclaw/plugin-sdk/media-runtime) treats the failure as a
-// recoverable per-photo skip rather than dropping the whole album.
 const saveRemoteMedia = vi.fn();
 const saveMediaBuffer = vi.fn();
 const readRemoteMediaBuffer = vi.fn();
@@ -171,15 +166,11 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
         ...opts,
         telegramDeps: telegramBotDepsForTest,
       });
-    setTelegramBotRuntimeForTest(
-      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-    );
+    setTelegramBotRuntimeForTest(telegramBotRuntimeForTest);
   });
 
   beforeEach(() => {
-    setTelegramBotRuntimeForTest(
-      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-    );
+    setTelegramBotRuntimeForTest(telegramBotRuntimeForTest);
     saveRemoteMedia.mockReset();
     saveMediaBuffer.mockReset();
     readRemoteMediaBuffer.mockReset();
@@ -227,7 +218,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
     }
   });
 
-  it("does not send a media-drop warning when every photo fails", async () => {
+  it("warns the user when every album image fails", async () => {
     setOpenChannelPostConfig();
     saveRemoteMedia.mockImplementation(async (...args: unknown[]) => {
       throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${urlOf(args)}`);
@@ -243,7 +234,10 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       });
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
-      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      const warningText = String(sendMessageSpy.mock.calls[0]?.[1]);
+      expect(warningText).toContain("0 of 2 images");
+      expect(warningText).toContain("2 could not be fetched and were skipped");
     } finally {
       setTimeoutSpy.mockRestore();
     }
