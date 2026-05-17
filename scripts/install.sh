@@ -1640,10 +1640,10 @@ install_node() {
             tmp="$(mktempfile)"
             run_quiet_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
             if is_root; then
-                run_quiet_step "Configuring NodeSource repository" bash "$tmp"
+                run_quiet_step "Configuring NodeSource repository" env DEBIAN_FRONTEND=noninteractive bash "$tmp"
                 run_quiet_step "Installing Node.js" apt_get_install nodejs
             else
-                run_quiet_step "Configuring NodeSource repository" sudo -E bash "$tmp"
+                run_quiet_step "Configuring NodeSource repository" sudo DEBIAN_FRONTEND=noninteractive bash "$tmp"
                 run_quiet_step "Installing Node.js" apt_get_install nodejs
             fi
         elif command -v dnf &> /dev/null; then
@@ -1674,8 +1674,13 @@ install_node() {
             exit 1
         fi
 
-        ui_success "Node.js v${NODE_DEFAULT_MAJOR} installed"
         activate_supported_node_on_path || true
+        if ! command -v node &>/dev/null; then
+            ui_error "Node.js package installed but node binary not found on PATH"
+            echo "Install Node.js ${NODE_DEFAULT_MAJOR} manually: https://nodejs.org"
+            exit 1
+        fi
+        ui_success "Node.js v${NODE_DEFAULT_MAJOR} installed"
         print_active_node_paths || true
     fi
 }
