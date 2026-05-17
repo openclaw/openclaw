@@ -918,7 +918,7 @@ describe("capability cli", () => {
     },
   );
 
-  it("runs gateway model probes without chat-agent prompt policy or tools", async () => {
+  it("runs gateway model probes in fresh raw sessions without chat-agent prompt policy or tools", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: ["capability", "model", "run", "--prompt", "hello", "--gateway", "--json"],
