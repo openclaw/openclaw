@@ -116,6 +116,69 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioExecutionConfig(soak.id)).toMatchObject({ turnCount: 100 });
   });
 
+  it("loads runtime tool fixture metadata for standard and optional lanes", () => {
+    const applyPatch = readQaScenarioById("runtime-tool-apply-patch");
+    const messageTool = readQaScenarioById("runtime-tool-message-tool");
+    const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
+
+    expect(applyPatch.runtimeParityTier).toBe("standard");
+    expect(messageTool.runtimeParityTier).toBe("optional");
+    expect(tavilySearch.runtimeParityTier).toBe("optional");
+    expect(readQaScenarioExecutionConfig(applyPatch.id)).toMatchObject({
+      toolName: "apply_patch",
+      toolCoverage: {
+        bucket: "codex-native-workspace",
+        expectedLayer: "codex-native-workspace",
+      },
+    });
+    expect(readQaScenarioExecutionConfig(messageTool.id)).toMatchObject({
+      toolName: "message",
+      expectedAvailable: false,
+      toolCoverage: {
+        bucket: "optional-profile-or-plugin",
+        expectedLayer: "profile-or-plugin",
+        required: false,
+      },
+    });
+  });
+
+  it("loads the Codex Pi-shaped Read vocabulary live parity canary", () => {
+    const scenario = readQaScenarioById("codex-pi-shaped-read-vocabulary");
+    const config = readQaScenarioExecutionConfig(scenario.id) as
+      | {
+          runtimeParityComparison?: string;
+          fixtureFile?: string;
+          expectedMarker?: string;
+          unavailableNeedles?: string[];
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/codex-pi-shaped-read-vocabulary.md");
+    expect(scenario.runtimeParityTier).toBe("live-only");
+    expect(config?.runtimeParityComparison).toBe("codex-native-workspace");
+    expect(config?.fixtureFile).toBe("PI_SHAPED_READ_FIXTURE.txt");
+    expect(config?.expectedMarker).toBe("PI_SHAPED_READ_OK");
+    expect(config?.unavailableNeedles).toContain("not in my available tool surface");
+  });
+
+  it("loads live gateway sentinel scenarios for harness self-health", () => {
+    const scenarioIds = [
+      "plugin-hook-health-sentinel",
+      "plugin-manifest-contract-health",
+      "webchat-direct-reply-routing",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = readQaScenarioById(scenarioId);
+      expect(scenario.runtimeParityTier).toBe("live-only");
+      expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
+      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
+    }
+    expect(readQaScenarioById("webchat-direct-reply-routing").sourcePath).toBe(
+      "qa/scenarios/channels/webchat-direct-reply-routing.md",
+    );
+  });
+
   it("keeps the character eval scenario natural and task-shaped", () => {
     const characterConfig = readQaScenarioExecutionConfig("character-vibes-gollum") as
       | {

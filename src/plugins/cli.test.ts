@@ -114,10 +114,12 @@ function expectAutoEnabledCliLoad(params: {
   autoEnabledConfig: OpenClawConfig;
   autoEnabledReasons?: Record<string, string[]>;
 }) {
-  expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-    config: params.rawConfig,
-    env: process.env,
-  });
+  expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config: params.rawConfig,
+      env: process.env,
+    }),
+  );
   const loadOptions = getMockCallObject(mocks.loadOpenClawPlugins);
   expect(loadOptions.config).toBe(params.autoEnabledConfig);
   expect(loadOptions.activationSourceConfig).toBe(params.rawConfig);

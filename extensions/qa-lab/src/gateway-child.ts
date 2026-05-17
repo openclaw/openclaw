@@ -183,10 +183,12 @@ export function buildQaRuntimeEnv(params: {
   homeDir: string;
   forwardHostHome?: boolean;
   stateDir: string;
+  tempRoot: string;
   xdgConfigHome: string;
   xdgDataHome: string;
   xdgCacheHome: string;
   bundledPluginsDir?: string;
+  stagedBundledPluginsRoot?: string | null;
   compatibilityHostVersion?: string;
   providerMode?: QaProviderMode;
   baseEnv?: NodeJS.ProcessEnv;
@@ -219,6 +221,10 @@ export function buildQaRuntimeEnv(params: {
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_TEST_FAST: "1",
     OPENCLAW_QA_PARENT_PID: String(process.pid),
+    OPENCLAW_QA_TEMP_ROOT: params.tempRoot,
+    ...(params.stagedBundledPluginsRoot
+      ? { OPENCLAW_QA_STAGED_RUNTIME_ROOT: params.stagedBundledPluginsRoot }
+      : {}),
     OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER: "1",
     // QA uses the fast runtime envelope for speed, but it still exercises
     // normal config-driven heartbeats and runtime config writes.
@@ -666,10 +672,12 @@ export async function startQaGatewayChild(params: {
           homeDir,
           forwardHostHome: params.forwardHostHome,
           stateDir,
+          tempRoot,
           xdgConfigHome,
           xdgDataHome,
           xdgCacheHome,
           bundledPluginsDir: stagedPluginRuntime.bundledPluginsDir,
+          stagedBundledPluginsRoot,
           compatibilityHostVersion: stagedPluginRuntime.runtimeHostVersion,
           providerMode,
           forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),

@@ -67,7 +67,10 @@ function liveSubagentConfig(
   workspace: string,
   port: number,
   token: string,
-  options?: { toolAllow?: string[] },
+  options?: {
+    queue?: NonNullable<OpenClawConfig["messages"]>["queue"];
+    toolAllow?: string[];
+  },
 ): OpenClawConfig {
   const providerConfig = resolveLiveSubagentModelConfig();
   const modelId = modelKey.replace(/^(openai|google)\//u, "");
@@ -132,6 +135,7 @@ function liveSubagentConfig(
     },
     plugins: { enabled: false },
     tools: { allow: options?.toolAllow ?? ["sessions_spawn", "sessions_yield", "subagents"] },
+    ...(options?.queue ? { messages: { queue: options.queue } } : {}),
     models: {
       providers,
     },
@@ -207,6 +211,148 @@ describeLive("subagent announce live", () => {
     server = undefined;
     state = undefined;
   });
+
+  it(
+    "keeps issue 82913 busy-parent completion announce pending until transcript delivery",
+    async () => {
+      if (!isTruthyEnvValue(process.env.OPENCLAW_SUBAGENT_ISSUE_82913_REPRO)) {
+        console.warn(
+          "[issue-82913] skip: set OPENCLAW_SUBAGENT_ISSUE_82913_REPRO=1 to run this focused repro",
+        );
+        return;
+      }
+      const modelConfig = resolveLiveSubagentModelConfig();
+      requireLiveSubagentAuth(modelConfig);
+
+      const token = `subagent-82913-${randomUUID()}`;
+      const port = 30_000 + Math.floor(Math.random() * 10_000);
+      const modelKey = modelConfig.modelKey;
+      const nonce = randomBytes(3).toString("hex").toUpperCase();
+      const childToken = `ISSUE_82913_CHILD_${nonce}`;
+      const parentToken = `ISSUE_82913_PARENT_SAW_${nonce}`;
+      const sessionKey = `agent:main:issue-82913-${nonce.toLowerCase()}`;
+
+      state = await createOpenClawTestState({
+        label: "subagent-issue-82913-live",
+        layout: "split",
+        env: {
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
+          OPENCLAW_PLUGINS_PATHS: undefined,
+        },
+      });
+      await state.writeConfig(
+        liveSubagentConfig(modelKey, state.workspaceDir, port, token, {
+          queue: { mode: "collect", debounceMs: 2_500 },
+          toolAllow: ["sessions_spawn", "bash"],
+        }),
+      );
+      clearRuntimeConfigSnapshot();
+      clearCurrentPluginMetadataSnapshot();
+
+      server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+      });
+      client = await createGatewayClient({ port, token });
+
+      let initialError: unknown;
+      let parentObservedAt: number | undefined;
+      let parentText: string | undefined;
+      const initialRequest = client.request<AgentPayload>(
+        "agent",
+        {
+          sessionKey,
+          idempotencyKey: `issue-82913-${randomUUID()}`,
+          deliver: false,
+          timeout: 240,
+          message: [
+            "Run this exact OpenClaw busy-parent subagent scenario. Use tool calls, not prose.",
+            `Use nonce ${nonce}.`,
+            `Step 1: call sessions_spawn with exactly this JSON input: ${JSON.stringify({
+              task: `Reply exactly ${childToken} and nothing else.`,
+              taskName: "issue_82913_child",
+              cleanup: "keep",
+              context: "isolated",
+              runTimeoutSeconds: 180,
+            })}.`,
+            'Step 2: after spawn returns status="accepted", immediately call the bash tool with command exactly: sleep 35; printf ISSUE_82913_PARENT_TOOL_DONE.',
+            "Do not call sessions_yield at any point in this scenario.",
+            `Step 3: after the child completion event is visible in your conversation, reply exactly ${parentToken}.`,
+            `Do not reply with ${parentToken} before the child completion event is visible.`,
+          ].join("\n"),
+        },
+        { expectFinal: true, timeoutMs: REQUEST_TIMEOUT_MS },
+      );
+      initialRequest
+        .then((response) => {
+          parentObservedAt = Date.now();
+          parentText = extractPayloadText(response.result);
+        })
+        .catch((error: unknown) => {
+          initialError = error;
+        });
+
+      const completedRunBeforeDelivery = await waitFor("issue 82913 child completion", () => {
+        if (initialError) {
+          throw initialError;
+        }
+        return listSubagentRunsForRequester(sessionKey).find(
+          (run) =>
+            run.taskName === "issue_82913_child" &&
+            run.frozenResultText?.includes(childToken) === true &&
+            run.outcome?.status === "ok",
+        );
+      });
+      expect(completedRunBeforeDelivery.completionAnnouncedAt).toBeUndefined();
+      expect(parentObservedAt).toBeUndefined();
+
+      const parent = await initialRequest;
+      parentObservedAt ??= Date.now();
+      parentText ??= extractPayloadText(parent.result);
+      expect(parentText).toContain(parentToken);
+
+      const completedRun = await waitFor("issue 82913 delivered completion announce", () =>
+        listSubagentRunsForRequester(sessionKey).find(
+          (run) =>
+            run.runId === completedRunBeforeDelivery.runId &&
+            typeof run.completionEnqueuedAt === "number" &&
+            typeof run.completionDeliveredAt === "number" &&
+            typeof run.completionAnnouncedAt === "number",
+        ),
+      );
+      const enqueuedAt = completedRun.completionEnqueuedAt!;
+      const deliveredAt = completedRun.completionDeliveredAt!;
+      const announcedAt = completedRun.completionAnnouncedAt!;
+      const enqueuedToDeliveredMs = deliveredAt - enqueuedAt;
+      const announcedToParentObservedMs = Math.abs(parentObservedAt - announcedAt);
+      console.log(
+        `[issue-82913] repro ${JSON.stringify({
+          runId: completedRun.runId,
+          childEndedAt: completedRun.endedAt,
+          completionEnqueuedAt: enqueuedAt,
+          completionDeliveredAt: deliveredAt,
+          completionAnnouncedAt: announcedAt,
+          parentObservedAt,
+          enqueuedToDeliveredMs,
+          announcedToParentObservedMs,
+        })}`,
+      );
+      expect(completedRun.completionAnnouncedAt).toBe(deliveredAt);
+      expect(enqueuedToDeliveredMs).toBeGreaterThan(10_000);
+      expect(announcedToParentObservedMs).toBeLessThan(20_000);
+    },
+    10 * 60_000,
+  );
 
   it(
     "lets a parent steer a subagent and receives completion through in-process agent dispatch",

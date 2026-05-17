@@ -22,6 +22,8 @@ func whatsappLoginWaitRequestTimeoutMs(
 extension ChannelsStore {
     func start() {
         guard !self.isPreview else { return }
+        self.startCount += 1
+        guard self.startCount == 1 else { return }
         guard self.pollTask == nil else { return }
         self.pollTask = Task.detached { [weak self] in
             guard let self else { return }
@@ -37,6 +39,10 @@ extension ChannelsStore {
     }
 
     func stop() {
+        guard !self.isPreview else { return }
+        guard self.startCount > 0 else { return }
+        self.startCount -= 1
+        guard self.startCount == 0 else { return }
         self.pollTask?.cancel()
         self.pollTask = nil
     }

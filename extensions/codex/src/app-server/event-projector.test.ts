@@ -1256,12 +1256,22 @@ describe("CodexAppServerEventProjector", () => {
   it("synthesizes native tool progress from turn completion snapshots", async () => {
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      verboseLevel: "on",
-      onAgentEvent,
-      onToolResult,
-    });
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(
+      {
+        ...(await createParams()),
+        verboseLevel: "on",
+        onAgentEvent,
+        onToolResult,
+      },
+      {
+        trajectoryRecorder,
+      },
+    );
 
     await projector.handleNotification(
       turnCompleted([
@@ -1307,11 +1317,38 @@ describe("CodexAppServerEventProjector", () => {
     expect(onToolResult).toHaveBeenCalledWith({
       text: "🛠️ `run tests (workspace)`",
     });
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.call", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      itemId: "cmd-snapshot",
+      toolCallId: "cmd-snapshot",
+      name: "bash",
+      arguments: { command: "pnpm test extensions/codex", cwd: "/workspace" },
+    });
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.result", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      itemId: "cmd-snapshot",
+      toolCallId: "cmd-snapshot",
+      name: "bash",
+      status: "completed",
+      isError: false,
+      result: { status: "completed", exitCode: 0, durationMs: 42 },
+      output: "ok",
+    });
   });
 
   it("does not duplicate native tool starts when the snapshot completes a started item", async () => {
     const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(
+      { ...(await createParams()), onAgentEvent },
+      { trajectoryRecorder },
+    );
     const commandItem = {
       type: "commandExecution",
       id: "cmd-started",
@@ -1342,6 +1379,12 @@ describe("CodexAppServerEventProjector", () => {
     ).toHaveLength(1);
     expect(
       toolEvents.filter((event) => event.phase === "result" && event.itemId === "cmd-started"),
+    ).toHaveLength(1);
+    expect(
+      trajectoryRecorder.recordEvent.mock.calls.filter(([type]) => type === "tool.call"),
+    ).toHaveLength(1);
+    expect(
+      trajectoryRecorder.recordEvent.mock.calls.filter(([type]) => type === "tool.result"),
     ).toHaveLength(1);
   });
 

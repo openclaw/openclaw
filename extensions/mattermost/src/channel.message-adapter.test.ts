@@ -44,6 +44,16 @@ function requireMediaSender(
   return media;
 }
 
+function requirePayloadSender(
+  adapter: MattermostMessageAdapter,
+): NonNullable<MattermostMessageSender["payload"]> {
+  const payload = adapter.send?.payload;
+  if (!payload) {
+    throw new Error("Expected mattermost message adapter payload sender");
+  }
+  return payload;
+}
+
 describe("mattermost channel message adapter", () => {
   beforeEach(() => {
     sendMessageMattermostMock.mockReset();
@@ -57,6 +67,7 @@ describe("mattermost channel message adapter", () => {
     const adapter = requireMattermostMessageAdapter();
     const sendText = requireTextSender(adapter);
     const sendMedia = requireMediaSender(adapter);
+    const sendPayload = requirePayloadSender(adapter);
 
     const proveText = async () => {
       sendMessageMattermostMock.mockClear();
@@ -130,12 +141,52 @@ describe("mattermost channel message adapter", () => {
       expect(result.receipt.replyToId).toBe("post-parent-1");
     };
 
+    const provePayload = async () => {
+      sendMessageMattermostMock.mockClear();
+      sendMessageMattermostMock.mockResolvedValueOnce({
+        messageId: "post-1",
+        channelId: "channel-1",
+        receipt: {
+          primaryPlatformMessageId: "post-1",
+          platformMessageIds: ["post-1"],
+          parts: [{ platformMessageId: "post-1", kind: "card", index: 0 }],
+          sentAt: Date.now(),
+        },
+      });
+      const result = await sendPayload({
+        cfg: {},
+        to: "channel:team-1",
+        text: "card",
+        accountId: "default",
+        payload: {
+          text: "card",
+          channelData: {
+            mattermost: {
+              presentationButtons: [[{ text: "Open", callback_data: "open" }]],
+            },
+          },
+        },
+      });
+      expect(sendMessageMattermostMock).toHaveBeenLastCalledWith("channel:team-1", "card", {
+        cfg: {},
+        accountId: "default",
+        mediaUrl: undefined,
+        mediaLocalRoots: undefined,
+        mediaReadFile: undefined,
+        replyToId: undefined,
+        buttons: [[{ text: "Open", callback_data: "open" }]],
+      });
+      expect(result.receipt.platformMessageIds).toEqual(["post-1"]);
+      expect(result.receipt.parts[0]?.kind).toBe("card");
+    };
+
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "mattermostMessageAdapter",
       adapter,
       proofs: {
         text: proveText,
         media: proveMedia,
+        payload: provePayload,
         replyTo: proveExplicitReply,
         thread: proveReplyThread,
         messageSendingHooks: () => {

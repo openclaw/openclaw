@@ -193,7 +193,6 @@ struct ConfigSchemaForm: View {
         return true
     }
 
-    @ViewBuilder
     private func renderChannelQuickEmptyState() -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("No quick settings for this channel.")

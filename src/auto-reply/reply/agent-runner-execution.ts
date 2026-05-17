@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -43,12 +42,10 @@ import {
   isTransientHttpError,
 } from "../../agents/pi-embedded-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
-import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
   resolveGroupSessionKey,
-  resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -98,6 +95,10 @@ import {
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import {
+  classifyProviderRequestError,
+  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+} from "./provider-request-error-classifier.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
@@ -110,10 +111,6 @@ import type { TypingSignaler } from "./typing-mode.js";
 // selection keeps conflicting with fallback model choices.
 // See: https://github.com/openclaw/openclaw/issues/58348
 export const MAX_LIVE_SWITCH_RETRIES = 2;
-const GPT_CHAT_BREVITY_ACK_MAX_CHARS = 420;
-const GPT_CHAT_BREVITY_ACK_MAX_SENTENCES = 3;
-const GPT_CHAT_BREVITY_SOFT_MAX_CHARS = 900;
-const GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES = 6;
 
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
   return value === "turn" || value === "session" ? value : undefined;
@@ -456,16 +453,6 @@ function isPureBillingSummary(err: unknown): boolean {
   );
 }
 
-function isToolResultTurnMismatchError(message: string): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(message);
-  return (
-    lower.includes("toolresult") &&
-    lower.includes("tooluse") &&
-    lower.includes("exceeds the number") &&
-    lower.includes("previous turn")
-  );
-}
-
 function collapseRepeatedFailureDetail(message: string): string {
   const parts = message
     .split(/\s+\|\s+/u)
@@ -582,6 +569,13 @@ function buildExternalRunFailureReply(
   options?: { includeDetails?: boolean; isHeartbeat?: boolean },
 ): ExternalRunFailureReply {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const providerRequestError = classifyProviderRequestError(normalizedMessage);
+  if (providerRequestError) {
+    return {
+      text: providerRequestError.userMessage,
+      isGenericRunnerFailure: false,
+    };
+  }
   const missingApiKeyFailure = buildMissingApiKeyFailureText(normalizedMessage);
   if (missingApiKeyFailure) {
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
@@ -602,12 +596,6 @@ function buildExternalRunFailureReply(
   }
   if (options?.isHeartbeat) {
     return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, isGenericRunnerFailure: false };
-  }
-  if (isToolResultTurnMismatchError(normalizedMessage)) {
-    return {
-      text: "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.",
-      isGenericRunnerFailure: false,
-    };
   }
   const cliBackendTimeoutFailure = buildCliBackendTimeoutFailureText(normalizedMessage);
   if (cliBackendTimeoutFailure) {
@@ -862,137 +850,6 @@ export function buildContextOverflowRecoveryText(params: {
       activeSessionEntry: params.activeSessionEntry,
     }) ?? CONTEXT_OVERFLOW_RESET_HINT)
   );
-}
-
-function shouldApplyOpenAIGptChatGuard(params: { provider?: string; model?: string }): boolean {
-  if (params.provider !== "openai" && params.provider !== "openai-codex") {
-    return false;
-  }
-  return /^gpt-5(?:[.-]|$)/i.test(params.model ?? "");
-}
-
-function countChatReplySentences(text: string): number {
-  return text
-    .trim()
-    .split(/(?<=[.!?])\s+/u)
-    .map((part) => part.trim())
-    .filter(Boolean).length;
-}
-
-function scoreChattyFinalReplyText(text: string): number {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return 0;
-  }
-  let score = 0;
-  const sentenceCount = countChatReplySentences(trimmed);
-  if (trimmed.length > 900) {
-    score += 1;
-  }
-  if (trimmed.length > 1_500) {
-    score += 1;
-  }
-  if (sentenceCount > 6) {
-    score += 1;
-  }
-  if (sentenceCount > 10) {
-    score += 1;
-  }
-  if (trimmed.split(/\n{2,}/u).filter(Boolean).length >= 3) {
-    score += 1;
-  }
-  if (
-    /\b(?:in summary|to summarize|here(?:'s| is) what|what changed|what I verified)\b/i.test(
-      trimmed,
-    )
-  ) {
-    score += 1;
-  }
-  return score;
-}
-
-function shortenChattyFinalReplyText(
-  text: string,
-  params: { maxChars: number; maxSentences: number },
-): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  const sentences = trimmed
-    .split(/(?<=[.!?])\s+/u)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  let shortened = sentences.slice(0, params.maxSentences).join(" ");
-  if (!shortened) {
-    shortened = trimmed.slice(0, params.maxChars).trimEnd();
-  }
-  if (shortened.length > params.maxChars) {
-    shortened = shortened.slice(0, params.maxChars).trimEnd();
-  }
-  if (shortened.length >= trimmed.length) {
-    return trimmed;
-  }
-  return shortened.replace(/[.,;:!?-]*$/u, "").trimEnd() + "...";
-}
-
-function applyOpenAIGptChatReplyGuard(params: {
-  provider?: string;
-  model?: string;
-  commandBody: string;
-  isHeartbeat: boolean;
-  payloads?: ReplyPayload[];
-}): void {
-  if (
-    params.isHeartbeat ||
-    !shouldApplyOpenAIGptChatGuard({
-      provider: params.provider,
-      model: params.model,
-    }) ||
-    !params.payloads?.length
-  ) {
-    return;
-  }
-
-  const trimmedCommand = params.commandBody.trim();
-  const isAckTurn = isLikelyExecutionAckPrompt(trimmedCommand);
-  const allowSoftCap =
-    !isAckTurn &&
-    trimmedCommand.length > 0 &&
-    trimmedCommand.length <= 120 &&
-    !/\b(?:detail|detailed|depth|deep dive|explain|compare|walk me through|why|how)\b/i.test(
-      trimmedCommand,
-    );
-
-  for (const payload of params.payloads) {
-    const text = normalizeOptionalString(payload.text);
-    if (
-      !text ||
-      payload.isError ||
-      payload.isReasoning ||
-      payload.mediaUrl ||
-      (payload.mediaUrls?.length ?? 0) > 0 ||
-      payload.interactive ||
-      text.includes("```")
-    ) {
-      continue;
-    }
-
-    if (isAckTurn) {
-      payload.text = shortenChattyFinalReplyText(text, {
-        maxChars: GPT_CHAT_BREVITY_ACK_MAX_CHARS,
-        maxSentences: GPT_CHAT_BREVITY_ACK_MAX_SENTENCES,
-      });
-      continue;
-    }
-
-    if (allowSoftCap && scoreChattyFinalReplyText(text) >= 4) {
-      payload.text = shortenChattyFinalReplyText(text, {
-        maxChars: GPT_CHAT_BREVITY_SOFT_MAX_CHARS,
-        maxSentences: GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES,
-      });
-    }
-  }
 }
 
 function buildRestartLifecycleReplyText(): string {
@@ -2254,16 +2111,18 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
       if (embeddedError?.kind === "role_ordering") {
-        const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
-        if (didReset) {
-          params.replyOperation?.fail("run_failed", embeddedError);
-          return {
-            kind: "final",
-            payload: markAgentRunFailureReplyPayload({
-              text: "⚠️ Message ordering conflict. I've reset the conversation - please try again.",
-            }),
-          };
-        }
+        const providerRequestError = classifyProviderRequestError(embeddedError);
+        params.replyOperation?.fail("run_failed", embeddedError);
+        const embeddedErrorText = formatErrorMessage(embeddedError).replace(/\.\s*$/, "");
+        return {
+          kind: "final",
+          payload: markAgentRunFailureReplyPayload({
+            text: shouldSurfaceToControlUi
+              ? `⚠️ Agent failed before reply: ${embeddedErrorText}.\nLogs: openclaw logs --follow`
+              : (providerRequestError?.userMessage ??
+                PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE),
+          }),
+        };
       }
 
       break;
@@ -2318,8 +2177,8 @@ export async function runAgentTurnWithFallback(params: {
         : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
-      const isSessionCorruption = /function call turn comes immediately after/i.test(message);
-      const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
+      const providerRequestError =
+        !isBilling && !shouldSurfaceToControlUi ? classifyProviderRequestError(err) : undefined;
       const isTransientHttp = isTransientHttpError(message);
 
       if (isReplyOperationRestartAbort(params.replyOperation)) {
@@ -2382,61 +2241,12 @@ export async function runAgentTurnWithFallback(params: {
           }),
         };
       }
-      if (isRoleOrderingError) {
-        const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
-        if (didReset) {
-          params.replyOperation?.fail("run_failed", err);
-          return {
-            kind: "final",
-            payload: markAgentRunFailureReplyPayload({
-              text: "⚠️ Message ordering conflict. I've reset the conversation - please try again.",
-            }),
-          };
-        }
-      }
-
-      // Auto-recover from Gemini session corruption by resetting the session
-      if (
-        isSessionCorruption &&
-        params.sessionKey &&
-        params.activeSessionStore &&
-        params.storePath
-      ) {
-        const sessionKey = params.sessionKey;
-        const corruptedSessionId = params.getActiveSessionEntry()?.sessionId;
-        defaultRuntime.error(
-          `Session history corrupted (Gemini function call ordering). Resetting session: ${params.sessionKey}`,
-        );
-
-        try {
-          // Delete transcript file if it exists
-          if (corruptedSessionId) {
-            const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);
-            try {
-              fs.unlinkSync(transcriptPath);
-            } catch {
-              // Ignore if file doesn't exist
-            }
-          }
-
-          // Keep the in-memory snapshot consistent with the on-disk store reset.
-          delete params.activeSessionStore[sessionKey];
-
-          // Remove session entry from store using a fresh, locked snapshot.
-          await updateSessionStore(params.storePath, (store) => {
-            delete store[sessionKey];
-          });
-        } catch (cleanupErr) {
-          defaultRuntime.error(
-            `Failed to reset corrupted session ${params.sessionKey}: ${String(cleanupErr)}`,
-          );
-        }
-
-        params.replyOperation?.fail("session_corruption_reset", err);
+      if (providerRequestError) {
+        params.replyOperation?.fail("run_failed", err);
         return {
           kind: "final",
           payload: markAgentRunFailureReplyPayload({
-            text: "⚠️ Session history was corrupted. I've reset the conversation - please try again!",
+            text: providerRequestError.userMessage,
           }),
         };
       }
@@ -2481,7 +2291,6 @@ export async function runAgentTurnWithFallback(params: {
         !(isRateLimit && !isOverloadedErrorMessage(message)) &&
         !rateLimitOrOverloadedCopy &&
         !isContextOverflow &&
-        !isRoleOrderingError &&
         !shouldSurfaceToControlUi
           ? buildExternalRunFailureReply(message, {
               includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
@@ -2499,11 +2308,9 @@ export async function runAgentTurnWithFallback(params: {
             ? rateLimitOrOverloadedCopy
             : isContextOverflow
               ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-              : isRoleOrderingError
-                ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-                : shouldSurfaceToControlUi
-                  ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
-                  : (externalRunFailureReply?.text ?? genericFallbackText);
+              : shouldSurfaceToControlUi
+                ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
+                : (externalRunFailureReply?.text ?? genericFallbackText);
       const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
         text: fallbackText,
         sessionCtx: params.sessionCtx,
@@ -2578,14 +2385,6 @@ export async function runAgentTurnWithFallback(params: {
         ];
       }
     }
-
-    applyOpenAIGptChatReplyGuard({
-      provider: fallbackProvider,
-      model: fallbackModel,
-      commandBody: params.commandBody,
-      isHeartbeat: params.isHeartbeat,
-      payloads: runResult.payloads,
-    });
   }
 
   return {

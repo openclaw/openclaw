@@ -5,12 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import { cloneAuthProfileStore } from "./clone.js";
-import {
-  AUTH_STORE_LOCK_OPTIONS,
-  AUTH_STORE_VERSION,
-  EXTERNAL_CLI_SYNC_TTL_MS,
-  log,
-} from "./constants.js";
+import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import {
   overlayExternalAuthProfiles,
   shouldPersistExternalAuthProfile,
@@ -40,6 +35,11 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { savePersistedAuthProfileState } from "./state.js";
+import {
+  clearLoadedAuthStoreCache,
+  readCachedAuthProfileStore,
+  writeCachedAuthProfileStore,
+} from "./store-cache.js";
 import type { AuthProfileStore } from "./types.js";
 
 type LoadAuthProfileStoreOptions = {
@@ -74,16 +74,6 @@ type ExternalCliSyncResult = {
   store: AuthProfileStore;
   cacheable: boolean;
 };
-
-const loadedAuthStoreCache = new Map<
-  string,
-  {
-    authMtimeMs: number | null;
-    stateMtimeMs: number | null;
-    syncedAtMs: number;
-    store: AuthProfileStore;
-  }
->();
 
 function isInheritedMainOAuthCredential(params: {
   agentDir?: string;
@@ -233,39 +223,6 @@ function acquireAuthStoreLockSync(authPath: string): (() => void) | null {
     }
     throw err;
   }
-}
-
-function readCachedAuthProfileStore(params: {
-  authPath: string;
-  authMtimeMs: number | null;
-  stateMtimeMs: number | null;
-}): AuthProfileStore | null {
-  const cached = loadedAuthStoreCache.get(params.authPath);
-  if (
-    !cached ||
-    cached.authMtimeMs !== params.authMtimeMs ||
-    cached.stateMtimeMs !== params.stateMtimeMs
-  ) {
-    return null;
-  }
-  if (Date.now() - cached.syncedAtMs >= EXTERNAL_CLI_SYNC_TTL_MS) {
-    return null;
-  }
-  return cloneAuthProfileStore(cached.store);
-}
-
-function writeCachedAuthProfileStore(params: {
-  authPath: string;
-  authMtimeMs: number | null;
-  stateMtimeMs: number | null;
-  store: AuthProfileStore;
-}): void {
-  loadedAuthStoreCache.set(params.authPath, {
-    authMtimeMs: params.authMtimeMs,
-    stateMtimeMs: params.stateMtimeMs,
-    syncedAtMs: Date.now(),
-    store: cloneAuthProfileStore(params.store),
-  });
 }
 
 function resolveExternalCliOverlayOptions(
@@ -735,7 +692,7 @@ export function replaceRuntimeAuthProfileStoreSnapshots(
 
 export function clearRuntimeAuthProfileStoreSnapshots(): void {
   clearRuntimeAuthProfileStoreSnapshotsImpl();
-  loadedAuthStoreCache.clear();
+  clearLoadedAuthStoreCache();
 }
 
 export function saveAuthProfileStore(

@@ -9,13 +9,24 @@ extension ChannelsSettings {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
-            self.store.start()
+            self.updateActiveWork(active: self.isActive)
             self.ensureSelection(in: channels)
+        }
+        .onChange(of: self.isActive) { _, active in
+            self.updateActiveWork(active: active)
         }
         .onChange(of: channels) { _, newValue in
             self.ensureSelection(in: newValue)
         }
         .onDisappear { self.store.stop() }
+    }
+
+    private func updateActiveWork(active: Bool) {
+        if active {
+            self.store.start()
+        } else {
+            self.store.stop()
+        }
     }
 
     private func sidebar(channels: [ChannelItem]) -> some View {

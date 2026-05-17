@@ -41,6 +41,7 @@ import {
   sanitizeCodexAgentEventRecord,
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
+import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import { attachCodexMirrorIdentity, buildCodexUserPromptMessage } from "./transcript-mirror.js";
 
 export type CodexAppServerToolTelemetry = {
@@ -57,6 +58,7 @@ export type CodexAppServerToolTelemetry = {
 
 export type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
+  trajectoryRecorder?: CodexTrajectoryRecorder | null;
 };
 
 const ZERO_USAGE: Usage = {
@@ -874,6 +876,7 @@ export class CodexAppServerEventProjector {
     const meta = itemMeta(item, this.toolProgressDetailMode());
     const args = params.phase === "start" ? itemToolArgs(item) : undefined;
     const status = params.phase === "result" ? itemStatus(item) : "running";
+    this.recordToolTrajectoryEvent({ phase: params.phase, item, name, args, status });
     this.emitDiagnosticToolExecutionEvent({ phase: params.phase, item, name, status });
     this.emitAgentEvent({
       stream: "tool",
@@ -896,6 +899,39 @@ export class CodexAppServerEventProjector {
     if (params.phase === "result") {
       this.emitAfterToolCallObservation(item);
     }
+  }
+
+  private recordToolTrajectoryEvent(params: {
+    phase: "start" | "result";
+    item: CodexThreadItem;
+    name: string;
+    args?: Record<string, unknown>;
+    status: ReturnType<typeof itemStatus>;
+  }): void {
+    if (params.phase === "start") {
+      this.options.trajectoryRecorder?.recordEvent("tool.call", {
+        threadId: this.threadId,
+        turnId: this.turnId,
+        itemId: params.item.id,
+        toolCallId: params.item.id,
+        name: params.name,
+        arguments: params.args,
+      });
+      return;
+    }
+    const toolResult = itemToolResult(params.item).result;
+    const output = itemOutputText(params.item);
+    this.options.trajectoryRecorder?.recordEvent("tool.result", {
+      threadId: this.threadId,
+      turnId: this.turnId,
+      itemId: params.item.id,
+      toolCallId: params.item.id,
+      name: params.name,
+      status: params.status,
+      isError: isNonSuccessItemStatus(params.status),
+      ...(toolResult ? { result: toolResult } : {}),
+      ...(output ? { output } : {}),
+    });
   }
 
   private emitDiagnosticToolExecutionEvent(params: {

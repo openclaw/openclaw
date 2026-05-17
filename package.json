@@ -1300,6 +1300,10 @@
       "types": "./dist/plugin-sdk/text-utility-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-utility-runtime.js"
     },
+    "./plugin-sdk/tool-plugin": {
+      "types": "./dist/plugin-sdk/tool-plugin.d.ts",
+      "default": "./dist/plugin-sdk/tool-plugin.js"
+    },
     "./plugin-sdk/tool-payload": {
       "types": "./dist/plugin-sdk/tool-payload.d.ts",
       "default": "./dist/plugin-sdk/tool-payload.js"
@@ -1791,7 +1795,7 @@
     "qrcode": "1.5.4",
     "quickjs-wasi": "2.2.0",
     "tar": "7.5.15",
-    "tokenjuice": "0.7.0",
+    "tokenjuice": "0.7.1",
     "tree-sitter-bash": "0.25.1",
     "tslog": "4.10.2",
     "typescript": "6.0.3",
