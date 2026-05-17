@@ -10,6 +10,7 @@ import {
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
 export {
   isAnnounceSkip,
@@ -31,7 +32,34 @@ export type AnnounceTarget = {
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
   const parsed = resolveSessionConversationRef(sessionKey);
   if (!parsed) {
-    return null;
+    const rawParts = sessionKey
+      .split(":")
+      .filter(Boolean);
+    const isAgentScoped = rawParts[0]?.toLowerCase() === "agent";
+    const raw = rawParts.slice(isAgentScoped ? 2 : 0);
+    if (raw.length < 3) {
+      return null;
+    }
+    const channel = normalizeAnyChannelId(raw[0]) ?? normalizeChatChannelId(raw[0]) ?? raw[0];
+    const kind = raw[1]?.toLowerCase();
+    if (kind !== "direct" && kind !== "dm") {
+      return null;
+    }
+    const parsedThread = parseThreadSessionSuffix(raw.slice(2).join(":"));
+    const id = parsedThread.baseSessionKey?.trim();
+    if (!id) {
+      return null;
+    }
+    const plugin = getChannelPlugin(channel);
+    const routed =
+      plugin?.messaging?.resolveDeliveryTarget?.({ conversationId: id })?.to ??
+      plugin?.messaging?.normalizeTarget?.(`user:${id}`) ??
+      id;
+    return {
+      channel,
+      to: routed,
+      threadId: parsedThread.threadId,
+    };
   }
   const normalizedChannel =
     normalizeAnyChannelId(parsed.channel) ?? normalizeChatChannelId(parsed.channel);

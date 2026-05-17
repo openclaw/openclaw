@@ -2,6 +2,7 @@
 // turn limits for agent-to-agent announce flows.
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { resolveAnnounceTargetFromKey, resolvePingPongTurns } from "./sessions-send-helpers.js";
 
@@ -63,6 +64,58 @@ describe("resolveAnnounceTargetFromKey", () => {
     ).toEqual({
       channel: "feishu",
       to: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      threadId: undefined,
+    });
+  });
+
+  it("supports direct session keys for feishu announce targets", () => {
+    expect(resolveAnnounceTargetFromKey("agent:main:feishu:direct:ou_direct_user")).toEqual({
+      channel: "feishu",
+      to: "user:ou_direct_user",
+      threadId: undefined,
+    });
+  });
+
+  it("supports dm alias in direct announce target parsing", () => {
+    expect(resolveAnnounceTargetFromKey("agent:main:feishu:dm:ou_direct_user")).toEqual({
+      channel: "feishu",
+      to: "user:ou_direct_user",
+      threadId: undefined,
+    });
+  });
+
+  it("does not crash when resolveDeliveryTarget returns null", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "feishu",
+          source: "test",
+          plugin: {
+            id: "feishu",
+            meta: {
+              id: "feishu",
+              label: "Feishu",
+              selectionLabel: "Feishu",
+              docsPath: "/channels/feishu",
+              blurb: "Feishu test stub.",
+            },
+            capabilities: { chatTypes: ["direct", "group", "thread"] },
+            messaging: {
+              resolveDeliveryTarget: () => null,
+              normalizeTarget: (raw: string) => raw.replace(/^user:/, ""),
+            },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+            },
+          },
+        },
+      ]),
+    );
+
+    expect(resolveAnnounceTargetFromKey("agent:main:feishu:direct:ou_direct_user")).toEqual({
+      channel: "feishu",
+      to: "ou_direct_user",
       threadId: undefined,
     });
   });
