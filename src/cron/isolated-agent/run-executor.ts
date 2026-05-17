@@ -111,6 +111,7 @@ export function createCronPromptExecutor(params: {
   senderIsOwner: boolean;
   messageChannel: string | undefined;
   suppressExecNotifyOnExit: boolean;
+  allowEmptyAssistantReplyAsSilent: boolean;
   resolvedDelivery: {
     accountId?: string;
     to?: string;
@@ -277,6 +278,7 @@ export function createCronPromptExecutor(params: {
           requireExplicitMessageTarget: params.toolPolicy.requireExplicitMessageTarget,
           disableMessageTool: params.toolPolicy.disableMessageTool,
           forceMessageTool: params.toolPolicy.forceMessageTool,
+          allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           abortSignal: params.abortSignal,
           onExecutionStarted: params.onExecutionStarted,
@@ -353,6 +355,7 @@ export async function executeCronRun(params: {
   runTimeoutOverrideMs?: number;
   senderIsOwner: boolean;
   suppressExecNotifyOnExit: boolean;
+  allowEmptyAssistantReplyAsSilent: boolean;
   runStartedAt?: number;
 }): Promise<CronExecutionResult> {
   const resolvedVerboseLevel: VerboseLevel =
@@ -379,6 +382,7 @@ export async function executeCronRun(params: {
     runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     messageChannel: params.resolvedDelivery.channel,
     suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,
+    allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
     resolvedDelivery: params.resolvedDelivery,
     toolPolicy: params.toolPolicy,
     skillsSnapshot: params.skillsSnapshot,
