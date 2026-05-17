@@ -106,12 +106,18 @@ type ResolvedVisionCandidate = {
 function collectVisionCandidates(
   visionCfg: BrowserVisionConfig | undefined,
 ): ResolvedVisionCandidate[] {
-  if (!visionCfg) return [];
-  if (visionCfg.enabled === false) return [];
+  if (!visionCfg) {
+    return [];
+  }
+  if (visionCfg.enabled === false) {
+    return [];
+  }
   const entries = Array.isArray(visionCfg.models) ? visionCfg.models : [];
   const out: ResolvedVisionCandidate[] = [];
   for (const entry of entries) {
-    if (!entry) continue;
+    if (!entry) {
+      continue;
+    }
     if (entry.type === "cli") {
       // CLI-style media-understanding entries are not supported by the
       // browser tool; skip them rather than throwing so operators can share
@@ -120,7 +126,9 @@ function collectVisionCandidates(
     }
     const provider = typeof entry.provider === "string" ? entry.provider.trim() : "";
     const model = typeof entry.model === "string" ? entry.model.trim() : "";
-    if (!provider || !model) continue;
+    if (!provider || !model) {
+      continue;
+    }
     out.push({
       provider,
       model,
@@ -172,7 +180,9 @@ function resolveDefaultMaxBytes(visionCfg: BrowserVisionConfig | undefined): num
 }
 
 function truncateForMaxChars(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
+  if (text.length <= maxChars) {
+    return text;
+  }
   // Reserve room for a trailing marker so the agent can tell the description
   // was clipped rather than naturally short.
   const marker = "\n[truncated]";
@@ -181,7 +191,9 @@ function truncateForMaxChars(text: string, maxChars: number): string {
 }
 
 function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
+  if (err instanceof Error) {
+    return err.message;
+  }
   return String(err);
 }
 
