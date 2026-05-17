@@ -824,8 +824,12 @@ function inferDeliveryFromSessionKey(
   // `<channel>:direct:<peer>` (typical) or `<channel>:<peer>` (legacy) shapes.
   for (let index = 1; index < parts.length; index += 1) {
     const segment = parts[index]?.trim();
-    if (!segment) continue;
-    if (SESSION_KEY_PEER_MARKERS.has(segment.toLowerCase())) continue;
+    if (!segment) {
+      continue;
+    }
+    if (SESSION_KEY_PEER_MARKERS.has(segment.toLowerCase())) {
+      continue;
+    }
     return { channel, to: segment };
   }
   return null;
