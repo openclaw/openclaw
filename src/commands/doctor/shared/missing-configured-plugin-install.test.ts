@@ -1151,6 +1151,11 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
 
     expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
+      mode: "update",
+      spec: expectedNpmInstallSpec("@openclaw/discord"),
+      expectedPluginId: "discord",
+    });
     expect(result.changes).toEqual([
       `Installed missing configured plugin "discord" from ${expectedNpmInstallSpec("@openclaw/discord")}.`,
     ]);
@@ -1204,6 +1209,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
       spec: expectedNpmInstallSpec("@openclaw/whatsapp"),
       expectedPluginId: "whatsapp",
+      mode: "update",
     });
     expect(result.changes).toEqual([
       `Installed missing configured plugin "whatsapp" from ${expectedNpmInstallSpec("@openclaw/whatsapp")}.`,
