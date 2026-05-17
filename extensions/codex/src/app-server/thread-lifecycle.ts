@@ -15,6 +15,7 @@ import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
+import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
   isCodexPluginThreadBindingStale,
   mergeCodexThreadConfigs,
@@ -41,6 +42,7 @@ import {
   writeCodexAppServerBinding,
   type CodexAppServerAuthProfileLookup,
   type CodexAppServerContextEngineBinding,
+  type CodexAppServerContextEngineProjectionBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 
@@ -51,6 +53,12 @@ export type CodexAppServerThreadLifecycle = {
 
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
   lifecycle: CodexAppServerThreadLifecycle;
+};
+
+export type CodexContextEngineThreadBootstrapProjection = {
+  mode: "thread_bootstrap";
+  epoch: string;
+  fingerprint?: string;
 };
 
 export type CodexPluginThreadConfigProvider = {
@@ -72,18 +80,29 @@ const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
 export async function startOrResumeThread(params: {
   client: CodexAppServerClient;
   params: EmbeddedRunAttemptParams;
+  agentId?: string;
   cwd: string;
   dynamicTools: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   config?: JsonObject;
+  finalConfigPatch?: JsonObject;
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
+  contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
 }): Promise<CodexAppServerThreadLifecycleBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
-  const contextEngineBinding = buildContextEngineBinding(params.params);
-  const userMcpServersConfigPatch = buildCodexUserMcpServersThreadConfigPatch(params.params.config);
+  const contextEngineBinding = buildContextEngineBinding(
+    params.params,
+    params.contextEngineProjection,
+  );
+  const userMcpServersConfigPatch = buildCodexUserMcpServersThreadConfigPatch(
+    params.params.config,
+    {
+      agentId: params.agentId ?? params.params.agentId,
+    },
+  );
   const userMcpServersFingerprint = fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
   let binding = await readCodexAppServerBinding(params.params.sessionFile, {
     authProfileStore: params.params.authProfileStore,
@@ -104,6 +123,12 @@ export async function startOrResumeThread(params: {
           threadId: binding.threadId,
           engineId: contextEngineBinding?.engineId,
           previousEngineId: binding.contextEngine?.engineId,
+          epoch: contextEngineBinding?.projection?.epoch,
+          previousEpoch: binding.contextEngine?.projection?.epoch,
+          fingerprint: contextEngineBinding?.projection?.fingerprint,
+          previousFingerprint: binding.contextEngine?.projection?.fingerprint,
+          policyFingerprint: contextEngineBinding?.policyFingerprint,
+          previousPolicyFingerprint: binding.contextEngine?.policyFingerprint,
         },
       );
       await clearCodexAppServerBinding(params.params.sessionFile);
@@ -207,7 +232,11 @@ export async function startOrResumeThread(params: {
     } else {
       try {
         const authProfileId = params.params.authProfileId ?? binding.authProfileId;
-        const resumeConfig = mergeCodexThreadConfigs(params.config, userMcpServersConfigPatch);
+        const resumeConfig = mergeCodexThreadConfigs(
+          params.config,
+          userMcpServersConfigPatch,
+          params.finalConfigPatch,
+        );
         const response = assertCodexThreadResumeResponse(
           await params.client.request(
             "thread/resume",
@@ -255,6 +284,17 @@ export async function startOrResumeThread(params: {
             config: params.params.config,
           },
         );
+        if (contextEngineBinding) {
+          embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
+            sessionId: params.params.sessionId,
+            sessionKey: params.params.sessionKey,
+            threadId: response.thread.id,
+            engineId: contextEngineBinding.engineId,
+            epoch: contextEngineBinding.projection?.epoch,
+            fingerprint: contextEngineBinding.projection?.fingerprint,
+            action: "resumed",
+          });
+        }
         return {
           ...binding,
           threadId: response.thread.id,
@@ -290,6 +330,7 @@ export async function startOrResumeThread(params: {
     params.config,
     userMcpServersConfigPatch,
     pluginThreadConfig?.configPatch,
+    params.finalConfigPatch,
   );
   const response = assertCodexThreadStartResponse(
     await params.client.request(
@@ -337,6 +378,17 @@ export async function startOrResumeThread(params: {
         config: params.params.config,
       },
     );
+    if (contextEngineBinding) {
+      embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
+        sessionId: params.params.sessionId,
+        sessionKey: params.params.sessionKey,
+        threadId: response.thread.id,
+        engineId: contextEngineBinding.engineId,
+        epoch: contextEngineBinding.projection?.epoch,
+        fingerprint: contextEngineBinding.projection?.fingerprint,
+        action: rotatedContextEngineBinding ? "rotated" : "started",
+      });
+    }
   }
   return {
     schemaVersion: 1,
@@ -362,8 +414,9 @@ export async function startOrResumeThread(params: {
   };
 }
 
-function buildContextEngineBinding(
+export function buildContextEngineBinding(
   params: EmbeddedRunAttemptParams,
+  projection?: CodexContextEngineThreadBootstrapProjection,
 ): CodexAppServerContextEngineBinding | undefined {
   const contextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
@@ -390,17 +443,45 @@ function buildContextEngineBinding(
         }),
       }),
     }),
+    projection: projection ? buildContextEngineProjectionBinding(projection) : undefined,
   };
 }
 
-function isContextEngineBindingCompatible(
+function buildContextEngineProjectionBinding(
+  projection: CodexContextEngineThreadBootstrapProjection,
+): CodexAppServerContextEngineProjectionBinding {
+  return {
+    schemaVersion: 1,
+    mode: "thread_bootstrap",
+    epoch: projection.epoch,
+    fingerprint: projection.fingerprint,
+  };
+}
+
+export function isContextEngineBindingCompatible(
   previous: CodexAppServerContextEngineBinding | undefined,
   next: CodexAppServerContextEngineBinding,
 ): boolean {
   return (
     previous?.schemaVersion === next.schemaVersion &&
     previous.engineId === next.engineId &&
-    previous.policyFingerprint === next.policyFingerprint
+    previous.policyFingerprint === next.policyFingerprint &&
+    areContextEngineProjectionBindingsCompatible(previous.projection, next.projection)
+  );
+}
+
+function areContextEngineProjectionBindingsCompatible(
+  previous: CodexAppServerContextEngineProjectionBinding | undefined,
+  next: CodexAppServerContextEngineProjectionBinding | undefined,
+): boolean {
+  if (!next) {
+    return previous === undefined;
+  }
+  return (
+    previous?.schemaVersion === next.schemaVersion &&
+    previous.mode === next.mode &&
+    previous.epoch === next.epoch &&
+    previous.fingerprint === next.fingerprint
   );
 }
 
@@ -723,15 +804,17 @@ function buildUserInput(
   params: EmbeddedRunAttemptParams,
   promptText: string = params.prompt,
 ): CodexUserInput[] {
-  return [
-    { type: "text", text: promptText, text_elements: [] },
-    ...(params.images ?? []).map(
-      (image): CodexUserInput => ({
-        type: "image",
-        url: `data:${image.mimeType};base64,${image.data}`,
-      }),
-    ),
-  ];
+  const imageInputs = (params.images ?? []).map((image): CodexUserInput => {
+    const imageUrl = sanitizeInlineImageDataUrl(`data:${image.mimeType};base64,${image.data}`);
+    return imageUrl
+      ? { type: "image", url: imageUrl }
+      : {
+          type: "text",
+          text: invalidInlineImageText("codex user input"),
+          text_elements: [],
+        };
+  });
+  return [{ type: "text", text: promptText, text_elements: [] }, ...imageInputs];
 }
 
 export function resolveCodexAppServerModelProvider(params: {

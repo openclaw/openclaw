@@ -147,14 +147,24 @@ export function searchQaBusMessages(params: {
     .map((message) => cloneMessage(message));
 }
 
+export function resolveQaBusPollStartCursor(params: {
+  currentCursor: number;
+  requestedCursor?: number;
+}): number {
+  const requestedCursor = params.requestedCursor ?? 0;
+  return params.currentCursor < requestedCursor ? 0 : requestedCursor;
+}
+
 export function pollQaBusEvents(params: {
   events: QaBusEvent[];
   cursor: number;
   input?: QaBusPollInput;
 }): QaBusPollResult {
   const accountId = normalizeAccountId(params.input?.accountId);
-  const startCursor = params.input?.cursor ?? 0;
-  const effectiveStartCursor = params.cursor < startCursor ? 0 : startCursor;
+  const effectiveStartCursor = resolveQaBusPollStartCursor({
+    currentCursor: params.cursor,
+    requestedCursor: params.input?.cursor,
+  });
   const limit = Math.max(1, Math.min(params.input?.limit ?? 100, 500));
   const matches = params.events
     .filter((event) => event.accountId === accountId && event.cursor > effectiveStartCursor)

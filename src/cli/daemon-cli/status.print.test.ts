@@ -37,6 +37,11 @@ vi.mock("../../daemon/restart-logs.js", () => ({
     stdoutPath: "/tmp/gateway.out.log",
     stderrPath: "/tmp/gateway.err.log",
   }),
+  resolveGatewaySupervisorLogPaths: () => ({
+    logDir: "/Users/test/Library/Logs/openclaw",
+    stdoutPath: "/Users/test/Library/Logs/openclaw/gateway.log",
+    stderrPath: "/Users/test/Library/Logs/openclaw/gateway.err.log",
+  }),
   resolveGatewayRestartLogPath: () => "/tmp/gateway-restart.log",
 }));
 
@@ -124,6 +129,122 @@ describe("printDaemonStatus", () => {
 
     expectMockLineContains(runtime.error, "Gateway runtime PID does not own the listening port");
     expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
+  });
+
+  it("prints established gateway client guidance gathered by deep status", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        connections: {
+          port: 18789,
+          established: [
+            {
+              pid: 4242,
+              ppid: 1,
+              command: "node",
+              commandLine: "/tmp/newer-openclaw/bin/openclaw logs --follow",
+              address: "TCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)",
+              direction: "client",
+            },
+          ],
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Established clients: 1");
+    expectMockLineContains(runtime.log, "pid=4242");
+    expectMockLineContains(runtime.log, "newer-openclaw");
+    expectMockLineContains(runtime.log, "client");
+    expectMockLineContains(runtime.log, "protocol mismatch after rollback");
+  });
+
+  it("prints stale updater launchd job guidance", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+          staleUpdateLaunchdJobs: [
+            {
+              label: "ai.openclaw.update.2026.5.12",
+              lastExitStatus: 127,
+            },
+          ],
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.error, "Stale OpenClaw updater launchd job(s) detected.");
+    expectMockLineContains(runtime.error, "ai.openclaw.update.2026.5.12");
+    expectMockLineContains(runtime.error, "launchctl remove <label>");
+    expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
+  });
+
+  it("prints macOS launchd stdout and suppressed stderr when gateway is not listening", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      printDaemonStatus(
+        {
+          service: {
+            label: "LaunchAgent",
+            loaded: true,
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            runtime: { status: "running", pid: 8000 },
+            command: { programArguments: [], environment: { HOME: "/Users/test" } },
+          },
+          gateway: {
+            bindMode: "loopback",
+            bindHost: "127.0.0.1",
+            port: 18789,
+            portSource: "env/config",
+            probeUrl: "ws://127.0.0.1:18789",
+          },
+          port: {
+            port: 18789,
+            status: "free",
+            listeners: [],
+            hints: [],
+          },
+          extraServices: [],
+        },
+        { json: false },
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+
+    expectMockLineContains(runtime.error, "Gateway port 18789 is not listening");
+    expectMockLineContains(runtime.error, "/Users/test/Library/Logs/openclaw/gateway.log");
+    expectMockLineContains(runtime.error, "Errors: suppressed");
   });
 
   it("prints probe kind and capability separately", () => {

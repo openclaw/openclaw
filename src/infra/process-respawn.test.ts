@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -30,16 +31,9 @@ import {
 const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
 const envSnapshot = captureFullEnv();
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
-function setPlatform(platform: string) {
-  if (!originalPlatformDescriptor) {
-    return;
-  }
-  Object.defineProperty(process, "platform", {
-    ...originalPlatformDescriptor,
-    value: platform,
-  });
+function setPlatform(platform: NodeJS.Platform) {
+  mockProcessPlatform(platform);
 }
 
 afterEach(() => {
@@ -50,9 +44,7 @@ afterEach(() => {
   triggerOpenClawRestartMock.mockClear();
   isContainerEnvironmentMock.mockReset();
   isContainerEnvironmentMock.mockReturnValue(false);
-  if (originalPlatformDescriptor) {
-    Object.defineProperty(process, "platform", originalPlatformDescriptor);
-  }
+  vi.restoreAllMocks();
 });
 
 function clearSupervisorHints() {

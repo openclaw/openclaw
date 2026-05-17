@@ -7,6 +7,7 @@ import type {
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
@@ -23,12 +24,13 @@ import type {
 import type { SkillSnapshot } from "../../skills.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
+import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
-export type CurrentTurnPromptContext = {
+export type CurrentInboundPromptContext = {
   text: string;
   promptJoiner?: "\n\n" | "\n" | " ";
 };
@@ -109,8 +111,8 @@ export type RunEmbeddedPiAgentParams = {
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
-  /** Explicit current-turn context that must be visible to the model but not persisted as user text. */
-  currentTurnContext?: CurrentTurnPromptContext;
+  currentInboundEventKind?: InboundEventKind;
+  currentInboundContext?: CurrentInboundPromptContext;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
@@ -123,6 +125,8 @@ export type RunEmbeddedPiAgentParams = {
   modelFallbacksOverride?: string[];
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
+  /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force PI. */
+  agentHarnessRuntimeOverride?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;
@@ -163,20 +167,7 @@ export type RunEmbeddedPiAgentParams = {
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
   onExecutionPhase?: (info: {
-    phase:
-      | "runner_entered"
-      | "workspace"
-      | "runtime_plugins"
-      | "model_resolution"
-      | "auth"
-      | "context_engine"
-      | "attempt_dispatch"
-      | "context_assembled"
-      | "turn_accepted"
-      | "process_spawned"
-      | "tool_execution_started"
-      | "assistant_output_started"
-      | "model_call_started";
+    phase: EmbeddedAgentExecutionPhase;
     provider?: string;
     model?: string;
     backend?: string;
@@ -185,6 +176,12 @@ export type RunEmbeddedPiAgentParams = {
     toolCallId?: string;
     itemId?: string;
     firstModelCallStarted?: boolean;
+  }) => void;
+  onRunProgress?: (info: {
+    reason: string;
+    provider?: string;
+    model?: string;
+    backend?: string;
   }) => void;
   replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
@@ -230,6 +227,7 @@ export type RunEmbeddedPiAgentParams = {
    */
   allowTransientCooldownProbe?: boolean;
   suppressNextUserMessagePersistence?: boolean;
+  suppressTranscriptOnlyAssistantPersistence?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   /**
    * Dispose bundled MCP runtimes when the overall run ends instead of preserving

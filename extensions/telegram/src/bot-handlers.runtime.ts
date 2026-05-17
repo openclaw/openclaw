@@ -1,4 +1,4 @@
-import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
+import type { Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
@@ -27,6 +27,7 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -763,6 +764,7 @@ export const registerTelegramHandlers = ({
       }
 
       const allMedia: TelegramMediaRef[] = [];
+      let skippedCount = 0;
       for (const { ctx } of entry.messages) {
         let media;
         try {
@@ -778,6 +780,7 @@ export const registerTelegramHandlers = ({
           runtime.log?.(
             warn(`media group: skipping photo that failed to fetch: ${String(mediaErr)}`),
           );
+          skippedCount++;
           continue;
         }
         if (media) {
@@ -786,7 +789,29 @@ export const registerTelegramHandlers = ({
             contentType: media.contentType,
             stickerMetadata: media.stickerMetadata,
           });
+        } else {
+          skippedCount++;
         }
+      }
+
+      if (skippedCount > 0) {
+        const total = entry.messages.length;
+        const wasOrWere = skippedCount === 1 ? "was" : "were";
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(
+              primaryEntry.msg.chat.id,
+              `⚠️ Received ${allMedia.length} of ${total} images — ${skippedCount} could not be fetched and ${wasOrWere} skipped.`,
+              {
+                reply_parameters: {
+                  message_id: primaryEntry.msg.message_id,
+                  allow_sending_without_reply: true,
+                },
+              },
+            ),
+        }).catch(() => {});
       }
 
       await processMessageWithReplyChain(
@@ -2076,6 +2101,18 @@ export const registerTelegramHandlers = ({
           logVerbose(
             `telegram: failed to resolve approval callback ${approvalCallback.approvalId}: ${errStr}`,
           );
+          if (isApprovalNotFoundError(resolveErr)) {
+            if (isPluginApproval || pluginApprovalAuthorizedSender) {
+              try {
+                await clearCallbackButtons();
+              } catch (editErr) {
+                logVerbose(
+                  `telegram: failed to clear expired approval callback buttons: ${String(editErr)}`,
+                );
+              }
+            }
+            return;
+          }
           throw new TelegramRetryableCallbackError(resolveErr);
         }
         try {

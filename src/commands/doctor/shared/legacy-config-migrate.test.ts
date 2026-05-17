@@ -26,6 +26,73 @@ function expectMigrationChangesToIncludeFragments(changes: string[], fragments: 
   expect(unmatchedFragments).toStrictEqual([]);
 }
 
+describe("legacy silent reply config migrate", () => {
+  it("removes silent reply rewrite and direct-chat silent reply config", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "allow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+            group: false,
+          },
+        },
+      },
+      surfaces: {
+        telegram: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.silentReply).toEqual({
+      group: "allow",
+      internal: "allow",
+    });
+    expect(res.config?.agents?.defaults).not.toHaveProperty("silentReplyRewrite");
+    expect(res.config?.surfaces?.telegram?.silentReply).toEqual({ group: "allow" });
+    expect(res.config?.surfaces?.telegram).not.toHaveProperty("silentReplyRewrite");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      "Removed agents.defaults.silentReply.direct",
+      "Removed agents.defaults.silentReplyRewrite",
+      "Removed surfaces.telegram.silentReply.direct",
+      "Removed surfaces.telegram.silentReplyRewrite",
+    ]);
+  });
+
+  it("removes malformed silent reply rewrite keys by presence", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          silentReplyRewrite: true,
+        },
+      },
+      surfaces: {
+        telegram: {
+          silentReplyRewrite: false,
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults).not.toHaveProperty("silentReplyRewrite");
+    expect(res.config?.surfaces?.telegram).not.toHaveProperty("silentReplyRewrite");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      "Removed agents.defaults.silentReplyRewrite",
+      "Removed surfaces.telegram.silentReplyRewrite",
+    ]);
+  });
+});
+
 describe("legacy session maintenance migrate", () => {
   it("removes deprecated session.maintenance.rotateBytes", () => {
     const res = migrateLegacyConfigForTest({
@@ -62,6 +129,75 @@ describe("legacy session parent fork migrate", () => {
     });
     expect(res.changes).toStrictEqual([
       "Removed session.parentForkMaxTokens; parent fork sizing is automatic.",
+    ]);
+  });
+});
+
+describe("legacy diagnostics memory pressure snapshot migrate", () => {
+  it("renames the boolean toggle", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        enabled: true,
+        memoryPressureBundle: false,
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      enabled: true,
+      memoryPressureSnapshot: false,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+    ]);
+  });
+
+  it("preserves the renamed toggle when both keys are present", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        memoryPressureBundle: false,
+        memoryPressureSnapshot: true,
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      memoryPressureSnapshot: true,
+    });
+    expect(res.changes).toStrictEqual([
+      "Removed diagnostics.memoryPressureBundle (memoryPressureSnapshot already set).",
+    ]);
+  });
+
+  it("moves nested enabled to the renamed boolean", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        enabled: true,
+        memoryPressureBundle: {
+          enabled: false,
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      enabled: true,
+      memoryPressureSnapshot: false,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+    ]);
+  });
+
+  it("moves empty object form to the renamed default boolean", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        memoryPressureBundle: {},
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      memoryPressureSnapshot: true,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
     ]);
   });
 });
@@ -345,7 +481,7 @@ describe("legacy migrate sandbox scope aliases", () => {
     });
 
     expect(res.changes).toStrictEqual([
-      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds within the agent/run timeout ceiling.",
     ]);
     expect(res.config?.agents?.defaults).toEqual({
       model: { primary: "openai/gpt-5.4" },

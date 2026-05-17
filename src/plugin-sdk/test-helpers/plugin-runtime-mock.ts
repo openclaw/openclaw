@@ -260,7 +260,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       return result;
     },
   ) as unknown as PluginRuntime["channel"]["turn"]["run"];
-  const buildChannelTurnContextMock = vi.fn(
+  const buildChannelInboundEventContextMock = vi.fn(
     (params: Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0]) =>
       ({
         Body: params.message.body ?? params.message.rawBody,
@@ -306,6 +306,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       mutateConfigFile: vi.fn(async () => ({
         path: "/tmp/openclaw.json",
         previousHash: null,
+        persistedHash: null,
         snapshot: {} as never,
         nextConfig: {},
         afterWrite: { mode: "auto" },
@@ -315,6 +316,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       replaceConfigFile: vi.fn(async ({ nextConfig }) => ({
         path: "/tmp/openclaw.json",
         previousHash: null,
+        persistedHash: null,
         snapshot: {} as never,
         nextConfig,
         afterWrite: { mode: "auto" },
@@ -676,7 +678,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
               },
             }),
         ) as unknown as PluginRuntime["channel"]["turn"]["runResolved"],
-        buildContext: buildChannelTurnContextMock,
+        buildContext: buildChannelInboundEventContextMock,
         runPrepared: runPreparedChannelTurnMock,
         dispatchAssembled:
           dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],

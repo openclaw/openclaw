@@ -81,13 +81,13 @@ async function requestGraph(params: {
   }
 }
 
-async function readOptionalGraphJson<T>(res: Response): Promise<T> {
+async function readOptionalGraphJson<T>(res: Response, label: string): Promise<T> {
   // Use optional chaining to stay resilient to partial test mocks that do not
   // provide a status or Headers instance (they only shim `ok` + `json()`).
   if (res.status === 204 || res.headers?.get?.("content-length") === "0") {
     return undefined as T;
   }
-  return (await res.json()) as T;
+  return await readProviderJsonResponse<T>(res, label);
 }
 
 export async function fetchGraphJson<T>(params: {
@@ -106,7 +106,7 @@ export async function fetchGraphJson<T>(params: {
     body: params.body,
     headers: params.headers,
   });
-  return await readOptionalGraphJson<T>(res);
+  return await readOptionalGraphJson<T>(res, `Graph ${params.path} failed`);
 }
 
 /**
@@ -258,7 +258,7 @@ export async function postGraphJson<T>(params: {
     body: params.body,
     errorPrefix: "Graph POST",
   });
-  return readOptionalGraphJson<T>(res);
+  return readOptionalGraphJson<T>(res, `Graph POST ${params.path} failed`);
 }
 
 export async function postGraphBetaJson<T>(params: {
@@ -274,7 +274,7 @@ export async function postGraphBetaJson<T>(params: {
     body: params.body,
     errorPrefix: "Graph beta POST",
   });
-  return readOptionalGraphJson<T>(res);
+  return readOptionalGraphJson<T>(res, `Graph beta POST ${params.path} failed`);
 }
 
 export async function deleteGraphRequest(params: { token: string; path: string }): Promise<void> {
@@ -298,10 +298,7 @@ export async function patchGraphJson<T>(params: {
     body: params.body,
     errorPrefix: "Graph PATCH",
   });
-  if (res.status === 204 || res.headers.get("content-length") === "0") {
-    return undefined as T;
-  }
-  return (await res.json()) as T;
+  return readOptionalGraphJson<T>(res, `Graph PATCH ${params.path} failed`);
 }
 
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {

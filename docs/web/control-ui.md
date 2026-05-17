@@ -202,6 +202,8 @@ Imported themes are stored only in the current browser profile. They are not wri
 
 The Control UI ships a `manifest.webmanifest` and a service worker, so modern browsers can install it as a standalone PWA. Web Push lets the Gateway wake the installed PWA with notifications even when the tab or browser window is not open.
 
+If the page shows **Protocol mismatch** right after an OpenClaw update, first reopen the dashboard with `openclaw dashboard` and hard-refresh the page. If it still fails, clear site data for the dashboard origin or test in a private browser window; an old tab or browser service-worker cache can keep running a pre-update Control UI bundle against the newer Gateway.
+
 | Surface                                               | What it does                                                       |
 | ----------------------------------------------------- | ------------------------------------------------------------------ |
 | `ui/public/manifest.webmanifest`                      | PWA manifest. Browsers offer "Install app" once it is reachable.   |
@@ -471,7 +473,7 @@ The Control UI is static files; the WebSocket target is configurable and can be 
     - When `gatewayUrl` is set, the UI does not fall back to config or environment credentials. Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
     - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
     - `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
-    - Non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins` explicitly (full origins). This includes remote dev setups.
+    - Public non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins` explicitly (full origins). Private same-origin LAN/Tailnet loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
     - Gateway startup may seed local origins such as `http://localhost:<port>` and `http://127.0.0.1:<port>` from the effective runtime bind and port, but remote browser origins still need explicit entries.
     - Do not use `gateway.controlUi.allowedOrigins: ["*"]` except for tightly controlled local testing. It means allow any browser origin, not "match whatever host I am using."
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode, but it is a dangerous security mode.

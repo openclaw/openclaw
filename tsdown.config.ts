@@ -174,6 +174,7 @@ const explicitNeverBundleDependencies = [
   "matrix-js-sdk",
   "prism-media",
   "qrcode-terminal",
+  "typescript",
   "vitest",
 ].toSorted((left, right) => left.localeCompare(right));
 
@@ -223,6 +224,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
     "server-close.runtime": "src/gateway/server-close.runtime.ts",
+    "plugins/hook-runner-global": "src/plugins/hook-runner-global.ts",
     "plugins/memory-state": "src/plugins/memory-state.ts",
     "subagent-registry.runtime": "src/agents/subagent-registry.runtime.ts",
     "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
@@ -263,6 +265,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "agents/pi-bundle-mcp-runtime": "src/agents/pi-bundle-mcp-runtime.ts",
     "agents/pi-embedded-runner/effective-tool-policy":
       "src/agents/pi-embedded-runner/effective-tool-policy.ts",
+    "agents/pi-embedded-runner/tool-split": "src/agents/pi-embedded-runner/tool-split.ts",
     "agents/pi-embedded-runner/run/runtime-context-prompt":
       "src/agents/pi-embedded-runner/run/runtime-context-prompt.ts",
     "auto-reply/reply/commands-crestodian": "src/auto-reply/reply/commands-crestodian.ts",

@@ -647,6 +647,17 @@ describe("codex command", () => {
     const limits = {
       ok: true as const,
       value: {
+        rateLimits: [
+          {
+            limitId: "codex",
+            limitName: "Codex",
+            primary: null,
+            secondary: null,
+            credits: null,
+            planType: "plus",
+            rateLimitReachedType: null,
+          },
+        ],
         rateLimitsByLimitId: {
           premium: {
             limitId: "premium",
@@ -655,6 +666,15 @@ describe("codex command", () => {
             secondary: null,
             credits: null,
             planType: "pro",
+            rateLimitReachedType: null,
+          },
+          codex: {
+            limitId: "codex",
+            limitName: "Codex",
+            primary: null,
+            secondary: null,
+            credits: null,
+            planType: "plus",
             rateLimitReachedType: null,
           },
         },
@@ -1294,9 +1314,18 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "Started Codex compaction for thread thread-123.",
     });
-    expect(codexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.compact, {
-      threadId: "thread-123",
-    });
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.compact,
+      {
+        threadId: "thread-123",
+      },
+      {
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        authProfileId: undefined,
+        config: {},
+      },
+    );
   });
 
   it("starts review with the generated app-server target shape", async () => {
@@ -1314,10 +1343,19 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "Started Codex review for thread thread-123.",
     });
-    expect(codexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.review, {
-      threadId: "thread-123",
-      target: { type: "uncommittedChanges" },
-    });
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.review,
+      {
+        threadId: "thread-123",
+        target: { type: "uncommittedChanges" },
+      },
+      {
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        authProfileId: undefined,
+        config: {},
+      },
+    );
   });
 
   it("rejects malformed compact and review commands before starting thread actions", async () => {
@@ -2646,6 +2684,7 @@ describe("codex command", () => {
       config: {},
       sessionFile,
       workspaceDir: "/repo",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
       threadId: "thread-123",
       model: "gpt-5.4",
       modelProvider: "openai",
@@ -2704,6 +2743,7 @@ describe("codex command", () => {
       config: {},
       sessionFile,
       workspaceDir: "/repo with space",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
       threadId: "thread-123",
       model: undefined,
       modelProvider: undefined,
@@ -2951,6 +2991,8 @@ describe("codex command", () => {
     expect(stopCodexConversationTurn).toHaveBeenCalledWith({
       sessionFile,
       pluginConfig: undefined,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 
@@ -2982,6 +3024,8 @@ describe("codex command", () => {
       sessionFile,
       pluginConfig: undefined,
       message: "focus tests first",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 
@@ -3012,16 +3056,22 @@ describe("codex command", () => {
       sessionFile,
       pluginConfig: undefined,
       model: "gpt-5.4",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
     expect(setCodexConversationFastMode).toHaveBeenCalledWith({
       sessionFile,
       pluginConfig: undefined,
       enabled: true,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
     expect(setCodexConversationPermissions).toHaveBeenCalledWith({
       sessionFile,
       pluginConfig: undefined,
       mode: "yolo",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 
@@ -3141,6 +3191,8 @@ describe("codex command", () => {
       sessionFile: hostSessionFile,
       pluginConfig: undefined,
       enabled: true,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 

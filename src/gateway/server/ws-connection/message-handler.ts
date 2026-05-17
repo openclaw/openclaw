@@ -54,6 +54,7 @@ import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
+import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
@@ -98,6 +99,9 @@ import {
 } from "../../protocol/index.js";
 import {
   gatewayStartupUnavailableDetails,
+  GATEWAY_STARTUP_CLOSE_CODE,
+  GATEWAY_STARTUP_CLOSE_REASON,
+  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../protocol/startup-unavailable.js";
 import { parseGatewayRole } from "../../role-policy.js";
@@ -171,6 +175,8 @@ function resolveTrustedProxyControlUiScopes(params: {
 }
 
 function resolvePinnedClientMetadata(params: {
+  clientId?: string;
+  clientMode?: string;
   claimedPlatform?: string;
   claimedDeviceFamily?: string;
   pairedPlatform?: string;
@@ -181,18 +187,45 @@ function resolvePinnedClientMetadata(params: {
   pinnedPlatform?: string;
   pinnedDeviceFamily?: string;
 } {
+  function normalizeLegacyNodeHostPlatformPin(value: string): string {
+    switch (value) {
+      case "darwin":
+      case "macos":
+        return "macos";
+      case "win32":
+      case "windows":
+        return "windows";
+      default:
+        return value;
+    }
+  }
+
   const claimedPlatform = normalizeDeviceMetadataForAuth(params.claimedPlatform);
   const claimedDeviceFamily = normalizeDeviceMetadataForAuth(params.claimedDeviceFamily);
   const pairedPlatform = normalizeDeviceMetadataForAuth(params.pairedPlatform);
   const pairedDeviceFamily = normalizeDeviceMetadataForAuth(params.pairedDeviceFamily);
   const hasPinnedPlatform = pairedPlatform !== "";
   const hasPinnedDeviceFamily = pairedDeviceFamily !== "";
-  const platformMismatch = hasPinnedPlatform && claimedPlatform !== pairedPlatform;
+  const isLegacyNodeHostPlatformPin =
+    params.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
+    params.clientMode === GATEWAY_CLIENT_MODES.NODE &&
+    hasPinnedPlatform &&
+    claimedPlatform !== "" &&
+    normalizeLegacyNodeHostPlatformPin(claimedPlatform) ===
+      normalizeLegacyNodeHostPlatformPin(pairedPlatform);
+  const platformMismatch =
+    hasPinnedPlatform && claimedPlatform !== pairedPlatform && !isLegacyNodeHostPlatformPin;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
+  const pinnedPlatform =
+    claimedPlatform === pairedPlatform
+      ? params.pairedPlatform
+      : isLegacyNodeHostPlatformPin
+        ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
+        : undefined;
   return {
     platformMismatch,
     deviceFamilyMismatch,
-    pinnedPlatform: hasPinnedPlatform ? params.pairedPlatform : undefined,
+    pinnedPlatform: hasPinnedPlatform ? pinnedPlatform : undefined,
     pinnedDeviceFamily: hasPinnedDeviceFamily ? params.pairedDeviceFamily : undefined,
   };
 }
@@ -224,6 +257,7 @@ export type GatewayWsMessageHandlerParams = {
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
+  getMethodRegistry?: () => GatewayMethodRegistry;
   buildRequestContext: () => GatewayRequestContext;
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   send: (obj: unknown) => void;
@@ -267,6 +301,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     gatewayMethods,
     events,
     extraHandlers,
+    getMethodRegistry,
     buildRequestContext,
     refreshHealthSnapshot,
     send,
@@ -482,7 +517,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         };
 
         if (isStartupPending?.()) {
-          markHandshakeFailure("startup-sidecars-pending");
+          markHandshakeFailure(GATEWAY_STARTUP_PENDING_CLOSE_CAUSE);
           await sendFrame({
             type: "res",
             id: frame.id,
@@ -493,7 +528,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               details: gatewayStartupUnavailableDetails(),
             }),
           }).catch(() => {});
-          queueMicrotask(() => close(1013, "gateway starting"));
+          queueMicrotask(() => close(GATEWAY_STARTUP_CLOSE_CODE, GATEWAY_STARTUP_CLOSE_REASON));
           return;
         }
 
@@ -513,10 +548,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
           });
           logWsControl.warn(
-            `protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
+            `protocol mismatch conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} remotePort=${remotePort ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} expected=${PROTOCOL_VERSION} probeMin=${MIN_PROBE_PROTOCOL_VERSION} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")}`,
           );
           sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
             details: {
+              code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+              clientMinProtocol: minProtocol,
+              clientMaxProtocol: maxProtocol,
               expectedProtocol: PROTOCOL_VERSION,
               minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
             },
@@ -956,8 +994,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           };
           const clientAccessMetadata = {
             displayName: connectParams.client.displayName,
-            clientId: connectParams.client.id,
-            clientMode: connectParams.client.mode,
             remoteIp: reportedClientIp,
           };
           const requirePairing = async (
@@ -1170,6 +1206,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             const claimedDeviceFamily = connectParams.client.deviceFamily;
             const pairedDeviceFamily = paired.deviceFamily;
             const metadataPinning = resolvePinnedClientMetadata({
+              clientId: connectParams.client.id,
+              clientMode: connectParams.client.mode,
               claimedPlatform,
               claimedDeviceFamily,
               pairedPlatform,
@@ -1650,6 +1688,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           client,
           isWebchatConnect,
           extraHandlers,
+          methodRegistry: getMethodRegistry?.(),
           context: buildRequestContext(),
         });
       })().catch((err) => {
@@ -1689,3 +1728,7 @@ function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
     receiver._maxPayload = maxPayload;
   }
 }
+
+export const __testing = {
+  resolvePinnedClientMetadata,
+};

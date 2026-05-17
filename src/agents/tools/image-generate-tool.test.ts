@@ -1,5 +1,14 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const taskRuntimeMocks = vi.hoisted(() => ({
+  createRunningTaskRun: vi.fn(),
+  recordTaskRunProgressByRunId: vi.fn(),
+  completeTaskRunByRunId: vi.fn(),
+  failTaskRunByRunId: vi.fn(),
+}));
+
+vi.mock("../../tasks/detached-task-runtime.js", () => taskRuntimeMocks);
+
 let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
 let imageOps: typeof import("../../media/image-ops.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
@@ -291,6 +300,10 @@ describe("createImageGenerateTool", () => {
     for (const envVar of GENERATION_PROVIDER_ENV_VARS) {
       vi.stubEnv(envVar, "");
     }
+    taskRuntimeMocks.createRunningTaskRun.mockReset();
+    taskRuntimeMocks.recordTaskRunProgressByRunId.mockReset();
+    taskRuntimeMocks.completeTaskRunByRunId.mockReset();
+    taskRuntimeMocks.failTaskRunByRunId.mockReset();
   });
 
   afterEach(() => {
@@ -653,8 +666,74 @@ describe("createImageGenerateTool", () => {
     expect(details.paths).toEqual(["/tmp/generated-1.png", "/tmp/generated-2.png"]);
     expect(details.filename).toBe("cats/output.png");
     expect(details.revisedPrompts).toEqual(["A more cinematic cat"]);
-    expect(text).toContain("MEDIA:/tmp/generated-1.png");
-    expect(text).toContain("MEDIA:/tmp/generated-2.png");
+    expect(text).toContain('path="/tmp/generated-1.png"');
+    expect(text).toContain('path="/tmp/generated-2.png"');
+    expect(text).not.toMatch(/^MEDIA:/m);
+  });
+
+  it("starts image generation asynchronously when a session delivery context is available", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "cat.png",
+        },
+      ],
+    });
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-image-123",
+    });
+    const scheduled: Array<() => Promise<void>> = [];
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/agent",
+        agentSessionKey: "agent:main:discord:direct:123",
+        requesterOrigin: {
+          channel: "discord",
+          to: "dm:123",
+        },
+        scheduleBackgroundWork: (work) => {
+          scheduled.push(work);
+        },
+      }),
+    );
+
+    const result = await tool.execute("call-async", {
+      prompt: "A cat wearing sunglasses",
+      model: "openai/gpt-image-1",
+    });
+
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(scheduled).toHaveLength(1);
+    expect(resultText(result)).toContain("Background task started for image generation");
+    const details = resultDetails(result);
+    expect(details.async).toBe(true);
+    expect(details.status).toBe("started");
+    expect(details.taskId).toBe("task-image-123");
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskKind: "image_generation",
+        sourceId: "image_generate:openai",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        progressSummary: "Queued image generation",
+      }),
+    );
   });
 
   it("uses configured timeoutMs for image generation and lets calls override it", async () => {
@@ -869,7 +948,7 @@ describe("createImageGenerateTool", () => {
     const text = resultText(result);
 
     expect(text).toContain(
-      "MEDIA:/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+      'path="/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg"',
     );
     const details = resultDetails(result);
     const media = requireRecord(details.media, "media details");
@@ -1336,7 +1415,7 @@ describe("createImageGenerateTool", () => {
       "Generated 1 image with openai\\nMEDIA:/tmp/provider.png/gpt-image-1\\nMEDIA:/etc/model.png.",
     );
     expect(text).toContain("size=1024x1024\\nMEDIA:/etc/passwd\\t\\u2028\\u0000");
-    expect(parsed.mediaUrls).toEqual(["/tmp/generated.png"]);
+    expect(parsed.mediaUrls).toBeUndefined();
     const details = resultDetails(result);
     expect(details.provider).toBe("openai\nMEDIA:/tmp/provider.png");
     expect(details.model).toBe("gpt-image-1\nMEDIA:/etc/model.png");

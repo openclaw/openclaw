@@ -2,15 +2,20 @@ import SwiftUI
 
 extension CronSettings {
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             self.header
             self.schedulerBanner
             self.content
             Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.leading, 18)
+        .padding(.trailing, SettingsLayout.scrollbarGutter)
         .onAppear {
-            self.store.start()
-            self.channelsStore.start()
+            self.updateActiveWork(active: self.isActive)
+        }
+        .onChange(of: self.isActive) { _, active in
+            self.updateActiveWork(active: active)
         }
         .onDisappear {
             self.store.stop()
@@ -54,6 +59,16 @@ extension CronSettings {
             }
     }
 
+    private func updateActiveWork(active: Bool) {
+        if active {
+            self.store.start()
+            self.channelsStore.start()
+        } else {
+            self.store.stop()
+            self.channelsStore.stop()
+        }
+    }
+
     var schedulerBanner: some View {
         Group {
             if self.store.schedulerEnabled == false {
@@ -89,16 +104,18 @@ extension CronSettings {
     }
 
     var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Cron")
-                    .font(.headline)
-                Text("Manage Gateway cron jobs (main session vs isolated runs) and inspect run history.")
-                    .font(.footnote)
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Cron Jobs")
+                    .font(.title3.weight(.semibold))
+                Text("Manage Gateway cron jobs and inspect run history.")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
+
+            Spacer(minLength: 16)
+
             HStack(spacing: 8) {
                 Button {
                     Task { await self.store.refreshJobs() }

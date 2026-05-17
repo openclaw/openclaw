@@ -40,7 +40,10 @@ export type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../agents/pi-embedded-runner/run/types.js";
-export type { ContextEngine as HarnessContextEngine } from "../context-engine/types.js";
+export type {
+  ContextEngine as HarnessContextEngine,
+  ContextEngineProjection,
+} from "../context-engine/types.js";
 export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runner/compact.js";
 export type { EmbeddedPiCompactResult } from "../agents/pi-embedded-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
@@ -71,6 +74,7 @@ export type {
 } from "../plugins/codex-app-server-extension-types.js";
 export type {
   NativeHookRelayEvent,
+  NativeHookRelayProcessResponse,
   NativeHookRelayProvider,
   NativeHookRelayRegistrationHandle,
 } from "../agents/harness/native-hook-relay.js";
@@ -78,6 +82,7 @@ export type {
 export { VERSION as OPENCLAW_VERSION } from "../version.js";
 export { formatErrorMessage } from "../infra/errors.js";
 export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
+export { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
 export { log as embeddedAgentLog } from "../agents/pi-embedded-runner/logger.js";
@@ -157,12 +162,15 @@ export { isSubagentSessionKey } from "../routing/session-key.js";
 export {
   acquireSessionWriteLock,
   resolveSessionWriteLockAcquireTimeoutMs,
+  resolveSessionWriteLockOptions,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
+  hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
+  runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "../agents/pi-tools.before-tool-call.js";
 export {
@@ -181,6 +189,7 @@ export {
   isActiveHarnessContextEngine,
   runHarnessContextEngineMaintenance,
 } from "../agents/harness/context-engine-lifecycle.js";
+export { resolveContextEngineOwnerPluginId } from "../context-engine/registry.js";
 export {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,
@@ -193,6 +202,8 @@ export {
 } from "../agents/harness/lifecycle-hook-helpers.js";
 export {
   buildNativeHookRelayCommand,
+  hasNativeHookRelayInvocation,
+  invokeNativeHookRelay,
   __testing as nativeHookRelayTesting,
   registerNativeHookRelay,
 } from "../agents/harness/native-hook-relay.js";

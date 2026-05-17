@@ -162,4 +162,9 @@ struct SettingsViewSmokeTests {
         let view = SkillsSettings(state: .preview)
         _ = view.body
     }
+
+    @Test func `exec approvals settings builds body`() {
+        let view = ExecApprovalsSettings()
+        _ = view.body
+    }
 }

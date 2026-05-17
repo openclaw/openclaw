@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
   QaLabLatestReport,
@@ -29,6 +30,14 @@ import {
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
 import { defaultQaModelForMode } from "./run-config.js";
+import {
+  captureRuntimeParityCell,
+  isRuntimeParityResultPass,
+  runRuntimeParityScenario,
+  type RuntimeId,
+  type RuntimeParityCell,
+  type RuntimeParityResult,
+} from "./runtime-parity.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import {
@@ -60,6 +69,7 @@ export type QaSuiteScenarioResult = {
   status: "pass" | "fail";
   steps: QaReportCheck[];
   details?: string;
+  runtimeParity?: RuntimeParityResult;
 };
 
 type QaSuiteEnvironment = {
@@ -86,6 +96,9 @@ export type QaSuiteRunParams = {
   enabledPluginIds?: string[];
   controlUiEnabled?: boolean;
   transportReadyTimeoutMs?: number;
+  forcedRuntime?: RuntimeId;
+  runtimePair?: [RuntimeId, RuntimeId];
+  captureRuntimeParityCell?: boolean;
 };
 
 function parseQaSuiteBooleanEnv(value: string | undefined): boolean | undefined {
@@ -139,6 +152,45 @@ function writeQaSuiteProgress(enabled: boolean, message: string) {
   process.stderr.write(`[qa-suite] ${message}\n`);
 }
 
+async function waitForQaLabReady(baseUrl: string, timeoutMs = 10_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const { response, release } = await fetchWithSsrFGuard({
+        url: `${baseUrl}/readyz`,
+        policy: { allowPrivateNetwork: true },
+        auditContext: "qa-lab-suite-wait-for-lab-ready",
+      });
+      try {
+        if (response.ok) {
+          return;
+        }
+      } finally {
+        await release();
+      }
+    } catch {
+      // retry
+    }
+    await sleep(100);
+  }
+  throw new Error(`timed out after ${timeoutMs}ms waiting for qa-lab ready`);
+}
+
+async function waitForQaLabReadyOrStopOwned(params: {
+  lab: Pick<QaLabServerHandle, "listenUrl" | "stop">;
+  ownsLab: boolean;
+  timeoutMs?: number;
+}) {
+  try {
+    await waitForQaLabReady(params.lab.listenUrl, params.timeoutMs);
+  } catch (error) {
+    if (params.ownsLab) {
+      await params.lab.stop();
+    }
+    throw error;
+  }
+}
+
 function sanitizeQaSuiteProgressValue(value: string): string {
   let normalized = "";
   for (const char of value) {
@@ -185,6 +237,7 @@ export type QaSuiteResult = {
   report: string;
   scenarios: QaSuiteScenarioResult[];
   watchUrl: string;
+  runtimeParityCell?: RuntimeParityCell;
 };
 
 async function runScenario(name: string, steps: QaSuiteStep[]): Promise<QaSuiteScenarioResult> {
@@ -263,6 +316,61 @@ async function runScenarioDefinition(
   });
 }
 
+function isRuntimeParityPass(result: RuntimeParityResult) {
+  return isRuntimeParityResultPass(result);
+}
+
+function formatRuntimeParityCellDetails(cell: RuntimeParityCell) {
+  const errors = [cell.transportErrorClass, cell.runtimeErrorClass].filter(Boolean).join(", ");
+  const sentinels = cell.sentinelFindings?.map((finding) => finding.kind).join(", ");
+  return [
+    `runtime=${cell.runtime}`,
+    `wallMs=${cell.wallClockMs}`,
+    `toolCalls=${cell.toolCalls.length}`,
+    `finalChars=${cell.finalText.length}`,
+    `tokens=${cell.usage.totalTokens}`,
+    ...(errors ? [`errors=${errors}`] : []),
+    ...(sentinels ? [`sentinels=${sentinels}`] : []),
+  ].join(" ");
+}
+
+function buildRuntimeParityScenarioResult(params: {
+  scenarioName: string;
+  result: RuntimeParityResult;
+}): QaSuiteScenarioResult {
+  const driftStepStatus = isRuntimeParityPass(params.result) ? "pass" : "fail";
+  return {
+    name: params.scenarioName,
+    status: driftStepStatus,
+    details: params.result.driftDetails ?? `runtime drift classified as ${params.result.drift}`,
+    steps: [
+      {
+        name: params.result.cells.pi.runtime,
+        status:
+          params.result.cells.pi.runtimeErrorClass || params.result.cells.pi.transportErrorClass
+            ? "fail"
+            : "pass",
+        details: formatRuntimeParityCellDetails(params.result.cells.pi),
+      },
+      {
+        name: params.result.cells.codex.runtime,
+        status:
+          params.result.cells.codex.runtimeErrorClass ||
+          params.result.cells.codex.transportErrorClass
+            ? "fail"
+            : "pass",
+        details: formatRuntimeParityCellDetails(params.result.cells.codex),
+      },
+      {
+        name: "runtime drift",
+        status: driftStepStatus,
+        details: params.result.driftDetails ?? params.result.drift,
+      },
+    ],
+    runtimeParity: params.result,
+  };
+}
+
 function createQaSuiteReportNotes(params: {
   transport: QaTransportAdapter;
   providerMode: QaProviderMode;
@@ -279,6 +387,47 @@ function normalizeQaSuiteModelRef(input: string | undefined, fallback: string) {
   return model && model.length > 0 ? model : fallback;
 }
 
+function remapModelRefForForcedRuntime(params: {
+  modelRef: string;
+  providerMode: QaProviderMode;
+  forcedRuntime?: RuntimeId;
+}) {
+  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
+    return params.modelRef;
+  }
+  const split = splitModelRef(params.modelRef);
+  if (!split || split.provider !== "mock-openai") {
+    return params.modelRef;
+  }
+  return `openai/${split.model}`;
+}
+
+function buildQaRuntimeEnvPatch(params: {
+  providerMode: QaProviderMode;
+  forcedRuntime?: RuntimeId;
+  mockBaseUrl?: string;
+}): NodeJS.ProcessEnv | undefined {
+  const patch: NodeJS.ProcessEnv = {};
+  if (params.forcedRuntime) {
+    patch.OPENCLAW_BUILD_PRIVATE_QA = "1";
+    patch.OPENCLAW_QA_FORCE_RUNTIME = params.forcedRuntime;
+  }
+  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
+    return Object.keys(patch).length > 0 ? patch : undefined;
+  }
+  const mockBaseUrl = params.mockBaseUrl?.trim().replace(/\/+$/u, "");
+  if (!mockBaseUrl) {
+    return Object.keys(patch).length > 0 ? patch : undefined;
+  }
+  // The forced codex lane uses the Codex app-server's native OpenAI provider
+  // path, so pin the managed app-server to the QA mock endpoint instead of
+  // leaking to the maintainer's real OpenAI config.
+  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = `app-server -c openai_base_url=${mockBaseUrl}/v1 --listen stdio://`;
+  patch.OPENAI_API_KEY = "qa-mock-openai-key";
+  patch.CODEX_API_KEY = "qa-mock-openai-key";
+  return patch;
+}
+
 export type QaSuiteSummaryJsonParams = {
   scenarios: QaSuiteScenarioResult[];
   startedAt: Date;
@@ -290,6 +439,7 @@ export type QaSuiteSummaryJsonParams = {
   fastMode: boolean;
   concurrency: number;
   scenarioIds?: readonly string[];
+  runtimePair?: [RuntimeId, RuntimeId];
 };
 
 /**
@@ -339,8 +489,227 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
       concurrency: params.concurrency,
       scenarioIds:
         params.scenarioIds && params.scenarioIds.length > 0 ? [...params.scenarioIds] : null,
+      runtimePair: params.runtimePair ?? null,
     },
   };
+}
+
+async function runQaRuntimeParitySuite(params: {
+  repoRoot: string;
+  outputDir: string;
+  startedAt: Date;
+  providerMode: QaProviderMode;
+  transportId: QaTransportId;
+  primaryModel: string;
+  alternateModel: string;
+  fastMode: boolean;
+  thinkingDefault?: QaThinkingLevel;
+  claudeCliAuthMode?: QaCliBackendAuthMode;
+  enabledPluginIds?: string[];
+  concurrency: number;
+  selectedCatalogScenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+  startLab?: QaSuiteStartLabFn;
+  lab?: QaLabServerHandle;
+  progressEnabled: boolean;
+  scenarioIds?: readonly string[];
+  runtimePair: [RuntimeId, RuntimeId];
+}) {
+  const ownsLab = !params.lab;
+  const startLab = requireQaSuiteStartLab(params.startLab);
+  const lab =
+    params.lab ??
+    (await startLab({
+      repoRoot: params.repoRoot,
+      host: "127.0.0.1",
+      port: 0,
+      embeddedGateway: "disabled",
+    }));
+  const transport = createQaTransportAdapter({
+    id: params.transportId,
+    state: lab.state,
+  });
+  const liveScenarioOutcomes: QaLabScenarioOutcome[] = params.selectedCatalogScenarios.map(
+    (scenario) => ({
+      id: scenario.id,
+      name: scenario.title,
+      status: "pending",
+    }),
+  );
+  lab.setScenarioRun({
+    kind: "suite",
+    status: "running",
+    startedAt: params.startedAt.toISOString(),
+    scenarios: [...liveScenarioOutcomes],
+  });
+
+  try {
+    const scenarios = await mapQaSuiteWithConcurrency(
+      params.selectedCatalogScenarios,
+      params.concurrency,
+      async (scenario, index): Promise<QaSuiteScenarioResult> => {
+        const scenarioIdForLog = sanitizeQaSuiteProgressValue(scenario.id);
+        writeQaSuiteProgress(
+          params.progressEnabled,
+          `runtime pair start (${index + 1}/${params.selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
+        );
+        liveScenarioOutcomes[index] = {
+          id: scenario.id,
+          name: scenario.title,
+          status: "running",
+          startedAt: new Date().toISOString(),
+        };
+        lab.setScenarioRun({
+          kind: "suite",
+          status: "running",
+          startedAt: params.startedAt.toISOString(),
+          scenarios: [...liveScenarioOutcomes],
+        });
+
+        const parity = await runRuntimeParityScenario({
+          scenarioId: scenario.id,
+          runCell: async (runtime) => {
+            const cellOutputDir = path.join(
+              params.outputDir,
+              "runtime-cells",
+              scenario.id,
+              runtime,
+            );
+            const cellStartedAt = Date.now();
+            const cellResult = await runQaSuite({
+              repoRoot: params.repoRoot,
+              outputDir: cellOutputDir,
+              providerMode: params.providerMode,
+              transportId: params.transportId,
+              primaryModel: remapModelRefForForcedRuntime({
+                modelRef: params.primaryModel,
+                providerMode: params.providerMode,
+                forcedRuntime: runtime,
+              }),
+              alternateModel: remapModelRefForForcedRuntime({
+                modelRef: params.alternateModel,
+                providerMode: params.providerMode,
+                forcedRuntime: runtime,
+              }),
+              fastMode: params.fastMode,
+              thinkingDefault: params.thinkingDefault,
+              claudeCliAuthMode: params.claudeCliAuthMode,
+              scenarioIds: [scenario.id],
+              concurrency: 1,
+              enabledPluginIds: params.enabledPluginIds,
+              startLab,
+              controlUiEnabled: scenarioRequiresControlUi(scenario),
+              forcedRuntime: runtime,
+              captureRuntimeParityCell: true,
+            });
+            const scenarioResult =
+              cellResult.scenarios[0] ??
+              ({
+                name: scenario.title,
+                status: "fail",
+                details: "runtime parity cell returned no scenario result",
+                steps: [
+                  {
+                    name: "runtime parity cell",
+                    status: "fail",
+                    details: "runtime parity cell returned no scenario result",
+                  },
+                ],
+              } satisfies QaSuiteScenarioResult);
+            const fallbackCell = {
+              runtime,
+              transcriptBytes: "",
+              toolCalls: [],
+              finalText: "",
+              usage: {
+                inputTokens: 0,
+                outputTokens: 0,
+                totalTokens: 0,
+              },
+              wallClockMs: Math.max(1, Date.now() - cellStartedAt),
+              runtimeErrorClass: "capture-missing",
+              bootStateLines: [],
+            } satisfies RuntimeParityCell;
+            return {
+              scenarioStatus: scenarioResult.status,
+              scenarioDetails: scenarioResult.details,
+              cell: cellResult.runtimeParityCell ?? fallbackCell,
+            };
+          },
+        });
+
+        const result = buildRuntimeParityScenarioResult({
+          scenarioName: scenario.title,
+          result: parity,
+        });
+        liveScenarioOutcomes[index] = {
+          id: scenario.id,
+          name: scenario.title,
+          status: result.status,
+          details: result.details,
+          steps: result.steps,
+          startedAt: liveScenarioOutcomes[index]?.startedAt,
+          finishedAt: new Date().toISOString(),
+        };
+        lab.setScenarioRun({
+          kind: "suite",
+          status: "running",
+          startedAt: params.startedAt.toISOString(),
+          scenarios: [...liveScenarioOutcomes],
+        });
+        writeQaSuiteProgress(
+          params.progressEnabled,
+          `runtime pair ${result.status} (${index + 1}/${params.selectedCatalogScenarios.length}): ${scenarioIdForLog}`,
+        );
+        return result;
+      },
+      {
+        startStaggerMs: resolveQaSuiteWorkerStartStaggerMs(params.concurrency),
+      },
+    );
+
+    const finishedAt = new Date();
+    const { report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
+      outputDir: params.outputDir,
+      startedAt: params.startedAt,
+      finishedAt,
+      scenarios,
+      transport,
+      providerMode: params.providerMode,
+      primaryModel: params.primaryModel,
+      alternateModel: params.alternateModel,
+      fastMode: params.fastMode,
+      concurrency: params.concurrency,
+      scenarioIds:
+        params.scenarioIds && params.scenarioIds.length > 0
+          ? params.selectedCatalogScenarios.map((scenario) => scenario.id)
+          : undefined,
+      runtimePair: params.runtimePair,
+    });
+    lab.setLatestReport({
+      outputPath: reportPath,
+      markdown: report,
+      generatedAt: finishedAt.toISOString(),
+    } satisfies QaLabLatestReport);
+    lab.setScenarioRun({
+      kind: "suite",
+      status: "completed",
+      startedAt: params.startedAt.toISOString(),
+      finishedAt: finishedAt.toISOString(),
+      scenarios: [...liveScenarioOutcomes],
+    });
+    return {
+      outputDir: params.outputDir,
+      reportPath,
+      summaryPath,
+      report,
+      scenarios,
+      watchUrl: lab.baseUrl,
+    } satisfies QaSuiteResult;
+  } finally {
+    if (ownsLab) {
+      await lab.stop();
+    }
+  }
 }
 
 async function writeQaSuiteArtifacts(params: {
@@ -360,6 +729,7 @@ async function writeQaSuiteArtifacts(params: {
   fastMode: boolean;
   concurrency: number;
   scenarioIds?: readonly string[];
+  runtimePair?: [RuntimeId, RuntimeId];
 }) {
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
@@ -450,6 +820,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     ...new Set([
       ...collectQaSuitePluginIds(selectedCatalogScenarios),
       ...(params?.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
+      ...(params?.forcedRuntime && params.forcedRuntime !== "pi" ? [params.forcedRuntime] : []),
     ]),
   ];
   const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
@@ -464,6 +835,29 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     progressEnabled,
     `run start: scenarios=${selectedCatalogScenarios.length} concurrency=${concurrency} transport=${transportId}`,
   );
+
+  if (params?.runtimePair) {
+    return await runQaRuntimeParitySuite({
+      repoRoot,
+      outputDir,
+      startedAt,
+      providerMode,
+      transportId,
+      primaryModel,
+      alternateModel,
+      fastMode,
+      thinkingDefault: params.thinkingDefault,
+      claudeCliAuthMode: params.claudeCliAuthMode,
+      enabledPluginIds: params.enabledPluginIds,
+      concurrency,
+      selectedCatalogScenarios,
+      startLab: params.startLab,
+      lab: params.lab,
+      progressEnabled,
+      scenarioIds: params.scenarioIds,
+      runtimePair: params.runtimePair,
+    });
+  }
 
   if (concurrency > 1 && selectedCatalogScenarios.length > 1) {
     const ownsLab = !params?.lab;
@@ -714,6 +1108,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       embeddedGateway: "disabled",
     }));
   writeQaSuiteProgress(progressEnabled, `lab ready: ${sanitizeQaSuiteProgressValue(lab.baseUrl)}`);
+  await waitForQaLabReadyOrStopOwned({ lab, ownsLab });
   const transport = createQaTransportAdapter({
     id: transportId,
     state: lab.state,
@@ -743,6 +1138,11 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     mutateConfig: gatewayConfigPatch
       ? (cfg) => applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig
       : undefined,
+    runtimeEnvPatch: buildQaRuntimeEnvPatch({
+      providerMode,
+      forcedRuntime: params?.forcedRuntime,
+      mockBaseUrl: mock?.baseUrl,
+    }),
   });
   writeQaSuiteProgress(
     progressEnabled,
@@ -840,6 +1240,19 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       });
     }
 
+    const runtimeParityCell =
+      params?.captureRuntimeParityCell &&
+      params.forcedRuntime &&
+      selectedCatalogScenarios.length === 1 &&
+      scenarios.length > 0
+        ? await captureRuntimeParityCell({
+            runtime: params.forcedRuntime,
+            gateway,
+            scenarioResult: scenarios[0],
+            wallClockMs: Math.max(1, Date.now() - startedAt.getTime()),
+            mockBaseUrl: mock?.baseUrl,
+          })
+        : undefined;
     const finishedAt = new Date();
     const metrics = buildQaSuiteRuntimeMetrics({
       startedAt,
@@ -897,6 +1310,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       report,
       scenarios,
       watchUrl: lab.baseUrl,
+      ...(runtimeParityCell ? { runtimeParityCell } : {}),
     } satisfies QaSuiteResult;
   } catch (error) {
     preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
@@ -923,8 +1337,11 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 }
 
 export const qaSuiteProgressTesting = {
+  buildQaRuntimeEnvPatch,
   parseQaSuiteBooleanEnv,
+  remapModelRefForForcedRuntime,
   resolveQaSuiteTransportReadyTimeoutMs,
   sanitizeQaSuiteProgressValue,
   shouldLogQaSuiteProgress,
+  waitForQaLabReadyOrStopOwned,
 };

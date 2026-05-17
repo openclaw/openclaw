@@ -19,10 +19,12 @@ import {
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import {
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
+  hasDeliveredExpectedMedia,
   hasMessagingToolDeliveryEvidence,
   hasVisibleAgentPayload,
 } from "./pi-embedded-runner/delivery-evidence.js";
@@ -56,7 +58,12 @@ import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
-const AGENT_MEDIATED_COMPLETION_TOOLS = new Set(["music_generate", "video_generate"]);
+const AGENT_MEDIATED_COMPLETION_TOOLS = new Set([
+  "image_generate",
+  "music_generate",
+  "subagent_announce",
+  "video_generate",
+]);
 
 type SubagentAnnounceDeliveryDeps = {
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
@@ -356,6 +363,23 @@ export async function resolveSubagentCompletionOrigin(params: {
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
 
   const router = createBoundDeliveryRouter();
+  const requesterRoute = router.resolveDestination({
+    eventKind: "task_completion",
+    targetSessionKey: params.requesterSessionKey,
+    requester: requesterConversation,
+    failClosed: true,
+  });
+  if (requesterRoute.mode === "bound" && requesterRoute.binding) {
+    return mergeDeliveryContext(
+      resolveBoundConversationOrigin({
+        bindingConversation: requesterRoute.binding.conversation,
+        requesterConversation,
+        requesterOrigin,
+      }),
+      requesterOrigin,
+    );
+  }
+
   const childRoute = router.resolveDestination({
     eventKind: "task_completion",
     targetSessionKey: params.childSessionKey,
@@ -366,23 +390,6 @@ export async function resolveSubagentCompletionOrigin(params: {
     return mergeDeliveryContext(
       resolveBoundConversationOrigin({
         bindingConversation: childRoute.binding.conversation,
-        requesterConversation,
-        requesterOrigin,
-      }),
-      requesterOrigin,
-    );
-  }
-
-  const route = router.resolveDestination({
-    eventKind: "task_completion",
-    targetSessionKey: params.requesterSessionKey,
-    requester: requesterConversation,
-    failClosed: true,
-  });
-  if (route.mode === "bound" && route.binding) {
-    return mergeDeliveryContext(
-      resolveBoundConversationOrigin({
-        bindingConversation: route.binding.conversation,
         requesterConversation,
         requesterOrigin,
       }),
@@ -442,18 +449,21 @@ export function loadSessionEntryByKey(sessionKey: string) {
 }
 
 async function maybeSteerSubagentAnnounce(params: {
+  deliveryTimeoutMs?: number;
   requesterSessionKey: string;
   steerMessage: string;
   signal?: AbortSignal;
-}): Promise<"steered" | "none" | "dropped"> {
+}): Promise<
+  { status: "steered"; deliveredAt?: number; enqueuedAt?: number } | { status: "none" | "dropped" }
+> {
   if (params.signal?.aborted) {
-    return "none";
+    return { status: "none" };
   }
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
-  const { sessionId, isActive } = resolveRequesterSessionActivity(canonicalKey);
+  const { sessionId } = resolveRequesterSessionActivity(canonicalKey);
   if (!sessionId) {
-    return "none";
+    return { status: "none" };
   }
 
   const queueSettings = resolveQueueSettings({
@@ -464,15 +474,36 @@ async function maybeSteerSubagentAnnounce(params: {
 
   // Subagent announcements are internal handoffs into an active requester turn.
   // Queue modes such as followup/collect apply to user prompts, not this path.
-  const queueOutcome = await resolveQueueEmbeddedPiMessageOutcome(sessionId, params.steerMessage, {
+  const queueOptions: EmbeddedPiQueueMessageOptions = {
+    deliveryTimeoutMs: params.deliveryTimeoutMs,
     steeringMode: "all",
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
-  });
+    waitForTranscriptCommit: true,
+  };
+  let queueOutcome = await resolveQueueEmbeddedPiMessageOutcome(
+    sessionId,
+    params.steerMessage,
+    queueOptions,
+  );
+  if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
+    const bestEffortQueueOptions = { ...queueOptions };
+    delete bestEffortQueueOptions.waitForTranscriptCommit;
+    queueOutcome = await resolveQueueEmbeddedPiMessageOutcome(
+      sessionId,
+      params.steerMessage,
+      bestEffortQueueOptions,
+    );
+  }
   if (queueOutcome.queued) {
-    return "steered";
+    return {
+      status: "steered",
+      deliveredAt: queueOutcome.deliveredAtMs,
+      enqueuedAt: queueOutcome.enqueuedAtMs,
+    };
   }
 
-  return isActive ? "dropped" : "none";
+  const currentActivity = resolveRequesterSessionActivity(canonicalKey);
+  return { status: currentActivity.isActive ? "dropped" : "none" };
 }
 
 function hasVisibleGatewayAgentPayload(response: unknown): boolean {
@@ -495,6 +526,39 @@ function requiresAgentMediatedCompletionDelivery(params: {
 function hasGatewayAgentMessagingToolDelivery(response: unknown): boolean {
   const result = getGatewayAgentResult(response);
   return Boolean(result && hasMessagingToolDeliveryEvidence(result));
+}
+
+function collectExpectedMediaFromInternalEvents(
+  events: AgentInternalEvent[] | undefined,
+): string[] {
+  if (!events?.length) {
+    return [];
+  }
+  const mediaUrls: string[] = [];
+  const seen = new Set<string>();
+  for (const event of events) {
+    const values = [
+      ...(Array.isArray(event.mediaUrls) ? event.mediaUrls : []),
+      ...mediaUrlsFromGeneratedAttachments(event.attachments),
+    ];
+    for (const value of values) {
+      const normalized = typeof value === "string" ? value.trim() : "";
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      mediaUrls.push(normalized);
+    }
+  }
+  return mediaUrls;
+}
+
+function hasGatewayAgentDeliveredExpectedMedia(
+  response: unknown,
+  expectedMediaUrls: readonly string[],
+): boolean {
+  const result = getGatewayAgentResult(response);
+  return Boolean(result && hasDeliveredExpectedMedia(result, expectedMediaUrls));
 }
 
 function getGatewayAgentCommandDeliveryFailure(response: unknown): string | undefined {
@@ -595,16 +659,21 @@ async function sendSubagentAnnounceDirectly(params: {
       expectsCompletionMessage: params.expectsCompletionMessage,
       sourceTool: params.sourceTool,
     });
+    const expectedMediaUrls = collectExpectedMediaFromInternalEvents(params.internalEvents);
     const requiresMessageToolDelivery =
       agentMediatedCompletion &&
-      completionRequiresMessageToolDelivery({
-        cfg,
-        requesterSessionKey: params.requesterSessionKey,
-        targetRequesterSessionKey: params.targetRequesterSessionKey,
-        requesterEntry,
-        directOrigin: effectiveDirectOrigin,
-        requesterSessionOrigin,
-      });
+      (expectedMediaUrls.length > 0 ||
+        completionRequiresMessageToolDelivery({
+          cfg,
+          requesterSessionKey: params.requesterSessionKey,
+          targetRequesterSessionKey: canonicalRequesterSessionKey,
+          requesterEntry,
+          directOrigin: effectiveDirectOrigin,
+          requesterSessionOrigin,
+        }));
+    const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
+      ? "message_tool_only"
+      : undefined;
     const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
     const requesterQueueSettings = resolveQueueSettings({
@@ -622,30 +691,32 @@ async function sendSubagentAnnounceDirectly(params: {
         requesterActivity.sessionId,
         params.triggerMessage,
         {
+          deliveryTimeoutMs: announceTimeoutMs,
           steeringMode: "all",
+          ...(completionSourceReplyDeliveryMode
+            ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
+            : {}),
           ...(requesterQueueSettings.debounceMs !== undefined
             ? { debounceMs: requesterQueueSettings.debounceMs }
             : {}),
+          waitForTranscriptCommit: true,
         },
       );
       if (wakeOutcome.queued) {
         return {
           delivered: true,
+          deliveredAt: wakeOutcome.deliveredAtMs,
+          enqueuedAt: wakeOutcome.enqueuedAtMs,
           path: "steered",
         };
       }
       if (requesterActivity.isActive) {
-        // Active requester sessions should receive completion data through their
-        // running agent turn. If wake fails, let the dispatch layer steer/retry;
-        // do not bypass the requester agent with raw child output.
-        return {
-          delivered: false,
-          path: "direct",
-          error: formatQueueWakeFailureError(
+        defaultRuntime.log(
+          `[warn] Active requester session could not be woken for subagent completion; falling back to requester-agent handoff: ${formatQueueWakeFailureError(
             "active requester session could not be woken",
             wakeOutcome,
-          ),
-        };
+          )}`,
+        );
       }
     }
     if (params.signal?.aborted) {
@@ -682,6 +753,9 @@ async function sendSubagentAnnounceDirectly(params: {
         sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
         sourceTool: params.sourceTool ?? "subagent_announce",
       },
+      ...(completionSourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
+        : {}),
       idempotencyKey: params.directIdempotencyKey,
     };
     let directAnnounceResponse: unknown;
@@ -724,6 +798,17 @@ async function sendSubagentAnnounceDirectly(params: {
         delivered: false,
         path: "direct",
         error: "completion agent did not deliver through the message tool",
+      };
+    }
+    if (
+      agentMediatedCompletion &&
+      expectedMediaUrls.length > 0 &&
+      !hasGatewayAgentDeliveredExpectedMedia(directAnnounceResponse, expectedMediaUrls)
+    ) {
+      return {
+        delivered: false,
+        path: "direct",
+        error: "completion agent did not deliver generated media",
       };
     }
     const directDeliveryFailure = shouldDeliverAgentFinal
@@ -787,6 +872,9 @@ export async function deliverSubagentAnnouncement(params: {
     signal: params.signal,
     steer: async () =>
       await maybeSteerSubagentAnnounce({
+        deliveryTimeoutMs: resolveSubagentAnnounceTimeoutMs(
+          subagentAnnounceDeliveryDeps.getRuntimeConfig(),
+        ),
         requesterSessionKey: params.requesterSessionKey,
         steerMessage: params.steerMessage,
         signal: params.signal,

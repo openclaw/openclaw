@@ -1,17 +1,12 @@
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createChannelContractTestShards } from "../../scripts/lib/channel-contract-test-plan.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 
 function listContractTests(rootDir = "src/channels/plugins/contracts"): string[] {
-  if (!existsSync(rootDir)) {
-    return [];
-  }
-
-  return readdirSync(rootDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"))
-    .map((entry) => join(rootDir, entry.name).replaceAll("\\", "/"))
-    .toSorted((a, b) => a.localeCompare(b));
+  const files = listGitTrackedFiles({ pathspecs: rootDir });
+  expect(files).not.toBeNull();
+  return (files ?? []).filter((line) => line.endsWith(".test.ts"));
 }
 
 describe("scripts/lib/channel-contract-test-plan.mjs", () => {
@@ -40,6 +35,22 @@ describe("scripts/lib/channel-contract-test-plan.mjs", () => {
 
     expect(actual).toEqual(listContractTests());
     expect(new Set(actual).size).toBe(actual.length);
+  });
+
+  it("uses git-tracked files without walking contract directories", () => {
+    const payload = expectNoNodeFsScans<{
+      files: number;
+      shards: number;
+    }>(`
+      const { createChannelContractTestShards } = await import("./scripts/lib/channel-contract-test-plan.mjs");
+      const shards = createChannelContractTestShards();
+      return {
+        files: shards.reduce((total, shard) => total + shard.includePatterns.length, 0),
+        shards: shards.length,
+      };
+    `);
+    expect(payload.shards).toBe(3);
+    expect(payload.files).toBeGreaterThan(0);
   });
 
   it("keeps registry-backed surface shards spread across checks", () => {

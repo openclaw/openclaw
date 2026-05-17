@@ -15,6 +15,7 @@ type DoctorConfigResult = {
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
+  preservedLegacyRootKeys?: readonly string[];
 };
 
 type DoctorHealthFlowContext = {
@@ -124,11 +125,17 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     await import("../commands/doctor-auth-flat-profiles.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
+  const { maybeRepairLegacyOAuthSidecarProfiles } =
+    await import("../commands/doctor-auth-oauth-sidecar.js");
   const { noteAuthProfileHealth, noteLegacyCodexProviderOverride } =
     await import("../commands/doctor-auth.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
   const { note } = await import("../terminal/note.js");
   await maybeRepairLegacyFlatAuthProfileStores({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+  });
+  await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: ctx.cfg,
     prompter: ctx.prompter,
   });
@@ -337,7 +344,11 @@ async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise
 
 async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionLockHealth } = await import("../commands/doctor-session-locks.js");
-  await noteSessionLockHealth({ shouldRepair: ctx.prompter.shouldRepair });
+  await noteSessionLockHealth({
+    shouldRepair: ctx.prompter.shouldRepair,
+    config: ctx.cfg,
+    env: ctx.env,
+  });
 }
 
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -372,8 +383,11 @@ async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairGatewayServiceConfig, maybeScanExtraGatewayServices } =
     await import("../commands/doctor-gateway-services.js");
-  const { noteMacLaunchAgentOverrides, noteMacLaunchctlGatewayEnvOverrides } =
-    await import("../commands/doctor-platform-notes.js");
+  const {
+    noteMacLaunchAgentOverrides,
+    noteMacLaunchctlGatewayEnvOverrides,
+    noteMacStaleOpenClawUpdateLaunchdJobs,
+  } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
   await maybeRepairGatewayServiceConfig(
     ctx.cfg,
@@ -382,6 +396,7 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
     ctx.prompter,
   );
   await noteMacLaunchAgentOverrides();
+  await noteMacStaleOpenClawUpdateLaunchdJobs();
   await noteMacLaunchctlGatewayEnvOverrides(ctx.cfg);
 }
 
@@ -607,7 +622,9 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       afterWrite: { mode: "auto" },
       writeOptions: {
         allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
-        skipPluginValidation: ctx.configResult.skipPluginValidationOnWrite === true,
+        skipPluginValidation:
+          ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
+        preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
       },
     });
     logConfigUpdated(ctx.runtime);
@@ -645,14 +662,17 @@ async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext): Prom
   }
 }
 
-async function runFinalConfigValidationHealth(_ctx: DoctorHealthFlowContext): Promise<void> {
+async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { readConfigFileSnapshot } = await import("../config/config.js");
-  const finalSnapshot = await readConfigFileSnapshot();
+  const finalSnapshot = await readConfigFileSnapshot({
+    skipPluginValidation: isUpdateDoctorRun(ctx.env ?? process.env),
+    preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
+  });
   if (finalSnapshot.exists && !finalSnapshot.valid) {
-    _ctx.runtime.error("Invalid config:");
+    ctx.runtime.error("Invalid config:");
     for (const issue of finalSnapshot.issues) {
       const path = issue.path || "<root>";
-      _ctx.runtime.error(`- ${path}: ${issue.message}`);
+      ctx.runtime.error(`- ${path}: ${issue.message}`);
     }
   }
 }
