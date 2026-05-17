@@ -51,8 +51,12 @@ describe("install.sh", () => {
   });
 
   it("loads nvm before checking Node.js so stale system Node does not win", () => {
+    // #83232: Node detection runs before any Homebrew step. Allow comments
+    // between the "# Step 2: Node.js" header and the load_nvm/check_node block,
+    // but the load_nvm_for_node_detection -> if ! check_node sequence must
+    // still be contiguous.
     expect(script).toMatch(
-      /# Step 2: Node\.js\s+load_nvm_for_node_detection\s+if ! check_node; then/,
+      /# Step 2: Node\.js\b[\s\S]*?\bload_nvm_for_node_detection\s+if ! check_node; then/,
     );
 
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-nvm-"));
@@ -589,6 +593,55 @@ describe("install.sh duplicate OpenClaw install detection", () => {
     expect(result.stdout).toContain("/fnm/openclaw");
     expect(result.stdout).toContain("Active openclaw:");
     expect(result.stdout).toContain("npm uninstall -g openclaw");
+  });
+
+  it("skips install_homebrew when check_node already passes (#83232)", () => {
+    // Real-behavior probe: stub the three step functions, call the exact main()
+    // block, and confirm install_homebrew is NOT called when an existing Node
+    // satisfies the version check (the #83232 scenario).
+    const result = runInstallShell(
+      [
+        "set -euo pipefail",
+        'CALL_ORDER=""',
+        "install_homebrew() { CALL_ORDER=\"$CALL_ORDER install_homebrew\"; }",
+        'load_nvm_for_node_detection() { CALL_ORDER="$CALL_ORDER load_nvm"; }',
+        "install_node() { CALL_ORDER=\"$CALL_ORDER install_node\"; }",
+        "check_node() { CALL_ORDER=\"$CALL_ORDER check_node_PASS\"; return 0; }",
+        "load_nvm_for_node_detection",
+        "if ! check_node; then",
+        "    install_homebrew",
+        "    install_node",
+        "fi",
+        'printf "ORDER:%s\\n" "$CALL_ORDER"',
+      ].join("\n"),
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("ORDER: load_nvm check_node_PASS");
+    expect(result.stdout).not.toContain("install_homebrew");
+    expect(result.stdout).not.toContain("install_node");
+  });
+
+  it("runs install_homebrew before install_node when Node is missing (#83232)", () => {
+    const result = runInstallShell(
+      [
+        "set -euo pipefail",
+        'CALL_ORDER=""',
+        "install_homebrew() { CALL_ORDER=\"$CALL_ORDER install_homebrew\"; }",
+        'load_nvm_for_node_detection() { CALL_ORDER="$CALL_ORDER load_nvm"; }',
+        "install_node() { CALL_ORDER=\"$CALL_ORDER install_node\"; }",
+        "check_node() { CALL_ORDER=\"$CALL_ORDER check_node_FAIL\"; return 1; }",
+        "load_nvm_for_node_detection",
+        "if ! check_node; then",
+        "    install_homebrew",
+        "    install_node",
+        "fi",
+        'printf "ORDER:%s\\n" "$CALL_ORDER"',
+      ].join("\n"),
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "ORDER: load_nvm check_node_FAIL install_homebrew install_node",
+    );
   });
 
   it("stays quiet when only one OpenClaw npm root exists", () => {
