@@ -73,6 +73,9 @@ function chunkInteractiveButtons(
   }
 }
 
+/**
+ * @deprecated Use buildTelegramPresentationButtons with MessagePresentation.
+ */
 export function buildTelegramInteractiveButtons(
   interactive?: InteractiveReply,
 ): TelegramInlineButtons | undefined {
