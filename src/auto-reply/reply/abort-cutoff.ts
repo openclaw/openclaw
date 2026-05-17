@@ -93,7 +93,11 @@ export function shouldSkipMessageByAbortCutoff(params: {
 export function shouldPersistAbortCutoff(params: {
   commandSessionKey?: string;
   targetSessionKey?: string;
+  commandTargetSharesMessageTimeline?: boolean;
 }): boolean {
+  if (params.commandTargetSharesMessageTimeline === true) {
+    return true;
+  }
   const commandSessionKey = normalizeOptionalString(params.commandSessionKey);
   const targetSessionKey = normalizeOptionalString(params.targetSessionKey);
   if (!commandSessionKey || !targetSessionKey) {
@@ -101,6 +105,8 @@ export function shouldPersistAbortCutoff(params: {
   }
   // Native targeted /stop can run from a slash/session-control key while the
   // actual target session uses different message id/timestamp spaces.
-  // Persist cutoff only when command source and target are the same session.
+  // Persist cutoff only when command source and target are the same session,
+  // unless the channel explicitly marks the command turn as sharing the
+  // target session's message timeline.
   return commandSessionKey === targetSessionKey;
 }

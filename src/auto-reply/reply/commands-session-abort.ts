@@ -71,6 +71,7 @@ function resolveAbortCutoffForTarget(params: {
     !shouldPersistAbortCutoff({
       commandSessionKey: params.commandSessionKey,
       targetSessionKey: params.targetSessionKey,
+      commandTargetSharesMessageTimeline: params.ctx.CommandTargetSharesMessageTimeline,
     })
   ) {
     return undefined;

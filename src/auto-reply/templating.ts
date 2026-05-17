@@ -230,6 +230,11 @@ export type MsgContext = {
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;
   /**
+   * Internal flag for native commands whose provider message id/timestamp can
+   * safely be used as a cutoff for the targeted conversation session.
+   */
+  CommandTargetSharesMessageTimeline?: boolean;
+  /**
    * Internal flag: command handling prepared trailing prompt text for ACP dispatch.
    * Used for `/new <prompt>` and `/reset <prompt>` on ACP-bound sessions.
    */

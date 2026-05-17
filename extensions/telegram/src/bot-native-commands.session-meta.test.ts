@@ -1083,12 +1083,21 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
     const dispatchCall = (
       replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
-        [{ ctx?: { CommandTargetSessionKey?: string; OriginatingTo?: string } }]
+        [
+          {
+            ctx?: {
+              CommandTargetSessionKey?: string;
+              CommandTargetSharesMessageTimeline?: boolean;
+              OriginatingTo?: string;
+            };
+          },
+        ]
       >
     )[0]?.[0];
     expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(
       "agent:zu:telegram:group:-1001234567890:topic:42",
     );
+    expect(dispatchCall?.ctx?.CommandTargetSharesMessageTimeline).toBe(true);
     expect(dispatchCall?.ctx?.OriginatingTo).toBe("telegram:-1001234567890:topic:42");
   });
 

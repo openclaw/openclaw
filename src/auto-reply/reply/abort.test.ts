@@ -118,6 +118,7 @@ describe("abort detection", () => {
     senderId?: string;
     commandSource?: "native" | "text";
     targetSessionKey?: string;
+    targetSharesMessageTimeline?: boolean;
     messageSid?: string;
     timestamp?: number;
   }) {
@@ -134,6 +135,7 @@ describe("abort detection", () => {
         ...(params.senderId ? { SenderId: params.senderId } : {}),
         ...(params.commandSource ? { CommandSource: params.commandSource } : {}),
         ...(params.targetSessionKey ? { CommandTargetSessionKey: params.targetSessionKey } : {}),
+        ...(params.targetSharesMessageTimeline ? { CommandTargetSharesMessageTimeline: true } : {}),
         ...(params.messageSid ? { MessageSid: params.messageSid } : {}),
         ...(typeof params.timestamp === "number" ? { Timestamp: params.timestamp } : {}),
       }),
@@ -568,6 +570,38 @@ describe("abort detection", () => {
     expect(entry.abortedLastRun).toBe(true);
     expect(entry.abortCutoffMessageSid).toBeUndefined();
     expect(entry.abortCutoffTimestamp).toBeUndefined();
+  });
+
+  it("persists cutoff metadata for native /stop when the target shares the message timeline", async () => {
+    const slashSessionKey = "agent:main:telegram:slash:123";
+    const targetSessionKey = "agent:main:telegram:group:-100123:topic:42";
+    const targetSessionId = "session-target";
+    const { storePath, cfg } = await createAbortConfig({
+      sessionIdsByKey: { [targetSessionKey]: targetSessionId },
+    });
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey: slashSessionKey,
+      from: "telegram:group:-100123:topic:42",
+      to: "slash:123",
+      commandSource: "native",
+      targetSessionKey,
+      targetSharesMessageTimeline: true,
+      messageSid: "1005",
+      timestamp: 1234567890000,
+    });
+
+    expect(result.handled).toBe(true);
+    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+    const entry = store[targetSessionKey] as {
+      abortedLastRun?: boolean;
+      abortCutoffMessageSid?: string;
+      abortCutoffTimestamp?: number;
+    };
+    expect(entry.abortedLastRun).toBe(true);
+    expect(entry.abortCutoffMessageSid).toBe("1005");
+    expect(entry.abortCutoffTimestamp).toBe(1234567890000);
   });
 
   it("fast-abort stops active subagent runs for requester session", async () => {

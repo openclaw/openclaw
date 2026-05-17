@@ -1174,6 +1174,7 @@ export const registerTelegramNativeCommands = ({
           SessionKey: commandSessionKey,
           AccountId: route.accountId,
           CommandTargetSessionKey: commandTargetSessionKey,
+          CommandTargetSharesMessageTimeline: true,
           MessageThreadId: threadSpec.id,
           IsForum: isForum,
           // Originating context for sub-agent announce routing

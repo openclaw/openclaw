@@ -326,6 +326,7 @@ export async function tryFastAbortFromMessage(params: {
     const abortCutoff = shouldPersistAbortCutoff({
       commandSessionKey: ctx.SessionKey,
       targetSessionKey: resolvedTargetKey,
+      commandTargetSharesMessageTimeline: ctx.CommandTargetSharesMessageTimeline,
     })
       ? resolveAbortCutoffFromContext(ctx)
       : undefined;
