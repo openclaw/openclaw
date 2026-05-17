@@ -113,6 +113,33 @@ describe("doctor session snapshot stale runtime metadata", () => {
     ]);
   });
 
+  it("expands home-relative cached bundled skill locations before classifying them", () => {
+    const homeDir = path.join(root, "home");
+    const stalePath = "~/old-runtime/node_modules/openclaw/skills/doctor/SKILL.md";
+
+    const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
+      bundledSkillsDir,
+      env: { HOME: homeDir },
+      store: {
+        "agent:home": sessionEntry({
+          skillsSnapshot: {
+            prompt: skillPrompt(stalePath),
+            skills: [{ name: "doctor" }],
+          },
+        }),
+      },
+    });
+
+    expect(findings).toEqual([
+      {
+        sessionKey: "agent:home",
+        field: "skillsSnapshot.prompt",
+        cachedPath: stalePath,
+        expectedPath: path.join(bundledSkillsDir, "doctor", "SKILL.md"),
+      },
+    ]);
+  });
+
   it("ignores current bundled locations and unrelated workspace skill locations", () => {
     const currentPath = path.join(bundledSkillsDir, "doctor", "SKILL.md");
     const workspacePath = path.join(root, "workspace", "skills", "doctor", "SKILL.md");
@@ -221,6 +248,52 @@ describe("doctor session snapshot stale runtime metadata", () => {
     expect(message).toContain("inactive runtime root");
     expect(message).toContain(stalePath);
     expect(message).toContain(path.join(bundledSkillsDir, "doctor", "SKILL.md"));
+  });
+
+  it("scans resolvedSkills before session store normalization strips them", async () => {
+    const stalePath = path.join(
+      root,
+      "old-runtime",
+      "node_modules",
+      "openclaw",
+      "skills",
+      "doctor",
+      "SKILL.md",
+    );
+    const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
+    await writeSessionStore(storePath, {
+      "agent:main": sessionEntry({
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "doctor" }],
+          resolvedSkills: [
+            {
+              name: "doctor",
+              description: "Doctor skill",
+              source: "bundled",
+              filePath: stalePath,
+              baseDir: path.dirname(stalePath),
+              sourceInfo: {
+                path: stalePath,
+                source: "bundled",
+                scope: "user",
+                origin: "top-level",
+                baseDir: path.dirname(stalePath),
+              },
+              disableModelInvocation: false,
+            },
+          ],
+        },
+      }),
+    });
+
+    await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const [message] = note.mock.calls[0] as [string, string];
+    expect(message).toContain("agent:main");
+    expect(message).toContain("skillsSnapshot.resolvedSkills");
+    expect(message).toContain(stalePath);
   });
 
   it("reports stale cached metadata from configured session stores", async () => {

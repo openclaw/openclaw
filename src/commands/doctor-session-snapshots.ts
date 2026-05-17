@@ -2,10 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledSkillsDir } from "../agents/skills/bundled-dir.js";
 import { resolveStateDir } from "../config/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -168,14 +168,20 @@ function resolveExpectedBundledSkillPath(params: {
   cachedPath: string;
   bundledSkillsDir: string;
   pathExists: (filePath: string) => boolean;
+  homeDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): string | undefined {
-  if (!isAbsolutePathLike(params.cachedPath)) {
+  const expandedCachedPath = expandHomePrefix(params.cachedPath, {
+    home: params.homeDir,
+    env: params.env,
+  });
+  if (!isAbsolutePathLike(expandedCachedPath)) {
     return undefined;
   }
-  if (isInsidePath(params.bundledSkillsDir, params.cachedPath)) {
+  if (isInsidePath(params.bundledSkillsDir, expandedCachedPath)) {
     return undefined;
   }
-  const relativeSegments = extractBundledSkillRelativeSegments(params.cachedPath);
+  const relativeSegments = extractBundledSkillRelativeSegments(expandedCachedPath);
   if (!relativeSegments) {
     return undefined;
   }
@@ -187,6 +193,8 @@ export function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
   store: Record<string, SessionEntry>;
   bundledSkillsDir: string | undefined;
   pathExists?: (filePath: string) => boolean;
+  homeDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): StaleSessionSnapshotPathFinding[] {
   const bundledSkillsDir = params.bundledSkillsDir?.trim();
   if (!bundledSkillsDir) {
@@ -204,6 +212,8 @@ export function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
         cachedPath: cached.path,
         bundledSkillsDir,
         pathExists,
+        homeDir: params.homeDir,
+        env: params.env,
       });
       if (!expectedPath) {
         continue;
@@ -252,6 +262,11 @@ function resolveSessionStorePaths(params: {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
+function loadSessionStoreForSnapshotScan(storePath: string): Record<string, SessionEntry> {
+  const parsed = JSON.parse(fs.readFileSync(storePath, "utf-8")) as unknown;
+  return isRecord(parsed) ? (parsed as Record<string, SessionEntry>) : {};
+}
+
 export async function noteSessionSnapshotHealth(params?: {
   storePaths?: string[];
   bundledSkillsDir?: string;
@@ -270,7 +285,7 @@ export async function noteSessionSnapshotHealth(params?: {
   for (const storePath of storePaths) {
     let store: Record<string, SessionEntry>;
     try {
-      store = loadSessionStore(storePath);
+      store = loadSessionStoreForSnapshotScan(storePath);
     } catch (err) {
       note(
         `- Failed to inspect session snapshot metadata in ${shortenHomePath(storePath)}: ${String(err)}`,
@@ -278,7 +293,11 @@ export async function noteSessionSnapshotHealth(params?: {
       );
       continue;
     }
-    const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({ store, bundledSkillsDir });
+    const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
+      store,
+      bundledSkillsDir,
+      env: params?.env,
+    });
     if (findings.length > 0) {
       findingsByStore.set(storePath, findings);
     }
