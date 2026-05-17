@@ -813,7 +813,8 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("normalizes hook channel ids for side-thread dynamic tool requests", async () => {
-    const beforeToolCall = vi.fn((_event: unknown, context: { channelId?: string }) => {
+    const beforeToolCall = vi.fn((...args: unknown[]) => {
+      const context = args[1] as { channelId?: string };
       expect(context.channelId).toBe("voice-room");
       return undefined;
     });
