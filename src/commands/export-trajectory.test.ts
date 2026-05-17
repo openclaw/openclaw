@@ -67,4 +67,51 @@ describe("exportTrajectoryCommand", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
+
+  it("preserves direct sessionKey when encoded request omits it (#83282)", async () => {
+    // Encoded request only supplies `output`, no sessionKey. The previous
+    // decode shape returned `sessionKey: ""`, which overwrote the direct
+    // --session-key from opts and tripped the "missing" path.
+    const runtime = createRuntime();
+    const requestJsonBase64 = Buffer.from(
+      JSON.stringify({ output: "/tmp/trajectory.json" }),
+      "utf8",
+    ).toString("base64url");
+
+    await exportTrajectoryCommand(
+      {
+        sessionKey: "agent:main:telegram:direct:456",
+        requestJsonBase64,
+      },
+      runtime,
+    );
+
+    // The direct sessionKey survived the merge: failure must be
+    // "Session not found" (because the store is empty), NOT
+    // "--session-key is required" (which is the pre-fix bug surface).
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Session not found: agent:main:telegram:direct:456. Run openclaw sessions to see available sessions.",
+    );
+    expect(runtime.error).not.toHaveBeenCalledWith(
+      "--session-key is required. Run openclaw sessions to choose a session.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("lets encoded sessionKey override when direct sessionKey is not given (#83282)", async () => {
+    // Reverse case: when only the encoded request supplies sessionKey, the
+    // resolved options must pick it up.
+    const runtime = createRuntime();
+    const requestJsonBase64 = Buffer.from(
+      JSON.stringify({ sessionKey: "agent:main:telegram:direct:789" }),
+      "utf8",
+    ).toString("base64url");
+
+    await exportTrajectoryCommand({ requestJsonBase64 }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Session not found: agent:main:telegram:direct:789. Run openclaw sessions to see available sessions.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
 });

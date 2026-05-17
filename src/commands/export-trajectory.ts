@@ -56,13 +56,34 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
     throw new Error("Encoded trajectory export request must be a JSON object");
   }
   const request = decoded as EncodedExportTrajectoryRequest;
-  return {
-    sessionKey: readOptionalString(request.sessionKey) ?? "",
-    output: readOptionalString(request.output),
-    store: readOptionalString(request.store),
-    agent: readOptionalString(request.agent),
-    workspace: readOptionalString(request.workspace),
-  };
+  // #83282: only include keys present in the encoded request so the spread in
+  // resolveExportTrajectoryOptions doesn't overwrite already-defined direct
+  // CLI options (notably sessionKey) with empty placeholders. The previous
+  // `sessionKey: readOptionalString(...) ?? ""` form silently clobbered an
+  // explicit --session-key with "", producing the "--session-key is required"
+  // failure path.
+  const partial: Partial<ExportTrajectoryCommandOptions> = {};
+  const sessionKey = readOptionalString(request.sessionKey);
+  if (sessionKey !== undefined) {
+    partial.sessionKey = sessionKey;
+  }
+  const output = readOptionalString(request.output);
+  if (output !== undefined) {
+    partial.output = output;
+  }
+  const store = readOptionalString(request.store);
+  if (store !== undefined) {
+    partial.store = store;
+  }
+  const agent = readOptionalString(request.agent);
+  if (agent !== undefined) {
+    partial.agent = agent;
+  }
+  const workspace = readOptionalString(request.workspace);
+  if (workspace !== undefined) {
+    partial.workspace = workspace;
+  }
+  return partial;
 }
 
 function resolveExportTrajectoryOptions(
