@@ -5,6 +5,7 @@ import { createQwenThinkingWrapper, wrapQwenProviderStream } from "./stream.js";
 
 function capturePayload(params: {
   thinkingLevel?: "off" | "low" | "medium" | "high" | "xhigh" | "max";
+  thinkingFormat?: "qwen-chat-template" | "top-level";
   reasoning?: unknown;
   initialPayload?: Record<string, unknown>;
   model?: Partial<Model<"openai-completions">>;
@@ -17,7 +18,11 @@ function capturePayload(params: {
     return {} as ReturnType<StreamFn>;
   };
 
-  const wrapped = createQwenThinkingWrapper(baseStreamFn, params.thinkingLevel ?? "high");
+  const wrapped = createQwenThinkingWrapper(
+    baseStreamFn,
+    params.thinkingLevel ?? "high",
+    params.thinkingFormat,
+  );
   void wrapped(
     {
       api: "openai-completions",
@@ -56,6 +61,31 @@ describe("createQwenThinkingWrapper", () => {
     expect(capturePayload({ thinkingLevel: "high" })).toEqual({ enable_thinking: true });
   });
 
+  it("maps chat-template format to session-aware chat_template_kwargs", () => {
+    expect(capturePayload({ thinkingFormat: "qwen-chat-template", thinkingLevel: "off" })).toEqual({
+      chat_template_kwargs: { enable_thinking: false },
+      preserve_thinking: true,
+    });
+    expect(
+      capturePayload({
+        thinkingFormat: "qwen-chat-template",
+        thinkingLevel: "high",
+        initialPayload: {
+          enable_thinking: false,
+          chat_template_kwargs: {
+            force_nonempty_content: true,
+          },
+        },
+      }),
+    ).toEqual({
+      chat_template_kwargs: {
+        enable_thinking: true,
+        force_nonempty_content: true,
+      },
+      preserve_thinking: true,
+    });
+  });
+
   it("skips non-reasoning and non-completions models", () => {
     expect(capturePayload({ model: { reasoning: false } })).toStrictEqual({});
     expect(capturePayload({ model: { api: "openai-responses" as never } })).toStrictEqual({});
@@ -73,6 +103,7 @@ describe("wrapQwenProviderStream", () => {
           provider: "qwen",
           id: "qwen3.6-plus",
           reasoning: true,
+          compat: { thinkingFormat: "qwen-chat-template" },
         } as Model<"openai-completions">,
         streamFn: undefined,
       } as never),

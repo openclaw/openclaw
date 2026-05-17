@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 
 type QwenThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
+type QwenThinkingFormat = "qwen-chat-template" | "top-level";
 
 function isQwenProviderId(providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
@@ -21,12 +22,26 @@ function isQwenProviderId(providerId: string): boolean {
 export function createQwenThinkingWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel: QwenThinkingLevel,
+  thinkingFormat: QwenThinkingFormat = "top-level",
 ): StreamFn {
   return createPayloadPatchStreamWrapper(
     baseStreamFn,
     ({ payload: payloadObj, options }) => {
       const enableThinking = isOpenAICompatibleThinkingEnabled({ thinkingLevel, options });
-      payloadObj.enable_thinking = enableThinking;
+      if (thinkingFormat === "qwen-chat-template") {
+        const existing = payloadObj.chat_template_kwargs;
+        payloadObj.chat_template_kwargs =
+          existing && typeof existing === "object" && !Array.isArray(existing)
+            ? {
+                ...(existing as Record<string, unknown>),
+                enable_thinking: enableThinking,
+              }
+            : { enable_thinking: enableThinking };
+        payloadObj.preserve_thinking = true;
+        delete payloadObj.enable_thinking;
+      } else {
+        payloadObj.enable_thinking = enableThinking;
+      }
       delete payloadObj.reasoning_effort;
       delete payloadObj.reasoningEffort;
       delete payloadObj.reasoning;
@@ -41,5 +56,9 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   if (!isQwenProviderId(ctx.provider) || (ctx.model && ctx.model.api !== "openai-completions")) {
     return undefined;
   }
-  return createQwenThinkingWrapper(ctx.streamFn, ctx.thinkingLevel);
+  return createQwenThinkingWrapper(
+    ctx.streamFn,
+    ctx.thinkingLevel,
+    ctx.model?.compat?.thinkingFormat === "qwen-chat-template" ? "qwen-chat-template" : "top-level",
+  );
 }
