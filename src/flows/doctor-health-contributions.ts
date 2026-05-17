@@ -41,6 +41,7 @@ type DoctorHealthFlowContext = {
 type DoctorHealthContribution = FlowContribution & {
   kind: "core";
   surface: "health";
+  healthCheckIds: readonly string[];
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 
@@ -76,6 +77,7 @@ export function shouldSkipLegacyUpdateDoctorConfigWrite(params: {
 function createDoctorHealthContribution(params: {
   id: string;
   label: string;
+  healthCheckIds?: readonly string[];
   hint?: string;
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution {
@@ -89,6 +91,7 @@ function createDoctorHealthContribution(params: {
       ...(params.hint ? { hint: params.hint } : {}),
     },
     source: "doctor",
+    healthCheckIds: params.healthCheckIds ?? [],
     run: params.run,
   };
 }
@@ -729,26 +732,37 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:gateway-config",
       label: "Gateway config",
+      healthCheckIds: ["core/doctor/gateway-config"],
       run: runGatewayConfigHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:auth-profiles",
       label: "Auth profiles",
+      healthCheckIds: [
+        "core/doctor/auth-profiles/flat-store",
+        "core/doctor/auth-profiles/oauth-sidecar",
+        "core/doctor/auth-profiles/oauth-ids",
+        "core/doctor/auth-profiles/keychain",
+        "core/doctor/auth-profiles/codex-provider",
+      ],
       run: runAuthProfileHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:claude-cli",
       label: "Claude CLI",
+      healthCheckIds: ["core/doctor/claude-cli"],
       run: runClaudeCliHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-auth",
       label: "Gateway auth",
+      healthCheckIds: ["core/doctor/gateway-auth"],
       run: runGatewayAuthHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:command-owner",
       label: "Command owner",
+      healthCheckIds: ["core/doctor/command-owner"],
       run: runCommandOwnerHealth,
     }),
     createDoctorHealthContribution({
@@ -759,41 +773,49 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:legacy-state",
       label: "Legacy state",
+      healthCheckIds: ["core/doctor/legacy-state"],
       run: runLegacyStateHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-plugin-manifests",
       label: "Legacy plugin manifests",
+      healthCheckIds: ["core/doctor/legacy-plugin-manifests"],
       run: runLegacyPluginManifestHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:release-configured-plugin-installs",
       label: "Configured plugin repair",
+      healthCheckIds: ["core/doctor/configured-plugin-installs"],
       run: runReleaseConfiguredPluginInstallsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:plugin-registry",
       label: "Plugin registry",
+      healthCheckIds: ["core/doctor/plugin-registry"],
       run: runPluginRegistryHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",
       label: "State integrity",
+      healthCheckIds: ["core/doctor/state-integrity"],
       run: runStateIntegrityHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:codex-session-routes",
       label: "Codex session routes",
+      healthCheckIds: ["core/doctor/codex-session-routes"],
       run: runCodexSessionRouteHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-locks",
       label: "Session locks",
+      healthCheckIds: ["core/doctor/session-locks"],
       run: runSessionLocksHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-transcripts",
       label: "Session transcripts",
+      healthCheckIds: ["core/doctor/session-transcripts"],
       run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({
@@ -804,71 +826,93 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:config-audit-scrub",
       label: "Config audit",
+      healthCheckIds: ["core/doctor/config-audit-scrub"],
       run: runConfigAuditScrubHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",
       label: "Legacy cron",
+      healthCheckIds: ["core/doctor/legacy-cron-store", "core/doctor/legacy-whatsapp-crontab"],
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:sandbox",
       label: "Sandbox",
+      healthCheckIds: [
+        "core/doctor/sandbox/registry-files",
+        "core/doctor/sandbox/images",
+        "core/doctor/sandbox-scope",
+      ],
       run: runSandboxHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-services",
       label: "Gateway services",
+      healthCheckIds: [
+        "core/doctor/gateway-services/extra",
+        "core/doctor/gateway-services/config",
+        "core/doctor/gateway-services/platform-notes",
+      ],
       run: runGatewayServicesHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:startup-channel-maintenance",
       label: "Startup channel maintenance",
+      healthCheckIds: ["core/doctor/startup-channel-maintenance"],
       run: runStartupChannelMaintenanceHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:security",
       label: "Security",
+      healthCheckIds: ["core/doctor/security"],
       run: runSecurityHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:browser",
       label: "Browser",
+      healthCheckIds: ["core/doctor/browser"],
       run: runBrowserHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:oauth-tls",
       label: "OAuth TLS",
+      healthCheckIds: ["core/doctor/oauth-tls"],
       run: runOpenAIOAuthTlsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:hooks-model",
       label: "Hooks model",
+      healthCheckIds: ["core/doctor/hooks-model"],
       run: runHooksModelHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",
       label: "systemd linger",
+      healthCheckIds: ["core/doctor/systemd-linger"],
       run: runSystemdLingerHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:workspace-status",
       label: "Workspace status",
+      healthCheckIds: ["core/doctor/workspace-status"],
       run: runWorkspaceStatusHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",
+      healthCheckIds: ["core/doctor/skills-readiness"],
       run: runSkillsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:bootstrap-size",
       label: "Bootstrap size",
+      healthCheckIds: ["core/doctor/bootstrap-size"],
       run: runBootstrapSizeHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:shell-completion",
       label: "Shell completion",
+      healthCheckIds: ["core/doctor/shell-completion"],
       run: runShellCompletionHealth,
     }),
     createDoctorHealthContribution({
@@ -879,21 +923,29 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:whatsapp-responsiveness",
       label: "WhatsApp responsiveness",
+      healthCheckIds: ["core/doctor/whatsapp-responsiveness"],
       run: runWhatsappResponsivenessHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:memory-search",
       label: "Memory search",
+      healthCheckIds: [
+        "core/doctor/memory-search",
+        "core/doctor/memory-recall",
+        "core/doctor/memory-gateway-probe",
+      ],
       run: runMemorySearchHealthContribution,
     }),
     createDoctorHealthContribution({
       id: "doctor:device-pairing",
       label: "Device pairing",
+      healthCheckIds: ["core/doctor/device-pairing"],
       run: runDevicePairingHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-daemon",
       label: "Gateway daemon",
+      healthCheckIds: ["core/doctor/gateway-daemon"],
       run: runGatewayDaemonHealth,
     }),
     createDoctorHealthContribution({
@@ -904,11 +956,13 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:workspace-suggestions",
       label: "Workspace suggestions",
+      healthCheckIds: ["core/doctor/workspace-suggestions"],
       run: runWorkspaceSuggestionsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:final-config-validation",
       label: "Final config validation",
+      healthCheckIds: ["core/doctor/final-config-validation"],
       run: runFinalConfigValidationHealth,
     }),
   ];
