@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { scheduleGatewaySigusr1Restart } from "../infra/restart.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -15,6 +16,7 @@ const DEFAULT_CHECK_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_MONITOR_STARTUP_GRACE_MS = 60_000;
 const DEFAULT_COOLDOWN_CYCLES = 2;
 const DEFAULT_MAX_RESTARTS_PER_HOUR = 10;
+const DEFAULT_RESTART_STOP_TIMEOUT_MS = 15_000;
 const ONE_HOUR_MS = 60 * 60_000;
 
 /**
@@ -41,6 +43,8 @@ type ChannelHealthMonitorDeps = {
   timing?: Partial<ChannelHealthTimingPolicy>;
   cooldownCycles?: number;
   maxRestartsPerHour?: number;
+  restartStopTimeoutMs?: number;
+  requestGatewayRestart?: (opts: { reason: string }) => void;
   abortSignal?: AbortSignal;
 };
 
@@ -79,6 +83,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     checkIntervalMs = DEFAULT_CHECK_INTERVAL_MS,
     cooldownCycles = DEFAULT_COOLDOWN_CYCLES,
     maxRestartsPerHour = DEFAULT_MAX_RESTARTS_PER_HOUR,
+    restartStopTimeoutMs = DEFAULT_RESTART_STOP_TIMEOUT_MS,
+    requestGatewayRestart = ({ reason }) => scheduleGatewaySigusr1Restart({ delayMs: 0, reason }),
     abortSignal,
   } = deps;
   const timing = resolveTimingPolicy(deps);
@@ -94,6 +100,34 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
   function pruneOldRestarts(record: RestartRecord, now: number) {
     record.restartsThisHour = record.restartsThisHour.filter((r) => now - r.at < ONE_HOUR_MS);
+  }
+
+  async function stopChannelWithTimeout(channelId: ChannelId, accountId: string) {
+    const timeoutMs = Math.max(1, Math.floor(restartStopTimeoutMs));
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const stopPromise = channelManager.stopChannel(channelId, accountId, { manual: false });
+    const timeoutPromise = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), timeoutMs);
+      if (typeof timer === "object" && "unref" in timer) {
+        timer.unref();
+      }
+    });
+
+    const outcome = await Promise.race([
+      stopPromise.then(() => "stopped" as const),
+      timeoutPromise,
+    ]);
+    if (timer) {
+      clearTimeout(timer);
+    }
+    if (outcome === "timeout") {
+      stopPromise.catch((err) =>
+        log.error?.(
+          `[${channelId}:${accountId}] health-monitor: delayed stop failed after timeout: ${String(err)}`,
+        ),
+      );
+    }
+    return outcome;
   }
 
   async function runCheck() {
@@ -163,9 +197,15 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           try {
             if (status.running) {
-              await channelManager.stopChannel(channelId as ChannelId, accountId, {
-                manual: false,
-              });
+              const stopOutcome = await stopChannelWithTimeout(channelId as ChannelId, accountId);
+              if (stopOutcome === "timeout") {
+                const restartReason = `health-monitor ${channelId}:${accountId} stop timed out`;
+                log.error?.(
+                  `[${channelId}:${accountId}] health-monitor: stop timed out after ${restartStopTimeoutMs}ms; requesting gateway restart`,
+                );
+                requestGatewayRestart({ reason: restartReason });
+                continue;
+              }
             }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);

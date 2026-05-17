@@ -508,6 +508,46 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("requests a gateway restart when stopping a stuck channel times out", async () => {
+    const now = Date.now();
+    const requestGatewayRestart = vi.fn();
+    const manager = createSnapshotManager(
+      {
+        telegram: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: now - 300_000,
+          },
+        },
+      },
+      {
+        stopChannel: vi.fn(() => new Promise<void>(() => {})),
+      },
+    );
+
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 100,
+      restartStopTimeoutMs: 1_000,
+      requestGatewayRestart,
+    });
+
+    await vi.advanceTimersByTimeAsync(101);
+    expect(manager.stopChannel).toHaveBeenCalledWith("telegram", "default", { manual: false });
+    expect(requestGatewayRestart).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    expect(requestGatewayRestart).toHaveBeenCalledWith({
+      reason: "health-monitor telegram:default stop timed out",
+    });
+    monitor.stop();
+  });
+
   it("stops cleanly", async () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager);

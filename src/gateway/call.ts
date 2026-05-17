@@ -580,6 +580,14 @@ function formatGatewayCloseError(
   return message;
 }
 
+function formatGatewayConnectError(
+  err: Error,
+  connectionDetails: GatewayConnectionDetails,
+): string {
+  const message = err.message.trim() || String(err);
+  return `gateway connect failed: ${message}\n${connectionDetails.message}`;
+}
+
 function formatGatewayTimeoutError(
   timeoutMs: number,
   connectionDetails: GatewayConnectionDetails,
@@ -736,6 +744,14 @@ async function executeGatewayRequestWithScopes<T>(params: {
             connectionDetails: params.connectionDetails,
           }),
         );
+      },
+      onConnectError: (err) => {
+        if (settled || ignoreClose) {
+          return;
+        }
+        ignoreClose = true;
+        client.stop();
+        stop(new Error(formatGatewayConnectError(err, params.connectionDetails)));
       },
     });
 
