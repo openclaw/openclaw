@@ -65,6 +65,16 @@
 .settings-section-nav__icon svg {
   width: 14px;
   height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-section-nav__icon svg * {
+  stroke: currentColor;
+  fill: none;
 }
 
 .settings-section-nav__label {
