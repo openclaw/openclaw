@@ -1791,7 +1791,7 @@
     "qrcode": "1.5.4",
     "quickjs-wasi": "2.2.0",
     "tar": "7.5.15",
-    "tokenjuice": "0.7.0",
+    "tokenjuice": "0.7.1",
     "tree-sitter-bash": "0.25.1",
     "tslog": "4.10.2",
     "typescript": "6.0.3",
