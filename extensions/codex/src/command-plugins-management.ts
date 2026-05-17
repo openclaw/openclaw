@@ -8,9 +8,10 @@ import { formatCodexDisplayText } from "./command-formatters.js";
  */
 export type CodexPluginsManagementIO = {
   readConfig: () => Promise<{
+    enabled?: boolean;
     plugins?: Record<string, CodexPluginConfigEntry>;
   }>;
-  mutate: (update: (block: Record<string, CodexPluginConfigEntry>) => void) => Promise<void>;
+  mutate: (update: (block: CodexPluginsConfigBlock) => void) => Promise<void>;
 };
 
 export type CodexPluginConfigEntry = {
@@ -18,6 +19,11 @@ export type CodexPluginConfigEntry = {
   marketplaceName?: string;
   pluginName?: string;
   allow_destructive_actions?: boolean;
+};
+
+export type CodexPluginsConfigBlock = {
+  enabled?: boolean;
+  plugins?: Record<string, CodexPluginConfigEntry>;
 };
 
 // Plugin lifecycle changes (enable/disable) write to openclaw.json
@@ -28,7 +34,7 @@ const POLICY_REFRESH_HINT =
   "New Codex conversations pick this up automatically. Use /new or /reset to refresh the current one.";
 
 export async function handleCodexPluginsSubcommand(
-  _ctx: PluginCommandContext,
+  ctx: PluginCommandContext,
   rest: string[],
   io: CodexPluginsManagementIO,
 ): Promise<PluginCommandResult> {
@@ -40,13 +46,20 @@ export async function handleCodexPluginsSubcommand(
       return { text: "Usage: /codex plugins list" };
     }
     const current = await io.readConfig();
-    return { text: formatPluginList(current.plugins ?? {}) };
+    return {
+      text: formatPluginList(current.plugins ?? {}, { globalEnabled: current.enabled === true }),
+    };
   }
 
   const target = args[0];
   if (normalized === "enable" || normalized === "disable") {
     if (!target || args.length > 1) {
       return { text: `Usage: /codex plugins ${normalized} <name>` };
+    }
+    if (!canMutateCodexPlugins(ctx)) {
+      return {
+        text: `Only an owner or operator.admin gateway client can run /codex plugins ${normalized}.`,
+      };
     }
     const wantEnabled = normalized === "enable";
     const current = (await io.readConfig()).plugins ?? {};
@@ -56,7 +69,11 @@ export async function handleCodexPluginsSubcommand(
       };
     }
     await io.mutate((block) => {
-      block[target] = { ...block[target], enabled: wantEnabled };
+      if (wantEnabled) {
+        block.enabled = true;
+      }
+      block.plugins ??= {};
+      block.plugins[target] = { ...block.plugins[target], enabled: wantEnabled };
     });
     return {
       text: `${formatCodexDisplayText(target)}: ${wantEnabled ? "enabled" : "disabled"} in openclaw.json. ${POLICY_REFRESH_HINT}`,
@@ -66,6 +83,13 @@ export async function handleCodexPluginsSubcommand(
   return {
     text: `Unknown /codex plugins subcommand: ${formatCodexDisplayText(verb)}\n\n${buildPluginsHelp()}`,
   };
+}
+
+function canMutateCodexPlugins(ctx: PluginCommandContext): boolean {
+  if (ctx.senderIsOwner === true) {
+    return true;
+  }
+  return ctx.gatewayClientScopes?.includes("operator.admin") === true;
 }
 
 export function buildPluginsHelp(): string {
@@ -78,14 +102,18 @@ export function buildPluginsHelp(): string {
   ].join("\n");
 }
 
-export function formatPluginList(plugins: Record<string, CodexPluginConfigEntry>): string {
+export function formatPluginList(
+  plugins: Record<string, CodexPluginConfigEntry>,
+  options: { globalEnabled?: boolean } = {},
+): string {
+  const globalEnabled = options.globalEnabled === true;
   const keys = Object.keys(plugins).toSorted();
   if (keys.length === 0) {
     return "No Codex sub-plugins configured under plugins.entries.codex.config.codexPlugins.plugins";
   }
   const rows = keys.map((key) => {
     const entry = plugins[key] ?? {};
-    const state = entry.enabled === false ? "OFF" : "ON ";
+    const state = globalEnabled && entry.enabled !== false ? "ON " : "OFF";
     const displayKey = formatCodexDisplayText(key);
     const pluginName = formatCodexDisplayText(entry.pluginName ?? key);
     const marketplace = formatCodexDisplayText(entry.marketplaceName ?? "?");
@@ -101,6 +129,9 @@ export function formatPluginList(plugins: Record<string, CodexPluginConfigEntry>
         `  ${r.state}  ${r.displayKey.padEnd(keyW)}  ${r.pluginName.padEnd(pluginW)}  [${r.marketplace}]`,
     ),
     "",
+    ...(globalEnabled
+      ? []
+      : ["Global codexPlugins.enabled is off; configured sub-plugins are inactive.", ""]),
     "New Codex conversations pick up policy changes automatically; /new or /reset to refresh the current one.",
   ].join("\n");
 }

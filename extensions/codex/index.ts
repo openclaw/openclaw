@@ -5,6 +5,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildCodexProvider } from "./provider.js";
+import type { CodexPluginsConfigBlock } from "./src/command-plugins-management.js";
 import { createCodexCommand } from "./src/commands.js";
 import {
   handleCodexConversationBindingResolved,
@@ -77,9 +78,12 @@ export default definePluginEntry({
               }
               const declared = (codexPlugins as Record<string, unknown>).plugins;
               if (!declared || typeof declared !== "object") {
-                return Promise.resolve({});
+                return Promise.resolve({
+                  enabled: (codexPlugins as Record<string, unknown>).enabled === true,
+                });
               }
               return Promise.resolve({
+                enabled: (codexPlugins as Record<string, unknown>).enabled === true,
                 plugins: declared as Record<string, never>,
               });
             },
@@ -98,7 +102,7 @@ export default definePluginEntry({
                   config.codexPlugins = (config.codexPlugins ?? {}) as Record<string, unknown>;
                   const codexPlugins = config.codexPlugins as Record<string, unknown>;
                   codexPlugins.plugins = (codexPlugins.plugins ?? {}) as Record<string, unknown>;
-                  update(codexPlugins.plugins as Record<string, never>);
+                  update(codexPlugins as CodexPluginsConfigBlock);
                 },
               });
             },
