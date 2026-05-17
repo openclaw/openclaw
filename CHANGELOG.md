@@ -287,6 +287,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/sessions: keep reachable transcript history when imported tree transcripts reference missing or legacy parent rows, preventing session history reads from going empty after a partial import.
 - Trajectory export: report incomplete transcript parent chains and stop cyclic branch walks so malformed imports cannot hang `/export-trajectory`.
 - Session replay: skip malformed user/assistant-shaped transcript rows during silent session resets instead of copying invalid entries into the fresh transcript.
+- Transcript state: skip malformed persisted JSONL entries before compaction/rewrite helpers choose the active leaf.
 - Backup verify: report malformed archive manifests with a stable error instead of leaking raw JSON parser details.
 - Session export: report skipped malformed transcript JSONL rows instead of silently omitting them from exported HTML archives.
 - Providers: reject malformed successful Runway, BytePlus, and Ollama embedding responses with provider-owned errors instead of raw parser/type failures, silent bad vectors, or long bogus polling.
