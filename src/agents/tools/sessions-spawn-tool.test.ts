@@ -902,4 +902,87 @@ describe("sessions_spawn tool", () => {
     expect(contentSchema?.type).toBe("string");
     expect(contentSchema?.maxLength).toBeUndefined();
   });
+
+  it("registers requesterSessionKey from the provided agentSessionKey, not the sandbox peer key", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "telegram",
+      agentAccountId: "bot-1",
+      agentTo: "telegram:direct:123",
+    });
+
+    await tool.execute("call-requester-key", {
+      task: "background research",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
+    expect(spawnContext.agentSessionKey).toBe("agent:main:main");
+  });
+
+  it("does not use the Telegram peer key as requesterSessionKey when agentSessionKey is the run session", async () => {
+    const telegramPeerKey = "agent:main:telegram:default:direct:456";
+    const runSessionKey = "agent:main:main";
+
+    const toolWithPeerKey = createSessionsSpawnTool({
+      agentSessionKey: telegramPeerKey,
+      agentChannel: "telegram",
+      agentAccountId: "default",
+      agentTo: "telegram:direct:456",
+    });
+
+    await toolWithPeerKey.execute("call-peer-key", { task: "task A" });
+
+    const toolWithRunKey = createSessionsSpawnTool({
+      agentSessionKey: runSessionKey,
+      agentChannel: "telegram",
+      agentAccountId: "default",
+      agentTo: "telegram:direct:456",
+    });
+
+    await toolWithRunKey.execute("call-run-key", { task: "task B" });
+
+    const peerContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
+    const runContext = mockCallArg(hoisted.spawnSubagentDirectMock, 1, 1, "spawnSubagentDirect");
+    expect(peerContext.agentSessionKey).toBe(telegramPeerKey);
+    expect(runContext.agentSessionKey).toBe(runSessionKey);
+  });
+
+  it("passes completionOwnerKey through to spawnSubagentDirect separately from agentSessionKey", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:telegram:default:direct:456",
+      completionOwnerKey: "agent:main:main",
+      agentChannel: "telegram",
+      agentAccountId: "default",
+      agentTo: "telegram:direct:456",
+    });
+
+    await tool.execute("call-completion-owner", { task: "background work" });
+
+    const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
+    expect(spawnContext.agentSessionKey).toBe("agent:main:telegram:default:direct:456");
+    expect(spawnContext.completionOwnerKey).toBe("agent:main:main");
+  });
+
+  it("uses completionOwnerKey for ACP registerSubagentRun requesterSessionKey", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:telegram:default:direct:456",
+      completionOwnerKey: "agent:main:main",
+      agentChannel: "telegram",
+      agentAccountId: "default",
+      agentTo: "telegram:direct:456",
+    });
+
+    await tool.execute("call-acp-completion-owner", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+    });
+
+    const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
+    expect(registration.controllerSessionKey).toBe("agent:main:telegram:default:direct:456");
+    expect(registration.requesterSessionKey).toBe("agent:main:main");
+    expect(registration.requesterDisplayKey).toBe("agent:main:main");
+  });
 });
