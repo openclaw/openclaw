@@ -197,8 +197,7 @@ function subagentFanoutTaskForProvider(
   worker: "alpha" | "beta",
 ) {
   const marker = worker === "alpha" ? "ALPHA-OK" : "BETA-OK";
-  const scope =
-    providerVariant === "anthropic" ? "the QA docs fixture" : "the QA workspace";
+  const scope = providerVariant === "anthropic" ? "the QA docs fixture" : "the QA workspace";
   return `Fanout worker ${worker}: inspect ${scope} and finish with exactly ${marker}.`;
 }
 

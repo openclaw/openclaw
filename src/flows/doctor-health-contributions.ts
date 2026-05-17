@@ -228,6 +228,34 @@ async function runCommandOwnerHealth(ctx: DoctorHealthFlowContext): Promise<void
   noteCommandOwnerHealth(ctx.cfg);
 }
 
+async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (!ctx.prompter.shouldRepair) {
+    return;
+  }
+  const { registerCoreHealthChecks } = await import("./doctor-core-checks.js");
+  const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+    await import("../agents/agent-scope.js");
+  const { note } = await import("../terminal/note.js");
+
+  registerCoreHealthChecks();
+  const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+  const result = await runDoctorHealthRepairs({
+    mode: "fix",
+    runtime: ctx.runtime,
+    cfg: ctx.cfg,
+    cwd: workspaceDir,
+    configPath: ctx.configPath,
+  });
+  ctx.cfg = result.config;
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
+}
+
 async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteClaudeCliHealth } = await import("../commands/doctor-claude-cli.js");
   noteClaudeCliHealth(ctx.cfg);
@@ -708,6 +736,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:command-owner",
       label: "Command owner",
       run: runCommandOwnerHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:structured-health-repairs",
+      label: "Structured health repairs",
+      run: runStructuredHealthRepairs,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-state",

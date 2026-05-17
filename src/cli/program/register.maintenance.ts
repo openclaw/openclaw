@@ -25,7 +25,52 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option("--deep", "Scan system services for extra gateway installs", false)
+    .option("--lint", "Run read-only health checks and report findings", false)
+    .option("--json", "With --lint: emit JSON findings instead of human output", false)
+    .option(
+      "--severity-min <level>",
+      "With --lint: drop findings below this severity (info|warning|error)",
+    )
+    .option(
+      "--skip <id>",
+      "With --lint: skip a specific check id (repeatable)",
+      (v: string, prev: string[]) => [...prev, v],
+      [],
+    )
+    .option(
+      "--only <id>",
+      "With --lint: run only the specified check id (repeatable)",
+      (v: string, prev: string[]) => [...prev, v],
+      [],
+    )
     .action(async (opts) => {
+      if (opts.lint === true) {
+        await runCommandWithRuntime(
+          defaultRuntime,
+          async () => {
+            const { runDoctorLintCli } = await import("../../commands/doctor-lint.js");
+            const exitCode = await runDoctorLintCli(defaultRuntime, {
+              json: Boolean(opts.json),
+              severityMin: typeof opts.severityMin === "string" ? opts.severityMin : undefined,
+              skipIds: Array.isArray(opts.skip) ? opts.skip : [],
+              onlyIds: Array.isArray(opts.only) ? opts.only : [],
+            });
+            defaultRuntime.exit(exitCode);
+          },
+          (err) => {
+            defaultRuntime.error(String(err));
+            defaultRuntime.exit(2);
+          },
+        );
+        return;
+      }
+      if (hasLintOnlyDoctorOptions(opts)) {
+        defaultRuntime.error(
+          "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+        );
+        defaultRuntime.exit(2);
+        return;
+      }
       await runCommandWithRuntime(defaultRuntime, async () => {
         await doctorCommand(defaultRuntime, {
           workspaceSuggestions: opts.workspaceSuggestions,
@@ -112,4 +157,18 @@ export function registerMaintenanceCommands(program: Command) {
         });
       });
     });
+}
+
+function hasLintOnlyDoctorOptions(opts: {
+  readonly json?: boolean;
+  readonly severityMin?: unknown;
+  readonly skip?: unknown;
+  readonly only?: unknown;
+}): boolean {
+  return (
+    opts.json === true ||
+    typeof opts.severityMin === "string" ||
+    (Array.isArray(opts.skip) && opts.skip.length > 0) ||
+    (Array.isArray(opts.only) && opts.only.length > 0)
+  );
 }
