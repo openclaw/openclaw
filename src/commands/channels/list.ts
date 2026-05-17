@@ -11,6 +11,11 @@ import {
   type RuntimeChannelStatusPayload,
 } from "../../channels/status/read-model.js";
 import { callGateway } from "../../gateway/call.js";
+import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
+import {
+  type OfficialExternalPluginRepairHint,
+  resolveMissingOfficialExternalChannelPluginRepairHint,
+} from "../../plugins/official-external-plugin-repair-hints.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
@@ -135,6 +140,19 @@ function formatCatalogOnlyLine(params: {
   return `- ${channelText}: ${bits.join(", ")}`;
 }
 
+function formatMissingConfiguredExternalChannelLine(
+  hint: OfficialExternalPluginRepairHint,
+): string {
+  const channelText = theme.accent(hint.label);
+  const bits = [
+    formatInstalled(false),
+    formatConfigured(true),
+    formatEnabled(true),
+    theme.warn(`run ${hint.installCommand} or ${hint.doctorFixCommand}`),
+  ];
+  return `- ${channelText}: ${bits.join(", ")}`;
+}
+
 export async function channelsListCommand(
   opts: ChannelsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -229,6 +247,25 @@ export async function channelsListCommand(
     });
   }
 
+  const missingConfiguredExternalChannelHints: OfficialExternalPluginRepairHint[] = [];
+  for (const channelId of listExplicitConfiguredChannelIdsForConfig(cfg).toSorted((left, right) =>
+    left.localeCompare(right),
+  )) {
+    if (renderedChannelIds.has(channelId)) {
+      continue;
+    }
+    const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
+      config: cfg,
+      channelId,
+      ...(workspaceDir ? { workspaceDir } : {}),
+    });
+    if (!hint?.channelId || renderedChannelIds.has(hint.channelId)) {
+      continue;
+    }
+    missingConfiguredExternalChannelHints.push(hint);
+    renderedChannelIds.add(hint.channelId);
+  }
+
   // --all also surfaces catalog entries that are not already represented
   // by a plugin row above. Two shapes land here:
   //   1. Catalog plugin package is not yet installed on disk — rendered as
@@ -268,6 +305,16 @@ export async function channelsListCommand(
         };
       }
     }
+    for (const hint of missingConfiguredExternalChannelHints) {
+      if (!hint.channelId) {
+        continue;
+      }
+      chat[hint.channelId] = {
+        accounts: [],
+        installed: false,
+        origin: "configured",
+      };
+    }
     if (showAll) {
       for (const entry of catalogOnlyLines) {
         const installed = isInstalled(entry.id);
@@ -284,7 +331,11 @@ export async function channelsListCommand(
 
   const lines: string[] = [];
   lines.push(theme.heading("Chat channels:"));
-  if (accountLines.length === 0 && catalogOnlyLines.length === 0) {
+  if (
+    accountLines.length === 0 &&
+    missingConfiguredExternalChannelHints.length === 0 &&
+    catalogOnlyLines.length === 0
+  ) {
     lines.push(
       theme.muted(
         showAll
@@ -301,6 +352,9 @@ export async function channelsListCommand(
           installed: line.installed,
         }),
       );
+    }
+    for (const hint of missingConfiguredExternalChannelHints) {
+      lines.push(formatMissingConfiguredExternalChannelLine(hint));
     }
     for (const entry of catalogOnlyLines) {
       lines.push(

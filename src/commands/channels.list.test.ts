@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   isCatalogChannelInstalled: vi.fn<(params: { entry: ChannelPluginCatalogEntry }) => boolean>(
     () => true,
   ),
+  listExplicitConfiguredChannelIdsForConfig: vi.fn<() => string[]>(() => []),
+  resolveMissingOfficialExternalChannelPluginRepairHint: vi.fn(),
   callGateway: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultAgentId: vi.fn(() => "main"),
@@ -52,6 +54,15 @@ vi.mock("./channel-setup/trusted-catalog.js", () => ({
 
 vi.mock("./channel-setup/discovery.js", () => ({
   isCatalogChannelInstalled: mocks.isCatalogChannelInstalled,
+}));
+
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  listExplicitConfiguredChannelIdsForConfig: mocks.listExplicitConfiguredChannelIdsForConfig,
+}));
+
+vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
+  resolveMissingOfficialExternalChannelPluginRepairHint:
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -120,6 +131,10 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([]);
     mocks.isCatalogChannelInstalled.mockReset();
     mocks.isCatalogChannelInstalled.mockReturnValue(true);
+    mocks.listExplicitConfiguredChannelIdsForConfig.mockReset();
+    mocks.listExplicitConfiguredChannelIdsForConfig.mockReturnValue([]);
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReset();
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue(null);
     mocks.callGateway.mockReset();
     mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
   });
@@ -353,6 +368,51 @@ describe("channels list", () => {
     expect(output).not.toContain("QQ Bot");
     // Hint user about --all
     expect(output).toContain("--all");
+  });
+
+  it("shows configured official external channels when their plugin is missing", async () => {
+    const runtime = createTestRuntime();
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+    mocks.listExplicitConfiguredChannelIdsForConfig.mockReturnValue(["discord"]);
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue({
+      pluginId: "@openclaw/discord",
+      channelId: "discord",
+      label: "Discord",
+      installSpec: "@openclaw/discord",
+      installCommand: "openclaw plugins install @openclaw/discord",
+      doctorFixCommand: "openclaw doctor --fix",
+      repairHint:
+        "Install the official external plugin with: openclaw plugins install @openclaw/discord, or run: openclaw doctor --fix.",
+    });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+    });
+
+    await channelsListCommand({}, runtime);
+
+    const output = stripAnsi(loggedText(runtime));
+    expect(output).toContain("Discord");
+    expect(output).toContain("not installed");
+    expect(output).toContain("configured");
+    expect(output).toContain("openclaw plugins install");
+    expect(output).toContain("openclaw doctor --fix");
+    expect(output).not.toContain("no configured chat channels");
+
+    runtime.log.mockClear();
+    await channelsListCommand({ json: true }, runtime);
+    const payload = JSON.parse(loggedText(runtime)) as {
+      chat: Record<string, { accounts: string[]; installed: boolean; origin: string }>;
+    };
+    expect(payload.chat.discord).toEqual({
+      accounts: [],
+      installed: false,
+      origin: "configured",
+    });
   });
 
   it("--all surfaces uninstalled catalog channels with installed=false / not configured / not enabled", async () => {
