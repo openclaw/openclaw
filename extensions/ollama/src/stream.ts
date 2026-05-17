@@ -521,6 +521,8 @@ interface OllamaChatMessage {
   content: string;
   images?: string[];
   tool_calls?: OllamaToolCall[];
+  tool_call_id?: string;
+  name?: string;
   tool_name?: string;
 }
 
@@ -534,6 +536,8 @@ interface OllamaTool {
 }
 
 interface OllamaToolCall {
+  id?: string;
+  type?: "function";
   function: {
     name: string;
     arguments: Record<string, unknown> | string;
@@ -801,6 +805,8 @@ function extractToolCalls(
   for (const part of parts) {
     if (part.type === "toolCall") {
       result.push({
+        ...(typeof part.id === "string" ? { id: part.id } : {}),
+        type: "function",
         function: {
           name: normalizeOllamaToolCallName(part.name, options),
           arguments: ensureArgsObject(part.arguments),
@@ -808,6 +814,8 @@ function extractToolCalls(
       });
     } else if (part.type === "tool_use") {
       result.push({
+        ...(typeof part.id === "string" ? { id: part.id } : {}),
+        type: "function",
         function: {
           name: normalizeOllamaToolCallName(part.name, options),
           arguments: ensureArgsObject(part.input),
@@ -899,9 +907,17 @@ export function convertToOllamaMessages(
         typeof (msg as { toolName?: unknown }).toolName === "string"
           ? (msg as { toolName?: string }).toolName
           : undefined;
+      const toolCallId =
+        typeof (msg as { toolCallId?: unknown }).toolCallId === "string"
+          ? (msg as { toolCallId?: string }).toolCallId
+          : typeof (msg as { tool_call_id?: unknown }).tool_call_id === "string"
+            ? (msg as { tool_call_id?: string }).tool_call_id
+            : undefined;
       result.push({
         role: "tool",
         content: text,
+        ...(toolCallId ? { tool_call_id: toolCallId } : {}),
+        ...(toolName ? { name: toolName } : {}),
         ...(toolName ? { tool_name: toolName } : {}),
       });
     }

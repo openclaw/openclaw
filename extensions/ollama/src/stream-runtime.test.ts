@@ -693,7 +693,11 @@ describe("convertToOllamaMessages", () => {
     expect(result[0].role).toBe("assistant");
     expect(result[0].content).toBe("Let me check.");
     expect(result[0].tool_calls).toEqual([
-      { function: { name: "bash", arguments: { command: "ls" } } },
+      {
+        id: "call_1",
+        type: "function",
+        function: { name: "bash", arguments: { command: "ls" } },
+      },
     ]);
   });
 
@@ -709,8 +713,16 @@ describe("convertToOllamaMessages", () => {
     ];
     const result = convertToOllamaMessages(messages);
     expect(result[0].tool_calls).toEqual([
-      { function: { name: "exec", arguments: { command: "pwd" } } },
-      { function: { name: "read", arguments: { path: "README.md" } } },
+      {
+        id: "call_1",
+        type: "function",
+        function: { name: "exec", arguments: { command: "pwd" } },
+      },
+      {
+        id: "call_2",
+        type: "function",
+        function: { name: "read", arguments: { path: "README.md" } },
+      },
     ]);
   });
 
@@ -729,9 +741,21 @@ describe("convertToOllamaMessages", () => {
       availableToolNames: new Set(["tool_a", "tools_invoke_test", "function-run"]),
     });
     expect(result[0].tool_calls).toEqual([
-      { function: { name: "tool_a", arguments: { value: 1 } } },
-      { function: { name: "tools_invoke_test", arguments: { value: 2 } } },
-      { function: { name: "function-run", arguments: { value: 3 } } },
+      {
+        id: "call_1",
+        type: "function",
+        function: { name: "tool_a", arguments: { value: 1 } },
+      },
+      {
+        id: "call_2",
+        type: "function",
+        function: { name: "tools_invoke_test", arguments: { value: 2 } },
+      },
+      {
+        id: "call_3",
+        type: "function",
+        function: { name: "function-run", arguments: { value: 3 } },
+      },
     ]);
   });
 
@@ -750,9 +774,21 @@ describe("convertToOllamaMessages", () => {
       availableToolNames: new Set(["exec", "read"]),
     });
     expect(result[0].tool_calls).toEqual([
-      { function: { name: "exec", arguments: { command: "pwd" } } },
-      { function: { name: "read", arguments: { path: "." } } },
-      { function: { name: "tool_missing", arguments: {} } },
+      {
+        id: "call_1",
+        type: "function",
+        function: { name: "exec", arguments: { command: "pwd" } },
+      },
+      {
+        id: "call_2",
+        type: "function",
+        function: { name: "read", arguments: { path: "." } },
+      },
+      {
+        id: "call_3",
+        type: "function",
+        function: { name: "tool_missing", arguments: {} },
+      },
     ]);
   });
 
@@ -770,10 +806,10 @@ describe("convertToOllamaMessages", () => {
     ];
     const result = convertToOllamaMessages(messages);
     expect(result[0].tool_calls).toEqual([
-      { function: { name: "functionshell", arguments: {} } },
-      { function: { name: "tooling", arguments: {} } },
-      { function: { name: "tools", arguments: {} } },
-      { function: { name: "tool_a", arguments: {} } },
+      { id: "call_1", type: "function", function: { name: "functionshell", arguments: {} } },
+      { id: "call_2", type: "function", function: { name: "tooling", arguments: {} } },
+      { id: "call_3", type: "function", function: { name: "tools", arguments: {} } },
+      { id: "call_4", type: "function", function: { name: "tool_a", arguments: {} } },
     ]);
   });
 
@@ -795,7 +831,11 @@ describe("convertToOllamaMessages", () => {
     ];
     const result = convertToOllamaMessages(messages);
     expect(result[0].tool_calls).toEqual([
-      { function: { name: "Read", arguments: { file_path: "/tmp/test.txt" } } },
+      {
+        id: "call_2",
+        type: "function",
+        function: { name: "Read", arguments: { file_path: "/tmp/test.txt" } },
+      },
     ]);
   });
 
@@ -810,7 +850,11 @@ describe("convertToOllamaMessages", () => {
     ];
     const result = convertToOllamaMessages(messages);
     expect(result[0].tool_calls).toEqual([
-      { function: { name: "exec", arguments: { command: "echo hello" } } },
+      {
+        id: "toolu_1",
+        type: "function",
+        function: { name: "exec", arguments: { command: "echo hello" } },
+      },
     ]);
   });
 
@@ -831,6 +875,8 @@ describe("convertToOllamaMessages", () => {
     const result = convertToOllamaMessages(messages);
     expect(result[0].tool_calls).toEqual([
       {
+        id: "call_3",
+        type: "function",
         function: {
           name: "read",
           arguments: {
@@ -854,9 +900,30 @@ describe("convertToOllamaMessages", () => {
   });
 
   it("includes tool_name from SDK toolResult messages", () => {
-    const messages = [{ role: "toolResult", content: "file contents here", toolName: "read" }];
+    const messages = [
+      {
+        role: "toolResult",
+        content: "file contents here",
+        toolCallId: "call_1",
+        toolName: "read",
+      },
+    ];
     const result = convertToOllamaMessages(messages);
-    expect(result).toEqual([{ role: "tool", content: "file contents here", tool_name: "read" }]);
+    expect(result).toEqual([
+      {
+        role: "tool",
+        content: "file contents here",
+        tool_call_id: "call_1",
+        name: "read",
+        tool_name: "read",
+      },
+    ]);
+  });
+
+  it("includes OpenAI-compatible tool_call_id from tool role messages", () => {
+    const messages = [{ role: "tool", content: "result", tool_call_id: "call_2" }];
+    const result = convertToOllamaMessages(messages);
+    expect(result).toEqual([{ role: "tool", content: "result", tool_call_id: "call_2" }]);
   });
 
   it("omits tool_name when not provided in toolResult", () => {
