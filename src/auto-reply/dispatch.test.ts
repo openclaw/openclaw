@@ -119,6 +119,7 @@ describe("withReplyDispatcher", () => {
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn(() => false),
       runMessageSending: vi.fn(async () => undefined),
+      runReplyPayloadSending: vi.fn(async () => undefined),
     });
   });
 
@@ -305,6 +306,77 @@ describe("withReplyDispatcher", () => {
         channelId: "threads",
         accountId: "acct-1",
         conversationId: "conv-1",
+      },
+    );
+  });
+
+  it("runs reply_payload_sending hooks before inbound dispatcher delivery", async () => {
+    const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({
+      payload: {
+        ...payload,
+        text: `${payload.text ?? ""} + buttons`,
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Proceed", value: "action:proceed" }],
+            },
+          ],
+        },
+      },
+    }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName?: string) => hookName === "reply_payload_sending"),
+      runMessageSending: vi.fn(async () => undefined),
+      runReplyPayloadSending,
+    });
+    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithDispatcher({
+      ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:test:session" }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+      replyOptions: { runId: "run-123" },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const dispatcherOptions = requireReplyDispatcherOptions();
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
+
+    const payload = await dispatcherOptions.beforeDeliver(
+      { text: "original reply" },
+      { kind: "final" },
+    );
+
+    expect(payload).toEqual({
+      text: "original reply + buttons",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Proceed", value: "action:proceed" }],
+          },
+        ],
+      },
+    });
+    expect(runReplyPayloadSending).toHaveBeenCalledWith(
+      {
+        payload: { text: "original reply" },
+        kind: "final",
+        channel: "telegram",
+        sessionKey: "agent:test:session",
+        runId: "run-123",
+      },
+      {
+        channelId: "threads",
+        accountId: "acct-1",
+        conversationId: "conv-1",
+        runId: "run-123",
       },
     );
   });

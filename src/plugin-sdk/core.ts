@@ -145,6 +145,9 @@ export type {
   MemoryPluginPublicArtifactsProvider,
 } from "../plugins/memory-state.js";
 export type {
+  PluginHookReplyPayloadSendingContext,
+  PluginHookReplyPayloadSendingEvent,
+  PluginHookReplyPayloadSendingResult,
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,

@@ -28,6 +28,9 @@ import type {
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
+  PluginHookReplyPayloadSendingContext,
+  PluginHookReplyPayloadSendingEvent,
+  PluginHookReplyPayloadSendingResult,
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
@@ -96,6 +99,9 @@ export type {
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
+  PluginHookReplyPayloadSendingContext,
+  PluginHookReplyPayloadSendingEvent,
+  PluginHookReplyPayloadSendingResult,
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
@@ -1049,6 +1055,64 @@ export function createHookRunner(
   }
 
   /**
+   * Run reply_payload_sending hook.
+   * Allows plugins to modify or cancel normalized reply payloads before delivery.
+   * Runs sequentially, passing each handler the latest payload.
+   */
+  async function runReplyPayloadSending(
+    event: PluginHookReplyPayloadSendingEvent,
+    ctx: PluginHookReplyPayloadSendingContext,
+  ): Promise<PluginHookReplyPayloadSendingResult | undefined> {
+    const hooks = getHooksForName(registry, "reply_payload_sending");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(`[hooks] running reply_payload_sending (${hooks.length} handlers, sequential)`);
+
+    let currentPayload = event.payload;
+    let result: PluginHookReplyPayloadSendingResult | undefined;
+
+    for (const hook of hooks) {
+      try {
+        const handler = hook.handler as (
+          event: PluginHookReplyPayloadSendingEvent,
+          ctx: PluginHookReplyPayloadSendingContext,
+        ) => Promise<PluginHookReplyPayloadSendingResult | void>;
+        const promise = Promise.resolve(handler({ ...event, payload: currentPayload }, ctx));
+        const timeoutMs = getModifyingHookTimeoutMs("reply_payload_sending", hook);
+        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+
+        if (!handlerResult) {
+          continue;
+        }
+
+        if (handlerResult.payload !== undefined) {
+          currentPayload = handlerResult.payload;
+        }
+
+        result = {
+          payload: currentPayload,
+          cancel: stickyTrue(result?.cancel, handlerResult.cancel),
+          reason: lastDefined(result?.reason, handlerResult.reason),
+        };
+
+        if (result.cancel === true) {
+          const priority = hook.priority ?? 0;
+          logger?.debug?.(
+            `[hooks] reply_payload_sending cancel=true decided by ${hook.pluginId} (priority=${priority}); skipping remaining handlers`,
+          );
+          break;
+        }
+      } catch (err) {
+        handleHookError({ hookName: "reply_payload_sending", pluginId: hook.pluginId, error: err });
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Run message_sending hook.
    * Allows plugins to modify or cancel outgoing messages.
    * Runs sequentially.
@@ -1522,6 +1586,7 @@ export function createHookRunner(
     runMessageReceived,
     runBeforeDispatch,
     runReplyDispatch,
+    runReplyPayloadSending,
     runMessageSending,
     runMessageSent,
     // Tool hooks
