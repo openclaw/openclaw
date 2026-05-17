@@ -412,6 +412,7 @@ export function createSessionsSendTool(opts?: {
             });
 
       const agentMessageContext = buildAgentToAgentMessageContext({
+        cfg,
         requesterSessionKey: opts?.agentSessionKey,
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
@@ -478,6 +479,7 @@ export function createSessionsSendTool(opts?: {
           return;
         }
         void runSessionsSendA2AFlow({
+          cfg,
           targetSessionKey: resolvedKey,
           displayKey,
           message,

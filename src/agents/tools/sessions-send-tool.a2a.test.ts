@@ -207,6 +207,31 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
+  it("includes configured agent identity names in announce prompts", async () => {
+    await runSessionsSendA2AFlow({
+      cfg: {
+        agents: {
+          list: [
+            { id: "habit", identity: { name: "Stevo" } },
+            { id: "story", identity: { name: "Story Bot" } },
+          ],
+        },
+      } as never,
+      targetSessionKey: "agent:story:main",
+      displayKey: "agent:story:main",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      requesterSessionKey: "agent:habit:telegram:direct:6344794319",
+      requesterChannel: "telegram",
+      roundOneReply: "Worker completed successfully",
+    });
+
+    const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
+    expect(stepInput.extraSystemPrompt).toContain("Agent 1 (requester) name: Stevo.");
+    expect(stepInput.extraSystemPrompt).toContain("Agent 2 (target) name: Story Bot.");
+  });
+
   it.each(["NO_REPLY", "HEARTBEAT_OK"])(
     "suppresses exact announce control reply %s before channel delivery",
     async (announceReply) => {

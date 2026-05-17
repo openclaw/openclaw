@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
-import { resolveAnnounceTargetFromKey, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import {
+  buildAgentToAgentAnnounceContext,
+  buildAgentToAgentMessageContext,
+  buildAgentToAgentReplyContext,
+  resolveAnnounceTargetFromKey,
+  resolvePingPongTurns,
+} from "./sessions-send-helpers.js";
 
 describe("resolveAnnounceTargetFromKey", () => {
   beforeEach(() => {
@@ -61,6 +67,59 @@ describe("resolveAnnounceTargetFromKey", () => {
       to: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
       threadId: undefined,
     });
+  });
+});
+
+describe("agent-to-agent context identity", () => {
+  const cfg = {
+    agents: {
+      list: [
+        { id: "habit", identity: { name: "Stevo" } },
+        { id: "story", identity: { name: "Story Bot" } },
+      ],
+    },
+  } as never;
+
+  it("includes configured requester identity name in the initial message context", () => {
+    const context = buildAgentToAgentMessageContext({
+      cfg,
+      requesterSessionKey: "agent:habit:telegram:direct:6344794319",
+      requesterChannel: "telegram",
+      targetSessionKey: "agent:story:main",
+    });
+
+    expect(context).toContain("Agent 1 (requester) name: Stevo.");
+    expect(context.indexOf("Agent 1 (requester) name: Stevo.")).toBeLessThan(
+      context.indexOf("Agent 1 (requester) session:"),
+    );
+  });
+
+  it("includes configured requester and target identity names in reply and announce contexts", () => {
+    const shared = {
+      cfg,
+      requesterSessionKey: "agent:habit:telegram:direct:6344794319",
+      requesterChannel: "telegram",
+      targetSessionKey: "agent:story:main",
+      targetChannel: "internal",
+    };
+
+    const replyContext = buildAgentToAgentReplyContext({
+      ...shared,
+      currentRole: "target",
+      turn: 1,
+      maxTurns: 2,
+    });
+    expect(replyContext).toContain("Agent 1 (requester) name: Stevo.");
+    expect(replyContext).toContain("Agent 2 (target) name: Story Bot.");
+
+    const announceContext = buildAgentToAgentAnnounceContext({
+      ...shared,
+      originalMessage: "check the metrics",
+      roundOneReply: "done",
+      latestReply: "done",
+    });
+    expect(announceContext).toContain("Agent 1 (requester) name: Stevo.");
+    expect(announceContext).toContain("Agent 2 (target) name: Story Bot.");
   });
 });
 

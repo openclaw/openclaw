@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -35,6 +36,7 @@ let sessionsSendA2ADeps: {
 } = defaultSessionsSendA2ADeps;
 
 export async function runSessionsSendA2AFlow(params: {
+  cfg?: OpenClawConfig;
   targetSessionKey: string;
   displayKey: string;
   message: string;
@@ -95,6 +97,7 @@ export async function runSessionsSendA2AFlow(params: {
         const currentRole =
           currentSessionKey === params.requesterSessionKey ? "requester" : "target";
         const replyPrompt = buildAgentToAgentReplyContext({
+          cfg: params.cfg,
           requesterSessionKey: params.requesterSessionKey,
           requesterChannel: params.requesterChannel,
           targetSessionKey: params.displayKey,
@@ -126,6 +129,7 @@ export async function runSessionsSendA2AFlow(params: {
     }
 
     const announcePrompt = buildAgentToAgentAnnounceContext({
+      cfg: params.cfg,
       requesterSessionKey: params.requesterSessionKey,
       requesterChannel: params.requesterChannel,
       targetSessionKey: params.displayKey,

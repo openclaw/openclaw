@@ -5,6 +5,8 @@ import {
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveAgentIdentity } from "../identity.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
 export {
   isAnnounceSkip,
@@ -45,25 +47,49 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   };
 }
 
+function resolveAgentIdentityName(params: {
+  cfg?: OpenClawConfig;
+  sessionKey?: string;
+}): string | undefined {
+  if (!params.cfg || !params.sessionKey) {
+    return undefined;
+  }
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const name = resolveAgentIdentity(params.cfg, agentId)?.name?.trim();
+  return name || undefined;
+}
+
 function buildAgentSessionLines(params: {
+  cfg?: OpenClawConfig;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
   targetChannel?: string;
 }): string[] {
+  const requesterName = resolveAgentIdentityName({
+    cfg: params.cfg,
+    sessionKey: params.requesterSessionKey,
+  });
+  const targetName = resolveAgentIdentityName({
+    cfg: params.cfg,
+    sessionKey: params.targetSessionKey,
+  });
   return [
+    requesterName ? `Agent 1 (requester) name: ${requesterName}.` : undefined,
     params.requesterSessionKey
       ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
       : undefined,
     params.requesterChannel
       ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
       : undefined,
+    targetName ? `Agent 2 (target) name: ${targetName}.` : undefined,
     `Agent 2 (target) session: ${params.targetSessionKey}.`,
     params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
   ].filter((line): line is string => Boolean(line));
 }
 
 export function buildAgentToAgentMessageContext(params: {
+  cfg?: OpenClawConfig;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
@@ -75,6 +101,7 @@ export function buildAgentToAgentMessageContext(params: {
 }
 
 export function buildAgentToAgentReplyContext(params: {
+  cfg?: OpenClawConfig;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
@@ -96,6 +123,7 @@ export function buildAgentToAgentReplyContext(params: {
 }
 
 export function buildAgentToAgentAnnounceContext(params: {
+  cfg?: OpenClawConfig;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
