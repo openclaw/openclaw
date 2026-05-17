@@ -117,6 +117,7 @@ describe("together video generation provider", () => {
           providers: {
             together: {
               baseUrl: "https://api.together.xyz/v1",
+              models: [],
             },
           },
         },
