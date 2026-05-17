@@ -1,5 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { qaSuiteProgressTesting, runQaSuite } from "./suite.js";
+
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
+afterEach(() => {
+  fetchWithSsrFGuardMock.mockReset();
+  vi.useRealTimers();
+});
 
 describe("qa suite", () => {
   it("rejects unsupported transport ids before starting the lab", async () => {
@@ -21,6 +32,46 @@ describe("qa suite", () => {
     expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("false")).toBe(false);
     expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("off")).toBe(false);
     expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("maybe")).toBeUndefined();
+  });
+
+  it("stops an owned lab when readiness never becomes healthy", async () => {
+    const stop = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: false },
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      qaSuiteProgressTesting.waitForQaLabReadyOrStopOwned({
+        lab: {
+          listenUrl: "http://127.0.0.1:43123",
+          stop,
+        },
+        ownsLab: true,
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("timed out after 1ms waiting for qa-lab ready");
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves caller-owned labs running when readiness never becomes healthy", async () => {
+    const stop = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: false },
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      qaSuiteProgressTesting.waitForQaLabReadyOrStopOwned({
+        lab: {
+          listenUrl: "http://127.0.0.1:43123",
+          stop,
+        },
+        ownsLab: false,
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("timed out after 1ms waiting for qa-lab ready");
+    expect(stop).not.toHaveBeenCalled();
   });
 
   it("defaults progress logging from CI when no override is set", () => {

@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
   QaLabLatestReport,
@@ -149,6 +150,45 @@ function writeQaSuiteProgress(enabled: boolean, message: string) {
     return;
   }
   process.stderr.write(`[qa-suite] ${message}\n`);
+}
+
+async function waitForQaLabReady(baseUrl: string, timeoutMs = 10_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const { response, release } = await fetchWithSsrFGuard({
+        url: `${baseUrl}/readyz`,
+        policy: { allowPrivateNetwork: true },
+        auditContext: "qa-lab-suite-wait-for-lab-ready",
+      });
+      try {
+        if (response.ok) {
+          return;
+        }
+      } finally {
+        await release();
+      }
+    } catch {
+      // retry
+    }
+    await sleep(100);
+  }
+  throw new Error(`timed out after ${timeoutMs}ms waiting for qa-lab ready`);
+}
+
+async function waitForQaLabReadyOrStopOwned(params: {
+  lab: Pick<QaLabServerHandle, "listenUrl" | "stop">;
+  ownsLab: boolean;
+  timeoutMs?: number;
+}) {
+  try {
+    await waitForQaLabReady(params.lab.listenUrl, params.timeoutMs);
+  } catch (error) {
+    if (params.ownsLab) {
+      await params.lab.stop();
+    }
+    throw error;
+  }
 }
 
 function sanitizeQaSuiteProgressValue(value: string): string {
@@ -1068,6 +1108,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       embeddedGateway: "disabled",
     }));
   writeQaSuiteProgress(progressEnabled, `lab ready: ${sanitizeQaSuiteProgressValue(lab.baseUrl)}`);
+  await waitForQaLabReadyOrStopOwned({ lab, ownsLab });
   const transport = createQaTransportAdapter({
     id: transportId,
     state: lab.state,
@@ -1302,4 +1343,5 @@ export const qaSuiteProgressTesting = {
   resolveQaSuiteTransportReadyTimeoutMs,
   sanitizeQaSuiteProgressValue,
   shouldLogQaSuiteProgress,
+  waitForQaLabReadyOrStopOwned,
 };
