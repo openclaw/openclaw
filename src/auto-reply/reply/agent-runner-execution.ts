@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -48,7 +47,6 @@ import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
   resolveGroupSessionKey,
-  resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -98,6 +96,10 @@ import {
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import {
+  classifyProviderRequestError,
+  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+} from "./provider-request-error-classifier.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
@@ -456,16 +458,6 @@ function isPureBillingSummary(err: unknown): boolean {
   );
 }
 
-function isToolResultTurnMismatchError(message: string): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(message);
-  return (
-    lower.includes("toolresult") &&
-    lower.includes("tooluse") &&
-    lower.includes("exceeds the number") &&
-    lower.includes("previous turn")
-  );
-}
-
 function collapseRepeatedFailureDetail(message: string): string {
   const parts = message
     .split(/\s+\|\s+/u)
@@ -582,6 +574,13 @@ function buildExternalRunFailureReply(
   options?: { includeDetails?: boolean; isHeartbeat?: boolean },
 ): ExternalRunFailureReply {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const providerRequestError = classifyProviderRequestError(normalizedMessage);
+  if (providerRequestError) {
+    return {
+      text: providerRequestError.userMessage,
+      isGenericRunnerFailure: false,
+    };
+  }
   const missingApiKeyFailure = buildMissingApiKeyFailureText(normalizedMessage);
   if (missingApiKeyFailure) {
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
@@ -602,12 +601,6 @@ function buildExternalRunFailureReply(
   }
   if (options?.isHeartbeat) {
     return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, isGenericRunnerFailure: false };
-  }
-  if (isToolResultTurnMismatchError(normalizedMessage)) {
-    return {
-      text: "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.",
-      isGenericRunnerFailure: false,
-    };
   }
   const cliBackendTimeoutFailure = buildCliBackendTimeoutFailureText(normalizedMessage);
   if (cliBackendTimeoutFailure) {
@@ -2254,16 +2247,18 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
       if (embeddedError?.kind === "role_ordering") {
-        const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
-        if (didReset) {
-          params.replyOperation?.fail("run_failed", embeddedError);
-          return {
-            kind: "final",
-            payload: markAgentRunFailureReplyPayload({
-              text: "⚠️ Message ordering conflict. I've reset the conversation - please try again.",
-            }),
-          };
-        }
+        const providerRequestError = classifyProviderRequestError(embeddedError);
+        params.replyOperation?.fail("run_failed", embeddedError);
+        const embeddedErrorText = formatErrorMessage(embeddedError).replace(/\.\s*$/, "");
+        return {
+          kind: "final",
+          payload: markAgentRunFailureReplyPayload({
+            text: shouldSurfaceToControlUi
+              ? `⚠️ Agent failed before reply: ${embeddedErrorText}.\nLogs: openclaw logs --follow`
+              : (providerRequestError?.userMessage ??
+                PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE),
+          }),
+        };
       }
 
       break;
@@ -2318,8 +2313,8 @@ export async function runAgentTurnWithFallback(params: {
         : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
-      const isSessionCorruption = /function call turn comes immediately after/i.test(message);
-      const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
+      const providerRequestError =
+        !isBilling && !shouldSurfaceToControlUi ? classifyProviderRequestError(err) : undefined;
       const isTransientHttp = isTransientHttpError(message);
 
       if (isReplyOperationRestartAbort(params.replyOperation)) {
@@ -2382,61 +2377,12 @@ export async function runAgentTurnWithFallback(params: {
           }),
         };
       }
-      if (isRoleOrderingError) {
-        const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
-        if (didReset) {
-          params.replyOperation?.fail("run_failed", err);
-          return {
-            kind: "final",
-            payload: markAgentRunFailureReplyPayload({
-              text: "⚠️ Message ordering conflict. I've reset the conversation - please try again.",
-            }),
-          };
-        }
-      }
-
-      // Auto-recover from Gemini session corruption by resetting the session
-      if (
-        isSessionCorruption &&
-        params.sessionKey &&
-        params.activeSessionStore &&
-        params.storePath
-      ) {
-        const sessionKey = params.sessionKey;
-        const corruptedSessionId = params.getActiveSessionEntry()?.sessionId;
-        defaultRuntime.error(
-          `Session history corrupted (Gemini function call ordering). Resetting session: ${params.sessionKey}`,
-        );
-
-        try {
-          // Delete transcript file if it exists
-          if (corruptedSessionId) {
-            const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);
-            try {
-              fs.unlinkSync(transcriptPath);
-            } catch {
-              // Ignore if file doesn't exist
-            }
-          }
-
-          // Keep the in-memory snapshot consistent with the on-disk store reset.
-          delete params.activeSessionStore[sessionKey];
-
-          // Remove session entry from store using a fresh, locked snapshot.
-          await updateSessionStore(params.storePath, (store) => {
-            delete store[sessionKey];
-          });
-        } catch (cleanupErr) {
-          defaultRuntime.error(
-            `Failed to reset corrupted session ${params.sessionKey}: ${String(cleanupErr)}`,
-          );
-        }
-
-        params.replyOperation?.fail("session_corruption_reset", err);
+      if (providerRequestError) {
+        params.replyOperation?.fail("run_failed", err);
         return {
           kind: "final",
           payload: markAgentRunFailureReplyPayload({
-            text: "⚠️ Session history was corrupted. I've reset the conversation - please try again!",
+            text: providerRequestError.userMessage,
           }),
         };
       }
@@ -2481,7 +2427,6 @@ export async function runAgentTurnWithFallback(params: {
         !(isRateLimit && !isOverloadedErrorMessage(message)) &&
         !rateLimitOrOverloadedCopy &&
         !isContextOverflow &&
-        !isRoleOrderingError &&
         !shouldSurfaceToControlUi
           ? buildExternalRunFailureReply(message, {
               includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
@@ -2499,11 +2444,9 @@ export async function runAgentTurnWithFallback(params: {
             ? rateLimitOrOverloadedCopy
             : isContextOverflow
               ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-              : isRoleOrderingError
-                ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-                : shouldSurfaceToControlUi
-                  ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
-                  : (externalRunFailureReply?.text ?? genericFallbackText);
+              : shouldSurfaceToControlUi
+                ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
+                : (externalRunFailureReply?.text ?? genericFallbackText);
       const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
         text: fallbackText,
         sessionCtx: params.sessionCtx,
