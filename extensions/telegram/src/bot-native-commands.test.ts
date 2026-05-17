@@ -19,6 +19,7 @@ import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plug
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let parseTelegramNativeCommandCallbackData: typeof import("./bot-native-commands.js").parseTelegramNativeCommandCallbackData;
 let resolveTelegramNativeCommandDisableBlockStreaming: typeof import("./bot-native-commands.js").resolveTelegramNativeCommandDisableBlockStreaming;
+let telegramNativeCommandTesting: typeof import("./bot-native-commands.js").__testing;
 
 type CommandBotHarness = ReturnType<typeof createCommandBot>;
 type TelegramInlineKeyboardReplyMarkup = {
@@ -151,6 +152,7 @@ describe("registerTelegramNativeCommands", () => {
       registerTelegramNativeCommands,
       parseTelegramNativeCommandCallbackData,
       resolveTelegramNativeCommandDisableBlockStreaming,
+      __testing: telegramNativeCommandTesting,
     } = await import("./bot-native-commands.js"));
   });
 
@@ -179,6 +181,22 @@ describe("registerTelegramNativeCommands", () => {
       cfg,
       agentIds: ["butler"],
     });
+  });
+
+  it("retries native runtime imports after a transient dist miss", async () => {
+    let calls = 0;
+    const loader = telegramNativeCommandTesting.createRecoveringTelegramRuntimeLoader(async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("stable runtime wrapper is not ready");
+      }
+      return { ready: true };
+    });
+
+    await expect(loader()).rejects.toThrow("stable runtime wrapper is not ready");
+    await expect(loader()).resolves.toEqual({ ready: true });
+    await expect(loader()).resolves.toEqual({ ready: true });
+    expect(calls).toBe(2);
   });
 
   it("scopes skill commands to default agent without a matching binding (#15599)", () => {

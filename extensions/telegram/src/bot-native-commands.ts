@@ -160,24 +160,37 @@ type TelegramNativeCommandThreadContext = {
   threadParams: ReturnType<typeof buildTelegramThreadParams>;
 };
 
-let telegramNativeCommandDeliveryRuntimePromise:
-  | Promise<typeof import("./bot-native-commands.delivery.runtime.js")>
-  | undefined;
-
-async function loadTelegramNativeCommandDeliveryRuntime() {
-  telegramNativeCommandDeliveryRuntimePromise ??=
-    import("./bot-native-commands.delivery.runtime.js");
-  return await telegramNativeCommandDeliveryRuntimePromise;
+function createRecoveringTelegramRuntimeLoader<TModule>(
+  importer: () => Promise<TModule>,
+): () => Promise<TModule> {
+  let runtimePromise: Promise<TModule> | undefined;
+  return async () => {
+    const promise = runtimePromise ?? importer();
+    runtimePromise = promise;
+    try {
+      return await promise;
+    } catch (error) {
+      // A live rebuild can briefly remove the stable runtime wrapper. Do not
+      // poison the long-lived Telegram command process with that transient miss.
+      if (runtimePromise === promise) {
+        runtimePromise = undefined;
+      }
+      throw error;
+    }
+  };
 }
 
-let telegramNativeCommandRuntimePromise:
-  | Promise<typeof import("./bot-native-commands.runtime.js")>
-  | undefined;
+const loadTelegramNativeCommandDeliveryRuntime = createRecoveringTelegramRuntimeLoader(
+  () => import("./bot-native-commands.delivery.runtime.js"),
+);
 
-async function loadTelegramNativeCommandRuntime() {
-  telegramNativeCommandRuntimePromise ??= import("./bot-native-commands.runtime.js");
-  return await telegramNativeCommandRuntimePromise;
-}
+const loadTelegramNativeCommandRuntime = createRecoveringTelegramRuntimeLoader(
+  () => import("./bot-native-commands.runtime.js"),
+);
+
+export const __testing = {
+  createRecoveringTelegramRuntimeLoader,
+};
 
 function resolveTelegramProgressPlaceholder(command: {
   nativeProgressMessages?: Partial<Record<string, string>> & { default?: string };
