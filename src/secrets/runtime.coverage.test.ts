@@ -154,6 +154,14 @@ const COVERAGE_WEB_FETCH_PROVIDERS = new Map(
 );
 
 vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
+  loadBundledWebFetchProviderEntriesFromDir: (params: { pluginId: string }) => {
+    const provider = COVERAGE_WEB_FETCH_PROVIDERS.get(params.pluginId);
+    return provider ? [provider] : null;
+  },
+  loadBundledWebSearchProviderEntriesFromDir: (params: { pluginId: string }) => {
+    const provider = COVERAGE_WEB_SEARCH_PROVIDERS.get(params.pluginId);
+    return provider ? [provider] : null;
+  },
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: (params: {
     onlyPluginIds: readonly string[];
   }) => {
@@ -230,6 +238,7 @@ const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
   "channels.googlechat.accounts.*.serviceAccount",
   // Doctor migrates legacy web search config into plugin-owned webSearch config.
   "tools.web.search.apiKey",
+  "tools.web.search.*.apiKey",
   "tools.web.fetch.firecrawl.apiKey",
 ]);
 

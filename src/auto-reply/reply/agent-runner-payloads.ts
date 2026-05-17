@@ -7,6 +7,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
+  appendReplyMediaFailureWarning,
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -35,6 +36,7 @@ function loadReplyPayloadsDedupeRuntime() {
 async function normalizeReplyPayloadMedia(params: {
   payload: ReplyPayload;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
+  suppressMediaFailureWarning?: boolean;
 }): Promise<ReplyPayload> {
   if (!params.normalizeMediaPaths || !resolveSendableOutboundReplyParts(params.payload).hasMedia) {
     return params.payload;
@@ -47,6 +49,9 @@ async function normalizeReplyPayloadMedia(params: {
     logVerbose(`reply payload media normalization failed: ${String(err)}`);
     return copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
+      text: params.suppressMediaFailureWarning
+        ? params.payload.text
+        : appendReplyMediaFailureWarning(params.payload.text),
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
@@ -223,8 +228,9 @@ export async function buildReplyPayloads(params: {
       const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
         payload: parsed.payload,
         normalizeMediaPaths: params.normalizeMediaPaths,
+        suppressMediaFailureWarning: parsed.isSilent,
       });
-      if (parsed.isSilent && !resolveSendableOutboundReplyParts(mediaNormalizedPayload).hasMedia) {
+      if (parsed.isSilent) {
         mediaNormalizedPayload.text = undefined;
       }
       return mediaNormalizedPayload;

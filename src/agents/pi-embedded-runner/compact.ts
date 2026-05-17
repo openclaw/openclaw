@@ -99,7 +99,7 @@ import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
-  resolveSessionWriteLockAcquireTimeoutMs,
+  resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import {
@@ -956,9 +956,10 @@ async function compactEmbeddedPiSessionDirectOnce(
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
-      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
-      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: compactionTimeoutMs,
+      ...resolveSessionWriteLockOptions(params.config, {
+        maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
+          timeoutMs: compactionTimeoutMs,
+        }),
       }),
     });
     try {

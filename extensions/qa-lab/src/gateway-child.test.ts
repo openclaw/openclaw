@@ -46,10 +46,12 @@ function createParams(baseEnv?: NodeJS.ProcessEnv) {
     gatewayToken: "qa-token",
     homeDir: "/tmp/openclaw-qa/home",
     stateDir: "/tmp/openclaw-qa/state",
+    tempRoot: "/tmp/openclaw-qa",
     xdgConfigHome: "/tmp/openclaw-qa/xdg-config",
     xdgDataHome: "/tmp/openclaw-qa/xdg-data",
     xdgCacheHome: "/tmp/openclaw-qa/xdg-cache",
     bundledPluginsDir: "/tmp/openclaw-qa/bundled-plugins",
+    stagedBundledPluginsRoot: "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
     compatibilityHostVersion: "2026.4.8",
     baseEnv,
   };
@@ -139,6 +141,10 @@ describe("buildQaRuntimeEnv", () => {
 
     expect(env.OPENCLAW_TEST_FAST).toBe("1");
     expect(env.OPENCLAW_QA_PARENT_PID).toBe(String(process.pid));
+    expect(env.OPENCLAW_QA_TEMP_ROOT).toBe("/tmp/openclaw-qa");
+    expect(env.OPENCLAW_QA_STAGED_RUNTIME_ROOT).toBe(
+      "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
+    );
     expect(env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER).toBe("1");
     expect(env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
     expect(env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");

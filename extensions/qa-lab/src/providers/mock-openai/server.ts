@@ -177,6 +177,7 @@ const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 
 type MockScenarioState = {
   subagentFanoutPhase: number;
+  subagentHandoffSpawned: boolean;
 };
 
 const MOCK_OPENAI_MAX_BODY_BYTES = 16 * 1024 * 1024;
@@ -1128,7 +1129,11 @@ function buildAssistantText(
       "- None.",
     ].join("\n");
   }
-  if (toolOutput && (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt))) {
+  if (
+    toolOutput &&
+    (/delegate (?:one |a )bounded qa task/i.test(allInputText) ||
+      /subagent handoff/i.test(allInputText))
+  ) {
     const compact = toolOutput.replace(/\s+/g, " ").trim() || "no delegated output";
     return `Delegated task:\n- Inspect the QA workspace via a bounded subagent.\nResult:\n- ${compact}\nEvidence:\n- The child result was folded back into the main thread exactly once.`;
   }
@@ -1141,7 +1146,11 @@ function buildAssistantText(
     }
     return `Protocol note: Lobster Invaders built at lobster-invaders.html.`;
   }
-  if (toolOutput && /compaction retry mutating tool check/i.test(prompt)) {
+  if (
+    toolOutput &&
+    (/compaction retry mutating tool check/i.test(allInputText) ||
+      /compaction-retry-summary\.txt/i.test(toolOutput))
+  ) {
     if (
       toolOutput.includes("Replay safety: unsafe after write.") ||
       /compaction-retry-summary\.txt/i.test(toolOutput) ||
@@ -1151,6 +1160,22 @@ function buildAssistantText(
       return "Protocol note: replay unsafe after write.";
     }
     return "";
+  }
+  if (
+    toolOutput &&
+    /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(allInputText)
+  ) {
+    return [
+      "Worked:",
+      "- Read all three seeded files: repo/qa/scenarios/index.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.",
+      "- Extra QA scenario candidates: config restart capability flip and image generation roundtrip.",
+      "Failed:",
+      "- None observed in mock mode.",
+      "Blocked:",
+      "- No live provider evidence in this lane.",
+      "Follow-up:",
+      "- Re-run with a real model for qualitative coverage.",
+    ].join("\n");
   }
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
@@ -1501,11 +1526,17 @@ async function buildResponsesPayload(
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
   const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
-  const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn");
-  const canCallSessionsYield = hasDeclaredTool(body, "sessions_yield");
-  const canPlanQaSessionsSpawn =
-    canCallSessionsSpawn ||
-    /subagent fanout synthesis check|delegate one bounded qa task|subagent handoff/i.test(prompt);
+  const canCallMockSubagentTool =
+    QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText) ||
+    /subagent fanout synthesis check/i.test(allInputText) ||
+    /forked subagent context qa check/i.test(allInputText) ||
+    /delegate (?:one |a )bounded qa task/i.test(allInputText) ||
+    /subagent handoff/i.test(allInputText) ||
+    buildExplicitSessionsSpawnArgs(allInputText) !== null;
+  const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn") || canCallMockSubagentTool;
+  const canCallSessionsYield =
+    hasDeclaredTool(body, "sessions_yield") ||
+    QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText);
   const buildToolProgressReadEvents = (pattern: RegExp) => {
     const toolProgressPrompt = extractLastMatchingUserText(extractAllUserTexts(input), pattern);
     return buildToolCallEventsWithArgs("read", {
@@ -1819,7 +1850,11 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/compaction retry mutating tool check/i.test(prompt)) {
+  if (
+    /compaction retry mutating tool check/i.test(allInputText) ||
+    /compaction retry evidence/i.test(toolOutput) ||
+    /compaction-retry-summary\.txt/i.test(toolOutput)
+  ) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "COMPACTION_RETRY_CONTEXT.md" });
     }
@@ -2002,7 +2037,7 @@ async function buildResponsesPayload(
       size: "1024x1024",
     });
   }
-  if (canPlanQaSessionsSpawn && /subagent fanout synthesis check/i.test(prompt)) {
+  if (canCallSessionsSpawn && /subagent fanout synthesis check/i.test(allInputText)) {
     if (!toolOutput && scenarioState.subagentFanoutPhase === 0) {
       scenarioState.subagentFanoutPhase = 1;
       return buildToolCallEventsWithArgs("sessions_spawn", {
@@ -2078,10 +2113,13 @@ async function buildResponsesPayload(
     }
   }
   if (
-    canPlanQaSessionsSpawn &&
-    (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt)) &&
-    !toolOutput
+    canCallSessionsSpawn &&
+    (/delegate (?:one |a )bounded qa task/i.test(allInputText) ||
+      /subagent handoff/i.test(allInputText)) &&
+    !toolOutput &&
+    !scenarioState.subagentHandoffSpawned
   ) {
+    scenarioState.subagentHandoffSpawned = true;
     return buildToolCallEventsWithArgs("sessions_spawn", {
       task: "Inspect the QA workspace and return one concise protocol note.",
       label: "qa-sidecar",
@@ -2092,7 +2130,7 @@ async function buildResponsesPayload(
     /(worked, failed, blocked|worked\/failed\/blocked|source and docs)/i.test(prompt) &&
     !toolOutput
   ) {
-    return buildToolCallEventsWithArgs("read", { path: "QA_SCENARIO_PLAN.md" });
+    return buildToolCallEventsWithArgs("read", { path: "repo/qa/scenarios/index.md" });
   }
   if (!toolOutput && /\b(read|inspect|repo|docs|scenario|kickoff)\b/i.test(prompt)) {
     return buildToolCallEvents(prompt);
@@ -2496,7 +2534,10 @@ async function buildMessagesPayload(
 
 export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
   const host = params?.host ?? "127.0.0.1";
-  const scenarioState: MockScenarioState = { subagentFanoutPhase: 0 };
+  const scenarioState: MockScenarioState = {
+    subagentFanoutPhase: 0,
+    subagentHandoffSpawned: false,
+  };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
   const imageGenerationRequests: Array<Record<string, unknown>> = [];

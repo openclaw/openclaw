@@ -126,7 +126,7 @@ function createModelStreamCooperativeScheduler(
       eventsSinceYield = 0;
       lastYieldedAt = now;
       await new Promise<void>((resolve) => {
-        setImmediate(resolve);
+        setTimeout(resolve, 0);
       });
       throwIfModelStreamAborted(signal);
     },
