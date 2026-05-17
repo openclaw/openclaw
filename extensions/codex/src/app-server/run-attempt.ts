@@ -51,6 +51,7 @@ import {
   refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerEnvApiKeyCacheKey,
+  resolveCodexAppServerHomeDir,
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
 } from "./auth-bridge.js";
@@ -520,10 +521,15 @@ function parseCodexAppServerByteLimit(value: unknown): number | undefined {
 async function listCodexAppServerRolloutFilesForThread(
   agentDir: string,
   threadId: string,
+  codexHome?: string,
 ): Promise<Array<{ path: string; bytes: number }>> {
   const resolvedAgentDir = path.resolve(agentDir);
+  const resolvedCodexHome = codexHome?.trim()
+    ? path.resolve(codexHome)
+    : resolveCodexAppServerHomeDir(resolvedAgentDir);
   const roots = [
-    path.join(resolvedAgentDir, "codex-home", "sessions"),
+    path.join(resolvedCodexHome, "sessions"),
+    path.join(resolveCodexAppServerHomeDir(resolvedAgentDir), "sessions"),
     path.join(resolvedAgentDir, "agent", "codex-home", "sessions"),
     path.join(path.dirname(resolvedAgentDir), "codex-home", "sessions"),
   ];
@@ -653,6 +659,7 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
   binding: CodexAppServerThreadBinding | undefined;
   sessionFile: string;
   agentDir: string;
+  codexHome?: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
 }): Promise<CodexAppServerThreadBinding | undefined> {
   const binding = params.binding;
@@ -669,6 +676,7 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
   const rolloutFiles = await listCodexAppServerRolloutFilesForThread(
     params.agentDir,
     binding.threadId,
+    params.codexHome,
   );
   if (maxBytes !== undefined) {
     const oversizedFiles = rolloutFiles.filter((file) => file.bytes > maxBytes);
@@ -788,6 +796,7 @@ export async function runCodexAppServerAttempt(
     binding: startupBinding,
     sessionFile: params.sessionFile,
     agentDir,
+    codexHome: appServer.start.env?.CODEX_HOME,
     config: params.config,
   });
   const startupAuthProfileCandidate =
