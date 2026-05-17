@@ -1110,9 +1110,7 @@ function buildAssistantText(
     return "FORKED-CONTEXT-ALPHA";
   }
   const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  const isFanoutCompletionTurn =
-    /subagent fanout synthesis check/i.test(allInputText) || /^continue\.?$/i.test(prompt.trim());
-  if (scenarioState.subagentFanoutPhase === 2 && prompt && isFanoutCompletionTurn) {
+  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
     scenarioState.subagentFanoutPhase = 3;
     return fanoutCompleteReply;
   }
@@ -2054,6 +2052,10 @@ async function buildResponsesPayload(
         thread: false,
       });
     }
+  }
+  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
+    scenarioState.subagentFanoutPhase = 3;
+    return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
   }
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
   if (explicitSessionsSpawnArgs && !toolOutput) {
