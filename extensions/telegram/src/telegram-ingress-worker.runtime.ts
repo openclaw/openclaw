@@ -165,5 +165,11 @@ main()
   .then(() => undefined)
   .catch((err) => {
     post({ type: "poll-error", message: formatErrorMessage(err), finishedAt: Date.now() });
-    process.exitCode = 1;
+    // Cleanup drift after a requested stop (e.g. transport.close throwing in
+    // finally when undici dispatcher pools are torn down mid-abort) is not a
+    // crash. Exit code 1 here makes the channel supervisor treat the worker
+    // as crashed, which on hot reload leaves the supervisor in a
+    // running:true state and skips startChannel, wedging telegram until the
+    // gateway is bounced (#83008).
+    process.exitCode = stopped ? 0 : 1;
   });
