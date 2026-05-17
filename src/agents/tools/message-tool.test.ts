@@ -1623,6 +1623,59 @@ describe("message tool schema scoping", () => {
     expect(tool.description).not.toContain("react");
   });
 
+  it("preserves channel-management params for scoped channel-move and category-delete allowlists", () => {
+    // Regression: SCOPED_ACTION_GROUPS previously omitted channel-move and
+    // category-delete from the channel-management group, so narrowing an agent
+    // allowlist to either action stripped position/parentId/categoryId from
+    // the schema even though the Discord handlers require them.
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+      actions: ["send", "channel-move", "category-delete"],
+    });
+
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const channelMoveTool = createMessageTool({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "mover",
+              tools: { message: { actions: { allow: ["channel-move"] } } },
+            },
+          ],
+        },
+      } as never,
+      currentChannelProvider: "discord",
+      agentId: "mover",
+    });
+    const channelMoveProps = getToolProperties(channelMoveTool);
+    expect(getActionEnum(channelMoveProps)).toEqual(["channel-move"]);
+    expect(channelMoveProps).toHaveProperty("position");
+    expect(channelMoveProps).toHaveProperty("parentId");
+
+    const categoryDeleteTool = createMessageTool({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "purger",
+              tools: { message: { actions: { allow: ["category-delete"] } } },
+            },
+          ],
+        },
+      } as never,
+      currentChannelProvider: "discord",
+      agentId: "purger",
+    });
+    const categoryDeleteProps = getToolProperties(categoryDeleteTool);
+    expect(getActionEnum(categoryDeleteProps)).toEqual(["category-delete"]);
+    expect(categoryDeleteProps).toHaveProperty("categoryId");
+  });
+
   it("uses discovery account scope for other configured channel actions", () => {
     const currentPlugin = createChannelPlugin({
       id: "discord",

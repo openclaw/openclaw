@@ -890,11 +890,18 @@ const SCOPED_ACTION_GROUPS: ReadonlyArray<{
     build: buildModerationSchema,
   },
   {
+    // Every action whose handler reads channel-management params
+    // (name, parentId, topic, position, nsfw, rateLimitPerUser, categoryId,
+    // channelType, clearParent) must be listed here. Omitting an action
+    // strips its required params from scoped allowlist schemas — see the
+    // regression coverage in message-tool.test.ts.
     actions: new Set<ChannelMessageActionName>([
       "channel-create",
       "channel-edit",
+      "channel-move",
       "category-create",
       "category-edit",
+      "category-delete",
       "topic-create",
       "topic-edit",
     ]),
