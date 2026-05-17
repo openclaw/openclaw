@@ -370,21 +370,21 @@ function buildWhatsAppQaConfig(
   };
 }
 
+type WhatsAppChannelStatus = {
+  connected?: boolean;
+  lastConnectedAt?: number;
+  lastDisconnect?: unknown;
+  lastError?: string;
+  restartPending?: boolean;
+  running?: boolean;
+};
+
 async function waitForWhatsAppChannelRunning(
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
   accountId: string,
-) {
+): Promise<WhatsAppChannelStatus> {
   const startedAt = Date.now();
-  let lastStatus:
-    | {
-        connected?: boolean;
-        lastConnectedAt?: number;
-        lastDisconnect?: unknown;
-        lastError?: string;
-        restartPending?: boolean;
-        running?: boolean;
-      }
-    | undefined;
+  let lastStatus: WhatsAppChannelStatus | undefined;
   while (Date.now() - startedAt < WHATSAPP_QA_READY_TIMEOUT_MS) {
     try {
       const payload = (await gateway.call(
@@ -418,6 +418,11 @@ async function waitForWhatsAppChannelRunning(
           }
         : undefined;
       if (match?.running && match.connected === true && match.restartPending !== true) {
+        if (!lastStatus) {
+          throw new Error(
+            `whatsapp account "${accountId}" status disappeared after readiness check`,
+          );
+        }
         return lastStatus;
       }
     } catch {
