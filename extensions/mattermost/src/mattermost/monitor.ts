@@ -846,6 +846,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
+  const participatedMattermostThreads = new Set<string>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -1451,6 +1452,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           : { triggered: false, stripped: rawText };
         const oncharTriggered = oncharResult.triggered;
         const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
+        const inParticipatedMattermostThread =
+          kind !== "direct" && threadRootId && participatedMattermostThreads.has(threadRootId);
+        if (inParticipatedMattermostThread && !wasMentioned) {
+          logVerboseMessage(
+            `mattermost: allowing reply in participated thread without mention thread=${threadRootId}`,
+          );
+        }
         const mentionDecision = evaluateMattermostMentionGate({
           kind,
           cfg,
@@ -1459,7 +1467,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           threadRootId,
           requireMentionOverride: account.requireMention,
           resolveRequireMention: core.channel.groups.resolveRequireMention,
-          wasMentioned,
+          wasMentioned: Boolean(wasMentioned || inParticipatedMattermostThread),
           isControlCommand,
           commandAuthorized,
           oncharEnabled,
@@ -1770,8 +1778,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
 
         let dispatchSettledBeforeStart = false;
+        let turnResult: Awaited<ReturnType<typeof core.channel.turn.run>> | undefined;
         try {
-          await core.channel.turn.run({
+          turnResult = await core.channel.turn.run({
             channel: "mattermost",
             accountId: route.accountId,
             raw: post,
@@ -1923,6 +1932,22 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           }
           if (!dispatchSettledBeforeStart) {
             markRunComplete();
+          }
+        }
+
+        if (turnResult?.dispatched) {
+          const dispatch = turnResult.dispatchResult;
+          const counts = (dispatch as { counts?: Record<string, number> }).counts ?? {};
+          const visibleReplySent =
+            (dispatch as { queuedFinal?: boolean }).queuedFinal === true ||
+            (counts.final ?? 0) > 0 ||
+            (counts.block ?? 0) > 0 ||
+            (counts.tool ?? 0) > 0;
+          if (kind !== "direct" && effectiveReplyToId && visibleReplySent) {
+            participatedMattermostThreads.add(effectiveReplyToId);
+            logVerboseMessage(
+              `mattermost: tracking participated thread for follow-up replies thread=${effectiveReplyToId}`,
+            );
           }
         }
       },
