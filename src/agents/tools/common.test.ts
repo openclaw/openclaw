@@ -49,6 +49,7 @@ describe("imageResult", () => {
       path: "/tmp/test.png",
       media: {
         mediaUrl: "/tmp/test.png",
+        mediaUrls: ["/tmp/test.png"],
       },
     });
   });
