@@ -25,6 +25,8 @@ export type PolicyChannelEvidence = {
   readonly enabled?: boolean;
 };
 
+const RESERVED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+
 export function policyDocumentHash(policy: unknown): string {
   return sha256(stableJson(policy));
 }
@@ -88,6 +90,7 @@ export function collectPolicyEvidence(cfg: Record<string, unknown>): PolicyEvide
 
 export function scanPolicyChannels(cfg: Record<string, unknown>): readonly PolicyChannelEvidence[] {
   return Object.entries(configuredChannels(cfg))
+    .filter(([id]) => !RESERVED_CHANNEL_CONFIG_KEYS.has(id))
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([id, value]) => {
       const entry: {

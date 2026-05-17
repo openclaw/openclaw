@@ -141,6 +141,29 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
+  it("reports malformed channel deny rules against a configured policy path", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "workspace.policy.jsonc"),
+      JSON.stringify({ channels: { denyRules: [{ when: {} }] } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(
+      ctx(configPath, cfgWithPolicy({ path: "workspace.policy.jsonc" })),
+    );
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/policy-jsonc-invalid",
+        path: "workspace.policy.jsonc",
+        target: "oc://workspace.policy.jsonc/channels/denyRules/#0",
+      }),
+    ]);
+  });
+
   it("reports a policy hash mismatch when expectedHash is configured", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");

@@ -63,4 +63,18 @@ describe("registerBundledHealthChecks", () => {
 
     expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalled();
   });
+
+  it("honors plugin control-plane disablement for policy checks", () => {
+    for (const plugins of [
+      { enabled: false, entries: { policy: { enabled: true } } },
+      { deny: ["policy"], entries: { policy: { enabled: true } } },
+      { allow: ["telegram"], entries: { policy: { enabled: true } } },
+    ]) {
+      vi.clearAllMocks();
+
+      registerBundledHealthChecks({ cfg: { plugins }, cwd: workspaceDir });
+
+      expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalled();
+    }
+  });
 });

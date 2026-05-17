@@ -1,12 +1,11 @@
 import { basename, isAbsolute, resolve } from "node:path";
-import { parseOcDocument, type Diagnostic, type JsoncAst } from "@openclaw/oc-path/api.js";
+import JSON5 from "json5";
 import {
   registerHealthCheck as registerPluginHealthCheck,
   type HealthCheck,
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
-import { jsoncValueToUnknown } from "../jsonc-value.js";
 import {
   collectPolicyEvidence,
   createPolicyAttestation,
@@ -46,6 +45,7 @@ export type PolicyEvaluation = {
   readonly evidence: PolicyEvidence;
   readonly expectedAttestationHash?: string;
   readonly findings: readonly HealthFinding[];
+  readonly attestedFindings: readonly HealthFinding[];
 };
 
 export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost): void {
@@ -162,6 +162,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       evidence,
       expectedAttestationHash: settings.expectedAttestationHash,
       findings,
+      attestedFindings: findings,
     };
   }
 
@@ -180,27 +181,23 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       evidence,
       expectedAttestationHash: settings.expectedAttestationHash,
       findings,
+      attestedFindings: findings,
     };
   }
 
-  const parsedPolicy = parsePolicyFile(policyFile.raw, policyFile.displayName);
-  if (parsedPolicy.diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
-    findings.push(
-      ...policyParseFindings(
-        policyFile.displayName,
-        policyFile.ocDocName,
-        parsedPolicy.diagnostics,
-      ),
-    );
+  const parsedPolicy = parsePolicyFile(policyFile.raw);
+  if (!parsedPolicy.ok) {
+    findings.push(policyParseFinding(policyFile.displayName, policyFile.ocDocName, parsedPolicy));
     return {
       policyPath,
       evidence,
       expectedAttestationHash: settings.expectedAttestationHash,
       findings,
+      attestedFindings: findings,
     };
   }
 
-  const policy = parsedPolicy.ast.root === null ? {} : jsoncValueToUnknown(parsedPolicy.ast.root);
+  const policy = parsedPolicy.value;
   const policyHash = policyDocumentHash(policy);
   const expectedHash = settings.expectedHash;
   if (
@@ -224,10 +221,16 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       evidence,
       expectedAttestationHash: settings.expectedAttestationHash,
       findings,
+      attestedFindings: findings,
     };
   }
 
-  const policyFindings = channelFindings(policy, policyFile.ocDocName, evidence);
+  const policyFindings = channelFindings(
+    policy,
+    policyFile.displayName,
+    policyFile.ocDocName,
+    evidence,
+  );
   const attestationFindings = policyAttestationFindings(
     policyFile.displayName,
     policyHash,
@@ -247,29 +250,24 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     evidence,
     expectedAttestationHash: settings.expectedAttestationHash,
     findings,
+    attestedFindings: policyFindings,
   };
 }
 
-function policyParseFindings(
+function policyParseFinding(
   policyPath: string,
   policyDocName: string,
-  diagnostics: readonly Diagnostic[],
-): readonly HealthFinding[] {
-  const diagnostic = diagnostics.find((entry) => entry.severity === "error");
-  return diagnostic === undefined
-    ? []
-    : [
-        {
-          checkId: CHECK_IDS.policyInvalidFile,
-          severity: "error" as const,
-          message: `${policyPath} could not be parsed: ${diagnostic.message}`,
-          source: "policy",
-          path: policyPath,
-          line: diagnostic.line,
-          target: `oc://${policyDocName}`,
-          fixHint: `Fix ${policyPath} so policy conformance checks can run.`,
-        },
-      ];
+  parseError: { readonly message: string },
+): HealthFinding {
+  return {
+    checkId: CHECK_IDS.policyInvalidFile,
+    severity: "error",
+    message: `${policyPath} could not be parsed: ${parseError.message}`,
+    source: "policy",
+    path: policyPath,
+    target: `oc://${policyDocName}`,
+    fixHint: `Fix ${policyPath} so policy conformance checks can run.`,
+  };
 }
 
 function findingsForCheck(
@@ -281,10 +279,11 @@ function findingsForCheck(
 
 function channelFindings(
   policy: unknown,
+  policyPath: string,
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  const invalidRules = invalidChannelDenyRuleFindings(policy, policyDocName);
+  const invalidRules = invalidChannelDenyRuleFindings(policy, policyPath, policyDocName);
   if (invalidRules.length > 0) {
     return invalidRules;
   }
@@ -372,6 +371,7 @@ function toAttestedFinding(finding: HealthFinding): Record<string, unknown> {
 
 function invalidChannelDenyRuleFindings(
   policy: unknown,
+  policyPath: string,
   policyDocName: string,
 ): readonly HealthFinding[] {
   if (!isRecord(policy) || !isRecord(policy.channels) || policy.channels.denyRules === undefined) {
@@ -382,11 +382,11 @@ function invalidChannelDenyRuleFindings(
       {
         checkId: CHECK_IDS.policyInvalidFile,
         severity: "error",
-        message: "policy.jsonc channels.denyRules must be an array.",
+        message: `${policyPath} channels.denyRules must be an array.`,
         source: "policy",
-        path: "policy.jsonc",
+        path: policyPath,
         target: `oc://${policyDocName}/channels/denyRules`,
-        fixHint: "Fix policy.jsonc so channel deny rules are an array.",
+        fixHint: `Fix ${policyPath} so channel deny rules are an array.`,
       },
     ];
   }
@@ -398,11 +398,11 @@ function invalidChannelDenyRuleFindings(
     {
       checkId: CHECK_IDS.policyInvalidFile,
       severity: "error",
-      message: `policy.jsonc channels.denyRules[${invalid}] must define when.provider as a string.`,
+      message: `${policyPath} channels.denyRules[${invalid}] must define when.provider as a string.`,
       source: "policy",
-      path: "policy.jsonc",
+      path: policyPath,
       target: `oc://${policyDocName}/channels/denyRules/#${invalid}`,
-      fixHint: "Fix policy.jsonc so each channel deny rule has a provider match.",
+      fixHint: `Fix ${policyPath} so each channel deny rule has a provider match.`,
     },
   ];
 }
@@ -441,16 +441,17 @@ function isNotFound(err: unknown): boolean {
 
 function parsePolicyFile(
   raw: string,
-  fileName: string,
-): {
-  readonly ast: JsoncAst;
-  readonly diagnostics: readonly Diagnostic[];
-} {
-  const parsed = parseOcDocument(raw, { fileName });
-  if (parsed.ast.kind !== "jsonc") {
-    throw new Error(`${fileName} did not parse as jsonc.`);
+):
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly message: string } {
+  try {
+    return { ok: true, value: JSON5.parse(raw) };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    };
   }
-  return { ast: parsed.ast, diagnostics: parsed.diagnostics };
 }
 
 function workspaceRepairsEnabled(ctx: HealthCheckContext): boolean {

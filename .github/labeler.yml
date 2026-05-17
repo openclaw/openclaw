@@ -291,7 +291,6 @@
       - any-glob-to-any-file:
           - "extensions/policy/**"
           - "docs/cli/policy.md"
-          - "docs/plugins/reference/policy.md"
 "extensions: open-prose":
   - changed-files:
       - any-glob-to-any-file:
