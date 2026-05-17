@@ -347,6 +347,56 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
+  it("best-effort delivery skips active descendant waits and sends the cron result", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(2);
+    vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
+
+    const params = makeBaseParams({
+      synthesizedText: "Parent cron summary is ready.",
+      deliveryBestEffort: true,
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [{ text: "Parent cron summary is ready." }],
+      skipQueue: true,
+    });
+  });
+
+  it("best-effort delivery still suppresses stale interim text from active descendants", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(2);
+    vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
+
+    const params = makeBaseParams({
+      synthesizedText: "on it, pulling everything together",
+      deliveryBestEffort: true,
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(
+      shouldEnqueueCronMainSummary({
+        summaryText: "on it, pulling everything together",
+        deliveryRequested: true,
+        delivered: state.delivered,
+        deliveryAttempted: state.deliveryAttempted,
+        suppressMainSummary: false,
+        isCronSystemEvent: () => true,
+      }),
+    ).toBe(false);
+  });
+
   it("early return (stale interim suppression) sets deliveryAttempted=true so timer skips enqueueSystemEvent", async () => {
     // First countActiveDescendantRuns call returns >0 (had descendants), second returns 0
     vi.mocked(countActiveDescendantRuns)

@@ -1113,8 +1113,10 @@ export async function dispatchCronDelivery(
     );
     const shouldCheckCompletedDescendants =
       activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText);
+    const shouldWaitForDescendantSummary =
+      !params.deliveryBestEffort && (activeSubagentRuns > 0 || expectedSubagentFollowup);
     const needsSubagentFollowupRuntime =
-      shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedSubagentFollowup;
+      shouldCheckCompletedDescendants || shouldWaitForDescendantSummary;
     const subagentFollowupRuntime = needsSubagentFollowupRuntime
       ? await loadSubagentFollowupRuntime()
       : undefined;
@@ -1130,7 +1132,7 @@ export async function dispatchCronDelivery(
         })
       : undefined;
     const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
-    if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
+    if (shouldWaitForDescendantSummary) {
       let finalReply = await subagentFollowupRuntime?.waitForDescendantSubagentSummary({
         sessionKey: subagentFollowupSessionKey,
         initialReply: initialSynthesizedText,
@@ -1160,7 +1162,7 @@ export async function dispatchCronDelivery(
       synthesizedText = completedDescendantReply;
       deliveryPayloads = [{ text: completedDescendantReply }];
     }
-    if (activeSubagentRuns > 0) {
+    if (!params.deliveryBestEffort && activeSubagentRuns > 0) {
       // Parent orchestration is still in progress; avoid announcing a partial
       // update to the main requester. Mark deliveryAttempted so the timer does
       // not fire a redundant enqueueSystemEvent fallback (double-announce bug).
