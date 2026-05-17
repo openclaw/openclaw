@@ -45,7 +45,7 @@ describe("fetchBrowserbaseConnectUrl", () => {
     expect(url).toBe("wss://connect.browserbase.com/abc?signingKey=xyz");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
-    const [calledUrl, calledInit] = fetchImpl.mock.calls[0]!;
+    const [calledUrl, calledInit] = fetchImpl.mock.calls[0];
     expect(calledUrl).toContain("/v1/sessions/" + SESSION_ID);
     expect((calledInit as RequestInit).method).toBe("GET");
     const headers = (calledInit as RequestInit).headers as Record<string, string>;
