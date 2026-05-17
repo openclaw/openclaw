@@ -6,7 +6,9 @@ import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import {
   buildJsonPluginConfigSchema,
   definePluginEntry,
+  type AnyAgentTool,
   type OpenClawPluginApi,
+  type OpenClawPluginToolContext,
 } from "./plugin-entry.js";
 
 const EMPTY_TOOL_PLUGIN_CONFIG_SCHEMA = Type.Object({}, { additionalProperties: false });
@@ -28,24 +30,51 @@ type ToolPluginToolFactory<TConfig> = <TParamsSchema extends TSchema>(
   definition: ToolPluginToolDefinition<TConfig, TParamsSchema>,
 ) => DefinedToolPluginTool;
 
-export type ToolPluginToolDefinition<TConfig, TParamsSchema extends TSchema> = {
+export type ToolPluginFactoryContext<TConfig> = {
+  api: OpenClawPluginApi;
+  config: TConfig;
+  toolContext: OpenClawPluginToolContext;
+};
+
+type ToolPluginToolDefinitionBase<TParamsSchema extends TSchema> = {
   name: string;
   label?: string;
   description: string;
   parameters: TParamsSchema;
-  execute: (
-    params: Static<TParamsSchema>,
-    config: TConfig,
-    context: ToolPluginExecutionContext,
-  ) => unknown;
+  optional?: boolean;
 };
+
+export type ToolPluginToolDefinition<
+  TConfig,
+  TParamsSchema extends TSchema,
+> = ToolPluginToolDefinitionBase<TParamsSchema> &
+  (
+    | {
+        execute: (
+          params: Static<TParamsSchema>,
+          config: TConfig,
+          context: ToolPluginExecutionContext,
+        ) => unknown;
+        factory?: never;
+      }
+    | {
+        factory: (
+          context: ToolPluginFactoryContext<TConfig>,
+        ) => AnyAgentTool | AnyAgentTool[] | null | undefined;
+        execute?: never;
+      }
+  );
 
 type DefinedToolPluginTool = {
   name: string;
   label: string;
   description: string;
   parameters: TSchema;
-  execute: (params: unknown, config: unknown, context: ToolPluginExecutionContext) => unknown;
+  optional: boolean;
+  execute?: (params: unknown, config: unknown, context: ToolPluginExecutionContext) => unknown;
+  factory?: (
+    context: ToolPluginFactoryContext<unknown>,
+  ) => AnyAgentTool | AnyAgentTool[] | null | undefined;
 };
 
 export type ToolPluginStaticToolMetadata = {
@@ -53,6 +82,7 @@ export type ToolPluginStaticToolMetadata = {
   label: string;
   description: string;
   parameters: JsonSchemaObject;
+  optional?: boolean;
 };
 
 export type ToolPluginMetadata = {
@@ -92,7 +122,9 @@ function createToolPluginToolFactory<TConfig>(): ToolPluginToolFactory<TConfig> 
     label: definition.label ?? definition.name,
     description: definition.description,
     parameters: definition.parameters,
+    optional: definition.optional === true,
     execute: definition.execute as DefinedToolPluginTool["execute"],
+    factory: definition.factory as DefinedToolPluginTool["factory"],
   })) as ToolPluginToolFactory<TConfig>;
 }
 
@@ -118,6 +150,7 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
       label: tool.label,
       description: tool.description,
       parameters: tool.parameters as JsonSchemaObject,
+      ...(tool.optional ? { optional: true } : {}),
     })),
   };
 
@@ -129,21 +162,44 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
     register(api) {
       const config = (api.pluginConfig ?? {}) as ToolPluginConfig<TConfigSchema>;
       for (const tool of tools) {
-        api.registerTool({
+        const opts = {
           name: tool.name,
-          label: tool.label,
-          description: tool.description,
-          parameters: tool.parameters,
-          execute: async (toolCallId, params, signal, onUpdate) =>
-            wrapToolPluginResult(
-              await tool.execute(params, config, {
+          ...(tool.optional ? { optional: true } : {}),
+        };
+        if (tool.factory) {
+          api.registerTool(
+            (toolContext) =>
+              tool.factory?.({
                 api,
-                signal,
-                toolCallId,
-                onUpdate,
+                config,
+                toolContext,
               }),
-            ),
-        });
+            opts,
+          );
+          continue;
+        }
+        const execute = tool.execute;
+        if (!execute) {
+          throw new Error(`tool plugin tool ${tool.name} must define execute or factory`);
+        }
+        api.registerTool(
+          {
+            name: tool.name,
+            label: tool.label,
+            description: tool.description,
+            parameters: tool.parameters,
+            execute: async (toolCallId, params, signal, onUpdate) =>
+              wrapToolPluginResult(
+                await execute(params, config, {
+                  api,
+                  signal,
+                  toolCallId,
+                  onUpdate,
+                }),
+              ),
+          },
+          tool.optional ? { optional: true } : undefined,
+        );
       }
     },
   }) as DefinedToolPluginEntry;
