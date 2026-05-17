@@ -1495,6 +1495,58 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("passes normalized channel context to app-server dynamic tool result hooks", async () => {
+    const harness = createStartedThreadHarness();
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+    __testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("echo")]);
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.messageChannel = "telegram";
+    params.messageProvider = "telegram";
+    params.currentChannelId = "telegram:-100123";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+
+    await harness.handleServerRequest({
+      id: "request-echo-tool",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-echo-1",
+        namespace: null,
+        tool: "echo",
+        arguments: {},
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(afterToolCall).toHaveBeenCalledTimes(1);
+    });
+    expect(afterToolCall.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        channelId: "-100123",
+        toolName: "echo",
+        toolCallId: "call-echo-1",
+      }),
+    );
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("releases the session when Codex never completes after a dynamic tool response", async () => {
     let handleRequest:
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)

@@ -607,6 +607,7 @@ export async function runCodexAppServerAttempt(
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
+  const hookChannelId = resolveCodexAppServerHookChannelId(params, sandboxSessionKey);
   let yieldDetected = false;
   const tools = await buildDynamicTools({
     params,
@@ -632,6 +633,7 @@ export async function runCodexAppServerAttempt(
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       runId: params.runId,
+      channelId: hookChannelId,
     },
   });
   const hadSessionFile = await pathExists(activeSessionFile);
@@ -657,13 +659,7 @@ export async function runCodexAppServerAttempt(
     workspaceDir: params.workspaceDir,
     messageProvider: params.messageProvider ?? undefined,
     trigger: params.trigger,
-    channelId: buildAgentHookContextChannelFields({
-      sessionKey: sandboxSessionKey,
-      messageChannel: params.messageChannel,
-      messageProvider: params.messageProvider,
-      currentChannelId: params.currentChannelId,
-      messageTo: params.messageTo,
-    }).channelId,
+    channelId: hookChannelId,
     ...hookContextWindowFields,
   };
   const activeContextEnginePluginId = activeContextEngine
@@ -864,13 +860,7 @@ export async function runCodexAppServerAttempt(
       sessionKey: sandboxSessionKey,
       config: params.config,
       runId: params.runId,
-      channelId: buildAgentHookContextChannelFields({
-        sessionKey: sandboxSessionKey,
-        messageChannel: params.messageChannel,
-        messageProvider: params.messageProvider,
-        currentChannelId: params.currentChannelId,
-        messageTo: params.messageTo,
-      }).channelId,
+      channelId: hookChannelId,
       attemptTimeoutMs: params.timeoutMs,
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,
@@ -2738,6 +2728,19 @@ function resolveOpenClawCodingToolsSessionKeys(
   };
 }
 
+function resolveCodexAppServerHookChannelId(
+  params: EmbeddedRunAttemptParams,
+  sandboxSessionKey: string,
+): string | undefined {
+  return buildAgentHookContextChannelFields({
+    sessionKey: sandboxSessionKey,
+    messageChannel: params.messageChannel,
+    messageProvider: params.messageProvider,
+    currentChannelId: params.currentChannelId,
+    messageTo: params.messageTo,
+  }).channelId;
+}
+
 async function buildDynamicTools(input: DynamicToolBuildParams) {
   const { params } = input;
   if (params.disableTools || !supportsModelTools(params.model)) {
@@ -2797,13 +2800,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     }),
     suppressManagedWebSearch: false,
     currentChannelId: params.currentChannelId,
-    hookChannelId: buildAgentHookContextChannelFields({
-      sessionKey: input.sandboxSessionKey,
-      messageChannel: params.messageChannel,
-      messageProvider: params.messageProvider,
-      currentChannelId: params.currentChannelId,
-      messageTo: params.messageTo,
-    }).channelId,
+    hookChannelId: resolveCodexAppServerHookChannelId(params, input.sandboxSessionKey),
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
     replyToMode: params.replyToMode,
