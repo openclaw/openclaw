@@ -93,6 +93,7 @@ export async function startOrResumeThread(params: {
   config?: JsonObject;
   finalConfigPatch?: JsonObject;
   nativeCodeModeEnabled?: boolean;
+  userMcpServersEnabled?: boolean;
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
@@ -103,12 +104,12 @@ export async function startOrResumeThread(params: {
     params.params,
     params.contextEngineProjection,
   );
-  const userMcpServersConfigPatch = buildCodexUserMcpServersThreadConfigPatch(
-    params.params.config,
-    {
-      agentId: params.agentId ?? params.params.agentId,
-    },
-  );
+  const userMcpServersConfigPatch =
+    params.userMcpServersEnabled === false
+      ? undefined
+      : buildCodexUserMcpServersThreadConfigPatch(params.params.config, {
+          agentId: params.agentId ?? params.params.agentId,
+        });
   const userMcpServersFingerprint = fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
   let binding = await readCodexAppServerBinding(params.params.sessionFile, {
     authProfileStore: params.params.authProfileStore,
@@ -118,6 +119,16 @@ export async function startOrResumeThread(params: {
   let preserveExistingBinding = false;
   let rotatedContextEngineBinding = false;
   let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
+  if (binding?.threadId && params.nativeCodeModeEnabled === false) {
+    embeddedAgentLog.debug(
+      "codex app-server native tool surface disabled for turn; starting transient thread",
+      {
+        threadId: binding.threadId,
+      },
+    );
+    preserveExistingBinding = true;
+    binding = undefined;
+  }
   if (binding?.threadId && (binding.contextEngine || contextEngineBinding)) {
     if (
       !contextEngineBinding ||
@@ -569,6 +580,7 @@ export function buildThreadStartParams(
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
     }),
+    ...(options.nativeCodeModeEnabled === false ? { environments: [] } : {}),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     dynamicTools: options.dynamicTools,
     experimentalRawEvents: true,

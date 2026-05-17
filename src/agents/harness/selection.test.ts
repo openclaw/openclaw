@@ -116,6 +116,36 @@ function registerSuccessfulCodexHarness(): void {
   );
 }
 
+function groupSenderDenyAllConfig(): OpenClawConfig {
+  return {
+    channels: {
+      telegram: {
+        groups: {
+          "test-deny-room": {
+            toolsBySender: {
+              "id:test-denied-sender": { deny: ["*"] },
+            },
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function groupDenyAllConfig(): OpenClawConfig {
+  return {
+    channels: {
+      telegram: {
+        groups: {
+          "test-deny-room": {
+            tools: { deny: ["*"] },
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
 function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfig {
   return {
     models: {
@@ -281,6 +311,75 @@ describe("runAgentHarnessAttempt", () => {
     expect(classifyCall?.[1]).toBe(params);
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
+  });
+
+  it("collapses channel group sender deny-all to empty toolsAllow for plugin harnesses", async () => {
+    const runAttempt = vi.fn(async () => createAttemptResult("codex"));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await runAgentHarnessAttempt({
+      ...createAttemptParams(groupSenderDenyAllConfig()),
+      sessionKey: "agent:main:telegram:group:test-deny-room",
+      messageProvider: "telegram",
+      groupId: "test-deny-room",
+      senderId: "test-denied-sender",
+      extraSystemPrompt: "Existing operator note.",
+    });
+
+    expect(runAttempt).toHaveBeenCalledTimes(1);
+    const attempt = runAttempt.mock.calls[0]?.[0];
+    expect(attempt?.toolsAllow).toEqual([]);
+    expect(attempt?.extraSystemPrompt).toContain("Existing operator note.");
+    expect(attempt?.extraSystemPrompt).toContain("this sender is not allowed by policy");
+  });
+
+  it("adds chat policy wording for plugin harness group deny-all", async () => {
+    const runAttempt = vi.fn(async () => createAttemptResult("codex"));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await runAgentHarnessAttempt({
+      ...createAttemptParams(groupDenyAllConfig()),
+      sessionKey: "agent:main:telegram:group:test-deny-room",
+      messageProvider: "telegram",
+      groupId: "test-deny-room",
+      senderId: "test-denied-sender",
+    });
+
+    expect(runAttempt).toHaveBeenCalledTimes(1);
+    const attempt = runAttempt.mock.calls[0]?.[0];
+    expect(attempt?.toolsAllow).toEqual([]);
+    expect(attempt?.extraSystemPrompt).toContain("this chat is not allowed by policy");
+  });
+
+  it("leaves PI harness params unchanged for channel group sender deny-all policy", async () => {
+    await runAgentHarnessAttempt({
+      ...createAttemptParams(groupSenderDenyAllConfig()),
+      sessionKey: "agent:main:telegram:group:test-deny-room",
+      messageProvider: "telegram",
+      groupId: "test-deny-room",
+      senderId: "test-denied-sender",
+    });
+
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+    expect(piRunAttempt.mock.calls[0]?.[0].toolsAllow).toBeUndefined();
   });
 
   it("fails for config-forced plugin harnesses when fallback is omitted", async () => {
