@@ -74,6 +74,10 @@ export const AgentDefaultsSchema = z
     silentReply: SilentReplyPolicyConfigSchema.optional(),
     repoRoot: z.string().optional(),
     systemPromptOverride: z.string().optional(),
+    identityLine: z.string().optional(),
+    identityMode: z
+      .union([z.literal("default"), z.literal("none"), z.literal("custom")])
+      .optional(),
     promptOverlays: z
       .object({
         gpt5: z

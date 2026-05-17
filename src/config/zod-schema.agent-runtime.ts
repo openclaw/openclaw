@@ -939,6 +939,10 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     systemPromptOverride: z.string().optional(),
+    identityLine: z.string().optional(),
+    identityMode: z
+      .union([z.literal("default"), z.literal("none"), z.literal("custom")])
+      .optional(),
     agentRuntime: AgentRuntimePolicySchema,
     embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),

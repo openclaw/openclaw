@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import { DEFAULT_IDENTITY_LINE } from "./identity-line.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import {
@@ -1142,6 +1143,42 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
+  });
+
+  it("emits the default identity line when identityLine is undefined", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+    expect(prompt).toContain(DEFAULT_IDENTITY_LINE);
+  });
+
+  it("emits a custom identity line when identityLine is provided", () => {
+    const custom = "You are a custom assistant.";
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      identityLine: custom,
+    });
+    expect(prompt).toContain(custom);
+    expect(prompt).not.toContain(DEFAULT_IDENTITY_LINE);
+  });
+
+  it("suppresses the identity line when identityLine is null", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      identityLine: null,
+    });
+    expect(prompt).not.toContain(DEFAULT_IDENTITY_LINE);
+    expect(prompt).toContain("## Tooling");
+  });
+
+  it("suppresses the identity line in promptMode 'none' when identityLine is null", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "none",
+      identityLine: null,
+    });
+    expect(prompt).not.toContain(DEFAULT_IDENTITY_LINE);
+    expect(prompt).toBe("");
   });
 
   it("keeps stable project context before volatile channel guidance for prefix-cache reuse", () => {
