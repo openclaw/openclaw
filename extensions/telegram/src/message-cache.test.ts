@@ -221,6 +221,57 @@ describe("telegram message cache", () => {
     }
   });
 
+  it("replaces authoritative edited message fields without stale caption carryover", () => {
+    const cache = createTelegramMessageCache();
+    const chat = { id: 7, type: "group", title: "Ops" } as const;
+    cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat,
+        message_id: 104,
+        date: 1736380900,
+        caption: "old caption",
+        from: { id: 999, is_bot: true, first_name: "Bot" },
+        photo: [
+          {
+            file_id: "generated-photo-2",
+            file_unique_id: "generated-photo-unique-2",
+            width: 640,
+            height: 480,
+          },
+        ],
+      } as Message,
+    });
+
+    const updated = cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat,
+        message_id: 104,
+        date: 1736380900,
+        edit_date: 1736380910,
+        from: { id: 999, is_bot: true, first_name: "Bot" },
+        photo: [
+          {
+            file_id: "generated-photo-2",
+            file_unique_id: "generated-photo-unique-2",
+            width: 640,
+            height: 480,
+          },
+        ],
+      } as Message,
+    });
+
+    expect(updated).toMatchObject({
+      messageId: "104",
+      body: "<media:image>",
+      mediaRef: "telegram:file/generated-photo-2",
+    });
+    expect(updated?.body).not.toBe("old caption");
+  });
+
   it("shares one persisted bucket across live cache instances", async () => {
     const storePath = `/tmp/openclaw-telegram-message-cache-shared-${process.pid}-${Date.now()}.json`;
     const persistedPath = resolveTelegramMessageCachePath(storePath);
