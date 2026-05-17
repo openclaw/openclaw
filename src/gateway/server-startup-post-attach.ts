@@ -28,6 +28,7 @@ const ACP_BACKEND_READY_POLL_MS = 50;
 const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
 const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
+const SKIP_STARTUP_AGENT_RUNTIME_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_AGENT_RUNTIME_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 const RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
 
@@ -74,6 +75,11 @@ function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boole
 
 function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env[SKIP_STARTUP_MODEL_PREWARM_ENV]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+function shouldSkipStartupAgentRuntimePrewarm(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env[SKIP_STARTUP_AGENT_RUNTIME_PREWARM_ENV]?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
@@ -406,6 +412,28 @@ function schedulePrimaryModelPrewarm(
   });
 }
 
+async function prewarmAgentRuntimeForFirstTurn(): Promise<void> {
+  await Promise.all([
+    import("../agents/command/attempt-execution.runtime.js"),
+    import("../agents/pi-embedded.js"),
+    import("../agents/tool-catalog.js"),
+  ]);
+}
+
+async function prewarmAgentRuntimeForFirstTurnIfEnabled(params: {
+  log: { warn: (msg: string) => void };
+  prewarm?: typeof prewarmAgentRuntimeForFirstTurn;
+}): Promise<void> {
+  if (shouldSkipStartupAgentRuntimePrewarm()) {
+    return;
+  }
+  try {
+    await (params.prewarm ?? prewarmAgentRuntimeForFirstTurn)();
+  } catch (err) {
+    params.log.warn(`startup agent runtime prewarm failed: ${String(err)}`);
+  }
+}
+
 export async function startGatewaySidecars(params: {
   cfg: OpenClawConfig;
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
@@ -413,6 +441,7 @@ export async function startGatewaySidecars(params: {
   deps: CliDeps;
   startChannels: () => Promise<void>;
   prewarmPrimaryModel?: typeof prewarmConfiguredPrimaryModel;
+  prewarmAgentRuntime?: typeof prewarmAgentRuntimeForFirstTurn;
   log: { warn: (msg: string) => void };
   logHooks: {
     info: (msg: string) => void;
@@ -474,6 +503,13 @@ export async function startGatewaySidecars(params: {
       );
     }
   });
+
+  await measureStartup(params.startupTrace, "sidecars.agent-runtime-prewarm", () =>
+    prewarmAgentRuntimeForFirstTurnIfEnabled({
+      log: params.log,
+      ...(params.prewarmAgentRuntime ? { prewarm: params.prewarmAgentRuntime } : {}),
+    }),
+  );
 
   const shouldDispatchGatewayStartupInternalHook =
     internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
@@ -959,11 +995,14 @@ export async function startGatewayPostAttachRuntime(
 
 export const __testing = {
   hasRestartSentinelFileFast,
+  prewarmAgentRuntimeForFirstTurn,
+  prewarmAgentRuntimeForFirstTurnIfEnabled,
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,
   refreshLatestUpdateRestartSentinelIfPresent,
   resolveGatewayMemoryStartupPolicy,
   schedulePrimaryModelPrewarm,
+  shouldSkipStartupAgentRuntimePrewarm,
   shouldSkipStartupModelPrewarm,
   stopPostReadySidecarsAfterCloseStarted,
 };

@@ -50,6 +50,8 @@ const hoisted = vi.hoisted(() => {
   }));
   const resolveEmbeddedAgentRuntime = vi.fn(() => "pi");
   const ensureOpenClawModelsJson = vi.fn(async () => {});
+  const runAgentAttempt = vi.fn();
+  const runEmbeddedPiAgent = vi.fn();
   return {
     startPluginServices,
     startGmailWatcherWithLogs,
@@ -79,6 +81,8 @@ const hoisted = vi.hoisted(() => {
     getModelRefStatus,
     resolveEmbeddedAgentRuntime,
     ensureOpenClawModelsJson,
+    runAgentAttempt,
+    runEmbeddedPiAgent,
   };
 });
 
@@ -192,6 +196,14 @@ vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
 
 vi.mock("../agents/models-config.js", () => ({
   ensureOpenClawModelsJson: hoisted.ensureOpenClawModelsJson,
+}));
+
+vi.mock("../agents/command/attempt-execution.runtime.js", () => ({
+  runAgentAttempt: hoisted.runAgentAttempt,
+}));
+
+vi.mock("../agents/pi-embedded.js", () => ({
+  runEmbeddedPiAgent: hoisted.runEmbeddedPiAgent,
 }));
 
 vi.mock("./server-tailscale.js", () => ({
@@ -324,6 +336,8 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.resolveEmbeddedAgentRuntime.mockReturnValue("pi");
     hoisted.ensureOpenClawModelsJson.mockReset();
     hoisted.ensureOpenClawModelsJson.mockResolvedValue(undefined);
+    hoisted.runAgentAttempt.mockClear();
+    hoisted.runEmbeddedPiAgent.mockClear();
   });
 
   afterEach(() => {
@@ -716,6 +730,84 @@ describe("startGatewayPostAttachRuntime", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("honors the startup agent runtime prewarm skip env", () => {
+    expect(__testing.shouldSkipStartupAgentRuntimePrewarm({})).toBe(false);
+    expect(
+      __testing.shouldSkipStartupAgentRuntimePrewarm({
+        OPENCLAW_SKIP_STARTUP_AGENT_RUNTIME_PREWARM: "1",
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldSkipStartupAgentRuntimePrewarm({
+        OPENCLAW_SKIP_STARTUP_AGENT_RUNTIME_PREWARM: "true",
+      }),
+    ).toBe(true);
+  });
+
+  it("prewarms the first-turn agent runtime after channel startup", async () => {
+    await withEnvAsync({ OPENCLAW_SKIP_STARTUP_AGENT_RUNTIME_PREWARM: undefined }, async () => {
+      const events: string[] = [];
+      const prewarmAgentRuntime = vi.fn(async () => {
+        events.push("agent-runtime-prewarm");
+      });
+      const startChannels = vi.fn(async () => {
+        events.push("channels");
+      });
+      const trace = createStartupTraceRecorder();
+
+      await startGatewaySidecars({
+        cfg: { hooks: { internal: { enabled: false } } } as never,
+        pluginRegistry: createPostAttachParams().pluginRegistry,
+        defaultWorkspaceDir: "/tmp/openclaw-workspace",
+        deps: {} as never,
+        startChannels,
+        prewarmAgentRuntime,
+        log: { warn: vi.fn() },
+        logHooks: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        logChannels: {
+          info: vi.fn(),
+          error: vi.fn(),
+        },
+        startupTrace: trace.startupTrace,
+      });
+
+      expect(events).toEqual(["channels", "agent-runtime-prewarm"]);
+      expect(prewarmAgentRuntime).toHaveBeenCalledTimes(1);
+      expect(trace.measures).toContain("sidecars.agent-runtime-prewarm");
+    });
+  });
+
+  it("skips first-turn agent runtime prewarm when disabled", async () => {
+    await withEnvAsync({ OPENCLAW_SKIP_STARTUP_AGENT_RUNTIME_PREWARM: "1" }, async () => {
+      const prewarmAgentRuntime = vi.fn(async () => {});
+
+      await startGatewaySidecars({
+        cfg: { hooks: { internal: { enabled: false } } } as never,
+        pluginRegistry: createPostAttachParams().pluginRegistry,
+        defaultWorkspaceDir: "/tmp/openclaw-workspace",
+        deps: {} as never,
+        startChannels: vi.fn(async () => {}),
+        prewarmAgentRuntime,
+        log: { warn: vi.fn() },
+        logHooks: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        logChannels: {
+          info: vi.fn(),
+          error: vi.fn(),
+        },
+      });
+
+      expect(prewarmAgentRuntime).not.toHaveBeenCalled();
+    });
   });
 
   it("prewarms models.json in the configured default agent dir", async () => {
