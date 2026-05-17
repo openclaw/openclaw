@@ -316,6 +316,17 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
   return sortModelCatalogEntries(models);
 }
 
+function hasConfiguredProviderRowsNeedingManifestLookup(cfg: OpenClawConfig): boolean {
+  const providers = cfg.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return false;
+  }
+  return Object.entries(providers).some(
+    ([providerRaw, provider]) =>
+      Array.isArray(provider?.models) && normalizeProviderId(providerRaw) !== "openai",
+  );
+}
+
 function loadReadOnlyStaticModelCatalog(params?: { config?: OpenClawConfig }): ModelCatalogEntry[] {
   const cfg = params?.config ?? getRuntimeConfig();
   const models: ModelCatalogEntry[] = [];
@@ -335,7 +346,16 @@ function loadReadOnlyStaticModelCatalog(params?: { config?: OpenClawConfig }): M
     }
   }
 
-  const configuredModels = buildConfiguredModelCatalog({ cfg });
+  const configuredManifestPlugins = hasConfiguredProviderRowsNeedingManifestLookup(cfg)
+    ? loadPluginMetadataSnapshot({
+        config: cfg,
+        env: process.env,
+      }).plugins
+    : [];
+  const configuredModels = buildConfiguredModelCatalog({
+    cfg,
+    manifestPlugins: configuredManifestPlugins,
+  });
   if (configuredModels.length > 0) {
     appendCatalogEntriesIfAbsent(models, configuredModels);
   }

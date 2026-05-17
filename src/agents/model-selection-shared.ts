@@ -1,6 +1,7 @@
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
@@ -934,9 +935,17 @@ function resolveConfiguredModelManifestPlugins(params: {
     return undefined;
   }
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  if (!workspaceDir) {
+    return (
+      getCurrentPluginMetadataSnapshot({
+        config: params.cfg,
+        env: process.env,
+      })?.plugins ?? []
+    );
+  }
   return loadManifestMetadataSnapshot({
     config: params.cfg,
-    ...(workspaceDir ? { workspaceDir } : {}),
+    workspaceDir,
     env: process.env,
   }).plugins;
 }
