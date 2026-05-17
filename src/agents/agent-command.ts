@@ -923,7 +923,7 @@ async function agentCommandInternal(
       const explicitKey = modelKey(explicitRef.provider, explicitRef.model);
       if (!visibilityPolicy.allowsKey(explicitKey)) {
         throw new Error(
-          `Model override "${sanitizeForLog(explicitRef.provider)}/${sanitizeForLog(explicitRef.model)}" is not allowed for agent "${sessionAgentId}".`,
+          `Model override "${sanitizeForLog(explicitRef.provider)}/${sanitizeForLog(explicitRef.model)}" is not allowed for agent "${sessionAgentId}". Add it to agents.defaults.models or pick an allowed model with "openclaw models list".`,
         );
       }
       provider = explicitRef.provider;
