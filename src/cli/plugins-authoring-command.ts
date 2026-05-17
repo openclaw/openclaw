@@ -1,13 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
   loadPluginManifest,
   PLUGIN_MANIFEST_FILENAME,
   resolvePackageExtensionEntries,
 } from "../plugins/manifest.js";
+import { unwrapDefaultModuleExport } from "../plugins/module-export.js";
+import {
+  createPluginModuleLoaderCache,
+  getCachedPluginModuleLoader,
+} from "../plugins/plugin-module-loader-cache.js";
+import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
+import { toSafeImportPath } from "../shared/import-specifier.js";
 import { isRecord } from "../utils.js";
 
 type JsonObject = Record<string, unknown>;
@@ -33,6 +39,8 @@ type LoadedToolPlugin = {
   entry: unknown;
   metadata: ToolPluginMetadata;
 };
+
+const toolPluginEntryModuleLoaders = createPluginModuleLoaderCache();
 
 function readJsonFile(filePath: string): JsonObject {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as JsonObject;
@@ -83,12 +91,21 @@ function readPackageManifest(rootDir: string): JsonObject {
 }
 
 async function importToolPluginEntry(entryPath: string): Promise<unknown> {
-  const mod = (await import(pathToFileURL(entryPath).href)) as {
-    default?: unknown;
-    createEntry?: unknown;
-    entry?: unknown;
-  };
-  const candidate = mod.default ?? mod.createEntry ?? mod.entry;
+  const loader = getCachedPluginModuleLoader({
+    cache: toolPluginEntryModuleLoaders,
+    modulePath: entryPath,
+    importerUrl: import.meta.url,
+    loaderFilename: entryPath,
+    aliasMap: buildPluginLoaderAliasMap(entryPath, process.argv[1], import.meta.url),
+  });
+  const loaded = loader(toSafeImportPath(entryPath));
+  const mod =
+    loaded && typeof loaded === "object"
+      ? (loaded as { default?: unknown; createEntry?: unknown; entry?: unknown })
+      : undefined;
+  const candidate = unwrapDefaultModuleExport(
+    mod?.default ?? mod?.createEntry ?? mod?.entry ?? loaded,
+  );
   return typeof candidate === "function" ? (candidate as () => unknown)() : candidate;
 }
 
