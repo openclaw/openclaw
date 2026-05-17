@@ -60,6 +60,72 @@ describe("createQwenThinkingWrapper", () => {
     expect(capturePayload({ model: { reasoning: false } })).toStrictEqual({});
     expect(capturePayload({ model: { api: "openai-responses" as never } })).toStrictEqual({});
   });
+
+  describe("qwen-chat-template thinking format", () => {
+    const qwenChatTemplateModel: Partial<Model<"openai-completions">> = {
+      compat: { thinkingFormat: "qwen-chat-template" } as Model<"openai-completions">["compat"],
+    };
+
+    it("mirrors disabled session thinking into chat_template_kwargs.enable_thinking", () => {
+      const payload = capturePayload({
+        thinkingLevel: "off",
+        model: qwenChatTemplateModel,
+        // The transport's qwen-chat-template formatter writes
+        // enable_thinking: true when no explicit reasoning is in options.
+        initialPayload: { chat_template_kwargs: { enable_thinking: true } },
+      });
+
+      expect(payload).toEqual({
+        enable_thinking: false,
+        chat_template_kwargs: { enable_thinking: false },
+      });
+    });
+
+    it("mirrors enabled session thinking into chat_template_kwargs.enable_thinking", () => {
+      const payload = capturePayload({
+        thinkingLevel: "medium",
+        model: qwenChatTemplateModel,
+      });
+
+      expect(payload).toEqual({
+        enable_thinking: true,
+        chat_template_kwargs: { enable_thinking: true },
+      });
+    });
+
+    it("preserves unrelated chat_template_kwargs entries", () => {
+      const payload = capturePayload({
+        thinkingLevel: "off",
+        model: qwenChatTemplateModel,
+        initialPayload: {
+          chat_template_kwargs: { enable_thinking: true, custom_kwarg: "keep" },
+        },
+      });
+
+      expect(payload).toEqual({
+        enable_thinking: false,
+        chat_template_kwargs: { enable_thinking: false, custom_kwarg: "keep" },
+      });
+    });
+
+    it("lets explicit request reasoning override the session thinking level", () => {
+      const payload = capturePayload({
+        thinkingLevel: "off",
+        reasoning: "high",
+        model: qwenChatTemplateModel,
+        initialPayload: { chat_template_kwargs: { enable_thinking: true } },
+      });
+
+      expect(payload).toEqual({
+        enable_thinking: true,
+        chat_template_kwargs: { enable_thinking: true },
+      });
+    });
+
+    it("does not touch chat_template_kwargs for non-chat-template Qwen models", () => {
+      expect(capturePayload({ thinkingLevel: "off" })).toEqual({ enable_thinking: false });
+    });
+  });
 });
 
 describe("wrapQwenProviderStream", () => {
