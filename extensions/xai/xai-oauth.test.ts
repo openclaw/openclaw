@@ -46,8 +46,20 @@ describe("xAI OAuth", () => {
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
     expect(url.searchParams.get("state")).toBe("state-1");
     expect(url.searchParams.get("nonce")).toBe("nonce-1");
-    expect(url.searchParams.get("plan")).toBe("generic");
-    expect(url.searchParams.get("referrer")).toBe("openclaw");
+    expect(url.searchParams.get("plan")).toBeNull();
+    expect(url.searchParams.get("referrer")).toBeNull();
+    expect([...url.searchParams.keys()].toSorted()).toEqual(
+      [
+        "client_id",
+        "code_challenge",
+        "code_challenge_method",
+        "nonce",
+        "redirect_uri",
+        "response_type",
+        "scope",
+        "state",
+      ].toSorted(),
+    );
     expect(XAI_OAUTH_REDIRECT_URI).toContain(`:${XAI_OAUTH_CALLBACK_PORT}/`);
   });
 

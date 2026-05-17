@@ -132,8 +132,6 @@ export function buildXaiOAuthAuthorizeUrl(params: {
   url.searchParams.set("nonce", params.nonce);
   url.searchParams.set("code_challenge", params.challenge);
   url.searchParams.set("code_challenge_method", "S256");
-  url.searchParams.set("plan", "generic");
-  url.searchParams.set("referrer", "openclaw");
   return url.toString();
 }
 
