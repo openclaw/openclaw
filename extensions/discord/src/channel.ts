@@ -180,7 +180,17 @@ function resolveRuntimeDiscordMessageActions() {
   }
 }
 
-const discordMessageActions = {
+const discordMessageActions: ChannelMessageActionAdapter = {
+  get messageActionTargetAliases() {
+    const runtimeAliases = resolveRuntimeDiscordMessageActions()?.messageActionTargetAliases;
+    if (!runtimeAliases) {
+      return discordMessageActionsImpl.messageActionTargetAliases;
+    }
+    return {
+      ...discordMessageActionsImpl.messageActionTargetAliases,
+      ...runtimeAliases,
+    };
+  },
   resolveExecutionMode: (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["resolveExecutionMode"]>>[0],
   ) =>
