@@ -67,6 +67,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
   const activeHandledUpdateKeys = new Map<string, boolean>();
   const pendingUpdateIds = new Set<number>();
   const failedUpdateIds = new Set<number>();
+  const completedFloorReplayUpdateIds = new Set<number>();
   let highestAcceptedUpdateId: number | null = initialUpdateId;
   let highestPersistedAcceptedUpdateId: number | null = persistenceFloorUpdateId;
   let highestPersistenceRequestedUpdateId: number | null = persistenceFloorUpdateId;
@@ -129,6 +130,11 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     highestAcceptedUpdateId = updateId;
   };
 
+  const isFloorReplayUpdateId = (updateId: number) =>
+    initialUpdateId === null &&
+    persistenceFloorUpdateId !== null &&
+    updateId <= persistenceFloorUpdateId;
+
   function resolveSafeCompletedUpdateId() {
     if (highestCompletedUpdateId === null) {
       return null;
@@ -178,7 +184,12 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     const updateKey = buildTelegramUpdateKey(ctx);
     if (typeof updateId === "number") {
       if (highestAcceptedUpdateId !== null && updateId <= highestAcceptedUpdateId) {
-        if (!failedUpdateIds.has(updateId)) {
+        const floorReplay = isFloorReplayUpdateId(updateId);
+        if (!floorReplay && !failedUpdateIds.has(updateId)) {
+          skip(`update:${updateId}`);
+          return { accepted: false, reason: "accepted-watermark" };
+        }
+        if (floorReplay && completedFloorReplayUpdateIds.has(updateId)) {
           skip(`update:${updateId}`);
           return { accepted: false, reason: "accepted-watermark" };
         }
@@ -229,6 +240,9 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
       pendingUpdateIds.delete(update.updateId);
       if (finish.completed) {
         failedUpdateIds.delete(update.updateId);
+        if (isFloorReplayUpdateId(update.updateId)) {
+          completedFloorReplayUpdateIds.add(update.updateId);
+        }
         if (highestCompletedUpdateId === null || update.updateId > highestCompletedUpdateId) {
           highestCompletedUpdateId = update.updateId;
         }
