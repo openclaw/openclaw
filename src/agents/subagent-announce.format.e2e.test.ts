@@ -589,7 +589,7 @@ describe("subagent announce formatting", () => {
 
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
-    expect(msg).toContain("completed successfully");
+    expect(msg).toContain("completed; ready for parent review");
     expect(msg).toContain("(no output)");
     expect(msg).not.toContain("const staleFileSlice = 'app/app.js';");
     expect(msg).not.toContain("stale assistant reply should never surface");
