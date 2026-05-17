@@ -169,7 +169,7 @@ export function restoreFollowupQueues(): void {
         continue;
       }
       const restored: FollowupQueueState = {
-        items: data.items as FollowupRun[],
+        items: data.items,
         draining: false,
         lastEnqueuedAt: typeof data.lastEnqueuedAt === "number" ? data.lastEnqueuedAt : Date.now(),
         mode: normalizeQueueMode(data.mode) ?? "steer",

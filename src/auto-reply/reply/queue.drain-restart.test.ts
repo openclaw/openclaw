@@ -1,4 +1,7 @@
 // Tests queue drain restart behavior when follow-up runs chain together.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -8,6 +11,9 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
+import { rememberFollowupDrainCallback } from "./queue/drain.js";
+import { restoreFollowupQueues } from "./queue/persist.js";
+import { FOLLOWUP_QUEUES } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -398,5 +404,43 @@ describe("followup queue drain restart after idle window", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("before-idle");
+  });
+
+  it("drains restored queue items when a followup callback is registered after restart", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-restore-drain-"));
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+
+    const key = `test-restored-drain-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const drained = createDeferred<void>();
+
+    try {
+      enqueueFollowupRun(
+        key,
+        createRun({ prompt: "survived restart" }),
+        settings,
+        "message-id",
+        undefined,
+        false,
+      );
+      FOLLOWUP_QUEUES.delete(key);
+      restoreFollowupQueues();
+
+      rememberFollowupDrainCallback(key, async (run) => {
+        expect(run.prompt).toBe("survived restart");
+        drained.resolve();
+      });
+
+      await drained.promise;
+    } finally {
+      FOLLOWUP_QUEUES.delete(key);
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
