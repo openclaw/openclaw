@@ -411,7 +411,7 @@ export function createFollowupRunner(params: {
       };
       const drainProgressDeliveries = async () => {
         while (pendingProgressDeliveries.size > 0) {
-          await Promise.all([...pendingProgressDeliveries]);
+          await Promise.all(pendingProgressDeliveries);
         }
       };
       replyOperation = createReplyOperation({
