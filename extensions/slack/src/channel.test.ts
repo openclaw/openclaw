@@ -12,10 +12,13 @@ const { handleSlackActionMock } = vi.hoisted(() => ({
 const { sendMessageSlackMock } = vi.hoisted(() => ({
   sendMessageSlackMock: vi.fn(),
 }));
-const { conversationsInfoMock, conversationsOpenMock } = vi.hoisted(() => ({
-  conversationsInfoMock: vi.fn(),
-  conversationsOpenMock: vi.fn(),
-}));
+const { assistantThreadsSetStatusMock, conversationsInfoMock, conversationsOpenMock } = vi.hoisted(
+  () => ({
+    assistantThreadsSetStatusMock: vi.fn(),
+    conversationsInfoMock: vi.fn(),
+    conversationsOpenMock: vi.fn(),
+  }),
+);
 
 vi.mock("./action-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./action-runtime.js")>("./action-runtime.js");
@@ -34,6 +37,11 @@ vi.mock("./client.js", async () => {
   return {
     ...actual,
     createSlackWebClient: vi.fn(() => ({
+      assistant: {
+        threads: {
+          setStatus: assistantThreadsSetStatusMock,
+        },
+      },
       conversations: {
         info: conversationsInfoMock,
         open: conversationsOpenMock,
@@ -46,6 +54,8 @@ beforeEach(async () => {
   handleSlackActionMock.mockReset();
   sendMessageSlackMock.mockReset();
   sendMessageSlackMock.mockResolvedValue({ messageId: "msg-1", channelId: "D123" });
+  assistantThreadsSetStatusMock.mockReset();
+  assistantThreadsSetStatusMock.mockResolvedValue({ ok: true });
   conversationsInfoMock.mockReset();
   conversationsOpenMock.mockReset();
   setSlackRuntime({
@@ -99,6 +109,22 @@ function requireSlackSendPayload() {
     throw new Error("slack outbound.sendPayload unavailable");
   }
   return sendPayload;
+}
+
+function requireSlackHeartbeatSendTyping() {
+  const sendTyping = slackPlugin.heartbeat?.sendTyping;
+  if (!sendTyping) {
+    throw new Error("slack heartbeat.sendTyping unavailable");
+  }
+  return sendTyping;
+}
+
+function requireSlackHeartbeatClearTyping() {
+  const clearTyping = slackPlugin.heartbeat?.clearTyping;
+  if (!clearTyping) {
+    throw new Error("slack heartbeat.clearTyping unavailable");
+  }
+  return clearTyping;
 }
 
 function requireSlackListPeers() {
@@ -754,6 +780,42 @@ describe("slackPlugin outbound", () => {
     expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("C123");
     expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("hello");
     expect(requireMockCallArg(sendSlack, 0, 2).threadTs).toBeUndefined();
+  });
+
+  it("sets Slack assistant status for heartbeat typing in thread targets", async () => {
+    const sendTyping = requireSlackHeartbeatSendTyping();
+
+    await sendTyping({
+      cfg,
+      to: "channel:C123",
+      accountId: "default",
+      threadId: "1712345678.123456",
+    });
+
+    expect(assistantThreadsSetStatusMock).toHaveBeenCalledWith({
+      token: "xoxb-test",
+      channel_id: "C123",
+      thread_ts: "1712345678.123456",
+      status: "is typing...",
+    });
+  });
+
+  it("clears Slack assistant status for heartbeat typing in thread targets", async () => {
+    const clearTyping = requireSlackHeartbeatClearTyping();
+
+    await clearTyping({
+      cfg,
+      to: "channel:C123",
+      accountId: "default",
+      threadId: "1712345678.123456",
+    });
+
+    expect(assistantThreadsSetStatusMock).toHaveBeenCalledWith({
+      token: "xoxb-test",
+      channel_id: "C123",
+      thread_ts: "1712345678.123456",
+      status: "",
+    });
   });
 
   it("falls back to auto-thread lookup when replyToId is not a Slack thread timestamp", () => {

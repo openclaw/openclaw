@@ -51,6 +51,7 @@ import {
   type OpenClawConfig,
 } from "./channel-api.js";
 import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel-type.js";
+import { createSlackWebClient } from "./client.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import {
@@ -230,6 +231,38 @@ async function resolveSlackSendContext(params: {
   const tokenOverride = token && token !== botToken ? token : undefined;
   const threadTsValue = resolveSlackThreadTsValue(params);
   return { send, threadTsValue, tokenOverride };
+}
+
+async function setSlackHeartbeatThreadStatus(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  accountId?: string | null;
+  threadId?: string | number | null;
+  status: string;
+}) {
+  const threadTs = resolveSlackThreadTsValue({ threadId: params.threadId });
+  if (!threadTs) {
+    return;
+  }
+  const target = parseSlackTarget(params.to, { defaultKind: "channel" });
+  if (!target || target.kind !== "channel") {
+    return;
+  }
+  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const botToken = normalizeOptionalString(account.botToken);
+  if (!botToken) {
+    return;
+  }
+  try {
+    await createSlackWebClient(botToken).assistant.threads.setStatus({
+      token: botToken,
+      channel_id: target.id,
+      thread_ts: threadTs,
+      status: params.status,
+    });
+  } catch {
+    // Best-effort typing visibility only.
+  }
 }
 
 function parseSlackExplicitTarget(raw: string) {
@@ -680,6 +713,26 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         )(action, cfg as OpenClawConfig, toolContext as SlackActionContext | undefined),
     }),
     message: slackMessageAdapter,
+    heartbeat: {
+      sendTyping: async ({ cfg, to, accountId, threadId }) => {
+        await setSlackHeartbeatThreadStatus({
+          cfg,
+          to,
+          accountId,
+          threadId,
+          status: "is typing...",
+        });
+      },
+      clearTyping: async ({ cfg, to, accountId, threadId }) => {
+        await setSlackHeartbeatThreadStatus({
+          cfg,
+          to,
+          accountId,
+          threadId,
+          status: "",
+        });
+      },
+    },
     status: createComputedAccountStatusAdapter<ResolvedSlackAccount, SlackProbe>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       buildChannelSummary: async ({ snapshot }) => {
