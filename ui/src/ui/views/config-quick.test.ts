@@ -217,7 +217,28 @@ describe("renderQuickSettings", () => {
     expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe("blob:nova");
   });
 
-  it("renders same-origin assistant avatar routes from IDENTITY.md", () => {
+  it("renders fetched blob URLs for local assistant avatar routes", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: null,
+          assistantAvatarUrl: "blob:nova-avatar",
+          assistantAvatarSource: "assets/avatars/nova-portrait.png",
+          assistantAvatarStatus: "local",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
+      "blob:nova-avatar",
+    );
+  });
+
+  it("does not render protected local assistant avatar routes directly", () => {
     const container = document.createElement("div");
 
     render(
@@ -234,7 +255,7 @@ describe("renderQuickSettings", () => {
     );
 
     expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
-      "/avatar/main",
+      "apple-touch-icon.png",
     );
   });
 

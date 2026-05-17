@@ -231,6 +231,46 @@ describe("renderApp assistant avatar routing", () => {
     expect(quickSettingsProps.current?.assistantAvatarOverride).toBe(dataUrl);
   });
 
+  it("passes the authenticated blob URL to Quick Settings for local assistant avatars", () => {
+    renderApp(
+      createState({
+        assistantAvatar: "/avatar/main",
+        assistantAvatarSource: "assets/avatars/nova-portrait.png",
+        assistantAvatarStatus: "local",
+        assistantAvatarReason: null,
+        chatAvatarUrl: "blob:nova-avatar",
+        chatAvatarStatus: "local",
+        chatAvatarReason: null,
+      }),
+    );
+
+    expect(quickSettingsProps.current?.assistantAvatar).toBeNull();
+    expect(quickSettingsProps.current?.assistantAvatarUrl).toBe("blob:nova-avatar");
+    expect(quickSettingsProps.current?.assistantAvatarSource).toBe(
+      "assets/avatars/nova-portrait.png",
+    );
+    expect(quickSettingsProps.current?.assistantAvatarStatus).toBe("local");
+    expect(quickSettingsProps.current?.assistantAvatarReason).toBeNull();
+  });
+
+  it("does not pass protected local avatar routes to Quick Settings before blob fetch completes", () => {
+    renderApp(
+      createState({
+        assistantAvatar: "/avatar/main",
+        assistantAvatarSource: "assets/avatars/nova-portrait.png",
+        assistantAvatarStatus: "local",
+        assistantAvatarReason: null,
+        chatAvatarUrl: null,
+        chatAvatarStatus: null,
+        chatAvatarReason: null,
+      }),
+    );
+
+    expect(quickSettingsProps.current?.assistantAvatar).toBeNull();
+    expect(quickSettingsProps.current?.assistantAvatarUrl).toBeNull();
+    expect(quickSettingsProps.current?.assistantAvatarStatus).toBe("local");
+  });
+
   it("applies the configured chat message width as a shell CSS variable", () => {
     const container = document.createElement("div");
 

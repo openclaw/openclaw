@@ -199,6 +199,10 @@ function resolveAssistantPreviewAvatarUrl(props: QuickSettingsProps): string | n
   if (props.assistantAvatarStatus === "none" && props.assistantAvatarReason === "missing") {
     return null;
   }
+  const avatarUrl = normalizeOptionalString(props.assistantAvatarUrl);
+  if (props.assistantAvatarStatus === "local" && avatarUrl?.startsWith("/")) {
+    return null;
+  }
   return resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
     identity: {
       avatar: props.assistantAvatar ?? undefined,
