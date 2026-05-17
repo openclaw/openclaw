@@ -13,7 +13,10 @@ import {
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import {
+  hasControlCommand,
+  isControlCommandMessage,
+} from "openclaw/plugin-sdk/command-detection";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -1536,11 +1539,15 @@ export const registerTelegramHandlers = ({
       promptContextMinTimestampMs,
     } = params;
 
+    const messageText = getTelegramTextParts(msg).text;
+    const botUsername = ctx.me?.username;
+    const isControlMessage = isControlCommandMessage(messageText, cfg, { botUsername });
+
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
     // We buffer “near-limit” messages and append immediately-following parts.
     const text = typeof msg.text === "string" ? msg.text : undefined;
     const isCommandLike = (text ?? "").trim().startsWith("/");
-    if (text && !isCommandLike) {
+    if (text && !isCommandLike && !isControlMessage) {
       const nowMs = Date.now();
       const senderId = msg.from?.id != null ? String(msg.from.id) : "unknown";
       // Use resolvedThreadId for forum groups, dmThreadId for DM topics
@@ -1602,6 +1609,15 @@ export const registerTelegramHandlers = ({
         textFragmentBuffer.set(key, entry);
         scheduleTextFragmentFlush(entry);
         return;
+      }
+    } else if (text && isControlMessage) {
+      const senderId = msg.from?.id != null ? String(msg.from.id) : "unknown";
+      const threadId = resolvedThreadId ?? dmThreadId;
+      const key = `text:${chatId}:${threadId ?? "main"}:${senderId}`;
+      const existing = textFragmentBuffer.get(key);
+      if (existing) {
+        clearTimeout(existing.timer);
+        textFragmentBuffer.delete(key);
       }
     }
 
@@ -1744,15 +1760,18 @@ export const registerTelegramHandlers = ({
           debounceLane,
         })
       : null;
+    if (isControlMessage && debounceKey) {
+      inboundDebouncer.cancelKey(debounceKey);
+    }
     await inboundDebouncer.enqueue({
       ctx,
       msg,
       allMedia,
       storeAllowFrom,
       receivedAtMs: Date.now(),
-      debounceKey,
+      debounceKey: isControlMessage ? null : debounceKey,
       debounceLane,
-      botUsername: ctx.me?.username,
+      botUsername,
       ...promptContextBoundaryOptions(promptContextMinTimestampMs),
     });
   };

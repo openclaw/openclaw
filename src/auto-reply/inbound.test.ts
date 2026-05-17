@@ -627,6 +627,29 @@ describe("createInboundDebouncer", () => {
     expect(started).toEqual(["1", "2"]);
   });
 
+  it("cancels buffered keyed turns before they flush", async () => {
+    vi.useFakeTimers();
+    try {
+      const flushed: string[][] = [];
+      const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+        debounceMs: 50,
+        buildKey: (item) => item.key,
+        onFlush: async (items) => {
+          flushed.push(items.map((item) => item.id));
+        },
+      });
+
+      await debouncer.enqueue({ key: "a", id: "1" });
+      expect(debouncer.cancelKey("a")).toBe(true);
+      await vi.advanceTimersByTimeAsync(60);
+
+      expect(flushed).toEqual([]);
+      expect(debouncer.cancelKey("a")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("swallows onError failures so keyed chains still complete", async () => {
     const calls: string[] = [];
     const debouncer = createInboundDebouncer<{ key: string; id: string }>({
