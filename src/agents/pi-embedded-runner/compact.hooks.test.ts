@@ -19,6 +19,7 @@ import {
   resolveSessionAgentIdMock,
   resolveSessionAgentIdsMock,
   rotateTranscriptAfterCompactionMock,
+  rotateTranscriptFileAfterCompactionMock,
   resetCompactHooksHarnessMocks,
   resetCompactSessionStateMocks,
   sessionAbortCompactionMock,
@@ -1323,6 +1324,51 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       authProfileId: "openai:p1",
       currentTokenCount: 333,
     });
+  });
+
+  it("rotates the active transcript after harness compaction without a delegated successor", async () => {
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "",
+        firstKeptEntryId: "",
+        tokensBefore: 333,
+        details: { backend: "codex-app-server" },
+      },
+    });
+    rotateTranscriptFileAfterCompactionMock.mockResolvedValueOnce({
+      rotated: true,
+      sessionId: "rotated-session",
+      sessionFile: "/tmp/rotated-session.jsonl",
+      leafId: "leaf-1",
+    });
+
+    const result = await compactEmbeddedPiSession(
+      wrappedCompactionArgs({
+        currentTokenCount: 333,
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                truncateAfterCompaction: true,
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(rotateTranscriptFileAfterCompactionMock).toHaveBeenCalledWith({
+      sessionFile: TEST_SESSION_FILE,
+      synthesizeMissingBoundary: true,
+    });
+    expect(result.result?.sessionId).toBe("rotated-session");
+    expect(result.result?.sessionFile).toBe("/tmp/rotated-session.jsonl");
+    expect(result.result?.tokensBefore).toBe(333);
+    expect(result.result?.details).toEqual({ backend: "codex-app-server" });
   });
 
   it("does not fire after_compaction when compaction fails", async () => {

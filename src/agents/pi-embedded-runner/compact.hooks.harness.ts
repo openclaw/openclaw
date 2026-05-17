@@ -110,6 +110,11 @@ export const rotateTranscriptAfterCompactionMock: Mock<
 > = vi.fn(async () => ({
   rotated: false,
 }));
+export const rotateTranscriptFileAfterCompactionMock: Mock<
+  (_params?: unknown) => Promise<CompactionTranscriptRotation>
+> = vi.fn(async () => ({
+  rotated: false,
+}));
 
 function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
@@ -262,6 +267,8 @@ export function resetCompactSessionStateMocks(): void {
   maybeCompactAgentHarnessSessionMock.mockResolvedValue(undefined);
   rotateTranscriptAfterCompactionMock.mockReset();
   rotateTranscriptAfterCompactionMock.mockResolvedValue({ rotated: false });
+  rotateTranscriptFileAfterCompactionMock.mockReset();
+  rotateTranscriptFileAfterCompactionMock.mockResolvedValue({ rotated: false });
 }
 
 export function resetCompactHooksHarnessMocks(): void {
@@ -610,6 +617,7 @@ export async function loadCompactHooksHarness(): Promise<{
     return {
       ...actual,
       rotateTranscriptAfterCompaction: rotateTranscriptAfterCompactionMock,
+      rotateTranscriptFileAfterCompaction: rotateTranscriptFileAfterCompactionMock,
     };
   });
 
