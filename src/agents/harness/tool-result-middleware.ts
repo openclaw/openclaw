@@ -144,12 +144,12 @@ function coerceMiddlewareText(value: unknown): string | null {
     return null;
   }
   for (const key of ["text", "output", "result", "message", "value"]) {
-    const candidate = (value as Record<string, unknown>)[key];
+    const candidate = value[key];
     if (typeof candidate === "string") {
       return candidate;
     }
   }
-  const nestedContent = (value as Record<string, unknown>).content;
+  const nestedContent = value.content;
   if (typeof nestedContent === "string") {
     return nestedContent;
   }
@@ -219,11 +219,10 @@ function coerceMiddlewareToolResult(value: unknown): OpenClawAgentToolResult | n
   if (coerced.length === 0) {
     return null;
   }
-  const detailsPreserved = isValidMiddlewareDetails(value.details) ? value.details : undefined;
-  const candidate: Record<string, unknown> = { content: coerced };
-  if (detailsPreserved !== undefined) {
-    candidate.details = detailsPreserved;
+  if (value.details !== undefined && !isValidMiddlewareDetails(value.details)) {
+    return null;
   }
+  const candidate: Record<string, unknown> = { content: coerced, details: value.details ?? {} };
   return isValidMiddlewareToolResult(candidate) ? candidate : null;
 }
 
