@@ -31,23 +31,43 @@ const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServer
 
 function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
   const globalState = globalThis as typeof globalThis & {
-    [SHARED_CODEX_APP_SERVER_CLIENT_STATE]?:
-      | SharedCodexAppServerClientState
-      | LegacySharedCodexAppServerClientState;
+    [SHARED_CODEX_APP_SERVER_CLIENT_STATE]?: unknown;
   };
   const state = globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
-  if (state?.clients instanceof Map) {
-    return state as SharedCodexAppServerClientState;
+  if (isSharedCodexAppServerClientState(state)) {
+    return state;
   }
+  const legacyState = readLegacySharedCodexAppServerClientState(state);
   const clients = new Map<string, SharedCodexAppServerClientEntry>();
-  if (state?.key && (state.client || state.promise)) {
-    clients.set(state.key, { client: state.client, promise: state.promise });
-    state.client?.addCloseHandler((closedClient) =>
-      clearSharedClientEntryIfCurrent(state.key!, closedClient),
+  if (legacyState?.key && (legacyState.client || legacyState.promise)) {
+    const legacyKey = legacyState.key;
+    clients.set(legacyKey, { client: legacyState.client, promise: legacyState.promise });
+    legacyState.client?.addCloseHandler((closedClient) =>
+      clearSharedClientEntryIfCurrent(legacyKey, closedClient),
     );
   }
-  globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] = { clients };
-  return globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
+  const nextState: SharedCodexAppServerClientState = { clients };
+  globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] = nextState;
+  return nextState;
+}
+
+function isSharedCodexAppServerClientState(
+  value: unknown,
+): value is SharedCodexAppServerClientState {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    (value as { clients?: unknown }).clients instanceof Map
+  );
+}
+
+function readLegacySharedCodexAppServerClientState(
+  value: unknown,
+): LegacySharedCodexAppServerClientState | undefined {
+  if (value === null || typeof value !== "object") {
+    return undefined;
+  }
+  return value as LegacySharedCodexAppServerClientState;
 }
 
 export async function getSharedCodexAppServerClient(options?: {
