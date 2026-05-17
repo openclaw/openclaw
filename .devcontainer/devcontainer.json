@@ -1,0 +1,10 @@
+{
+  "name": "OpenClaw source",
+  "dockerComposeFile": ["../docker-compose.dev.yml"],
+  "service": "openclaw-dev",
+  "workspaceFolder": "/workspace",
+  "remoteUser": "node",
+  "overrideCommand": true,
+  "shutdownAction": "stopCompose",
+  "postCreateCommand": "scripts/docker/dev-setup.sh"
+}

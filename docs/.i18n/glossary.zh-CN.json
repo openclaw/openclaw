@@ -998,5 +998,9 @@
   {
     "source": "ds4 (local DeepSeek V4)",
     "target": "ds4（本地 DeepSeek V4）"
+  },
+  {
+    "source": "Collaborator readiness and containerized development",
+    "target": "协作者准备和容器化开发"
   }
 ]

@@ -8,6 +8,11 @@ title: "Docker"
 
 Docker is **optional**. Use it only if you want a containerized gateway or to validate the Docker flow.
 
+For single-container source development in a consistent Linux container, use
+`Dockerfile.dev` and `docker-compose.dev.yml` instead. See
+[Containerized source development](/start/setup#containerized-source-development).
+This page covers the production-shaped Gateway image and runtime Compose flow.
+
 ## Is Docker right for me?
 
 - **Yes**: you want an isolated, throwaway gateway environment or to run OpenClaw on a host without local installs.

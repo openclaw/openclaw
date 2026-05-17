@@ -1,0 +1,57 @@
+# Source-development image for collaborators.
+#
+# This image is intentionally not the production gateway image. Use the root
+# Dockerfile for deployable OpenClaw runtime builds and release-path validation.
+ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
+
+FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE}
+
+LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
+  org.opencontainers.image.title="OpenClaw source development" \
+  org.opencontainers.image.description="Development container for OpenClaw source checkouts"
+
+ENV COREPACK_HOME=/home/node/.local/share/corepack \
+  PNPM_HOME=/home/node/.local/share/pnpm \
+  PATH=/home/node/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN --mount=type=cache,id=openclaw-dev-apt-cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,id=openclaw-dev-apt-lists,target=/var/lib/apt,sharing=locked \
+  apt-get update && \
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    curl \
+    g++ \
+    git \
+    gnupg \
+    make \
+    openssh-client \
+    pkg-config \
+    procps \
+    python3 \
+    tini && \
+  update-ca-certificates && \
+  rm -rf /var/lib/apt/lists/*
+
+RUN corepack enable && \
+  install -d -m 0755 -o node -g node \
+    "$COREPACK_HOME" \
+    "$PNPM_HOME" \
+    "$PNPM_HOME/store" \
+    /home/node/.cache \
+    /workspace \
+    /workspace/node_modules \
+    /workspace/ui \
+    /workspace/ui/node_modules && \
+  git config --system --add safe.directory /workspace
+
+WORKDIR /workspace
+
+COPY --chown=node:node package.json ./
+RUN corepack prepare "$(node -p 'require("./package.json").packageManager')" --activate && \
+  chmod -R a+rX "$COREPACK_HOME" "$PNPM_HOME"
+
+USER node
+
+ENTRYPOINT ["tini", "-s", "--"]
+CMD ["bash"]

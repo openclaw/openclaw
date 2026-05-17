@@ -1,0 +1,38 @@
+services:
+  openclaw-dev:
+    image: openclaw:dev
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    init: true
+    stdin_open: true
+    tty: true
+    working_dir: /workspace
+    environment:
+      HOME: /home/node
+      COREPACK_HOME: /home/node/.local/share/corepack
+      PNPM_HOME: /home/node/.local/share/pnpm
+      PLAYWRIGHT_BROWSERS_PATH: /home/node/.cache/ms-playwright
+      PNPM_CONFIG_NETWORK_CONCURRENCY: 8
+      TERM: xterm-256color
+      OPENCLAW_STATE_DIR: /workspace/.local/openclaw-state
+      OPENCLAW_CONFIG_DIR: /workspace/.local/openclaw-state
+      OPENCLAW_CONFIG_PATH: /workspace/.local/openclaw-state/openclaw.json
+      OPENCLAW_WORKSPACE_DIR: /workspace/.local/openclaw-workspace
+      OPENCLAW_GATEWAY_PORT: 18789
+    volumes:
+      - .:/workspace:cached
+      - openclaw-dev-pnpm-store:/home/node/.local/share/pnpm/store
+      - openclaw-dev-cache:/home/node/.cache
+      - openclaw-dev-node-modules:/workspace/node_modules
+      - openclaw-dev-ui-node-modules:/workspace/ui/node_modules
+    ports:
+      - "18789:18789"
+      - "5173:5173"
+    command: ["bash"]
+
+volumes:
+  openclaw-dev-pnpm-store:
+  openclaw-dev-cache:
+  openclaw-dev-node-modules:
+  openclaw-dev-ui-node-modules:

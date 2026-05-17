@@ -233,6 +233,20 @@ pnpm ui:build
 pnpm gateway:watch
 ```
 
+Single-container source development is also available when you want the same
+Linux Node and pnpm environment across collaborators:
+
+```bash
+docker compose -f docker-compose.dev.yml build
+docker compose -f docker-compose.dev.yml run --rm openclaw-dev scripts/docker/dev-setup.sh
+docker compose -f docker-compose.dev.yml run --rm --service-ports openclaw-dev pnpm gateway:watch:raw
+```
+
+Use `Dockerfile.dev` for source development and the root `Dockerfile` for
+production-shaped gateway images. The dev setup script installs dependencies
+and writes the local gateway config and token auth needed for the
+container-published port.
+
 If you need a built `dist/` from the checkout (for Node, packaging, or release validation), run:
 
 ```bash

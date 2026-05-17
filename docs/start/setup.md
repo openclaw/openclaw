@@ -25,7 +25,59 @@ Pick a setup workflow based on how often you want updates and whether you want t
 - `pnpm` required for source checkouts. OpenClaw loads bundled plugins from the
   `extensions/*` pnpm workspace packages in dev mode, so root `npm install` does
   not prepare the full source tree.
-- Docker (optional; only for containerized setup/e2e - see [Docker](/install/docker))
+- Docker (optional; for source containers, containerized setup, and e2e - see [Docker](/install/docker))
+
+## Containerized source development
+
+Use this path when collaborators need the same Linux Node and pnpm environment
+without installing the full source toolchain on the host. The dev Compose file
+defines one `openclaw-dev` service and no sidecars. It is for source work only.
+Use the root `Dockerfile` and `docker-compose.yml` for production-shaped gateway
+images.
+
+Build the development image:
+
+```bash
+docker compose -f docker-compose.dev.yml build
+```
+
+Install dependencies and write the local gateway config inside the container:
+
+```bash
+docker compose -f docker-compose.dev.yml run --rm openclaw-dev scripts/docker/dev-setup.sh
+```
+
+Run the Gateway in the foreground with source reload behavior:
+
+```bash
+docker compose -f docker-compose.dev.yml run --rm --service-ports openclaw-dev pnpm gateway:watch:raw
+```
+
+Run one-off repo commands the same way:
+
+```bash
+docker compose -f docker-compose.dev.yml run --rm openclaw-dev pnpm docs:list
+docker compose -f docker-compose.dev.yml run --rm openclaw-dev pnpm build
+```
+
+The setup script runs `pnpm install --frozen-lockfile`, creates ignored local
+state directories, persists `gateway.mode=local`, `gateway.bind=lan`, and
+`gateway.port=18789`, and generates or reuses local token auth so the
+container-published Gateway port is reachable from the host. It also allowlists
+the Gateway and Vite Control UI origins for `localhost` and `127.0.0.1`. When
+you need to paste the local Control UI token, print it explicitly:
+
+```bash
+docker compose -f docker-compose.dev.yml run --rm openclaw-dev scripts/docker/dev-token.sh
+```
+
+The Compose file mounts the checkout at `/workspace`, keeps pnpm and
+`node_modules` in Docker volumes, stores OpenClaw local state under `.local/`,
+and publishes ports `18789` and `5173` for Gateway and UI development. One-off
+commands run against the same image and do not require a second service.
+
+VS Code and compatible tools can open the same environment through
+`.devcontainer/devcontainer.json`.
 
 ## Tailoring strategy (so updates do not hurt)
 
