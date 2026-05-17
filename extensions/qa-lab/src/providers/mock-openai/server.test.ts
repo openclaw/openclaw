@@ -2105,6 +2105,37 @@ describe("qa mock openai server", () => {
     expect(outputText(await response.json())).toBe("");
   });
 
+  it("does not answer fanout child completion announce sessions", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        input: [
+          makeUserInput(
+            [
+              "Auto-announce is push-based. If a child completion event arrives AFTER your final answer, reply ONLY with NO_REPLY.",
+              "[Internal task completion event]",
+              "Task: fanout worker beta",
+              "Result: BETA-OK",
+            ].join("\n"),
+          ),
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe("");
+  });
+
   it("uses full request text when planning continuation subagent tool calls", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
