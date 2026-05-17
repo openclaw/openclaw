@@ -167,6 +167,15 @@ function retainThoughtSignature(existing: string | undefined, incoming: string |
   return existing;
 }
 
+function isValidGeminiThoughtSignature(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length % 4 === 0 &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(value)
+  );
+}
+
 function stableStringifyGoogleToolCallValue(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map((item) => stableStringifyGoogleToolCallValue(item)).join(",")}]`;
@@ -210,6 +219,9 @@ function sanitizeGeminiToolCallThoughtSignature(
     lowered === "reasoning" ||
     lowered === normalizeLowercaseStringOrEmpty(GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP)
   ) {
+    return undefined;
+  }
+  if (!isValidGeminiThoughtSignature(trimmed)) {
     return undefined;
   }
   return trimmed;
@@ -536,7 +548,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           }
           parts.push({
             text: sanitizeTransportPayloadText(block.text),
-            ...(isSameRoute && block.textSignature
+            ...(isSameRoute && isValidGeminiThoughtSignature(block.textSignature)
               ? { thoughtSignature: block.textSignature }
               : {}),
           });
@@ -550,7 +562,9 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
             parts.push({
               thought: true,
               text: sanitizeTransportPayloadText(block.thinking),
-              ...(block.thinkingSignature ? { thoughtSignature: block.thinkingSignature } : {}),
+              ...(isValidGeminiThoughtSignature(block.thinkingSignature)
+                ? { thoughtSignature: block.thinkingSignature }
+                : {}),
             });
           } else {
             parts.push({ text: sanitizeTransportPayloadText(block.thinking) });
@@ -573,6 +587,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           if (ownSignature) {
             nextReplayToolCallThoughtSignatures.set(replayKey, ownSignature);
           }
+          const thoughtSignature =
           const thoughtSignature =
             ownSignature ??
             replayedThoughtSignature ??

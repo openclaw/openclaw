@@ -2819,7 +2819,17 @@ function injectToolCallThoughtSignatures(
         continue;
       }
       const sig = sigById.get(id) ?? fallbackSig;
-      if (!sig) {
+      // Strict canonical-Base64 guard. Compaction can truncate
+      // `thought_signature` mid-token (length not a multiple of 4,
+      // sometimes ending with a literal ellipsis). Gemini decodes
+      // TYPE_BYTES strictly and replies HTTP 400 INVALID_ARGUMENT,
+      // which aborts the whole assistant turn. Drop the field.
+      if (
+        typeof sig !== "string" ||
+        sig.length === 0 ||
+        sig.length % 4 !== 0 ||
+        !/^[A-Za-z0-9+/]+={0,2}$/.test(sig)
+      ) {
         continue;
       }
       const extra =
