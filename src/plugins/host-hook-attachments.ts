@@ -214,6 +214,20 @@ function normalizeOptionalThreadId(value: unknown): string | number | undefined 
   return normalizeOptionalString(value);
 }
 
+export function resolveSessionAttachmentThreadId(params: {
+  deliveryThreadId?: unknown;
+  explicitThreadId?: unknown;
+  fallbackThreadId?: unknown;
+  hintThreadTs?: string;
+}): string | number | undefined {
+  return (
+    params.hintThreadTs ??
+    normalizeOptionalThreadId(params.explicitThreadId) ??
+    normalizeOptionalThreadId(params.fallbackThreadId) ??
+    normalizeOptionalThreadId(params.deliveryThreadId)
+  );
+}
+
 export async function sendPluginSessionAttachment(
   params: PluginSessionAttachmentParams & { config?: OpenClawConfig; origin?: PluginOrigin },
 ): Promise<PluginSessionAttachmentResult> {
@@ -258,9 +272,6 @@ export async function sendPluginSessionAttachment(
     };
   }
   const rawText = normalizeOptionalString(params.text) ?? "";
-  const explicitThreadId = normalizeOptionalThreadId(params.threadId);
-  const deliveryThreadId = normalizeOptionalThreadId(deliveryContext.threadId);
-  const fallbackThreadId = normalizeOptionalThreadId(threadId);
   const resolvedDelivery = resolveAttachmentDelivery({
     channel: deliveryContext.channel,
     captionFormat: params.captionFormat,
@@ -274,8 +285,12 @@ export async function sendPluginSessionAttachment(
   if (!Array.isArray(validated)) {
     return { ok: false, error: validated.error };
   }
-  const resolvedThreadId =
-    resolvedDelivery.threadTs ?? explicitThreadId ?? fallbackThreadId ?? deliveryThreadId;
+  const resolvedThreadId = resolveSessionAttachmentThreadId({
+    deliveryThreadId: deliveryContext.threadId,
+    explicitThreadId: params.threadId,
+    fallbackThreadId: threadId,
+    hintThreadTs: resolvedDelivery.threadTs,
+  });
   let result: Awaited<ReturnType<SendMessage>>;
   try {
     const sendMessage = await loadSendMessage();

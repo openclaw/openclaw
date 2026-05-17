@@ -458,6 +458,7 @@ jobs:
           codex-home: /tmp/mantis-codex-home-${{ github.run_id }}
           safety-strategy: unprivileged-user
           codex-user: codex
+          allow-bot-users: clawsweeper[bot]
 
       - name: Inspect Mantis evidence manifest
         id: inspect

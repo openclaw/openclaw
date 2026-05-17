@@ -859,6 +859,7 @@ export async function runCodexAppServerAttempt(
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
   });
+  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
     embeddedAgentLog.warn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
@@ -1136,7 +1137,14 @@ export async function runCodexAppServerAttempt(
     const threadConfig = mergeCodexThreadConfigs(
       bundleMcpThreadConfig?.configPatch as JsonObject | undefined,
     );
-    const pluginThreadConfigEnabled = shouldBuildCodexPluginThreadConfig(pluginConfig);
+    const nativeToolSurfaceRestricted = !nativeToolSurfaceEnabled;
+    const pluginThreadConfigRequired =
+      nativeToolSurfaceRestricted || shouldBuildCodexPluginThreadConfig(pluginConfig);
+    // Restricted runs still need a plugin thread config so thread/start
+    // carries the explicit apps._default denial patch without app/list.
+    const pluginThreadConfigPluginConfig = nativeToolSurfaceEnabled
+      ? pluginConfig
+      : disableCodexPluginThreadConfig(pluginConfig);
     const pluginAppCacheKey = buildCodexPluginAppCacheKey({
       appServer,
       agentDir,
@@ -1144,14 +1152,14 @@ export async function runCodexAppServerAttempt(
       accountId: startupAuthAccountCacheKey,
       envApiKeyFingerprint: startupEnvApiKeyCacheKey,
     });
-    const pluginThreadConfigInputFingerprint = pluginThreadConfigEnabled
+    const pluginThreadConfigInputFingerprint = pluginThreadConfigRequired
       ? buildCodexPluginThreadConfigInputFingerprint({
-          pluginConfig,
+          pluginConfig: pluginThreadConfigPluginConfig,
           appCacheKey: pluginAppCacheKey,
         })
       : undefined;
-    const resolvedPluginPolicy = pluginThreadConfigEnabled
-      ? resolveCodexPluginsPolicy(pluginConfig)
+    const resolvedPluginPolicy = pluginThreadConfigRequired
+      ? resolveCodexPluginsPolicy(pluginThreadConfigPluginConfig)
       : undefined;
     const enabledPluginConfigKeys = resolvedPluginPolicy
       ? resolvedPluginPolicy.pluginPolicies
@@ -1197,17 +1205,19 @@ export async function runCodexAppServerAttempt(
               developerInstructions: promptBuild.developerInstructions,
               config: threadConfig,
               finalConfigPatch: nativeHookRelayConfig,
+              nativeCodeModeEnabled: nativeToolSurfaceEnabled,
+              userMcpServersEnabled: nativeToolSurfaceEnabled,
               mcpServersFingerprint: bundleMcpThreadConfig.fingerprint,
               mcpServersFingerprintEvaluated: bundleMcpThreadConfig.evaluated,
               contextEngineProjection,
-              pluginThreadConfig: pluginThreadConfigEnabled
+              pluginThreadConfig: pluginThreadConfigRequired
                 ? {
                     enabled: true,
                     inputFingerprint: pluginThreadConfigInputFingerprint,
                     enabledPluginConfigKeys,
                     build: () =>
                       buildCodexPluginThreadConfig({
-                        pluginConfig,
+                        pluginConfig: pluginThreadConfigPluginConfig,
                         request: (method, requestParams) =>
                           startupClient.request(method, requestParams, {
                             timeoutMs: appServer.requestTimeoutMs,
@@ -3109,10 +3119,11 @@ function includeForcedMessageToolAllow(
   toolsAllow: string[] | undefined,
   params: EmbeddedRunAttemptParams,
 ): string[] | undefined {
-  if (!shouldForceMessageTool(params)) {
-    return toolsAllow;
-  }
-  if (toolsAllow === undefined) {
+  if (
+    !shouldForceMessageTool(params) ||
+    toolsAllow === undefined ||
+    hasWildcardCodexToolsAllow(toolsAllow)
+  ) {
     return toolsAllow;
   }
   if (toolsAllow.length === 0) {
@@ -3122,17 +3133,49 @@ function includeForcedMessageToolAllow(
   return normalized.has("message") ? toolsAllow : [...toolsAllow, "message"];
 }
 
+function shouldEnableCodexAppServerNativeToolSurface(params: EmbeddedRunAttemptParams): boolean {
+  const toolsAllow = includeForcedMessageToolAllow(params.toolsAllow, params);
+  if (toolsAllow === undefined) {
+    return true;
+  }
+  // Codex native code mode exposes its shell/file surface as one app-server
+  // capability, so narrow OpenClaw allowlists must fail closed rather than
+  // widening `message` or `web_search` into shell access.
+  return hasWildcardCodexToolsAllow(toolsAllow);
+}
+
+function disableCodexPluginThreadConfig(pluginConfig?: unknown): CodexPluginConfig {
+  const config = readCodexPluginConfig(pluginConfig);
+  return {
+    ...config,
+    codexPlugins: {
+      ...config.codexPlugins,
+      enabled: false,
+    },
+  };
+}
+
 function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
 ): T[] {
-  if (!toolsAllow || toolsAllow.length === 0) {
+  if (!toolsAllow) {
+    return tools;
+  }
+  if (toolsAllow.length === 0) {
+    return [];
+  }
+  if (hasWildcardCodexToolsAllow(toolsAllow)) {
     return tools;
   }
   const allowSet = new Set(
     toolsAllow.map((name) => normalizeCodexDynamicToolName(name)).filter(Boolean),
   );
   return tools.filter((tool) => allowSet.has(normalizeCodexDynamicToolName(tool.name)));
+}
+
+function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
+  return toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*");
 }
 
 function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
@@ -4221,6 +4264,7 @@ export const __testing = {
   buildDynamicTools,
   filterCodexDynamicToolsForAllowlist,
   filterToolsForVisionInputs,
+  hasWildcardCodexToolsAllow,
   handleDynamicToolCallWithTimeout,
   isInvalidCodexImagePayloadError,
   remapCodexContextFilePath,
@@ -4230,6 +4274,7 @@ export const __testing = {
   restrictCodexAppServerSandboxForOpenClawSandbox,
   resolveCodexAppServerForOpenClawToolPolicy,
   resolveOpenClawCodingToolsSessionKeys,
+  shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {
     openClawCodingToolsFactoryForTests = factory;

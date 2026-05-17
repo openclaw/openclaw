@@ -640,6 +640,7 @@ export async function processDiscordMessage(
                   sessionKey: ctxPayload.SessionKey,
                   threadBindings,
                   mediaLocalRoots,
+                  kind: info.kind,
                 });
                 return true;
               },
@@ -678,6 +679,7 @@ export async function processDiscordMessage(
                 sessionKey: ctxPayload.SessionKey,
                 threadBindings,
                 mediaLocalRoots,
+                kind: info.kind,
               });
               return true;
             },
@@ -716,6 +718,7 @@ export async function processDiscordMessage(
           sessionKey: ctxPayload.SessionKey,
           threadBindings,
           mediaLocalRoots,
+          kind: info.kind,
         });
         replyReference.markSent();
         if (isFinal) {

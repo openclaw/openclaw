@@ -21,7 +21,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
-import { resolveTelegramAccount } from "./accounts.js";
+import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
@@ -48,6 +48,33 @@ import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 export type { TelegramBotOptions } from "./bot.types.js";
 
 export { getTelegramSequentialKey };
+
+export function resolveTelegramScopedGroupConfig(
+  telegramCfg: ResolvedTelegramAccount["config"],
+  chatId: string | number,
+  messageThreadId?: number,
+) {
+  const groups = telegramCfg.groups;
+  const direct = telegramCfg.direct;
+  const chatIdStr = String(chatId);
+  const isDm = !chatIdStr.startsWith("-");
+
+  if (isDm) {
+    const groupConfig = direct?.[chatIdStr] ?? direct?.["*"];
+    const topicConfig =
+      groupConfig && messageThreadId != null
+        ? groupConfig.topics?.[String(messageThreadId)]
+        : undefined;
+    return { groupConfig, topicConfig };
+  }
+
+  const groupConfig = groups?.[chatIdStr] ?? groups?.["*"];
+  const topicConfig =
+    groupConfig && messageThreadId != null
+      ? groupConfig.topics?.[String(messageThreadId)]
+      : undefined;
+  return { groupConfig, topicConfig };
+}
 
 type TelegramBotRuntime = {
   Bot: typeof Bot;
@@ -318,29 +345,7 @@ export function createTelegramBotCore(
   };
   const resolveTelegramGroupConfig = (chatId: string | number, messageThreadId?: number) => {
     const freshTelegramCfg = loadFreshTelegramAccountConfig();
-    const groups = freshTelegramCfg.groups;
-    const direct = freshTelegramCfg.direct;
-    const chatIdStr = String(chatId);
-    const isDm = !chatIdStr.startsWith("-");
-
-    if (isDm) {
-      const directConfig = direct?.[chatIdStr] ?? direct?.["*"];
-      if (directConfig) {
-        const topicConfig =
-          messageThreadId != null ? directConfig.topics?.[String(messageThreadId)] : undefined;
-        return { groupConfig: directConfig, topicConfig };
-      }
-      // DMs without direct config: don't fall through to groups lookup
-      return { groupConfig: undefined, topicConfig: undefined };
-    }
-
-    if (!groups) {
-      return { groupConfig: undefined, topicConfig: undefined };
-    }
-    const groupConfig = groups[chatIdStr] ?? groups["*"];
-    const topicConfig =
-      messageThreadId != null ? groupConfig?.topics?.[String(messageThreadId)] : undefined;
-    return { groupConfig, topicConfig };
+    return resolveTelegramScopedGroupConfig(freshTelegramCfg, chatId, messageThreadId);
   };
 
   // Global sendChatAction handler with 401 backoff / circuit breaker (issue #27092).

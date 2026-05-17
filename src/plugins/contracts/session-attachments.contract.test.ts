@@ -13,6 +13,7 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import {
   attachmentProbeFs,
   resolveAttachmentDelivery,
+  resolveSessionAttachmentThreadId,
   sendPluginSessionAttachment,
 } from "../host-hook-attachments.js";
 import { clearPluginLoaderCache } from "../loader.js";
@@ -308,30 +309,28 @@ describe("plugin session attachments", () => {
     });
   });
 
-  it("prefers the thread encoded in a threaded session key over stale stored routes", async () => {
-    await withSessionStore(async ({ storePath, filePath }) => {
-      const baseKey = "agent:main:telegram:group:12345";
-      const threadKey = `${baseKey}:thread:99`;
-      await writeSessionEntry(
-        storePath,
-        {
-          deliveryContext: {
-            channel: "telegram",
-            to: "group:12345",
-            threadId: 42,
-          },
-        },
-        threadKey,
-      );
-      mockSuccessfulAttachmentDelivery();
-
-      const result = await sendBundledSessionAttachment({
-        sessionKey: threadKey,
-        files: [{ path: filePath }],
-      });
-      expectTelegramAttachmentResult(result, 1);
-      expect(requireFirstSendMessageParams().threadId).toBe("99");
-    });
+  it("prefers the thread encoded in a threaded session key over stale stored routes", () => {
+    expect(
+      resolveSessionAttachmentThreadId({
+        deliveryThreadId: 42,
+        fallbackThreadId: "99",
+      }),
+    ).toBe("99");
+    expect(
+      resolveSessionAttachmentThreadId({
+        deliveryThreadId: 42,
+        explicitThreadId: 7,
+        fallbackThreadId: "99",
+      }),
+    ).toBe(7);
+    expect(
+      resolveSessionAttachmentThreadId({
+        deliveryThreadId: 42,
+        explicitThreadId: 7,
+        fallbackThreadId: "99",
+        hintThreadTs: "1700000000.000100",
+      }),
+    ).toBe("1700000000.000100");
   });
 
   it("reports attachment delivery as failed when no delivery result is returned", async () => {

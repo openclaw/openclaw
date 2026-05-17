@@ -1046,7 +1046,7 @@ export async function dispatchReplyFromConfig(
     const shouldSendToolStartStatuses = false;
     const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
       suppressAutomaticSourceDelivery &&
-      chatType === "direct" &&
+      sourceReplyDeliveryMode === "message_tool_only" &&
       ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
       shouldEmitVerboseProgress() &&
@@ -1214,7 +1214,7 @@ export async function dispatchReplyFromConfig(
       return parts.join("\n\n").trim() || "Planning next steps.";
     };
     const maybeSendWorkingStatus = async (label: string): Promise<void> => {
-      if (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression()) {
+      if (shouldSuppressProgressDelivery()) {
         return;
       }
       const normalizedLabel = normalizeWorkingLabel(label);
@@ -1244,7 +1244,7 @@ export async function dispatchReplyFromConfig(
       steps?: string[];
     }): Promise<void> => {
       if (
-        (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression()) ||
+        shouldSuppressProgressDelivery() ||
         !shouldEmitVerboseProgress() ||
         !shouldSendVerboseProgressMessages
       ) {
@@ -1349,6 +1349,9 @@ export async function dispatchReplyFromConfig(
       params.replyOptions?.suppressDefaultToolProgressMessages === true;
     const shouldSuppressDefaultToolProgressMessages = () =>
       suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
+    const shouldSuppressProgressDelivery = () =>
+      sendPolicyDenied ||
+      (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -1420,7 +1423,7 @@ export async function dispatchReplyFromConfig(
               if (!suppressAutomaticSourceDelivery) {
                 await onToolResultFromReplyOptions?.(payload);
               }
-              if (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression()) {
+              if (shouldSuppressProgressDelivery()) {
                 return;
               }
               const ttsPayload = await maybeApplyTtsToReplyPayload({

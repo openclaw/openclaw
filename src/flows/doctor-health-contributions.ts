@@ -228,6 +228,34 @@ async function runCommandOwnerHealth(ctx: DoctorHealthFlowContext): Promise<void
   noteCommandOwnerHealth(ctx.cfg);
 }
 
+async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (!ctx.prompter.shouldRepair) {
+    return;
+  }
+  const { registerCoreHealthChecks } = await import("./doctor-core-checks.js");
+  const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+    await import("../agents/agent-scope.js");
+  const { note } = await import("../terminal/note.js");
+
+  registerCoreHealthChecks();
+  const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+  const result = await runDoctorHealthRepairs({
+    mode: "fix",
+    runtime: ctx.runtime,
+    cfg: ctx.cfg,
+    cwd: workspaceDir,
+    configPath: ctx.configPath,
+  });
+  ctx.cfg = result.config;
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
+}
+
 async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteClaudeCliHealth } = await import("../commands/doctor-claude-cli.js");
   noteClaudeCliHealth(ctx.cfg);
@@ -354,6 +382,11 @@ async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
   await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
+}
+
+async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteSessionSnapshotHealth } = await import("../commands/doctor-session-snapshots.js");
+  await noteSessionSnapshotHealth({ cfg: ctx.cfg, env: ctx.env ?? process.env });
 }
 
 async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -705,6 +738,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runCommandOwnerHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:structured-health-repairs",
+      label: "Structured health repairs",
+      run: runStructuredHealthRepairs,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:legacy-state",
       label: "Legacy state",
       run: runLegacyStateHealth,
@@ -743,6 +781,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:session-transcripts",
       label: "Session transcripts",
       run: runSessionTranscriptsHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-snapshots",
+      label: "Session snapshots",
+      run: runSessionSnapshotsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:config-audit-scrub",

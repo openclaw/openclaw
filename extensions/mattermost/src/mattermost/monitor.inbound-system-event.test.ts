@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { monitorMattermostProvider } from "./monitor.js";
 import type { OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
 
 class FakeWebSocket {
@@ -385,7 +386,6 @@ describe("mattermost inbound user posts", () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
     mockState.abortController = abortController;
-    const { monitorMattermostProvider } = await import("./monitor.js");
 
     const monitor = monitorMattermostProvider({
       config: testConfig,
@@ -458,8 +458,6 @@ describe("mattermost inbound user posts", () => {
       team_id: "team-1",
       type: "D",
     });
-    const { monitorMattermostProvider } = await import("./monitor.js");
-
     const monitor = monitorMattermostProvider({
       config: directConfig,
       runtime: testRuntime(),
