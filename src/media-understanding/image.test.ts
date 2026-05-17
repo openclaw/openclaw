@@ -350,7 +350,11 @@ describe("describeImageWithModel", () => {
         cfg: {
           models: {
             providers: {
-              minimax: { baseUrl: "https://api.minimaxi.com/anthropic", models: [] },
+              minimax: {
+                apiKey: "minimax-test-key",
+                baseUrl: "https://api.minimaxi.com/anthropic",
+                models: [],
+              },
             },
           },
         },
@@ -370,7 +374,7 @@ describe("describeImageWithModel", () => {
 
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "minimax-cn",
+        provider: "minimax",
       }),
     );
     const [fetchUrl] = requireFirstMockCall(fetchMock, "fetch");

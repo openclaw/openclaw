@@ -386,6 +386,23 @@ function isMinimaxCnBaseUrl(baseUrl: string): boolean {
   }
 }
 
+function hasConfiguredProviderApiKey(
+  cfg: ImageDescriptionRequest["cfg"],
+  provider: string,
+): boolean {
+  return typeof cfg.models?.providers?.[provider]?.apiKey === "string";
+}
+
+function resolveMinimaxVlmAuthProvider(
+  cfg: ImageDescriptionRequest["cfg"],
+  provider: string,
+): string {
+  if (!isMinimaxCnAlias(provider) || hasConfiguredProviderApiKey(cfg, provider)) {
+    return provider;
+  }
+  return normalizeMediaProviderId(provider);
+}
+
 async function resolveMinimaxVlmFallbackRuntime(params: {
   cfg: ImageDescriptionRequest["cfg"];
   agentDir: string;
@@ -394,8 +411,9 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
   profile?: string;
   preferredProfile?: string;
 }): Promise<{ apiKey: string; modelBaseUrl?: string }> {
+  const authProvider = resolveMinimaxVlmAuthProvider(params.cfg, params.provider);
   const auth = await resolveApiKeyForProvider({
-    provider: params.provider,
+    provider: authProvider,
     cfg: params.cfg,
     profileId: params.profile,
     preferredProfile: params.preferredProfile,
@@ -403,7 +421,7 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   return {
-    apiKey: requireApiKey(auth, params.provider),
+    apiKey: requireApiKey(auth, authProvider),
     modelBaseUrl: resolveConfiguredProviderBaseUrl(params.cfg, params.provider),
   };
 }
