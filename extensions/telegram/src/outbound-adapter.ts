@@ -212,7 +212,7 @@ export function createTelegramOutboundAdapter(
     },
     renderPresentation: ({ payload, presentation }) => {
       const telegramData = payload.channelData?.telegram as Record<string, unknown> | undefined;
-      const hasExplicitButtons = telegramData && "buttons" in telegramData;
+      const hasExplicitButtons = (telegramData && "buttons" in telegramData) || payload.interactive;
       const buttons = hasExplicitButtons
         ? undefined
         : resolveTelegramInlineButtons({ presentation });
