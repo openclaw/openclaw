@@ -164,13 +164,13 @@ const CronScheduleSchema = Type.Optional(
       expr: Type.Optional(
         Type.String({
           description:
-            'Cron expr in tz local time; no UTC conversion. Example 6pm Shanghai daily: expr "0 18 * * *", tz "Asia/Shanghai".',
+            'Cron expr in tz wall-clock time; do not convert to UTC. Omitted tz => Gateway host local timezone. Example 6pm Shanghai daily: expr "0 18 * * *", tz "Asia/Shanghai".',
         }),
       ),
       tz: Type.Optional(
         Type.String({
           description:
-            'IANA tz for cron fields, e.g. "Asia/Shanghai"; omitted => Gateway host local tz.',
+            'IANA timezone for cron wall-clock fields, e.g. "Asia/Shanghai"; omitted => Gateway host local timezone.',
         }),
       ),
       staggerMs: Type.Optional(Type.Number({ description: "Jitter ms (kind=cron)" })),

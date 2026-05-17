@@ -344,7 +344,7 @@
                   "type": "number"
                 },
                 "expr": {
-                  "description": "Cron expr in tz local time; no UTC conversion. Example 6pm Shanghai daily: expr \"0 18 * * *\", tz \"Asia/Shanghai\".",
+                  "description": "Cron expr in tz wall-clock time; do not convert to UTC. Omitted tz => Gateway host local timezone. Example 6pm Shanghai daily: expr \"0 18 * * *\", tz \"Asia/Shanghai\".",
                   "type": "string"
                 },
                 "kind": {
@@ -357,7 +357,7 @@
                   "type": "number"
                 },
                 "tz": {
-                  "description": "IANA tz for cron fields, e.g. \"Asia/Shanghai\"; omitted => Gateway host local tz.",
+                  "description": "IANA timezone for cron wall-clock fields, e.g. \"Asia/Shanghai\"; omitted => Gateway host local timezone.",
                   "type": "string"
                 }
               },
@@ -562,7 +562,7 @@
                   "type": "number"
                 },
                 "expr": {
-                  "description": "Cron expr in tz local time; no UTC conversion. Example 6pm Shanghai daily: expr \"0 18 * * *\", tz \"Asia/Shanghai\".",
+                  "description": "Cron expr in tz wall-clock time; do not convert to UTC. Omitted tz => Gateway host local timezone. Example 6pm Shanghai daily: expr \"0 18 * * *\", tz \"Asia/Shanghai\".",
                   "type": "string"
                 },
                 "kind": {
@@ -575,7 +575,7 @@
                   "type": "number"
                 },
                 "tz": {
-                  "description": "IANA tz for cron fields, e.g. \"Asia/Shanghai\"; omitted => Gateway host local tz.",
+                  "description": "IANA timezone for cron wall-clock fields, e.g. \"Asia/Shanghai\"; omitted => Gateway host local timezone.",
                   "type": "string"
                 }
               },
