@@ -70,6 +70,8 @@ type TelegramCachedMessageObservation = {
   mode: TelegramMessageObservationMode;
 };
 
+type TelegramEmbeddedReplyMessage = NonNullable<Message["reply_to_message"]>;
+
 const DEFAULT_MAX_MESSAGES = 5000;
 const COMPACT_THRESHOLD_RATIO = 2;
 const persistedMessageCacheBuckets = new Map<string, TelegramMessageCacheBucket>();
@@ -344,24 +346,27 @@ function trimMessages(messages: Map<string, TelegramCachedMessageNode>, maxMessa
 function mergeTelegramSourceMessage(existing: Message, incoming: Message): Message {
   const existingReply = resolveEmbeddedReplyMessage(existing);
   const incomingReply = resolveEmbeddedReplyMessage(incoming);
-  const merged = { ...existing, ...incoming };
   if (existingReply?.message_id != null && incomingReply?.message_id === existingReply.message_id) {
-    return {
-      ...merged,
-      reply_to_message: mergeTelegramSourceMessage(existingReply, incomingReply),
-    };
+    return Object.assign({}, existing, incoming, {
+      reply_to_message: mergeTelegramSourceMessage(
+        existingReply,
+        incomingReply,
+      ) as TelegramEmbeddedReplyMessage,
+    }) as Message;
   }
-  return merged;
+  return Object.assign({}, existing, incoming);
 }
 
 function mergeAuthoritativeTelegramSourceMessage(existing: Message, incoming: Message): Message {
   const existingReply = resolveEmbeddedReplyMessage(existing);
   const incomingReply = resolveEmbeddedReplyMessage(incoming);
   if (existingReply?.message_id != null && incomingReply?.message_id === existingReply.message_id) {
-    return {
-      ...incoming,
-      reply_to_message: mergeTelegramSourceMessage(existingReply, incomingReply),
-    };
+    return Object.assign({}, incoming, {
+      reply_to_message: mergeTelegramSourceMessage(
+        existingReply,
+        incomingReply,
+      ) as TelegramEmbeddedReplyMessage,
+    }) as Message;
   }
   return incoming;
 }
@@ -376,9 +381,7 @@ function mergeCachedMessageNode(
     mode === "authoritative"
       ? mergeAuthoritativeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage)
       : mergeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage);
-  return normalizeRequiredMessageNode(sourceMessage, {
-    ...(Number.isFinite(threadId) ? { threadId } : {}),
-  });
+  return normalizeRequiredMessageNode(sourceMessage, Number.isFinite(threadId) ? { threadId } : {});
 }
 
 function upsertCachedMessageNode(params: {
@@ -559,7 +562,11 @@ export function createTelegramMessageCache(params?: {
       }
       let recordedEntry: TelegramCachedMessageNode | null = null;
       for (const { node, mode } of observations) {
-        const key = telegramMessageCacheKey({ accountId, chatId, messageId: node.messageId });
+        const { messageId } = node;
+        if (!messageId) {
+          continue;
+        }
+        const key = telegramMessageCacheKey({ accountId, chatId, messageId });
         const cachedNode = upsertCachedMessageNode({ messages, key, node, mode });
         if (node.messageId === currentObservation.node.messageId) {
           recordedEntry = cachedNode;
