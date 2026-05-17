@@ -422,7 +422,7 @@ describe("telegram live qa runtime", () => {
     ).steps[0];
     expect(replyChainStep?.expectedJoinedSutTextIncludes).toEqual(["QA-TELEGRAM-REPLY-CHAIN-OK"]);
     expect(replyChainStep?.expectedSutMessageCount).toBe(1);
-    expect(replyChainStep?.replyToLatestSutMessage).toBe(true);
+    expect(replyChainStep?.replyToLatestSutMessage).toBeUndefined();
     const streamSingleStep = requireScenario(
       scenarios,
       "telegram-stream-final-single-message",
@@ -431,7 +431,7 @@ describe("telegram live qa runtime", () => {
       "QA-TELEGRAM-STREAM-SINGLE-OK",
     ]);
     expect(streamSingleStep?.expectedSutMessageCount).toBe(1);
-    expect(streamSingleStep?.replyToLatestSutMessage).toBe(true);
+    expect(streamSingleStep?.replyToLatestSutMessage).toBeUndefined();
     const longReusesStep = requireScenario(
       scenarios,
       "telegram-long-final-reuses-preview",

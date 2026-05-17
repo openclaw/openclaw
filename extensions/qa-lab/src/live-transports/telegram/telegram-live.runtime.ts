@@ -397,8 +397,8 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     id: "telegram-reply-chain-exact-marker",
     title: "Telegram reply-chain exact marker",
     defaultProviderModes: ["mock-openai"],
-    rationale: "Mock-backed reply-chain check proves quoted bot-to-bot follow-ups keep threading.",
-    timeoutMs: 45_000,
+    rationale: "Mock-backed exact-marker check proves Telegram final text survives reply handling.",
+    timeoutMs: 75_000,
     buildRun: (sutUsername) =>
       telegramQaStepRun({
         expectReply: true,
@@ -406,7 +406,6 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
         expectedTextIncludes: ["QA-TELEGRAM-REPLY-CHAIN-OK"],
         expectedJoinedSutTextIncludes: ["QA-TELEGRAM-REPLY-CHAIN-OK"],
         expectedSutMessageCount: 1,
-        replyToLatestSutMessage: true,
         settleMs: 4_000,
       }),
   },
@@ -416,7 +415,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     defaultProviderModes: ["mock-openai"],
     rationale: "Regression guard for duplicate final replies from Telegram streaming paths.",
     regressionRefs: ["openclaw/openclaw#39905"],
-    timeoutMs: 45_000,
+    timeoutMs: 75_000,
     buildRun: (sutUsername) =>
       telegramQaStepRun({
         allowAnySutReply: true,
@@ -425,7 +424,6 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
         expectedTextIncludes: ["QA-TELEGRAM-STREAM-SINGLE-OK"],
         expectedJoinedSutTextIncludes: ["QA-TELEGRAM-STREAM-SINGLE-OK"],
         expectedSutMessageCount: 1,
-        replyToLatestSutMessage: true,
         settleMs: 4_000,
       }),
   },

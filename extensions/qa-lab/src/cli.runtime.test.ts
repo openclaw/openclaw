@@ -622,7 +622,7 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-6",
+      alternateModel: "anthropic/claude-opus-4-7",
       preflight: true,
     });
 
@@ -632,7 +632,7 @@ describe("qa cli runtime", () => {
       transportId: "qa-channel",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-6",
+      alternateModel: "anthropic/claude-opus-4-7",
       scenarioIds: ["approval-turn-tool-followthrough"],
       concurrency: 1,
     });
@@ -777,8 +777,69 @@ describe("qa cli runtime", () => {
         "personal-memory-preference-recall",
         "personal-redaction-no-secret-leak",
         "personal-tool-safety-followthrough",
+        "personal-approval-denial-stop",
       ],
     });
+  });
+
+  it("expands runtime parity tier selections onto the suite scenario list", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      runtimeParityTier: ["standard"],
+      scenarioIds: ["channel-chat-baseline", "runtime-tool-bash"],
+    });
+
+    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      scenarioIds: [
+        "channel-chat-baseline",
+        "runtime-tool-bash",
+        "runtime-first-hour-20-turn",
+        "runtime-tool-apply-patch",
+        "runtime-tool-edit",
+        "runtime-tool-exec",
+        "runtime-tool-fs-list",
+        "runtime-tool-fs-read",
+        "runtime-tool-fs-write",
+        "runtime-tool-grep",
+        "runtime-tool-image-generate",
+        "runtime-tool-session-status",
+        "runtime-tool-sessions-spawn",
+        "runtime-tool-web-fetch",
+        "runtime-tool-web-search",
+      ],
+    });
+  });
+
+  it("accepts comma-separated runtime parity tier filters", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      runtimeParityTier: ["optional,soak"],
+    });
+
+    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+      scenarioIds: [
+        "runtime-soak-100-turn",
+        "runtime-tool-memory-add",
+        "runtime-tool-memory-recall",
+        "runtime-tool-message-tool",
+        "runtime-tool-skill-invocation",
+        "runtime-tool-tavily-extract",
+        "runtime-tool-tavily-search",
+        "runtime-tool-tts",
+      ],
+    });
+  });
+
+  it("rejects unknown runtime parity tier filters", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runtimeParityTier: ["standardish"],
+      }),
+    ).rejects.toThrow(
+      '--runtime-parity-tier must be one of standard, optional, live-only, soak, got "standardish".',
+    );
   });
 
   it("rejects unknown suite packs", async () => {
@@ -930,7 +991,7 @@ describe("qa cli runtime", () => {
       fast: true,
       thinking: "medium",
       modelThinking: ["codex-cli/test-model=medium"],
-      judgeModel: ["openai/gpt-5.5,thinking=xhigh,fast", "anthropic/claude-opus-4-6,thinking=high"],
+      judgeModel: ["openai/gpt-5.5,thinking=xhigh,fast", "anthropic/claude-opus-4-7,thinking=high"],
       judgeTimeoutMs: 180_000,
       blindJudgeModels: true,
       concurrency: 4,
@@ -951,10 +1012,10 @@ describe("qa cli runtime", () => {
         "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: false },
         "codex-cli/test-model": { thinkingDefault: "high", fastMode: true },
       },
-      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-6"],
+      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-7"],
       judgeModelOptions: {
         "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: true },
-        "anthropic/claude-opus-4-6": { thinkingDefault: "high" },
+        "anthropic/claude-opus-4-7": { thinkingDefault: "high" },
       },
       judgeTimeoutMs: 180_000,
       judgeBlindModels: true,
@@ -1285,7 +1346,7 @@ describe("qa cli runtime", () => {
       providerMode: "mock-openai",
       parityPack: "agentic",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-6",
+      alternateModel: "anthropic/claude-opus-4-7",
     });
 
     expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
@@ -1294,7 +1355,7 @@ describe("qa cli runtime", () => {
       transportId: "qa-channel",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-6",
+      alternateModel: "anthropic/claude-opus-4-7",
       fastMode: undefined,
       scenarioIds: [
         "approval-turn-tool-followthrough",

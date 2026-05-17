@@ -21,6 +21,7 @@ The first pack is intentionally narrow:
 - fake preference recall from the temporary QA workspace memory files
 - fake secret no-echo checks
 - safe read-backed tool followthrough after a short approval-style turn
+- approval denial stop behavior for a sensitive local read request
 
 ## Scenarios
 
@@ -62,7 +63,6 @@ Add new cases under `qa/scenarios/personal/`, then add the scenario id to
 
 Good follow-up candidates:
 
-- approval denial correctness
 - multi-step task ledger assertions
 - redacted trajectory export checks
 - local-only plugin workflow checks

@@ -14,9 +14,11 @@ type WorkflowStep = {
   name?: string;
   run?: string;
   uses?: string;
+  with?: Record<string, string>;
 };
 
 type WorkflowJob = {
+  if?: string;
   steps?: WorkflowStep[];
 };
 
@@ -24,6 +26,20 @@ type Workflow = {
   concurrency?: unknown;
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
+  on?: {
+    pull_request_target?: {
+      types?: string[];
+    };
+    workflow_dispatch?: {
+      inputs?: Record<
+        string,
+        {
+          required?: boolean;
+          type?: string;
+        }
+      >;
+    };
+  };
   permissions?: Record<string, string>;
 };
 
@@ -100,6 +116,39 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflow).not.toContain("@Mantis");
     expect(workflow).not.toContain("@mantis");
     expect(workflow).not.toContain('"/mantis"');
+  });
+
+  it("runs when ClawSweeper applies the Telegram proof label", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const workflowText = readFileSync(WORKFLOW, "utf8");
+
+    expect(workflow.on?.pull_request_target?.types).toContain("labeled");
+    expect(workflowText).toContain("github.event.label.name == 'mantis: telegram-visible-proof'");
+    expect(workflowText).toContain('eventName === "pull_request_target"');
+    expect(workflowText).toContain("context.payload.pull_request?.number");
+    expect(workflowText).toContain("Accepted Mantis label trigger");
+  });
+
+  it("can publish an existing proof artifact without recapturing", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const workflowText = readFileSync(WORKFLOW, "utf8");
+    const publishJob = workflow.jobs?.publish_existing_telegram_desktop_proof;
+    const captureJob = workflow.jobs?.run_telegram_desktop_proof;
+    const validateJob = workflow.jobs?.validate_refs;
+
+    expect(workflow.on?.workflow_dispatch?.inputs?.publish_artifact_name?.required).toBe(false);
+    expect(workflow.on?.workflow_dispatch?.inputs?.publish_run_id?.required).toBe(false);
+    expect(captureJob?.if).toBe("needs.resolve_request.outputs.publish_artifact_name == ''");
+    expect(validateJob?.if).toBe("needs.resolve_request.outputs.publish_artifact_name == ''");
+    expect(publishJob?.if).toBe("needs.resolve_request.outputs.publish_artifact_name != ''");
+    expect(workflowText).toContain("publish_run_id is required when publish_artifact_name is set.");
+    expect(workflowText).toContain('gh run download "$run_id"');
+    expect(workflowText).toContain(
+      '--artifact-root "mantis/telegram-desktop/pr-${TARGET_PR}/published-',
+    );
+    expect(workflowText).toContain(
+      "PUBLISH_ARTIFACT_URL=https://github.com/${GITHUB_REPOSITORY}/actions/runs/",
+    );
   });
 
   it("uses the repo-owned Telegram user driver by default", () => {

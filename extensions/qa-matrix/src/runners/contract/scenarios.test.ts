@@ -2766,7 +2766,7 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.threadRootEventId).toBe("$subagent-thread-root");
 
     expectSentTextMessage(sendTextMessage, {
-      bodyIncludes: ["Call sessions_spawn now for this QA check", "runTimeoutSeconds=120"],
+      bodyIncludes: ["call the sessions_spawn tool now", "thread=true", "runTimeoutSeconds=120"],
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });
