@@ -43,8 +43,14 @@ describe("resolveCommandSecretsFromActiveRuntimeSnapshot", () => {
       env,
       includeAuthStoreRefs: false,
     });
-    expect(snapshot.config.plugins?.entries?.google?.config?.webSearch?.apiKey).toBe("gemini-live");
-    expect(snapshot.config.plugins?.entries?.brave?.config?.webSearch?.apiKey).toEqual({
+    const googleConfig = snapshot.config.plugins?.entries?.google?.config as
+      | { webSearch?: { apiKey?: unknown } }
+      | undefined;
+    const braveConfig = snapshot.config.plugins?.entries?.brave?.config as
+      | { webSearch?: { apiKey?: unknown } }
+      | undefined;
+    expect(googleConfig?.webSearch?.apiKey).toBe("gemini-live");
+    expect(braveConfig?.webSearch?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "BRAVE_API_KEY",
@@ -93,7 +99,10 @@ describe("resolveCommandSecretsFromActiveRuntimeSnapshot", () => {
       env,
       includeAuthStoreRefs: false,
     });
-    expect(snapshot.config.tools?.web?.fetch?.firecrawl?.apiKey).toEqual({
+    const fetchConfig = snapshot.config.tools?.web?.fetch as
+      | { firecrawl?: { apiKey?: unknown } }
+      | undefined;
+    expect(fetchConfig?.firecrawl?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "FIRECRAWL_API_KEY",

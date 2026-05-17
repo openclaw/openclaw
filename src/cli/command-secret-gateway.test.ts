@@ -543,9 +543,10 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         targetIds: new Set(["tools.web.fetch.firecrawl.apiKey"]),
       });
 
-      expect(result.resolvedConfig.tools?.web?.fetch?.firecrawl?.apiKey).toBe(
-        "legacy-firecrawl-local-fallback-key",
-      );
+      const resolvedFetch = result.resolvedConfig.tools?.web?.fetch as
+        | { firecrawl?: { apiKey?: unknown } }
+        | undefined;
+      expect(resolvedFetch?.firecrawl?.apiKey).toBe("legacy-firecrawl-local-fallback-key");
       expect(result.targetStatesByPath["tools.web.fetch.firecrawl.apiKey"]).toBe("resolved_local");
       expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
