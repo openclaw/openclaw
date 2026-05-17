@@ -126,6 +126,15 @@ describe("normalizeAssistantReplayContent", () => {
     expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
   });
 
+  it("converts mid-turn zero-usage null stop turns to a replay sentinel", () => {
+    const falseSuccessStop = bedrockAssistant(null, "stop");
+    const messages = [userMessage("hello"), falseSuccessStop, userMessage("retry")];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).not.toBe(messages);
+    const repaired = out[1] as AgentMessage & { content: { type: string; text: string }[] };
+    expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
+  });
+
   it("preserves empty content with non-error stopReasons (toolUse, length) untouched", () => {
     // Boundary lock: only `stopReason:"error"` should trip the sentinel
     // substitution. `toolUse` and `length` are reachable in practice when a
