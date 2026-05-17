@@ -1150,7 +1150,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
   );
   lab.setControlUi({
     controlUiProxyTarget: gateway.baseUrl,
-    controlUiToken: gateway.token,
+    controlUiProxyToken: gateway.token,
   });
   const env: QaSuiteEnvironment = {
     lab,
@@ -1329,7 +1329,6 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     } else {
       lab.setControlUi({
         controlUiUrl: null,
-        controlUiToken: null,
         controlUiProxyTarget: null,
       });
     }

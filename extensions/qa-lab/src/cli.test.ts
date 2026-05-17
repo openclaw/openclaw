@@ -159,6 +159,16 @@ describe("qa cli registration", () => {
     expect(commandNames).toContain("coverage");
   });
 
+  it("does not expose a control-ui token flag on qa ui", () => {
+    const qa = program.commands.find((command) => command.name() === "qa");
+    const ui = qa?.commands.find((command) => command.name() === "ui");
+    if (!ui) {
+      throw new Error("expected qa ui command");
+    }
+
+    expect(ui.options.map((option) => option.long)).not.toContain("--control-ui-token");
+  });
+
   it("routes mantis discord-smoke flags into the mantis runtime command", async () => {
     await program.parseAsync([
       "node",
