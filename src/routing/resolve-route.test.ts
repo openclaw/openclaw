@@ -115,6 +115,24 @@ describe("resolveAgentRoute", () => {
     });
   });
 
+  test("preserves case-sensitive Signal group IDs in route session keys", () => {
+    const groupId = "VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=";
+    const route = resolveAgentRoute({
+      cfg: {},
+      channel: "signal",
+      accountId: null,
+      peer: { kind: "group", id: groupId },
+    });
+
+    expectResolvedRoute(route, {
+      agentId: "main",
+      accountId: "default",
+      sessionKey: `agent:main:signal:group:${groupId}`,
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    });
+  });
+
   test.each([
     { dmScope: "per-peer" as const, expected: "agent:main:direct:+15551234567" },
     {

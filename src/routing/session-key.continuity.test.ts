@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildAgentSessionKey } from "./resolve-route.js";
+import { buildGroupHistoryKey } from "./session-key.js";
 
 describe("Channel Session Key Continuity", () => {
   const agentId = "main";
@@ -63,5 +64,18 @@ describe("Channel Session Key Continuity", () => {
 
   it.each(["", "   "] as const)("handles invalid channel id %j without collision", (channelId) => {
     expectUnknownChannelKeyCase(channelId);
+  });
+
+  it("preserves case-sensitive Signal group IDs in history keys", () => {
+    const groupId = "AbCdEF123+/Z=";
+
+    expect(
+      buildGroupHistoryKey({
+        channel: "signal",
+        accountId: "default",
+        peerKind: "group",
+        peerId: groupId,
+      }),
+    ).toBe(`signal:default:group:${groupId}`);
   });
 });

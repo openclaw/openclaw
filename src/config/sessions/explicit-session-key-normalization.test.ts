@@ -56,4 +56,15 @@ describe("normalizeExplicitSessionKey", () => {
       ),
     ).toBe("agent:fina:slack:dm:abc");
   });
+
+  it("preserves case-sensitive Signal group IDs in explicit session keys", () => {
+    const groupId = "VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=";
+
+    expect(
+      normalizeExplicitSessionKey(
+        `Agent:Main:Signal:Group:${groupId}`,
+        makeCtx({ Provider: "signal", Surface: "signal" }),
+      ),
+    ).toBe(`agent:main:signal:group:${groupId}`);
+  });
 });

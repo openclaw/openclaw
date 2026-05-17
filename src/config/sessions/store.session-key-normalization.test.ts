@@ -12,6 +12,8 @@ import {
 
 const CANONICAL_KEY = "agent:main:webchat:dm:mixed-user";
 const MIXED_CASE_KEY = "Agent:Main:WebChat:DM:MiXeD-User";
+const SIGNAL_GROUP_ID = "VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=";
+const SIGNAL_GROUP_KEY = `agent:main:signal:group:${SIGNAL_GROUP_ID}`;
 
 function createInboundContext(): MsgContext {
   return {
@@ -60,6 +62,27 @@ describe("session store key normalization", () => {
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(Object.keys(store)).toEqual([CANONICAL_KEY]);
     expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
+  });
+
+  it("preserves Signal group ID case while canonicalizing store keys", async () => {
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: `Agent:Main:Signal:Group:${SIGNAL_GROUP_ID}`,
+      ctx: {
+        ...createInboundContext(),
+        Provider: "signal",
+        Surface: "signal",
+        ChatType: "group",
+        From: `group:${SIGNAL_GROUP_ID}`,
+        To: `group:${SIGNAL_GROUP_ID}`,
+        SessionKey: `Agent:Main:Signal:Group:${SIGNAL_GROUP_ID}`,
+        OriginatingTo: `group:${SIGNAL_GROUP_ID}`,
+      },
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(store)).toEqual([SIGNAL_GROUP_KEY]);
+    expect(store[SIGNAL_GROUP_KEY]?.origin?.to).toBe(`group:${SIGNAL_GROUP_ID}`);
   });
 
   it("does not create a duplicate mixed-case key when last route is updated", async () => {

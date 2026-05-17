@@ -21,14 +21,38 @@ export type RawSessionConversationRef = {
   prefix: string;
 };
 
+const SIGNAL_GROUP_SESSION_SEGMENT_RE = /(^|:)signal:group:([^:]+)/gi;
+
+export function normalizeSessionKeyPreservingOpaquePeerIds(
+  sessionKey: string | undefined | null,
+): string {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return "";
+  }
+  let normalized = "";
+  let cursor = 0;
+  for (const match of raw.matchAll(SIGNAL_GROUP_SESSION_SEGMENT_RE)) {
+    const matchIndex = match.index ?? 0;
+    const matched = match[0] ?? "";
+    const groupId = match[2] ?? "";
+    const groupStart = matchIndex + matched.length - groupId.length;
+    normalized += normalizeLowercaseStringOrEmpty(raw.slice(cursor, groupStart));
+    normalized += groupId.trim();
+    cursor = matchIndex + matched.length;
+  }
+  normalized += normalizeLowercaseStringOrEmpty(raw.slice(cursor));
+  return normalized;
+}
+
 /**
  * Parse agent-scoped session keys in a canonical, case-insensitive way.
- * Returned values are normalized to lowercase for stable comparisons/routing.
+ * Returned values are canonicalized for stable comparisons/routing while preserving opaque IDs.
  */
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
 ): ParsedAgentSessionKey | null {
-  const raw = normalizeOptionalLowercaseString(sessionKey);
+  const raw = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   if (!raw) {
     return null;
   }

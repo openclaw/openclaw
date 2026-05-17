@@ -661,22 +661,18 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   ) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const effectiveDmScope = sessionOverride?.dmScope ?? dmScope;
-    const sessionKey = normalizeLowercaseStringOrEmpty(
-      buildAgentSessionKey({
-        agentId: resolvedAgentId,
-        channel,
-        accountId,
-        peer,
-        dmScope: effectiveDmScope,
-        identityLinks,
-      }),
-    );
-    const mainSessionKey = normalizeLowercaseStringOrEmpty(
-      buildAgentMainSessionKey({
-        agentId: resolvedAgentId,
-        mainKey: DEFAULT_MAIN_KEY,
-      }),
-    );
+    const sessionKey = buildAgentSessionKey({
+      agentId: resolvedAgentId,
+      channel,
+      accountId,
+      peer,
+      dmScope: effectiveDmScope,
+      identityLinks,
+    });
+    const mainSessionKey = buildAgentMainSessionKey({
+      agentId: resolvedAgentId,
+      mainKey: DEFAULT_MAIN_KEY,
+    });
     const route = {
       agentId: resolvedAgentId,
       channel,

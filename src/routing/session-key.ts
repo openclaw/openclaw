@@ -32,6 +32,27 @@ function normalizeToken(value: string | undefined | null): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
 
+function shouldPreserveOpaquePeerIdCase(params: {
+  channel: string | undefined | null;
+  peerKind: ChatType;
+}): boolean {
+  return normalizeToken(params.channel) === "signal" && params.peerKind === "group";
+}
+
+function normalizePeerIdForSessionKey(params: {
+  channel: string | undefined | null;
+  peerKind: ChatType;
+  peerId: string | undefined | null;
+}): string {
+  const trimmed = (params.peerId ?? "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  return shouldPreserveOpaquePeerIdCase(params)
+    ? trimmed
+    : normalizeLowercaseStringOrEmpty(trimmed);
+}
+
 export function scopedHeartbeatWakeOptions<T extends object>(
   sessionKey: string,
   wakeOptions: T,
@@ -208,7 +229,8 @@ export function buildAgentPeerSessionKey(params: {
     });
   }
   const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
-  const peerId = normalizeLowercaseStringOrEmpty(params.peerId) || "unknown";
+  const peerId =
+    normalizePeerIdForSessionKey({ channel, peerKind, peerId: params.peerId }) || "unknown";
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
 }
 
@@ -266,7 +288,12 @@ export function buildGroupHistoryKey(params: {
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const accountId = normalizeAccountId(params.accountId);
-  const peerId = normalizeLowercaseStringOrEmpty(params.peerId) || "unknown";
+  const peerId =
+    normalizePeerIdForSessionKey({
+      channel,
+      peerKind: params.peerKind,
+      peerId: params.peerId,
+    }) || "unknown";
   return `${channel}:${accountId}:${params.peerKind}:${peerId}`;
 }
 
