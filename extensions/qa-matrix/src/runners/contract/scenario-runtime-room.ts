@@ -607,13 +607,15 @@ async function runMatrixStreamingPreviewScenario(
     predicate: (event) =>
       event.roomId === context.roomId &&
       event.sender === context.sutUserId &&
-      event.kind === params.expectedPreviewKind &&
-      event.relatesTo === undefined,
+      event.relatesTo === undefined &&
+      (event.kind === params.expectedPreviewKind ||
+        (isMatrixQaMessageLikeKind(event.kind) &&
+          doesMatrixQaReplyBodyMatchToken(event, params.finalText))),
     roomId: context.roomId,
     since: startSince,
     timeoutMs: context.timeoutMs,
   });
-  if (preview.event.body === params.finalText) {
+  if (doesMatrixQaReplyBodyMatchToken(preview.event, params.finalText)) {
     advanceMatrixQaActorCursor({
       actorId: "driver",
       syncState: context.syncState,
