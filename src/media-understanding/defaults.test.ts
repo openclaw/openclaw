@@ -140,6 +140,30 @@ describe("resolveDefaultMediaModel", () => {
       "kimi-k2.6",
     );
   });
+
+  it("prefers configured image models before manifest defaults", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            models: [{ id: "google/gemini-2.5-flash", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as never;
+
+    expect(resolveDefaultMediaModel({ providerId: "openrouter", capability: "image", cfg })).toBe(
+      "google/gemini-2.5-flash",
+    );
+    expect(
+      resolveDefaultMediaModel({
+        providerId: "openrouter",
+        capability: "image",
+        cfg,
+        includeConfiguredImageModels: false,
+      }),
+    ).toBe("auto");
+  });
 });
 
 describe("resolveAutoMediaKeyProviders", () => {

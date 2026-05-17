@@ -176,6 +176,7 @@ export function resolveImageModelConfigForTool(params: {
       workspaceDir: params.workspaceDir,
       providerId: primary.provider,
       capability: "image",
+      includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
     });
     if (providerDefault) {
       return [`${primary.provider}/${providerDefault}`];
@@ -198,6 +199,7 @@ export function resolveImageModelConfigForTool(params: {
         workspaceDir: params.workspaceDir,
         providerId,
         capability: "image",
+        includeConfiguredImageModels: !isMinimaxVlmProvider(providerId),
       });
       return modelId ? `${providerId}/${modelId}` : null;
     });

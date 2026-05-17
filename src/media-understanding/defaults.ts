@@ -141,17 +141,9 @@ export function resolveDefaultMediaModel(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
+  includeConfiguredImageModels?: boolean;
 }): string | undefined {
-  const registry =
-    params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
-  const provider = registry.get(normalizeMediaProviderId(params.providerId));
-  const manifestDefaultModel = normalizeOptionalString(
-    provider?.defaultModels?.[params.capability],
-  );
-  if (manifestDefaultModel) {
-    return manifestDefaultModel;
-  }
-  if (!params.providerRegistry) {
+  if (!params.providerRegistry && params.includeConfiguredImageModels !== false) {
     const configuredImageModel =
       params.capability === "image"
         ? resolveConfiguredImageProviderModel({
@@ -162,6 +154,15 @@ export function resolveDefaultMediaModel(params: {
     if (configuredImageModel) {
       return configuredImageModel;
     }
+  }
+  const registry =
+    params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
+  const provider = registry.get(normalizeMediaProviderId(params.providerId));
+  const manifestDefaultModel = normalizeOptionalString(
+    provider?.defaultModels?.[params.capability],
+  );
+  if (manifestDefaultModel) {
+    return manifestDefaultModel;
   }
   return undefined;
 }
