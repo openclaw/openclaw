@@ -1422,6 +1422,8 @@ function buildObservedMessagesArtifact(params: {
       ? {
           ...scenarioContext,
           senderIsBot: message.senderIsBot,
+          triggerTimestamp: message.triggerTimestamp,
+          timestamp: message.timestamp,
         }
       : {
           ...scenarioContext,

@@ -693,4 +693,39 @@ describe("discord live qa runtime", () => {
       },
     ]);
   });
+
+  it("preserves observed message timing when metadata is redacted", () => {
+    expect(
+      __testing.buildObservedMessagesArtifact({
+        includeContent: false,
+        redactMetadata: true,
+        observedMessages: [
+          {
+            messageId: "523456789012345678",
+            channelId: "223456789012345678",
+            guildId: "123456789012345678",
+            senderId: "323456789012345678",
+            senderIsBot: true,
+            senderUsername: "sut",
+            scenarioId: "canary",
+            scenarioTitle: "Canary",
+            matchedScenario: true,
+            text: "secret text",
+            triggerMessageId: "423456789012345678",
+            triggerTimestamp: "2026-04-22T11:59:59.000Z",
+            timestamp: "2026-04-22T12:00:00.000Z",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        senderIsBot: true,
+        scenarioId: "canary",
+        scenarioTitle: "Canary",
+        matchedScenario: true,
+        triggerTimestamp: "2026-04-22T11:59:59.000Z",
+        timestamp: "2026-04-22T12:00:00.000Z",
+      },
+    ]);
+  });
 });
