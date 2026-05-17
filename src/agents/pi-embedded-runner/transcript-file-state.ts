@@ -336,9 +336,13 @@ function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
   };
   const repairEntryLinks = (entry: SessionEntry): SessionEntry => {
     const rejectedAncestors = rejectedParentChain(entry.parentId);
+    const resolvedRejectedParent =
+      rejectedAncestors.length > 0 ? resolveRejectedParent(entry.parentId) : undefined;
     const parentId =
-      rejectedAncestors.length > 0
-        ? resolveRejectedParent(entry.parentId)
+      resolvedRejectedParent !== undefined
+        ? resolvedRejectedParent !== null && acceptedIds.has(resolvedRejectedParent)
+          ? resolvedRejectedParent
+          : null
         : (entry.parentId ?? null);
     let repaired = parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
     if (repaired.type === "compaction" && rejectedIds.has(repaired.firstKeptEntryId)) {

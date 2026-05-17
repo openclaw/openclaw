@@ -838,6 +838,56 @@ describe("readTranscriptFileState", () => {
     expect(state.getBranch().map((entry) => entry.id)).toEqual(["user-1"]);
   });
 
+  it("drops missing parents reached through rejected rows before rewrite replay", async () => {
+    const root = await makeRoot("openclaw-transcript-state-rejected-missing-parent-");
+    const sessionFile = path.join(root, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-05-16T00:00:00.000Z",
+          cwd: root,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "bad-message",
+          parentId: "missing-parent",
+          timestamp: "2026-05-16T00:00:01.000Z",
+          message: { role: "user" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "user-1",
+          parentId: "bad-message",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { role: "user", content: "kept after missing malformed parent" },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const state = await readTranscriptFileState(sessionFile);
+
+    expect(state.getEntries().map((entry) => ({ id: entry.id, parentId: entry.parentId }))).toEqual(
+      [{ id: "user-1", parentId: null }],
+    );
+    expect(state.getBranch().map((entry) => entry.id)).toEqual(["user-1"]);
+    expect(() =>
+      rewriteTranscriptEntriesInState({
+        state,
+        replacements: [
+          {
+            entryId: "user-1",
+            message: { role: "user", content: "replacement prompt", timestamp: 1 },
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
   it("drops labels targeting rejected entries before transcript rewrite replay", async () => {
     const root = await makeRoot("openclaw-transcript-state-rejected-label-");
     const sessionFile = path.join(root, "session.jsonl");
