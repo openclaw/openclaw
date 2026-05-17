@@ -5,7 +5,7 @@
   },
   {
     "source": "Active Memory",
-    "target": "Active Memory"
+    "target": "主動記憶"
   },
   {
     "source": "ClawHub",
@@ -13,7 +13,7 @@
   },
   {
     "source": "CLI",
-    "target": "CLI"
+    "target": "命令列介面"
   },
   {
     "source": "Compaction",
@@ -21,7 +21,7 @@
   },
   {
     "source": "Cron",
-    "target": "Cron"
+    "target": "排程"
   },
   {
     "source": "Dreaming",
@@ -29,7 +29,7 @@
   },
   {
     "source": "Gateway",
-    "target": "Gateway"
+    "target": "閘道"
   },
   {
     "source": "Heartbeat",
@@ -41,7 +41,7 @@
   },
   {
     "source": "Node",
-    "target": "Node"
+    "target": "節點"
   },
   {
     "source": "OpenClaw",
@@ -53,7 +53,7 @@
   },
   {
     "source": "Plugin",
-    "target": "Plugin"
+    "target": "外掛"
   },
   {
     "source": "Skills",
