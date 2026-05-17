@@ -40,8 +40,9 @@ and inferred built JavaScript peers do not make an escaping `extensions` or
 `setupEntry` source path valid.
 
 <Tip>
-  **Looking for a walkthrough?** See [Channel Plugins](/plugins/sdk-channel-plugins)
-  or [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides.
+  **Looking for a walkthrough?** See [Tool Plugins](/plugins/tool-plugins),
+  [Channel Plugins](/plugins/sdk-channel-plugins), or
+  [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides.
 </Tip>
 
 ## `defineToolPlugin`

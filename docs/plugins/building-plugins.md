@@ -38,8 +38,11 @@ install from npm during the launch cutover.
   <Card title="CLI backend plugin" icon="terminal" href="/plugins/cli-backend-plugins">
     Map a local AI CLI into OpenClaw's text fallback runner
   </Card>
-  <Card title="Tool / hook plugin" icon="wrench" href="/plugins/hooks">
-    Register agent tools, event hooks, or services - continue below
+  <Card title="Tool plugin" icon="wrench" href="/plugins/tool-plugins">
+    Add simple typed agent tools with generated manifest metadata
+  </Card>
+  <Card title="Hook plugin" icon="plug" href="/plugins/hooks">
+    Register event hooks, services, or advanced runtime integrations
   </Card>
 </CardGroup>
 
@@ -53,6 +56,7 @@ until the plugin is installed.
 
 This walkthrough creates a minimal plugin that registers an agent tool. Channel
 and provider plugins have dedicated guides linked above.
+For the detailed tool-only workflow, see [Tool Plugins](/plugins/tool-plugins).
 
 <Steps>
   <Step title="Create the package and manifest">
@@ -133,8 +137,9 @@ and provider plugins have dedicated guides linked above.
     `defineToolPlugin` is for simple agent-tool plugins. For providers, hooks,
     services, and other advanced non-channel plugins, use `definePluginEntry`.
     For channels, use `defineChannelPluginEntry` - see
-    [Channel Plugins](/plugins/sdk-channel-plugins). For full entry point
-    options, see [Entry Points](/plugins/sdk-entrypoints).
+    [Channel Plugins](/plugins/sdk-channel-plugins). For the full
+    `defineToolPlugin` workflow, see [Tool Plugins](/plugins/tool-plugins). For
+    full entry point options, see [Entry Points](/plugins/sdk-entrypoints).
 
   </Step>
 
