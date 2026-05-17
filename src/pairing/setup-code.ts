@@ -132,15 +132,6 @@ function isMobilePairingCleartextAllowedHost(host: string): boolean {
   );
 }
 
-function isSecureWebSocketUrl(url: string): boolean {
-  try {
-    const protocol = new URL(url).protocol;
-    return protocol === "wss:" || protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 function validateMobilePairingUrl(url: string, source?: string): string | null {
   let parsed: URL;
   try {
