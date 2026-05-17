@@ -83,6 +83,7 @@ export type NativeHookRelayRegistration = {
 };
 
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
+  shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
   commandForEvent: (event: NativeHookRelayEvent) => string;
   renew: (ttlMs?: number) => void;
   unregister: () => void;
@@ -313,6 +314,7 @@ export function registerNativeHookRelay(
   registerNativeHookRelayBridge(registration);
   const handle: NativeHookRelayRegistrationHandle = {
     ...registration,
+    shouldRelayEvent: nativeHookRelayEventHasLocalWork,
     commandForEvent: (event) =>
       buildNativeHookRelayCommand({
         provider: params.provider,
@@ -366,9 +368,6 @@ export function buildNativeHookRelayCommand(params: {
   executable?: string;
   nodeExecutable?: string;
 }): string {
-  if (!nativeHookRelayEventHasLocalWork(params.event)) {
-    return buildNativeHookRelayNoopCommand(params);
-  }
   const timeoutMs = normalizePositiveInteger(params.timeoutMs, DEFAULT_RELAY_TIMEOUT_MS);
   const executable = params.executable ?? resolveOpenClawCliExecutable();
   const argv =
@@ -392,7 +391,7 @@ export function buildNativeHookRelayCommand(params: {
 
 function nativeHookRelayEventHasLocalWork(event: NativeHookRelayEvent): boolean {
   if (event === "pre_tool_use") {
-    return hasGlobalHooks("before_tool_call");
+    return true;
   }
   if (event === "post_tool_use") {
     return hasGlobalHooks("after_tool_call");
@@ -401,10 +400,6 @@ function nativeHookRelayEventHasLocalWork(event: NativeHookRelayEvent): boolean 
     return hasGlobalHooks("before_agent_finalize");
   }
   return true;
-}
-
-function buildNativeHookRelayNoopCommand(params: { nodeExecutable?: string }): string {
-  return shellQuoteArgs([params.nodeExecutable ?? process.execPath, "-e", ""]);
 }
 
 export async function invokeNativeHookRelay(

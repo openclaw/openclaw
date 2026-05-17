@@ -81,9 +81,6 @@ async function waitForNativeHookRelayBridgeRecord(
 
 describe("native hook relay registry", () => {
   it("registers a short-lived relay and builds hidden CLI commands", () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
-    );
     const relay = registerNativeHookRelay({
       provider: "codex",
       agentId: "agent-1",
@@ -117,7 +114,7 @@ describe("native hook relay registry", () => {
     );
   });
 
-  it("returns a cheap no-op command when a native event has no local hook work", () => {
+  it("preserves safety relays while marking hook-only events without handlers inactive", () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
       sessionId: "session-1",
@@ -129,13 +126,10 @@ describe("native hook relay registry", () => {
       },
     });
 
-    expect(relay.commandForEvent("pre_tool_use")).toBe("/usr/local/bin/node -e ''");
-    expect(relay.commandForEvent("post_tool_use")).toBe("/usr/local/bin/node -e ''");
-    expect(relay.commandForEvent("before_agent_finalize")).toBe("/usr/local/bin/node -e ''");
-    expect(relay.commandForEvent("permission_request")).toBe(
-      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
-        `${relay.relayId} --event permission_request --timeout 1234`,
-    );
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
+    expect(relay.shouldRelayEvent("post_tool_use")).toBe(false);
+    expect(relay.shouldRelayEvent("before_agent_finalize")).toBe(false);
+    expect(relay.shouldRelayEvent("permission_request")).toBe(true);
   });
 
   it("builds relay commands only for native events with matching local hooks", () => {
@@ -153,12 +147,35 @@ describe("native hook relay registry", () => {
       },
     });
 
-    expect(relay.commandForEvent("pre_tool_use")).toBe("/usr/local/bin/node -e ''");
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
+    expect(relay.shouldRelayEvent("post_tool_use")).toBe(true);
+    expect(relay.shouldRelayEvent("before_agent_finalize")).toBe(false);
     expect(relay.commandForEvent("post_tool_use")).toBe(
       "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
         `${relay.relayId} --event post_tool_use --timeout 1234`,
     );
-    expect(relay.commandForEvent("before_agent_finalize")).toBe("/usr/local/bin/node -e ''");
+  });
+
+  it("builds relay commands for before-agent-finalize hooks", () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_agent_finalize", handler: vi.fn() }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      command: {
+        executable: "/opt/Open Claw/openclaw.mjs",
+        nodeExecutable: "/usr/local/bin/node",
+        timeoutMs: 1234,
+      },
+    });
+
+    expect(relay.shouldRelayEvent("before_agent_finalize")).toBe(true);
+    expect(relay.commandForEvent("before_agent_finalize")).toBe(
+      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
+        `${relay.relayId} --event before_agent_finalize --timeout 1234`,
+    );
   });
 
   it("allows callers to replace a relay at a stable id", () => {
