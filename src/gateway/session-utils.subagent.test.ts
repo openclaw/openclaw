@@ -13,6 +13,7 @@ import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   listSessionsFromStore,
+  listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   resolveGatewayModelSupportsImages,
 } from "./session-utils.js";
@@ -176,9 +177,11 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const main = result.sessions.find((session) => session.key === "agent:main:main");
     expect(main?.childSessions).toEqual([
-      "agent:main:subagent:parent",
       "agent:main:subagent:failed",
+      "agent:main:subagent:parent",
     ]);
+    expect(main?.childSessionCount).toBe(2);
+    expect(main?.childSessionsTruncated).toBeUndefined();
     expect(main?.status).toBeUndefined();
 
     const parent = result.sessions.find((session) => session.key === "agent:main:subagent:parent");
@@ -203,6 +206,81 @@ describe("listSessionsFromStore subagent metadata", () => {
     const failed = result.sessions.find((session) => session.key === "agent:main:subagent:failed");
     expect(failed?.status).toBe("failed");
     expect(failed?.runtimeMs).toBe(5_000);
+  });
+
+
+  test("bounds child session links for long-lived controller sessions", async () => {
+    const now = Date.now();
+    const controllerKey = "agent:main:telegram:group:-1003764901648:topic:5915";
+    const store: Record<string, SessionEntry> = {
+      [controllerKey]: {
+        sessionId: "controller-session",
+        updatedAt: now,
+        channel: "telegram",
+      } as SessionEntry,
+    };
+
+    for (let index = 0; index < 175; index += 1) {
+      store[`agent:main:subagent:historical-${index}`] = {
+        sessionId: `historical-${index}`,
+        updatedAt: now - index,
+        spawnedBy: controllerKey,
+        status: "running",
+        startedAt: now - 1_000,
+      } as SessionEntry;
+    }
+
+    const result = await listSessionsFromStoreAsync({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { limit: 1 },
+    });
+
+    const controller = result.sessions[0];
+    expect(controller?.key).toBe(controllerKey);
+    expect(controller?.childSessions).toHaveLength(50);
+    expect(controller?.childSessions?.slice(0, 3)).toEqual([
+      "agent:main:subagent:historical-0",
+      "agent:main:subagent:historical-1",
+      "agent:main:subagent:historical-2",
+    ]);
+    expect(controller?.childSessions).not.toContain("agent:main:subagent:historical-174");
+    expect(controller?.childSessionCount).toBe(175);
+    expect(controller?.childSessionsTruncated).toBe(true);
+    expect(JSON.stringify(controller).length).toBeLessThan(6_000);
+  });
+
+  test("spawnedBy filtering remains the explicit way to list all child sessions", async () => {
+    const now = Date.now();
+    const controllerKey = "agent:main:telegram:group:-1003764901648:topic:5915";
+    const store: Record<string, SessionEntry> = {
+      [controllerKey]: {
+        sessionId: "controller-session",
+        updatedAt: now + 1_000,
+        channel: "telegram",
+      } as SessionEntry,
+    };
+
+    for (let index = 0; index < 75; index += 1) {
+      store[`agent:main:subagent:child-${index}`] = {
+        sessionId: `child-${index}`,
+        updatedAt: now - index,
+        spawnedBy: controllerKey,
+        status: "running",
+        startedAt: now - 1_000,
+      } as SessionEntry;
+    }
+
+    const result = await listSessionsFromStoreAsync({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { spawnedBy: controllerKey, limit: 75 },
+    });
+
+    expect(result.sessions).toHaveLength(75);
+    expect(result.sessions.every((session) => session.spawnedBy === controllerKey)).toBe(true);
   });
 
   test("does not show stale registry-only subagent runs as actively running", () => {

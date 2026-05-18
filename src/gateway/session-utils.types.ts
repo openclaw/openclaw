@@ -79,6 +79,8 @@ export type GatewaySessionRow = {
   runtimeMs?: number;
   parentSessionKey?: string;
   childSessions?: string[];
+  childSessionCount?: number;
+  childSessionsTruncated?: boolean;
   responseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;

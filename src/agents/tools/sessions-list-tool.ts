@@ -319,6 +319,12 @@ export function createSessionsListTool(opts?: {
                   }),
                 )
             : undefined,
+          childSessionCount:
+            typeof entry.childSessionCount === "number" ? entry.childSessionCount : undefined,
+          childSessionsTruncated:
+            typeof entry.childSessionsTruncated === "boolean"
+              ? entry.childSessionsTruncated
+              : undefined,
           thinkingLevel: readStringValue(entry.thinkingLevel),
           fastMode: typeof entry.fastMode === "boolean" ? entry.fastMode : undefined,
           verboseLevel: readStringValue(entry.verboseLevel),

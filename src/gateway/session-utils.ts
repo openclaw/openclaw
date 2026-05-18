@@ -396,6 +396,7 @@ function resolveEstimatedSessionCostUsd(params: {
 }
 
 const STALE_STORE_ONLY_CHILD_LINK_MS = 60 * 60 * 1_000;
+const SESSION_LIST_CHILD_SESSIONS_LIMIT = 50;
 
 function isFinitePositiveTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -423,7 +424,7 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
 
 type SessionListRowContext = {
   subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
-  storeChildSessionsByKey: Map<string, string[]>;
+  storeChildSessionsByKey: Map<string, ChildSessionLinkSummary>;
   selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef>>;
   // Per-list memoization for deterministic resolvers that scale linearly with
   // session count but only depend on (provider, model[, agentId]). Sessions
@@ -440,12 +441,78 @@ type SessionListRowContext = {
   modelCostConfigByModelRef: Map<string, ModelCostConfig | undefined>;
 };
 
-function resolveRuntimeChildSessionKeys(
+type ChildSessionLinkSummary = {
+  keys: string[];
+  count: number;
+  truncated: boolean;
+  seen: Set<string>;
+  visibleSortValues: Map<string, number>;
+};
+
+function createEmptyChildSessionSummary(): ChildSessionLinkSummary {
+  return { keys: [], count: 0, truncated: false, seen: new Set(), visibleSortValues: new Map() };
+}
+
+function normaliseChildSessionSortValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function sortVisibleChildSessionKeys(summary: ChildSessionLinkSummary) {
+  summary.keys.sort((left, right) => {
+    const byRecency =
+      (summary.visibleSortValues.get(right) ?? 0) - (summary.visibleSortValues.get(left) ?? 0);
+    return byRecency || left.localeCompare(right);
+  });
+}
+
+function addChildSessionKey(
+  childSessionsByKey: Map<string, ChildSessionLinkSummary>,
+  parentKey: string,
+  childKey: string,
+  sortValue?: number,
+) {
+  const current = childSessionsByKey.get(parentKey) ?? createEmptyChildSessionSummary();
+  if (!childSessionsByKey.has(parentKey)) {
+    childSessionsByKey.set(parentKey, current);
+  }
+  const childSortValue = normaliseChildSessionSortValue(sortValue);
+  if (current.seen.has(childKey)) {
+    const previousSortValue = current.visibleSortValues.get(childKey);
+    if (typeof previousSortValue === "number" && childSortValue > previousSortValue) {
+      current.visibleSortValues.set(childKey, childSortValue);
+      sortVisibleChildSessionKeys(current);
+    }
+    return;
+  }
+  current.seen.add(childKey);
+  current.count += 1;
+  if (current.keys.length < SESSION_LIST_CHILD_SESSIONS_LIMIT) {
+    current.keys.push(childKey);
+    current.visibleSortValues.set(childKey, childSortValue);
+    sortVisibleChildSessionKeys(current);
+    return;
+  }
+  current.truncated = true;
+  const oldestVisibleKey = current.keys.at(-1);
+  if (!oldestVisibleKey) {
+    return;
+  }
+  const oldestVisibleSortValue = current.visibleSortValues.get(oldestVisibleKey) ?? 0;
+  if (childSortValue <= oldestVisibleSortValue) {
+    return;
+  }
+  current.visibleSortValues.delete(oldestVisibleKey);
+  current.keys[current.keys.length - 1] = childKey;
+  current.visibleSortValues.set(childKey, childSortValue);
+  sortVisibleChildSessionKeys(current);
+}
+
+function resolveRuntimeChildSessionSummary(
   controllerSessionKey: string,
   now = Date.now(),
   subagentRuns?: SessionListRowContext["subagentRuns"],
-): string[] | undefined {
-  const childSessionKeys = new Set<string>();
+): ChildSessionLinkSummary | undefined {
+  const childSessionsByKey = new Map<string, ChildSessionLinkSummary>();
   const controllerKey = controllerSessionKey.trim();
   const runs = subagentRuns
     ? (subagentRuns.runsByControllerSessionKey.get(controllerKey) ?? [])
@@ -477,41 +544,34 @@ function resolveRuntimeChildSessionKeys(
     ) {
       continue;
     }
-    childSessionKeys.add(childSessionKey);
+    addChildSessionKey(
+      childSessionsByKey,
+      controllerSessionKey,
+      childSessionKey,
+      latest.endedAt ?? latest.startedAt ?? latest.sessionStartedAt ?? latest.createdAt,
+    );
   }
-  const childSessions = Array.from(childSessionKeys);
-  return childSessions.length > 0 ? childSessions : undefined;
-}
-
-function addChildSessionKey(
-  childSessionsByKey: Map<string, string[]>,
-  parentKey: string,
-  childKey: string,
-) {
-  const current = childSessionsByKey.get(parentKey);
-  if (current) {
-    if (!current.includes(childKey)) {
-      current.push(childKey);
-    }
-    return;
-  }
-  childSessionsByKey.set(parentKey, [childKey]);
+  const summary = childSessionsByKey.get(controllerSessionKey);
+  return summary && summary.count > 0 ? summary : undefined;
 }
 
 function buildStoreChildSessionIndex(
   store: Record<string, SessionEntry>,
   now = Date.now(),
   subagentRuns?: SessionListRowContext["subagentRuns"],
-): Map<string, string[]> {
-  const childSessionsByKey = new Map<string, string[]>();
+): Map<string, ChildSessionLinkSummary> {
+  const childSessionsByKey = new Map<string, ChildSessionLinkSummary>();
   for (const [key, entry] of Object.entries(store)) {
     if (!entry) {
       continue;
     }
-    const parentKeys = [
-      normalizeOptionalString(entry.spawnedBy),
-      normalizeOptionalString(entry.parentSessionKey),
-    ].filter((value): value is string => Boolean(value) && value !== key);
+    const parentKeys = Array.from(
+      new Set(
+        [normalizeOptionalString(entry.spawnedBy), normalizeOptionalString(entry.parentSessionKey)].filter(
+          (value): value is string => Boolean(value) && value !== key,
+        ),
+      ),
+    );
     if (parentKeys.length === 0) {
       continue;
     }
@@ -540,7 +600,12 @@ function buildStoreChildSessionIndex(
       if (latestControllerSessionKey && latestControllerSessionKey !== parentKey) {
         continue;
       }
-      addChildSessionKey(childSessionsByKey, parentKey, key);
+      addChildSessionKey(
+        childSessionsByKey,
+        parentKey,
+        key,
+        latest?.endedAt ?? latest?.startedAt ?? latest?.sessionStartedAt ?? latest?.createdAt ?? entry.updatedAt,
+      );
     }
   }
   return childSessionsByKey;
@@ -645,26 +710,49 @@ function resolveSessionRowThinkingMetadata(params: {
   return metadata;
 }
 
-function mergeChildSessionKeys(
-  runtimeChildSessions: string[] | undefined,
-  storeChildSessions: string[] | undefined,
-): string[] | undefined {
-  if (!runtimeChildSessions?.length) {
-    return storeChildSessions?.length ? storeChildSessions : undefined;
+function mergeChildSessionSummaries(
+  runtimeChildSessions: ChildSessionLinkSummary | undefined,
+  storeChildSessions: ChildSessionLinkSummary | undefined,
+): ChildSessionLinkSummary | undefined {
+  if (!runtimeChildSessions?.count) {
+    return storeChildSessions?.count ? storeChildSessions : undefined;
   }
-  if (!storeChildSessions?.length) {
+  if (!storeChildSessions?.count) {
     return runtimeChildSessions;
   }
-  return Array.from(new Set([...runtimeChildSessions, ...storeChildSessions]));
+  const merged = createEmptyChildSessionSummary();
+  const mergedByKey = new Map([["merged", merged]]);
+  for (const childKey of [...runtimeChildSessions.keys, ...storeChildSessions.keys]) {
+    addChildSessionKey(
+      mergedByKey,
+      "merged",
+      childKey,
+      Math.max(
+        runtimeChildSessions.visibleSortValues.get(childKey) ?? 0,
+        storeChildSessions.visibleSortValues.get(childKey) ?? 0,
+      ),
+    );
+  }
+  const allChildSessionKeys = new Set([
+    ...runtimeChildSessions.seen,
+    ...storeChildSessions.seen,
+  ]);
+  merged.seen = allChildSessionKeys;
+  merged.count = Math.max(merged.count, allChildSessionKeys.size);
+  merged.truncated =
+    runtimeChildSessions.truncated ||
+    storeChildSessions.truncated ||
+    merged.count > merged.keys.length;
+  return merged.count > 0 ? merged : undefined;
 }
 
-function resolveChildSessionKeys(
+function resolveChildSessionSummary(
   controllerSessionKey: string,
   store: Record<string, SessionEntry>,
   now = Date.now(),
   subagentRuns?: SessionListRowContext["subagentRuns"],
-): string[] | undefined {
-  const runtimeChildSessions = resolveRuntimeChildSessionKeys(
+): ChildSessionLinkSummary | undefined {
+  const runtimeChildSessions = resolveRuntimeChildSessionSummary(
     controllerSessionKey,
     now,
     subagentRuns,
@@ -672,7 +760,7 @@ function resolveChildSessionKeys(
   const storeChildSessions = buildStoreChildSessionIndex(store, now, subagentRuns).get(
     controllerSessionKey,
   );
-  return mergeChildSessionKeys(runtimeChildSessions, storeChildSessions);
+  return mergeChildSessionSummaries(runtimeChildSessions, storeChildSessions);
 }
 
 function resolveTranscriptUsageFallback(params: {
@@ -1651,7 +1739,7 @@ export function buildGatewaySessionRow(params: {
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   transcriptUsageMaxBytes?: number;
-  storeChildSessionsByKey?: Map<string, string[]>;
+  storeChildSessionsByKey?: Map<string, ChildSessionLinkSummary>;
   rowContext?: SessionListRowContext;
   skipTranscriptUsageFallback?: boolean;
   lightweightListRow?: boolean;
@@ -1804,12 +1892,13 @@ export function buildGatewaySessionRow(params: {
     typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
       ? true
       : transcriptUsage?.totalTokensFresh === true;
-  const childSessions = params.storeChildSessionsByKey
-    ? mergeChildSessionKeys(
-        resolveRuntimeChildSessionKeys(key, now, rowContext?.subagentRuns),
+  const childSessionSummary = params.storeChildSessionsByKey
+    ? mergeChildSessionSummaries(
+        resolveRuntimeChildSessionSummary(key, now, rowContext?.subagentRuns),
         params.storeChildSessionsByKey.get(key),
       )
-    : resolveChildSessionKeys(key, store, now, rowContext?.subagentRuns);
+    : resolveChildSessionSummary(key, store, now, rowContext?.subagentRuns);
+  const childSessions = childSessionSummary?.keys.length ? childSessionSummary.keys : undefined;
   const compactionCheckpoints = resolveProjectableCompactionCheckpoints(entry);
   const compactionCheckpointCount = Array.isArray(entry?.compactionCheckpoints)
     ? compactionCheckpoints.length
@@ -1939,6 +2028,8 @@ export function buildGatewaySessionRow(params: {
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
+    childSessionCount: childSessionSummary?.count,
+    childSessionsTruncated: childSessionSummary?.truncated || undefined,
     responseUsage: entry?.responseUsage,
     modelProvider: rowModelProvider,
     model: rowModel,

@@ -62,6 +62,8 @@ export type SessionListRow = {
   endedAt?: number;
   runtimeMs?: number;
   childSessions?: string[];
+  childSessionCount?: number;
+  childSessionsTruncated?: boolean;
   thinkingLevel?: string;
   fastMode?: boolean;
   verboseLevel?: string;
