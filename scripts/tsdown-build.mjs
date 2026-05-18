@@ -58,7 +58,11 @@ export function cleanTsdownOutputRoots(params = {}) {
   for (const root of TSDOWN_OUTPUT_ROOTS) {
     const rootPath = path.join(cwd, root);
     try {
-      fsImpl.rmSync(rootPath, { force: true, recursive: true });
+      fsImpl.mkdirSync(rootPath, { recursive: true });
+      const entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
+      for (const entry of entries) {
+        fsImpl.rmSync(path.join(rootPath, entry.name), { force: true, recursive: true });
+      }
     } catch {
       // Best-effort cleanup. tsdown will recreate the output tree it needs.
     }
