@@ -254,7 +254,9 @@ export function attachGatewayWsMessageHandler(params: {
 
         const device = connectParams.device;
         let devicePublicKey: string | null = null;
-        if (!device) {
+        const hasAuthToken =
+          typeof connectParams.auth?.token === "string" && connectParams.auth.token.length > 0;
+        if (!device && !hasAuthToken) {
           setHandshakeState("failed");
           setCloseCause("device-required", {
             client: connectParams.client.id,
@@ -427,7 +429,7 @@ export function attachGatewayWsMessageHandler(params: {
         });
         let authOk = authResult.ok;
         let authMethod = authResult.method ?? "none";
-        if (!authOk && connectParams.auth?.token) {
+        if (!authOk && device && connectParams.auth?.token) {
           const tokenCheck = await verifyDeviceToken({
             deviceId: device.id,
             token: connectParams.auth.token,
