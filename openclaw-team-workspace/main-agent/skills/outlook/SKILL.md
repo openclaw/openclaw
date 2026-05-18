@@ -148,6 +148,7 @@ Always use the folder-scoped search that matches where the email lives:
 
 ```bash
 ./scripts/outlook-lookup.sh get-profile <name-or-email>    # Look up a person's details using their names or email address
+./scripts/outlook-lookup.sh get-user-profile               # Look up the user's details
 ./scripts/outlook-lookup.sh designation <designation>      # Look up a person's details using their designation
 ```
 
@@ -215,6 +216,47 @@ $ ./scripts/outlook-calendar.sh create "Lunch with client" "2026-01-26T13:00" "2
   "end": "2026-01-26T14:00:00.0000000",
   "id": "AAMkAGQ5NzE4YjQ3..."
 }
+
+$ /scripts/outlook-calendar.sh availability \"zali@nabeh.sa\" \"2026-05-13\" && ./scripts/outlook-calendar.sh availability \"ubaig@nabeh.sa\"
+
+{
+  "email": "zali@nabeh.sa",
+  "busySlots": [
+    {
+      "status": "tentative",
+      "start": "2026-05-13T10:58:00.0000000",
+      "end": "2026-05-13T11:30:00.0000000",
+      "subject": null,
+      "timezone": "India Standard Time"
+    }
+  ]
+}
+{
+  "email": "ubaig@nabeh.sa",
+  "busySlots": [
+    {
+      "status": "busy",
+      "start": "2026-05-13T10:58:00.0000000",
+      "end": "2026-05-13T11:30:00.0000000",
+      "subject": "Meeting with Zeeshan Ali",
+      "timezone": "India Standard Time"
+    },
+    {
+      "status": "busy",
+      "start": "2026-05-13T11:30:00.0000000",
+      "end": "2026-05-13T12:00:00.0000000",
+      "subject": "Alignment Meeting: Resolve Outstanding Issue",
+      "timezone": "India Standard Time"
+    },
+    {
+      "status": "busy",
+      "start": "2026-05-13T12:00:00.0000000",
+      "end": "2026-05-13T12:30:00.0000000",
+      "subject": "Meeting with Tala Alfuhaid",
+      "timezone": "India Standard Time"
+    }
+  ]
+}
 ```
 
 ## Token Refresh
@@ -241,6 +283,8 @@ Access tokens expire after ~1 hour. Refresh with:
 
 ## Tool use notes
 
+- **Tool arguments**: Follow each tool’s documented arguments exactly. Do not assume an argument supports multiple values unless the tool explicitly says so. For example, if an argument is named `email`, treat it as a single email address, not a comma-separated list. -**User's email address**: Use `get-user-profile` to get current user's email address, never guess it, email addresses are not necessarily similar to names.
+- **Timezone**: Remember that all times retured by outlook tools are in user's timezone, do not convert them again, talk to the user only in their timezone, never in UTC unless timezone is not provided.
 - **Attachment downloads**: Always download attachments to `./attachments/` (relative to workspace). The directory already exists — use this path with the `download` command.
 - **Email IDs**: The `id` field shows the last 20 characters of the full message ID. Use this ID with commands like `read`, `mark-read`, `delete`, etc.
 - **Email content formatting**: Always write email body as HTML using
@@ -316,7 +360,7 @@ The user at times does not specify many details that might be needed to set a me
 
 Date: Today
 Subject: Appropriate title you deduced from user conversations or "Meeting with [participant's names]" if user provides standalone meeting request.
-Start Time: If date is today's, then 10 minutes after current time. If its any other day, try tomorrow 1pm, it thats unavailable, try 30 minutes before or after.
+Start Time: If date is today's, then 10 minutes after current time (check whats the time now). If its any other day, try tomorrow 1pm, it thats unavailable, try 30 minutes before or after.
 End Time: 30 minutes after start time.
 Duration: 30 minutes default (set start and end time appropriately)
 

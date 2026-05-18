@@ -366,24 +366,28 @@ setup_cron() {
     echo ""
     echo -e "${YELLOW}Setting up cron jobs${NC}"
 
-    if [ -z "$TRIAGE_DIR" ]; then
+    if [ -z "${TRIAGE_DIR:-}" ] || [ ! -d "$TRIAGE_DIR" ]; then
         echo -e "${YELLOW}⚠ Skipping cron setup — triage Outlook skill directory not found.${NC}"
+        echo "    TRIAGE_DIR=${TRIAGE_DIR:-<empty>}"
         return
     fi
 
     local missing=()
     for script in check-and-trigger.sh outlook-seen.sh; do
-        if [ ! -x "$TRIAGE_DIR/$script" ]; then
-            missing+=("$script")
+        if [ ! -f "$TRIAGE_DIR/$script" ]; then
+            missing+=("$script (missing)")
+        elif [ ! -x "$TRIAGE_DIR/$script" ]; then
+            missing+=("$script (not executable)")
         fi
     done
 
     if [ "${#missing[@]}" -gt 0 ]; then
-        echo -e "${YELLOW}⚠ Skipping cron setup — missing or non-executable in $TRIAGE_DIR:${NC}"
+        echo -e "${YELLOW}⚠ Skipping cron setup — required scripts unavailable in $TRIAGE_DIR:${NC}"
         for s in "${missing[@]}"; do
             echo "    $s"
         done
-        echo "    Make them executable with chmod +x and re-run setup."
+        echo "    Fix with:"
+        echo "    chmod +x \"$TRIAGE_DIR/check-and-trigger.sh\" \"$TRIAGE_DIR/outlook-seen.sh\""
         return
     fi
 
@@ -392,13 +396,33 @@ setup_cron() {
         return
     fi
 
-    (crontab -l 2>/dev/null | grep -v "check-and-trigger\|outlook-seen.*prune"; \
-     echo "* * * * * $TRIAGE_DIR/check-and-trigger.sh"; \
-     echo "0 3 * * * $TRIAGE_DIR/outlook-seen.sh prune") | crontab -
+    echo -e "${YELLOW}Seeding seen email store${NC}"
+    "$TRIAGE_DIR/outlook-seen.sh" seed || {
+        echo -e "${YELLOW}⚠ Seen-store seed failed; continuing, but first triage run may process existing unread emails.${NC}"
+    }
+
+    # crontab -l returns non-zero when no crontab exists.
+    # grep also returns non-zero when it filters everything/no input.
+    # Under set -euo pipefail, both are normal but must be guarded.
+    local existing_cron
+    existing_cron="$(crontab -l 2>/dev/null || true)"
+
+    {
+        if [ -n "$existing_cron" ]; then
+            printf '%s\n' "$existing_cron" | grep -v -E 'check-and-trigger|outlook-seen.*prune' || true
+        fi
+
+        echo "* * * * * $TRIAGE_DIR/check-and-trigger.sh"
+        echo "0 3 * * * $TRIAGE_DIR/outlook-seen.sh prune"
+    } | crontab -
 
     echo -e "${GREEN}✓ Cron jobs registered${NC}"
     echo "  - Email triage: every minute ($TRIAGE_DIR/check-and-trigger.sh)"
     echo "  - Seen store prune: daily at 3am ($TRIAGE_DIR/outlook-seen.sh prune)"
+
+    echo ""
+    echo "Current crontab:"
+    crontab -l || true
 }
 
 main() {

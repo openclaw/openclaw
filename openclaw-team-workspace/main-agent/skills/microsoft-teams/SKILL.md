@@ -16,7 +16,7 @@ Do **not** use legacy `ComposioToolSet`, `App`, `entity.initiate_connection(...)
 | Variable                         | Description                        |
 | -------------------------------- | ---------------------------------- |
 | `COMPOSIO_API_KEY`               | Composio API key                   |
-| `USER_ID`               | Stable app-side user identifier    |
+| `USER_ID`                        | Stable app-side user identifier    |
 | `MICROSOFT_TEAMS_AUTH_CONFIG_ID` | Auth config ID starting with `ac_` |
 
 - Network access required
@@ -89,7 +89,7 @@ has_connected_accounts= True
 | Term                   | Description                                                          |
 | ---------------------- | -------------------------------------------------------------------- |
 | `auth_config_id`       | Composio auth blueprint for Microsoft Teams. Starts with `ac_`.      |
-| `user_id`              | Stable app-side user identifier, from `USER_ID`.            |
+| `user_id`              | Stable app-side user identifier, from `USER_ID`.                     |
 | `connected_account_id` | Actual authenticated Teams connection. Starts with `ca_`.            |
 | `chat_id`              | Microsoft Teams chat/conversation target used when sending messages. |
 

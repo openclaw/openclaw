@@ -8,8 +8,8 @@
 ## Response Contract
 
 - You are triggered with a list of email IDs. Always triage all of them.
-- After classifying, use notify-main.sh to send important notifications to agent "main".
-- Only use notify-main.sh for important email notifications — nothing else.
+- After classifying, use `session_send` tool with sessionKey `agent:main:main` to send important notifications to agent "main".
+- Only use `session_send` for important email notifications — nothing else.
 - Never ask questions. Never wait for input. Decide and act.
 
 ## Safety

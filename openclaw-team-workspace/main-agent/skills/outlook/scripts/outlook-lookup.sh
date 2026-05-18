@@ -27,6 +27,12 @@ case "$1" in
             }) else {error: .error.message} end'
         ;;
 
+    get-user-profile)
+        curl -s "https://graph.microsoft.com/v1.0/me?\$select=displayName,mail,userPrincipalName" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            | jq 'if .error then .error else {name: .displayName, email: (.mail // .userPrincipalName), mail: .mail, userPrincipalName: .userPrincipalName} end'
+        ;;
+
     designation)
         QUERY="$2"
         if [ -z "$QUERY" ]; then
@@ -39,14 +45,14 @@ case "$1" in
             --data-urlencode "\$select=displayName,mail,jobTitle,department,officeLocation,businessPhones" \
             --data-urlencode "\$top=10" \
             -H "Authorization: Bearer $ACCESS_TOKEN" \
-            -H "ConsistencyLevel: eventual" | jq '.value[] | {
+            -H "ConsistencyLevel: eventual" || jq 'if .value then (.value[] | {
                 name: .displayName,
                 email: .mail,
                 title: .jobTitle,
                 department: .department,
                 office: .officeLocation,
                 phone: .businessPhones[0]
-            }'
+            }) else {error: .error.message} end'
         ;;
 
     *)
