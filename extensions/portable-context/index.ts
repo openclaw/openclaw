@@ -1,6 +1,6 @@
 // Bundled "portable-context" command plugin.
 //
-// Adds a `/export` native command. When invoked from a DM it bundles a short
+// Adds a `/export-context` native command. When invoked from a DM it bundles a short
 // header + the gemma workspace USER.md + MEMORY.md into a single .md file and
 // delivers it as a Telegram document (via the outbound mediaUrl path).
 //
@@ -22,7 +22,7 @@ function looksLikeGroupTarget(value: string | undefined): boolean {
 
 export default function register(api: OpenClawPluginApi): void {
   api.registerCommand({
-    name: "export",
+    name: "export-context",
     description: "Export your USER.md + MEMORY.md as a single portable .md document (DM only).",
     acceptsArgs: false,
     handler: async (ctx) => {
