@@ -2179,6 +2179,7 @@ export async function runEmbeddedAttempt(
       const { customTools } = splitSdkTools({
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
+        toolHookContext: catalogToolHookContext,
       });
 
       // Add client tools (OpenResponses hosted tools) to customTools.
