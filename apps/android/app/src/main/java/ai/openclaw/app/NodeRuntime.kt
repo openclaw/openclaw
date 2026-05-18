@@ -539,6 +539,9 @@ class NodeRuntime(
   val talkModeStatusText: StateFlow<String>
     get() = talkMode.statusText
 
+  val talkModeConversation: StateFlow<List<VoiceConversationEntry>>
+    get() = talkMode.conversation
+
   private fun syncMainSessionKey(agentId: String?) {
     val resolvedKey = resolveNodeMainSessionKey(agentId)
     // Always push the resolved session key into TalkMode, even when the
