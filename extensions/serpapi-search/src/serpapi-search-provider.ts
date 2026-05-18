@@ -15,7 +15,10 @@ function loadClientModule(): Promise<SerpApiClientModule> {
   return clientModulePromise;
 }
 
-const ALLOWED_PARAMS = ["q", "gl", "hl", "tbs", "safe", "num", "zero_trace"] as const;
+const ALLOWED_PARAMS = [
+  "q", "gl", "hl", "lr", "google_domain", "location", "uule",
+  "safe", "nfpr", "filter", "start", "zero_trace",
+] as const;
 
 function extract(
   raw: Record<string, unknown>,
@@ -24,21 +27,19 @@ function extract(
   const organicResults = Array.isArray(raw.organic_results)
     ? (raw.organic_results as Record<string, unknown>[])
     : [];
-  const answerBox = raw.answer_box as Record<string, unknown> | undefined;
   return {
-    engine: "google",
-    answer_box: answerBox
-      ? (answerBox.answer ?? answerBox.snippet ?? answerBox.result ?? null)
-      : null,
+    engine: "google_light",
     results: organicResults.slice(0, maxCount).map((r) => ({
       title: r.title,
       url: r.link ?? null,
       snippet: typeof r.snippet === "string" ? wrapWebContent(r.snippet) : (r.snippet ?? null),
     })),
+    related_questions: raw.related_questions ?? [],
+    related_searches: raw.related_searches ?? [],
   };
 }
 
-const SerpApiGoogleSearchSchema = {
+const SerpApiGoogleLightSearchSchema = {
   type: "object",
   properties: {
     query: { type: "string", description: "Search query string." },
@@ -52,9 +53,27 @@ const SerpApiGoogleSearchSchema = {
       type: "string",
       description: "Country code for Google Search (e.g. us, de, ua). Defaults to us.",
     },
+    location: {
+      type: "string",
+      description: "Location to originate the search from (e.g. 'Austin, Texas'). Cannot be used with uule.",
+    },
+    google_domain: {
+      type: "string",
+      description: "Google domain to use (e.g. google.com, google.de). Defaults to google.com.",
+    },
+    lr: {
+      type: "string",
+      description: "Limit results to specific languages (e.g. 'lang_en|lang_de').",
+    },
     safe: {
       type: "string",
+      enum: ["active", "off"],
       description: 'SafeSearch level: "active" or "off".',
+    },
+    start: {
+      type: "number",
+      description: "Result offset for pagination (0=first page, 10=second page, 20=third page, ...).",
+      minimum: 0,
     },
   },
   required: ["query"],
@@ -66,20 +85,23 @@ export function createSerpApiWebSearchProvider(): WebSearchProviderPlugin {
     ...createSerpApiWebSearchProviderBase(),
     createTool: (ctx) => ({
       description:
-        "Search the web using SerpApi (Google). Returns titles, URLs, and snippets with real-time results.",
-      parameters: SerpApiGoogleSearchSchema,
+        "Search the web using SerpApi Google Light (fastest Google Search API). Returns titles, URLs, snippets, related questions, and related searches.",
+      parameters: SerpApiGoogleLightSearchSchema,
       execute: async (args, context) => {
         const { callSerpApi: call } = await loadClientModule();
         const count = readNumberParam(args, "count", { integer: true }) ?? 5;
         const raw = await call({
           cfg: ctx.config,
-          engine: "google",
+          engine: "google_light",
           allowedParams: ALLOWED_PARAMS,
           params: {
             q: readStringParam(args, "query", { required: true }),
-            num: count,
             gl: readStringParam(args, "gl") ?? "us",
+            location: readStringParam(args, "location") ?? undefined,
+            google_domain: readStringParam(args, "google_domain") ?? undefined,
+            lr: readStringParam(args, "lr") ?? undefined,
             safe: readStringParam(args, "safe") ?? undefined,
+            start: readNumberParam(args, "start", { integer: true }) ?? undefined,
           },
           signal: context?.signal,
         });
