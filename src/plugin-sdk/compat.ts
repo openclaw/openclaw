@@ -58,12 +58,27 @@ export {
   type ApiKeyStorageOptions,
   type WriteOAuthCredentialsOptions,
 } from "../plugins/provider-auth-helpers.js";
+export {
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  recordPendingHistoryEntryIfEnabled,
+} from "../auto-reply/reply/history.js";
+export { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+export { logTypingFailure } from "../channels/logging.js";
+export { addWildcardAllowFrom } from "../channels/plugins/setup-wizard-helpers.js";
+export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
+export { jsonResult, readReactionParams, readStringParam } from "../agents/tools/common.js";
+export { formatDocsLink } from "../terminal/links.js";
 
 export { createAccountStatusSink } from "./channel-lifecycle.core.js";
 export { createPluginRuntimeStore } from "./runtime-store.js";
 export { KeyedAsyncQueue } from "./keyed-async-queue.js";
+export { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "./routing.js";
 export { normalizeAccountId } from "./account-id.js";
-export { resolvePreferredOpenClawTmpDir } from "./temp-path.js";
+export { buildRandomTempFilePath, resolvePreferredOpenClawTmpDir } from "./temp-path.js";
+export { extractToolSend } from "./tool-send.js";
+export { resolveSenderCommandAuthorization } from "./command-auth.js";
 
 export {
   createHybridChannelConfigAdapter,
@@ -77,6 +92,7 @@ export {
   mapAllowFromEntries,
 } from "./channel-config-helpers.js";
 export { formatAllowFromLowercase, formatNormalizedAllowFromEntries } from "./allow-from.js";
+export { isNormalizedSenderAllowed } from "./allow-from.js";
 export * from "./channel-config-schema.js";
 export * from "./channel-policy.js";
 export { collectOpenGroupPolicyConfiguredRouteWarnings } from "./channel-policy.js";
