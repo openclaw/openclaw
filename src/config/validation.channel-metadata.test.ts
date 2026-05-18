@@ -247,7 +247,7 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("explains the Telegram groups object-map shape when raw channel validation rejects it", () => {
+  it("keeps raw channel validation diagnostics plugin-agnostic", () => {
     const result = validateConfigObjectRawWithPlugins({
       channels: {
         telegram: {
@@ -261,13 +261,11 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
       expect(result.issues).toContainEqual(
         expect.objectContaining({
           path: "channels.telegram.groups",
-          message: expect.stringContaining(
-            "Telegram groups must be an object map keyed by Telegram group/chat id",
-          ),
+          message: expect.stringContaining("invalid config:"),
         }),
       );
-      expect(result.issues[0]?.message).toContain("topics");
-      expect(result.issues[0]?.message).toContain("openclaw doctor --fix");
+      expect(result.issues[0]?.message).not.toContain("Telegram groups");
+      expect(result.issues[0]?.message).not.toContain("openclaw doctor --fix");
     }
   });
 });
