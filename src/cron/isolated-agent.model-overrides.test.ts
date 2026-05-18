@@ -58,7 +58,8 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
     resetPluginRuntimeStateForTest();
     installThinkingTestProviders();
     vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
-    vi.mocked(runEmbeddedPiAgent).mockClear();
+    vi.mocked(runEmbeddedPiAgent).mockReset();
+    vi.mocked(loadModelCatalog).mockReset();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });
 
