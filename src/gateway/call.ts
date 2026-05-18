@@ -43,6 +43,7 @@ import {
   type OperatorScope,
 } from "./method-scopes.js";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
+import { resolveGatewayConnectionTlsFingerprint } from "./tls-fingerprint.js";
 export type { GatewayConnectionDetails };
 
 type CallGatewayBaseOptions = {
@@ -536,27 +537,13 @@ async function resolveGatewayTlsFingerprint(params: {
   url: string;
 }): Promise<string | undefined> {
   const { opts, context, url } = params;
-  const useLocalTls =
-    context.config.gateway?.tls?.enabled === true &&
-    !context.urlOverrideSource &&
-    !context.remoteUrl &&
-    url.startsWith("wss://");
-  const tlsRuntime = useLocalTls
-    ? await gatewayCallDeps.loadGatewayTlsRuntime(context.config.gateway?.tls)
-    : undefined;
-  const overrideTlsFingerprint = trimToUndefined(opts.tlsFingerprint);
-  const remoteTlsFingerprint =
-    // Env overrides may still inherit configured remote TLS pinning for private cert deployments.
-    // CLI overrides remain explicit-only and intentionally skip config remote TLS to avoid
-    // accidentally pinning against caller-supplied target URLs.
-    context.isRemoteMode && context.urlOverrideSource !== "cli"
-      ? trimToUndefined(context.remote?.tlsFingerprint)
-      : undefined;
-  return (
-    overrideTlsFingerprint ||
-    remoteTlsFingerprint ||
-    (tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined)
-  );
+  return await resolveGatewayConnectionTlsFingerprint({
+    config: context.config,
+    url,
+    urlOverrideSource: context.urlOverrideSource,
+    explicitTlsFingerprint: opts.tlsFingerprint,
+    loadGatewayTlsRuntime: gatewayCallDeps.loadGatewayTlsRuntime,
+  });
 }
 
 function formatGatewayCloseError(
