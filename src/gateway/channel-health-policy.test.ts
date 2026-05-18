@@ -290,6 +290,35 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 
+  it("flags polling startups with inherited connected:true and no transport activity", () => {
+    // Defense in depth: notePollingStart now explicitly clears connected, so
+    // the normal startup-hang path falls through `connected === false` above.
+    // This case covers a future code path that forgets to clear connected:true
+    // on lifecycle start; the inherited true plus null lastConnectedAt plus
+    // null lastTransportActivityAt past the grace still means the channel
+    // never reached its first transport event.
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        mode: "polling",
+        lastStartAt: 0,
+        lastConnectedAt: null,
+        lastEventAt: null,
+        lastTransportActivityAt: null,
+      },
+      {
+        channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+  });
+
   it("keeps quiet telegram webhooks healthy when they do not publish transport tracking", () => {
     const evaluation = evaluateChannelHealth(
       {
