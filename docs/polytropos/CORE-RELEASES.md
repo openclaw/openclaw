@@ -41,26 +41,21 @@ A release is a `.tgz` produced by `npm pack` from this repo.
 
 It contains a subset of the repo as defined by `package.json.files`, including `dist/` and bundled assets. Dependencies are installed by npm when the tarball is installed globally.
 
-## Switching versions
+## Correct order (release → activation)
 
-Switching is done by:
+**Always stage a release first, then activate it.**
 
-1. updating symlinks:
-   - `previous.tgz` → old `current.tgz`
-   - `current.tgz` → new `<tag>.tgz`
-2. installing the tarball globally into the prefix the service uses (`/home/ec2-user/.npm-global`)
-3. running the Polytropos bundled plugin deps helper from the installed package (ensures bundled plugin runtime deps exist)
+1) **Release (stage):** produce/obtain the versioned tarball, update `previous.tgz` then `current.tgz`, and install `current.tgz` globally.
 
-Rollback is the same operation, pointing `current.tgz` back to `previous.tgz`.
+2) **Activation:** restart/reload the gateway using the appropriate procedure for your environment so the running process begins using the newly-installed global package.
 
-## Activation (restart/reload)
-
-Activation is a separate step from release.
-
-1. Complete the **release** procedure first (the new `.tgz` is built, `current.tgz` is updated, and the package is installed globally).
-2. Then **activate** the staged release by restarting/reloading the gateway using the appropriate procedure for your environment (for example: your service manager, container/orchestrator, or supervisor).
+Rollback is the same concept:
+- stage rollback (point `current.tgz` back to `previous.tgz` + reinstall if needed)
+- then restart/reload the gateway.
 
 ## Release procedure (scripted)
+
+(Release stages bits but does not restart the gateway; activation is always separate.)
 
 Core releases are performed by the release script:
 
@@ -69,7 +64,7 @@ Core releases are performed by the release script:
 Usage:
 
 ```bash
-node scripts/polytropos-release.mjs release [--tgz <path>]
+node scripts/polytropos-release.mjs release --tgz /path/to/openclaw-<ver>.tgz
 ```
 
 What it does (high level):
@@ -77,12 +72,12 @@ What it does (high level):
 - finds the nearest reachable release tag (`v<ver>` or `v<ver>+poly.<N>`) and derives the base upstream version `v<ver>` from it
 - computes next global build number `poly.N` (always increments)
 - creates tag `v<ver>+poly.<N>`
-- obtains a release tarball either by building locally (default) or by promoting a provided CI-built tarball via --tgz
-- runs `npm pack` to produce `v<ver>+poly.<N>.tgz`
+- validates the provided tarball (`package/package.json` name/version)
+- stages the tarball into `~/polytropos/releases/v<ver>+poly.<N>.tgz`
 - updates symlinks (mandatory): `previous.tgz` then `current.tgz`
 - installs `current.tgz` globally into `/home/ec2-user/.npm-global`
-- runs the Polytropos bundled plugin deps helper from the installed package (`scripts/polytropos-bundled-plugin-deps-helper.mjs`); it self-discovers the installed package root and ensures bundled plugin runtime deps are present
-- does not restart/activate the gateway (activation is a separate manual step)
+- runs the Polytropos bundled plugin deps helper from the installed package (`scripts/polytropos-bundled-plugin-deps-helper.mjs`)
+- does not restart/activate the gateway (activation is always separate)
 
 
 ## CI-built artifacts (recommended)
