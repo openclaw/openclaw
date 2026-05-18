@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
@@ -44,6 +45,62 @@ export function resolveFollowupQueueStatePath(stateDir: string = resolveStateDir
 }
 
 /**
+ * Minimal recovery descriptor for FollowupRun["run"]. Persisted fields are the
+ * per-message identity, routing, and intent inputs that cannot be recovered any
+ * other way after a restart. Bulky or secret-bearing runtime state (config,
+ * skillsSnapshot, extraSystemPrompt[Static], authProfileId[Source],
+ * inputProvenance) is intentionally excluded — the dispatcher reassigns
+ * `run.config` via resolveQueuedReplyExecutionConfig on the next turn, and the
+ * other fields are either rebuilt from current runtime state or left undefined.
+ *
+ * Use Pick (allowlist), not Omit, so new fields added to FollowupRun["run"]
+ * default to NOT persisted until explicitly opted in.
+ */
+type PersistedRunFields = Pick<
+  FollowupRun["run"],
+  | "agentId"
+  | "agentDir"
+  | "sessionId"
+  | "sessionKey"
+  | "runtimePolicySessionKey"
+  | "messageProvider"
+  | "agentAccountId"
+  | "groupId"
+  | "groupChannel"
+  | "groupSpace"
+  | "senderId"
+  | "senderName"
+  | "senderUsername"
+  | "senderE164"
+  | "senderIsOwner"
+  | "traceAuthorized"
+  | "sessionFile"
+  | "workspaceDir"
+  | "provider"
+  | "model"
+  | "hasSessionModelOverride"
+  | "modelOverrideSource"
+  | "hasAutoFallbackProvenance"
+  | "thinkLevel"
+  | "verboseLevel"
+  | "reasoningLevel"
+  | "elevatedLevel"
+  | "execOverrides"
+  | "bashElevated"
+  | "timeoutMs"
+  | "blockReplyBreak"
+  | "ownerNumbers"
+  | "sourceReplyDeliveryMode"
+  | "silentReplyPromptMode"
+  | "enforceFinalTag"
+  | "skipProviderRuntimeHints"
+  | "silentExpected"
+  | "allowEmptyAssistantReplyAsSilent"
+  | "suppressNextUserMessagePersistence"
+  | "suppressTranscriptOnlyAssistantPersistence"
+>;
+
+/**
  * Subset of FollowupRun that can be safely JSON-serialized across restarts.
  * Runtime-only fields (abortSignal, currentTurnContext, deliveryCorrelations,
  * queuedLifecycle) are intentionally excluded.
@@ -62,8 +119,9 @@ type PersistedFollowupRun = Pick<
   | "originatingAccountId"
   | "originatingThreadId"
   | "originatingChatType"
-  | "run"
->;
+> & {
+  run: PersistedRunFields;
+};
 
 type PersistedQueueEntry = {
   items: PersistedFollowupRun[];
@@ -74,8 +132,71 @@ type PersistedQueueEntry = {
   dropPolicy: QueueDropPolicy;
   droppedCount: number;
   summaryLines: string[];
-  lastRun?: FollowupRun["run"];
+  lastRun?: PersistedRunFields;
 };
+
+const PERSISTED_RUN_FIELDS = [
+  "agentId",
+  "agentDir",
+  "sessionId",
+  "sessionKey",
+  "runtimePolicySessionKey",
+  "messageProvider",
+  "agentAccountId",
+  "groupId",
+  "groupChannel",
+  "groupSpace",
+  "senderId",
+  "senderName",
+  "senderUsername",
+  "senderE164",
+  "senderIsOwner",
+  "traceAuthorized",
+  "sessionFile",
+  "workspaceDir",
+  "provider",
+  "model",
+  "hasSessionModelOverride",
+  "modelOverrideSource",
+  "hasAutoFallbackProvenance",
+  "thinkLevel",
+  "verboseLevel",
+  "reasoningLevel",
+  "elevatedLevel",
+  "execOverrides",
+  "bashElevated",
+  "timeoutMs",
+  "blockReplyBreak",
+  "ownerNumbers",
+  "sourceReplyDeliveryMode",
+  "silentReplyPromptMode",
+  "enforceFinalTag",
+  "skipProviderRuntimeHints",
+  "silentExpected",
+  "allowEmptyAssistantReplyAsSilent",
+  "suppressNextUserMessagePersistence",
+  "suppressTranscriptOnlyAssistantPersistence",
+] as const satisfies ReadonlyArray<keyof PersistedRunFields>;
+
+function projectRunForPersist(run: FollowupRun["run"]): PersistedRunFields {
+  const projected: Partial<PersistedRunFields> = {};
+  for (const key of PERSISTED_RUN_FIELDS) {
+    const value = run[key];
+    if (value !== undefined) {
+      // Field-by-field copy keeps each value in its source type without
+      // forcing a single union onto the projected map's index type.
+      (projected as Record<string, unknown>)[key] = value;
+    }
+  }
+  return projected as PersistedRunFields;
+}
+
+// On restore the dispatcher reassigns run.config via resolveQueuedReplyExecutionConfig
+// before any read, so a stubbed empty config is safe and avoids carrying the live
+// app config (which contains secret refs and provider/channel state) across disk.
+function rehydrateRun(run: PersistedRunFields): FollowupRun["run"] {
+  return { ...run, config: {} as OpenClawConfig };
+}
 
 function toPersistedRun(item: FollowupRun): PersistedFollowupRun {
   return {
@@ -99,7 +220,7 @@ function toPersistedRun(item: FollowupRun): PersistedFollowupRun {
     ...(item.originatingChatType !== undefined
       ? { originatingChatType: item.originatingChatType }
       : {}),
-    run: item.run,
+    run: projectRunForPersist(item.run),
   };
 }
 
@@ -126,7 +247,7 @@ export function persistFollowupQueues(): void {
           dropPolicy: queue.dropPolicy,
           droppedCount: queue.droppedCount,
           summaryLines: queue.summaryLines,
-          lastRun: queue.lastRun,
+          ...(queue.lastRun !== undefined ? { lastRun: projectRunForPersist(queue.lastRun) } : {}),
         },
       ]);
     }
@@ -184,8 +305,12 @@ export function restoreFollowupQueues(): void {
       if (!key || !data || !Array.isArray(data.items)) {
         continue;
       }
+      const rehydratedItems: FollowupRun[] = data.items.map((persisted) => ({
+        ...persisted,
+        run: rehydrateRun(persisted.run),
+      }));
       const restored: FollowupQueueState = {
-        items: data.items,
+        items: rehydratedItems,
         draining: false,
         lastEnqueuedAt: typeof data.lastEnqueuedAt === "number" ? data.lastEnqueuedAt : Date.now(),
         mode: normalizeQueueMode(data.mode) ?? "steer",
@@ -200,7 +325,7 @@ export function restoreFollowupQueues(): void {
           typeof data.droppedCount === "number" ? Math.max(0, Math.floor(data.droppedCount)) : 0,
         summaryLines: Array.isArray(data.summaryLines) ? data.summaryLines : [],
         summarySources: [],
-        lastRun: data.lastRun,
+        ...(data.lastRun !== undefined ? { lastRun: rehydrateRun(data.lastRun) } : {}),
       };
       FOLLOWUP_QUEUES.set(key, restored);
       if (restored.items.length > 0) {

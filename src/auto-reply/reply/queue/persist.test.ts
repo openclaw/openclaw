@@ -201,6 +201,77 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(fs.statSync(statePath).mode & 0o777).toBe(0o600);
   });
 
+  it("does not persist config, skillsSnapshot, extraSystemPrompt, authProfileId, or inputProvenance", () => {
+    const run = makeRun();
+    run.config = {
+      defaults: { agent: { provider: "anthropic-secret", model: "claude-secret" } },
+    } as FollowupRun["run"]["config"];
+    run.skillsSnapshot = {
+      sensitive: "details",
+    } as unknown as FollowupRun["run"]["skillsSnapshot"];
+    run.extraSystemPrompt = "do-not-leak";
+    run.extraSystemPromptStatic = "static-do-not-leak";
+    run.authProfileId = "profile-secret";
+    run.authProfileIdSource = "user";
+    run.inputProvenance = { source: "secret" } as unknown as FollowupRun["run"]["inputProvenance"];
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push({ ...makeFollowupRun("descriptor"), run });
+    queue.lastRun = run;
+    persistFollowupQueues();
+
+    const raw = fs.readFileSync(path.join(tmpDir, STATE_FILE), "utf8");
+    for (const needle of [
+      "anthropic-secret",
+      "claude-secret",
+      "sensitive",
+      "do-not-leak",
+      "static-do-not-leak",
+      "profile-secret",
+      '"inputProvenance"',
+    ]) {
+      expect(raw).not.toContain(needle);
+    }
+    const parsed = JSON.parse(raw);
+    const persistedRun = parsed.entries[0][1].items[0].run;
+    expect(persistedRun.config).toBeUndefined();
+    expect(persistedRun.skillsSnapshot).toBeUndefined();
+    expect(persistedRun.extraSystemPrompt).toBeUndefined();
+    expect(persistedRun.extraSystemPromptStatic).toBeUndefined();
+    expect(persistedRun.authProfileId).toBeUndefined();
+    expect(persistedRun.authProfileIdSource).toBeUndefined();
+    expect(persistedRun.inputProvenance).toBeUndefined();
+    const persistedLastRun = parsed.entries[0][1].lastRun;
+    expect(persistedLastRun.config).toBeUndefined();
+    expect(persistedLastRun.skillsSnapshot).toBeUndefined();
+  });
+
+  it("stubs run.config and leaves other stripped fields undefined on restore", () => {
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push(makeFollowupRun("rehydrate"));
+    persistFollowupQueues();
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    restoreFollowupQueues();
+
+    const restored = FOLLOWUP_QUEUES.get(TEST_KEY);
+    expect(restored).toBeDefined();
+    const rerun = restored!.items[0].run;
+    // config is stubbed (empty object). The dispatcher reassigns it via
+    // resolveQueuedReplyExecutionConfig on the next turn.
+    expect(rerun.config).toEqual({});
+    expect(rerun.skillsSnapshot).toBeUndefined();
+    expect(rerun.extraSystemPrompt).toBeUndefined();
+    expect(rerun.authProfileId).toBeUndefined();
+    expect(rerun.inputProvenance).toBeUndefined();
+    // Identity / routing / paths / per-message intent survive.
+    expect(rerun.agentId).toBe("main");
+    expect(rerun.sessionId).toBe("sess-persist");
+    expect(rerun.workspaceDir).toBe("/tmp/ws");
+    expect(rerun.provider).toBe("anthropic");
+    expect(rerun.model).toBe("claude");
+    expect(rerun.timeoutMs).toBe(30000);
+    expect(rerun.blockReplyBreak).toBe("message_end");
+  });
+
   it("skips entries with missing or invalid items array", () => {
     const statePath = path.join(tmpDir, STATE_FILE);
     fs.writeFileSync(
