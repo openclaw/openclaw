@@ -1227,6 +1227,20 @@ describe("capability cli", () => {
     expect(describeCall?.timeoutMs).toBe(90000);
   });
 
+  it("passes detected image describe MIME types through media understanding", async () => {
+    const tempInput = path.join(os.tmpdir(), `openclaw-image-describe-${Date.now()}.png`);
+    await fs.writeFile(tempInput, Buffer.from(PNG_1X1_BASE64, "base64"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "image", "describe", "--file", tempInput, "--json"],
+    });
+
+    const describeCall = imageDescribeCall();
+    expect(describeCall?.filePath).toBe(tempInput);
+    expect(describeCall?.mime).toBe("image/png");
+  });
+
   it("keeps image describe URL files as remote media references", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -1275,6 +1289,31 @@ describe("capability cli", () => {
     expect(mocks.describeImageFile).not.toHaveBeenCalled();
     expect(firstJsonOutput()?.provider).toBe("ollama");
     expect(firstJsonOutput()?.model).toBe("gpt-4.1-mini");
+  });
+
+  it("passes detected MIME types through explicit image describe model overrides", async () => {
+    const tempInput = path.join(os.tmpdir(), `openclaw-image-describe-model-${Date.now()}.png`);
+    await fs.writeFile(tempInput, Buffer.from(PNG_1X1_BASE64, "base64"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "describe",
+        "--file",
+        tempInput,
+        "--model",
+        "ollama/qwen2.5vl:7b",
+        "--json",
+      ],
+    });
+
+    const describeCall = firstImageDescribeWithModelCall();
+    expect(describeCall?.filePath).toBe(tempInput);
+    expect(describeCall?.provider).toBe("ollama");
+    expect(describeCall?.model).toBe("qwen2.5vl:7b");
+    expect(describeCall?.mime).toBe("image/png");
   });
 
   it("keeps explicit-model image describe URL files as remote media references", async () => {
