@@ -2,6 +2,7 @@ import {
   completionRequiresMessageToolDelivery,
   resolveCompletionChatType,
 } from "../auto-reply/reply/completion-delivery-policy.js";
+import { routeFromConversationRef, routeToDeliveryFields } from "../channels/route-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
@@ -10,11 +11,7 @@ import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import {
-  mergeDeliveryContext,
-  normalizeDeliveryContext,
-  resolveConversationDeliveryTarget,
-} from "../utils/delivery-context.js";
+import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -160,11 +157,7 @@ function resolveBoundConversationOrigin(params: {
     };
   }
 
-  const boundTarget = resolveConversationDeliveryTarget({
-    channel: conversation.channel,
-    conversationId,
-    parentConversationId,
-  });
+  const boundTarget = routeToDeliveryFields(routeFromConversationRef(conversation));
   const inferredThreadId =
     boundTarget.threadId ??
     (parentConversationId && parentConversationId !== conversationId

@@ -1214,6 +1214,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           systemSent: entry?.systemSent,
           sendPolicy: entry?.sendPolicy,
           skillsSnapshot: entry?.skillsSnapshot,
+          route: effectiveDeliveryFields.route,
           deliveryContext: effectiveDeliveryFields.deliveryContext,
           lastChannel: effectiveDeliveryFields.lastChannel ?? entry?.lastChannel,
           lastTo: effectiveDeliveryFields.lastTo ?? entry?.lastTo,
