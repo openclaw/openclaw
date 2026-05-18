@@ -39,6 +39,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Codex app-server: hydrate current inbound image attachments before queued runs so Responses-backed agents receive Discord and other channel images as native vision input. Fixes #83466. Thanks @iannwu.
+- Release stability: recover stale session diagnostics and Codex OAuth fallback state so stuck runs and reused refresh tokens clear without blocking follow-up work. (#83503) Thanks @100yenadmin.
 - Codex app-server: preserve network access for sandboxed Codex code-mode turns when the OpenClaw sandbox allows outbound egress. Fixes #83347. Thanks @YusukeIt0.
 - QA-Lab: keep the OTLP smoke decoder independent of removed OpenTelemetry generated-root internals.
 - Messages: default group/channel visible replies to automatic final delivery again, keeping `message_tool` opt-in for ambient/shared rooms and tool-reliable models.
