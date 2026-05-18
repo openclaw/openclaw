@@ -73,7 +73,7 @@ jobs:
           ls -la "$tgz"
       - name: Write build metadata
         run: |
-          node -e "const fs=require("fs"); const pkg=require("./package.json"); fs.writeFileSync("build-metadata.json", JSON.stringify({name:pkg.name, version:pkg.version, sha:process.env.GITHUB_SHA, node:process.version, node_options:process.env.NODE_OPTIONS, pnpm:process.env.PNPM_VERSION}, null, 2));"
+          node -e "const fs=require(\"fs\"); const pkg=require(\"./package.json\"); fs.writeFileSync(\"build-metadata.json\", JSON.stringify({name:pkg.name, version:pkg.version, sha:process.env.GITHUB_SHA, node:process.version, node_options:process.env.NODE_OPTIONS, pnpm:process.env.PNPM_VERSION}, null, 2));"
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
