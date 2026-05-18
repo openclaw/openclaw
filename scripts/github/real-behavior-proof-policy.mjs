@@ -3,6 +3,7 @@ export const PROOF_SUPPLIED_LABEL = "proof: supplied";
 export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";
 export const NEEDS_REAL_BEHAVIOR_PROOF_LABEL = "triage: needs-real-behavior-proof";
 export const MOCK_ONLY_PROOF_LABEL = "triage: mock-only-proof";
+export const MAINTAINER_AUTHOR_LABEL = "maintainer";
 
 const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
@@ -94,7 +95,7 @@ function isAutomationUser(user = {}, fallbackLogin = "") {
   return user?.type === "Bot" || /\[bot\]$/i.test(login) || login.startsWith("app/");
 }
 
-export function isExternalPullRequest(pullRequest) {
+export function isExternalPullRequest(pullRequest, labels) {
   if (!pullRequest) {
     return false;
   }
@@ -104,11 +105,24 @@ export function isExternalPullRequest(pullRequest) {
   const authorAssociation = String(
     pullRequest.author_association ?? pullRequest.authorAssociation ?? "",
   ).toUpperCase();
-  return !privilegedAuthorAssociations.has(authorAssociation);
+  if (privilegedAuthorAssociations.has(authorAssociation)) {
+    return false;
+  }
+  // Private org membership reports as CONTRIBUTOR in author_association. The
+  // labeler workflow applies "maintainer" via the team-membership API, which
+  // sees private members, so trust that label as an equivalent privileged signal.
+  if (hasMaintainerAuthorLabel(labels ?? pullRequest.labels)) {
+    return false;
+  }
+  return true;
 }
 
 export function hasProofOverride(labels) {
   return labelNames(labels).has(PROOF_OVERRIDE_LABEL);
+}
+
+export function hasMaintainerAuthorLabel(labels) {
+  return labelNames(labels).has(MAINTAINER_AUTHOR_LABEL);
 }
 
 export function extractRealBehaviorProofSection(body = "") {
@@ -211,7 +225,7 @@ export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
   if (hasProofOverride(currentLabels)) {
     return result("override", `Maintainer override label ${PROOF_OVERRIDE_LABEL} is present.`);
   }
-  if (!isExternalPullRequest(pullRequest)) {
+  if (!isExternalPullRequest(pullRequest, currentLabels)) {
     return result("skipped", "Maintainer, collaborator, or bot PRs do not require this gate.");
   }
 
