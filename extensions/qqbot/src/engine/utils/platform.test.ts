@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  getQQBotMediaPath,
   getHomeDir,
   resolveQQBotLocalMediaPath,
   resolveQQBotPayloadLocalFilePath,
@@ -39,9 +40,25 @@ describe("qqbot local media path remapping", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     for (const target of createdPaths.splice(0)) {
       fs.rmSync(target, { recursive: true, force: true });
     }
+  });
+
+  it("resolves QQ Bot media storage under OPENCLAW_HOME when configured", () => {
+    const hostHome = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-platform-home-"));
+    const openclawHome = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-platform-openclaw-home-"));
+    createdPaths.push(hostHome, openclawHome);
+    vi.stubEnv("HOME", hostHome);
+    vi.stubEnv("OPENCLAW_HOME", openclawHome);
+
+    const mediaFile = path.join(openclawHome, ".openclaw", "media", "qqbot", "image.png");
+    fs.mkdirSync(path.dirname(mediaFile), { recursive: true });
+    fs.writeFileSync(mediaFile, "image", "utf8");
+
+    expect(getQQBotMediaPath("image.png")).toBe(mediaFile);
+    expect(resolveQQBotPayloadLocalFilePath(mediaFile)).toBe(fs.realpathSync(mediaFile));
   });
 
   it("remaps missing workspace media paths to the real media directory", () => {
