@@ -20,6 +20,7 @@ type RenderEnv = {
 type MarkdownToken = {
   type: string;
   content?: string;
+  info?: string;
   children?: MarkdownToken[];
   attrs?: [string, string][];
   attrGet?: (name: string) => string | null;
@@ -40,6 +41,7 @@ export type MarkdownStyleSpan = {
   start: number;
   end: number;
   style: MarkdownStyle;
+  language?: string;
 };
 
 export type MarkdownLinkSpan = {
@@ -325,7 +327,12 @@ function renderInlineCode(state: RenderState, content: string) {
   target.styles.push({ start, end: start + content.length, style: "code" });
 }
 
-function renderCodeBlock(state: RenderState, content: string) {
+function extractFenceLanguage(token: MarkdownToken): string | undefined {
+  const language = (token.info ?? "").trim().split(/\s+/, 1)[0]?.trim();
+  return language ? language : undefined;
+}
+
+function renderCodeBlock(state: RenderState, content: string, language?: string) {
   let code = content ?? "";
   if (!code.endsWith("\n")) {
     code = `${code}\n`;
@@ -333,7 +340,12 @@ function renderCodeBlock(state: RenderState, content: string) {
   const target = resolveRenderTarget(state);
   const start = target.text.length;
   target.text += code;
-  target.styles.push({ start, end: start + code.length, style: "code_block" });
+  target.styles.push({
+    start,
+    end: start + code.length,
+    style: "code_block",
+    ...(language ? { language } : {}),
+  });
   if (state.env.listStack.length === 0) {
     target.text += "\n";
   }
@@ -731,8 +743,10 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         }
         break;
       case "code_block":
-      case "fence":
         renderCodeBlock(state, token.content ?? "");
+        break;
+      case "fence":
+        renderCodeBlock(state, token.content ?? "", extractFenceLanguage(token));
         break;
       case "html_block":
       case "html_inline":
@@ -834,7 +848,12 @@ function clampStyleSpans(spans: MarkdownStyleSpan[], maxLength: number): Markdow
     const start = Math.max(0, Math.min(span.start, maxLength));
     const end = Math.max(start, Math.min(span.end, maxLength));
     if (end > start) {
-      clamped.push({ start, end, style: span.style });
+      clamped.push({
+        start,
+        end,
+        style: span.style,
+        ...(span.language ? { language: span.language } : {}),
+      });
     }
   }
   return clamped;
@@ -869,6 +888,7 @@ function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
     if (
       prev &&
       prev.style === span.style &&
+      prev.language === span.language &&
       // Blockquotes are container blocks. Adjacent blockquote spans should not merge or
       // consecutive blockquotes can "style bleed" across the paragraph boundary.
       (span.start < prev.end || (span.start === prev.end && span.style !== "blockquote"))
@@ -912,6 +932,7 @@ function sliceStyleSpans(
       start: bounds.start - start,
       end: bounds.end - start,
       style: span.style,
+      ...(span.language ? { language: span.language } : {}),
     });
   }
   return mergeStyleSpans(sliced);
