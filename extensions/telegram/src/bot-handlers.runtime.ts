@@ -201,6 +201,9 @@ export const registerTelegramHandlers = ({
       telegramDeps.resolveStorePath(cfg.session?.store),
     ),
   });
+  const conversationContextEnabled = telegramCfg.conversationContext ?? true;
+  const defaultGroupRecentLimit = Math.max(0, telegramCfg.groupRecentLimit ?? 10);
+  const defaultDmRecentLimit = Math.max(0, telegramCfg.dmRecentLimit ?? 10);
 
   type TextFragmentEntry = {
     key: string;
@@ -937,6 +940,10 @@ export const registerTelegramHandlers = ({
     replyChainNodes: TelegramCachedMessageNode[],
     options?: TelegramMessageContextOptions,
   ): TelegramPromptContextEntry[] => {
+    if (!conversationContextEnabled) {
+      return [];
+    }
+    const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const messageId = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
     const currentNode = messageCache.get({
       accountId,
@@ -944,6 +951,24 @@ export const registerTelegramHandlers = ({
       messageId,
     });
     const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
+    const groupConfig = isGroup
+      ? (telegramCfg.groups?.[String(msg.chat.id)] ?? telegramCfg.groups?.["*"])
+      : undefined;
+    const topicConfig =
+      groupConfig && Number.isFinite(threadId) ? groupConfig.topics?.[String(threadId)] : undefined;
+    const directConfig = !isGroup
+      ? (telegramCfg.direct?.[String(msg.chat.id)] ?? telegramCfg.direct?.["*"])
+      : undefined;
+    const directTopicConfig =
+      directConfig && Number.isFinite(threadId)
+        ? directConfig.topics?.[String(threadId)]
+        : undefined;
+    const recentLimit = Math.max(
+      0,
+      isGroup
+        ? (topicConfig?.recentLimit ?? groupConfig?.recentLimit ?? defaultGroupRecentLimit)
+        : (directTopicConfig?.recentLimit ?? directConfig?.recentLimit ?? defaultDmRecentLimit),
+    );
     const conversationContext = buildTelegramConversationContext({
       cache: messageCache,
       messageId,
@@ -951,7 +976,7 @@ export const registerTelegramHandlers = ({
       chatId: msg.chat.id,
       ...(Number.isFinite(threadId) ? { threadId } : {}),
       replyChainNodes,
-      recentLimit: 10,
+      recentLimit,
       replyTargetWindowSize: 2,
       ...(options?.promptContextMinTimestampMs !== undefined
         ? { minTimestampMs: options.promptContextMinTimestampMs }
@@ -1024,14 +1049,20 @@ export const registerTelegramHandlers = ({
     storeAllowFrom: string[],
     options?: TelegramMessageContextOptions,
   ) => {
-    const replyChainNodes = buildReplyChainForMessage(msg);
-    const { replyMedia, replyChain } = await resolveReplyMediaForChain(ctx, replyChainNodes);
-    const promptContext = buildPromptContextForMessage(msg, replyChainNodes, options);
+    const replyChainNodes = conversationContextEnabled ? buildReplyChainForMessage(msg) : [];
+    const { replyMedia, replyChain } = conversationContextEnabled
+      ? await resolveReplyMediaForChain(ctx, replyChainNodes)
+      : { replyMedia: [], replyChain: [] };
+    const messageOptions: TelegramMessageContextOptions = {
+      ...options,
+      includeConversationContext: conversationContextEnabled,
+    };
+    const promptContext = buildPromptContextForMessage(msg, replyChainNodes, messageOptions);
     await processMessage(
       ctx,
       allMedia,
       storeAllowFrom,
-      options,
+      messageOptions,
       replyMedia,
       replyChain,
       promptContext,

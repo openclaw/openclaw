@@ -139,6 +139,12 @@ export type TelegramAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
   contextVisibility?: ContextVisibilityMode;
+  /** Include Telegram observed conversation context in model prompts. Default: true. */
+  conversationContext?: boolean;
+  /** Default max recent observed group messages to include in conversation context (0 disables). */
+  groupRecentLimit?: number;
+  /** Default max recent observed DM messages to include in conversation context (0 disables). Default: 0. */
+  dmRecentLimit?: number;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
@@ -233,6 +239,8 @@ export type TelegramTopicConfig = {
   requireMention?: boolean;
   /** Emit internal message hooks for mention-skipped topic messages. */
   ingest?: boolean;
+  /** Max recent observed group messages to include in conversation context for this topic (0 disables). */
+  recentLimit?: number;
   /** Per-topic override for group message policy (open|disabled|allowlist). */
   groupPolicy?: GroupPolicy;
   /** If specified, only load these skills for this topic. Omit = all skills; empty = no skills. */
@@ -257,6 +265,8 @@ export type TelegramGroupConfig = {
   requireMention?: boolean;
   /** Emit internal message hooks for mention-skipped group messages. */
   ingest?: boolean;
+  /** Max recent observed group messages to include in conversation context for this group (0 disables). */
+  recentLimit?: number;
   /** Per-group override for group message policy (open|disabled|allowlist). */
   groupPolicy?: GroupPolicy;
   /** Optional tool policy overrides for this group. */
@@ -294,6 +304,8 @@ export type TelegramDirectConfig = {
   dmPolicy?: DmPolicy;
   /** Controls whether Telegram DM message_thread_id values split sessions. Default: off unless topic config requires it. */
   threadReplies?: "off" | "inbound" | "always";
+  /** Max recent observed DM messages to include in conversation context for this DM (0 disables). */
+  recentLimit?: number;
   /** Optional tool policy overrides for this DM. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;

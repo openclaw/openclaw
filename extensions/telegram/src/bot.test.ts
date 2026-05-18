@@ -1773,6 +1773,247 @@ describe("createTelegramBot", () => {
     expect(messagesById.get("201")?.body).toBe("After the incident review.");
   });
 
+  it("omits the recent observed conversation window when groupRecentLimit is zero", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groupRecentLimit: 0,
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "Lunch after standup?",
+        date: 1736380800,
+        message_id: 200,
+        from: { id: 201, is_bot: false, first_name: "Sam" },
+      },
+    });
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "After the incident review.",
+        date: 1736380860,
+        message_id: 201,
+        from: { id: 202, is_bot: false, first_name: "Riley" },
+      },
+    });
+
+    replySpy.mockClear();
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "@openclaw_bot thoughts?",
+        date: 1736380920,
+        message_id: 202,
+        from: { id: 203, is_bot: false, first_name: "Avery" },
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.UntrustedStructuredContext).toBeUndefined();
+  });
+
+  it("omits all Telegram conversation context when conversationContext is false", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          conversationContext: false,
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "Earlier deployment answer",
+        date: 1736380200,
+        message_id: 100,
+        from: { id: 777, is_bot: true, first_name: "Assistant" },
+      },
+    });
+
+    replySpy.mockClear();
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "@openclaw_bot thoughts?",
+        date: 1736380920,
+        message_id: 202,
+        from: { id: 203, is_bot: false, first_name: "Avery" },
+        reply_to_message: {
+          chat: { id: 42, type: "group", title: "Ops" },
+          text: "Earlier deployment answer",
+          date: 1736380200,
+          message_id: 100,
+          from: { id: 777, is_bot: true, first_name: "Assistant" },
+        },
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.Body).not.toContain("Reply chain");
+    expect(payload.ReplyChain).toBeUndefined();
+    expect(payload.UntrustedStructuredContext).toBeUndefined();
+  });
+
+  it("does not add the recent observed conversation window for DMs by default", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    for (const message of [
+      { text: "previous private message", message_id: 300, date: 1736380800 },
+      { text: "another private message", message_id: 301, date: 1736380860 },
+    ]) {
+      await handler({
+        ...baseCtx,
+        message: {
+          chat: { id: 7, type: "private" },
+          ...message,
+          from: { id: 7, is_bot: false, first_name: "Ada" },
+        },
+      });
+    }
+
+    replySpy.mockClear();
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "current private message",
+        date: 1736380920,
+        message_id: 302,
+        from: { id: 7, is_bot: false, first_name: "Ada" },
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.UntrustedStructuredContext).toBeUndefined();
+  });
+
+  it("adds the recent observed conversation window for DMs when dmRecentLimit is set", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          dmRecentLimit: 10,
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    for (const message of [
+      { text: "previous private message", message_id: 300, date: 1736380800 },
+      { text: "another private message", message_id: 301, date: 1736380860 },
+    ]) {
+      await handler({
+        ...baseCtx,
+        message: {
+          chat: { id: 7, type: "private" },
+          ...message,
+          from: { id: 7, is_bot: false, first_name: "Ada" },
+        },
+      });
+    }
+
+    replySpy.mockClear();
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "current private message",
+        date: 1736380920,
+        message_id: 302,
+        from: { id: 7, is_bot: false, first_name: "Ada" },
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const [conversationContext] = requireArray(
+      payload.UntrustedStructuredContext,
+      "structured context",
+    );
+    const contextPayload = requireRecord(
+      requireRecord(conversationContext, "conversation context").payload,
+      "conversation context payload",
+    );
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+    );
+    expect(messages.map((message) => message.message_id)).toEqual(["300", "301"]);
+  });
+
   it("updates cached bot messages from Telegram edit updates", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

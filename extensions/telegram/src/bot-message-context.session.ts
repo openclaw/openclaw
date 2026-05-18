@@ -238,8 +238,9 @@ export async function buildTelegramInboundContextPayload(params: {
     topicName,
     sessionRuntime: sessionRuntimeOverride,
   } = params;
-  const replyTarget = describeReplyTarget(msg);
-  const forwardOrigin = normalizeForwardedContext(msg);
+  const includeConversationContext = options?.includeConversationContext ?? true;
+  const replyTarget = includeConversationContext ? describeReplyTarget(msg) : null;
+  const forwardOrigin = includeConversationContext ? normalizeForwardedContext(msg) : null;
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
     channel: "telegram",

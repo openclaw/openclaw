@@ -138,6 +138,7 @@ export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
     ingest: z.boolean().optional(),
+    recentLimit: z.number().int().min(0).optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     skills: z.array(z.string()).optional(),
@@ -154,6 +155,7 @@ export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
     ingest: z.boolean().optional(),
+    recentLimit: z.number().int().min(0).optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     tools: ToolPolicySchema,
@@ -192,6 +194,7 @@ export const TelegramDirectSchema = z
   .object({
     dmPolicy: DmPolicySchema.optional(),
     threadReplies: z.enum(["off", "inbound", "always"]).optional(),
+    recentLimit: z.number().int().min(0).optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
@@ -265,6 +268,9 @@ export const TelegramAccountSchemaBase = z
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     contextVisibility: ContextVisibilityModeSchema.optional(),
+    conversationContext: z.boolean().optional(),
+    groupRecentLimit: z.number().int().min(0).optional(),
+    dmRecentLimit: z.number().int().min(0).optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),

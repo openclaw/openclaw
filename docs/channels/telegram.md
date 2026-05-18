@@ -611,7 +611,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - message sends omit `message_thread_id` (Telegram rejects `sendMessage(...thread_id=1)`)
     - typing actions still include `message_thread_id`
 
-    Topic inheritance: topic entries inherit group settings unless overridden (`requireMention`, `allowFrom`, `skills`, `systemPrompt`, `enabled`, `groupPolicy`).
+    Topic inheritance: topic entries inherit group settings unless overridden (`requireMention`, `allowFrom`, `skills`, `systemPrompt`, `enabled`, `groupPolicy`, `recentLimit`).
     `agentId` is topic-only and does not inherit from group defaults.
 
     **Per-topic agent routing**: Each topic can route to a different agent by setting `agentId` in the topic config. This gives each topic its own isolated workspace, memory, and session. Example:
@@ -828,7 +828,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `channels.telegram.timeoutSeconds` overrides Telegram API client timeout (if unset, grammY default applies). Bot clients clamp configured values below the 60-second outbound text/typing request guard so grammY does not abort visible reply delivery before OpenClaw's transport guard and fallback can run. Long polling still uses a 45-second `getUpdates` request guard so idle polls are not abandoned indefinitely.
     - `channels.telegram.pollingStallThresholdMs` defaults to `120000`; tune between `30000` and `600000` only for false-positive polling-stall restarts.
     - group context history uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables.
-    - reply/quote/forward supplemental context is normalized into one selected conversation context window when the gateway has observed the parent messages; the observed-message cache is persisted beside the session store. Telegram only includes one shallow `reply_to_message` in updates, so chains older than the cache are limited to Telegram's current update payload.
+    - group recent conversation context uses `channels.telegram.groups["<chat_id>"].recentLimit` or `channels.telegram.groups["*"].recentLimit`, falling back to `channels.telegram.groupRecentLimit` (default 10); `0` disables this recent-message window.
+    - DM recent conversation context uses `channels.telegram.direct["<user_id>"].recentLimit` or `channels.telegram.direct["*"].recentLimit`, falling back to `channels.telegram.dmRecentLimit` (default 0).
+    - set `channels.telegram.conversationContext=false` to remove the selected `Conversation context` block entirely, including reply/quote/forward supplemental context. Otherwise, reply/quote/forward supplemental context is normalized into one selected conversation context window when the gateway has observed the parent messages. Telegram only includes one shallow `reply_to_message` in updates, so chains older than the cache are limited to Telegram's current update payload.
     - Telegram allowlists primarily gate who can trigger the agent, not a full supplemental-context redaction boundary.
     - DM history controls:
       - `channels.telegram.dmHistoryLimit`
@@ -1053,7 +1055,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`
 - reactions: `reactionNotifications`, `reactionLevel`
 - errors: `errorPolicy`, `errorCooldownMs`
-- writes/history: `configWrites`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
+- writes/history: `configWrites`, `conversationContext`, `groupRecentLimit`, `dmRecentLimit`, `groups.*.recentLimit`, `groups.*.topics.*.recentLimit`, `direct.*.recentLimit`, `direct.*.topics.*.recentLimit`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 
 </Accordion>
 

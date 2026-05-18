@@ -40,16 +40,52 @@ describe("telegram custom commands schema", () => {
     }
   });
 
-  it("accepts historyLimit overrides per account", () => {
+  it("accepts conversation context limits per account, group, and DM", () => {
     const res = TelegramConfigSchema.safeParse({
+      conversationContext: false,
+      groupRecentLimit: 0,
+      dmRecentLimit: 2,
       historyLimit: 8,
-      accounts: { ops: { historyLimit: 3 } },
+      groups: {
+        "*": {
+          recentLimit: 4,
+          topics: { "1": { recentLimit: 5 } },
+        },
+      },
+      direct: {
+        "7": {
+          recentLimit: 6,
+          topics: { "3": { recentLimit: 7 } },
+        },
+      },
+      accounts: {
+        ops: {
+          conversationContext: false,
+          groupRecentLimit: 2,
+          dmRecentLimit: 9,
+          historyLimit: 3,
+          groups: { "-100123": { recentLimit: 1 } },
+          direct: { "8": { recentLimit: 10 } },
+        },
+      },
     });
 
     expect(res.success).toBe(true);
     if (res.success) {
+      expect(res.data.conversationContext).toBe(false);
+      expect(res.data.groupRecentLimit).toBe(0);
+      expect(res.data.dmRecentLimit).toBe(2);
       expect(res.data.historyLimit).toBe(8);
+      expect(res.data.groups?.["*"]?.recentLimit).toBe(4);
+      expect(res.data.groups?.["*"]?.topics?.["1"]?.recentLimit).toBe(5);
+      expect(res.data.direct?.["7"]?.recentLimit).toBe(6);
+      expect(res.data.direct?.["7"]?.topics?.["3"]?.recentLimit).toBe(7);
+      expect(res.data.accounts?.ops?.conversationContext).toBe(false);
+      expect(res.data.accounts?.ops?.groupRecentLimit).toBe(2);
+      expect(res.data.accounts?.ops?.dmRecentLimit).toBe(9);
       expect(res.data.accounts?.ops?.historyLimit).toBe(3);
+      expect(res.data.accounts?.ops?.groups?.["-100123"]?.recentLimit).toBe(1);
+      expect(res.data.accounts?.ops?.direct?.["8"]?.recentLimit).toBe(10);
     }
   });
 

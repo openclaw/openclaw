@@ -29,6 +29,34 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Config Writes",
     help: "Allow Telegram to write config in response to channel events/commands (default: true).",
   },
+  conversationContext: {
+    label: "Telegram Conversation Context",
+    help: "Include observed Telegram conversation context in model prompts (default: true). Set false to remove the Conversation context block entirely.",
+  },
+  groupRecentLimit: {
+    label: "Telegram Group Recent Context Limit",
+    help: "Default recent observed Telegram group messages to include in selected conversation context (default: 10). Set 0 to disable this recent-message window for groups.",
+  },
+  dmRecentLimit: {
+    label: "Telegram DM Recent Context Limit",
+    help: "Default recent observed Telegram DM messages to include in selected conversation context (default: 0).",
+  },
+  "groups.*.recentLimit": {
+    label: "Telegram Group Recent Context Limit",
+    help: "Recent observed Telegram group messages to include for this group. Overrides channels.telegram.groupRecentLimit; set 0 to disable.",
+  },
+  "groups.*.topics.*.recentLimit": {
+    label: "Telegram Topic Recent Context Limit",
+    help: "Recent observed Telegram group messages to include for this topic. Overrides the group recentLimit; set 0 to disable.",
+  },
+  "direct.*.recentLimit": {
+    label: "Telegram DM Recent Context Limit",
+    help: "Recent observed Telegram DM messages to include for this DM. Overrides channels.telegram.dmRecentLimit; set 0 to disable.",
+  },
+  "direct.*.topics.*.recentLimit": {
+    label: "Telegram DM Topic Recent Context Limit",
+    help: "Recent observed Telegram DM topic messages to include for this topic. Overrides the DM recentLimit; set 0 to disable.",
+  },
   "commands.native": {
     label: "Telegram Native Commands",
     help: 'Override native commands for Telegram (bool or "auto").',
