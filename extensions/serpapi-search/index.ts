@@ -41,6 +41,7 @@ export default definePluginEntry({
     api.registerTool((ctx) => createSerpApiShoppingTool(api, ctx), { name: "serpapi_shopping" });
     api.registerTool((ctx) => createSerpApiAiOverviewTool(api, ctx), { name: "serpapi_ai_overview" });
     api.registerTool((ctx) => createSerpApiAmazonTool(api, ctx), { name: "serpapi_amazon" });
+    api.registerTool((ctx) => createSerpApiAmazonProductTool(api, ctx), { name: "serpapi_amazon_product" });
     api.registerTool((ctx) => createSerpApiBingTool(api, ctx), { name: "serpapi_bing" });
     api.registerTool((ctx) => createSerpApiDuckDuckGoTool(api, ctx), { name: "serpapi_duckduckgo" });
     api.registerTool((ctx) => createSerpApiImmersiveProductTool(api, ctx), { name: "serpapi_immersive_product" });

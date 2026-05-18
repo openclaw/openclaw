@@ -40,6 +40,7 @@
       "serpapi_shopping",
       "serpapi_ai_overview",
       "serpapi_amazon",
+      "serpapi_amazon_product",
       "serpapi_bing",
       "serpapi_duckduckgo",
       "serpapi_immersive_product",
