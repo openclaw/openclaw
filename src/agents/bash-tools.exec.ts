@@ -1290,8 +1290,29 @@ function expandExecPathToken(token: string): string[] {
 }
 
 function extractEmbeddedExecPathTokens(token: string): string[] {
-  const matches = token.match(/(?:~\/|\.{1,2}[\\/]|\/)[^\s"'`;&|<>)]*/gu) ?? [];
+  const matches =
+    token.match(/(?:\$\{HOME\}[\\/]|\$HOME[\\/]|~[\\/]|\.{1,2}[\\/]|\/)[^\s"'`;&|<>)]*/gu) ?? [];
   return matches.filter((match) => match !== "/" && match !== "./" && match !== "../");
+}
+
+function resolveHomePrefixedExecPathCandidate(
+  value: string,
+  env: NodeJS.ProcessEnv,
+  pathOps: ExecPathOps,
+): string | null {
+  const home = normalizeOptionalString(env.HOME);
+  if (!home) {
+    return null;
+  }
+  if (value === "~" || value === "$HOME" || value === "${HOME}") {
+    return pathOps.resolve(home);
+  }
+  for (const prefix of ["~/", "~\\", "$HOME/", "$HOME\\", "${HOME}/", "${HOME}\\"]) {
+    if (value.startsWith(prefix)) {
+      return pathOps.resolve(home, value.slice(prefix.length));
+    }
+  }
+  return null;
 }
 
 function resolveExecPathCandidate(params: {
@@ -1308,12 +1329,9 @@ function resolveExecPathCandidate(params: {
   if (pathOps.isAbsolute(value)) {
     return pathOps.resolve(value);
   }
-  if (value === "~" || value.startsWith("~/")) {
-    const home = normalizeOptionalString(params.env.HOME);
-    if (!home) {
-      return null;
-    }
-    return pathOps.resolve(home, value.slice(2));
+  const homeCandidate = resolveHomePrefixedExecPathCandidate(value, params.env, pathOps);
+  if (homeCandidate) {
+    return homeCandidate;
   }
   if (/^\.{1,2}(?:[\\/]|$)/u.test(value) || value.includes("/") || value.includes("\\")) {
     return pathOps.resolve(params.workdir ?? process.cwd(), value);

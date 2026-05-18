@@ -376,6 +376,62 @@ describe("exec host env validation", () => {
     }
   });
 
+  it("blocks HOME-prefixed command paths against home-relative denied path patterns", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-denied-env-home-"));
+    const originalHome = process.env.HOME;
+    process.env.HOME = homeDir;
+    const deniedFile = path.join(homeDir, ".openclaw", "credentials", "provider.key");
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      deniedPaths: ["~/.openclaw/credentials/**"],
+    });
+
+    try {
+      await expect(
+        tool.execute("call-denied-env-home-path", {
+          command: 'cat "$HOME/.openclaw/credentials/provider.key"',
+        }),
+      ).rejects.toThrow(`Security Violation: exec command references denied path ${deniedFile}`);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks braced HOME-prefixed command paths inside shell wrapper payloads", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-denied-braced-home-"));
+    const originalHome = process.env.HOME;
+    process.env.HOME = homeDir;
+    const deniedFile = path.join(homeDir, ".openclaw", "credentials", "provider.key");
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      deniedPaths: ["~/.openclaw/credentials/**"],
+    });
+
+    try {
+      await expect(
+        tool.execute("call-denied-braced-home-path", {
+          command: `bash -lc 'cat "\${HOME}/.openclaw/credentials/provider.key"'`,
+        }),
+      ).rejects.toThrow(`Security Violation: exec command references denied path ${deniedFile}`);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
