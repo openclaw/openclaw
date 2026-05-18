@@ -518,7 +518,7 @@ export async function sanitizeToolResultImages(
   return { ...result, content: next };
 }
 
-export const __testing = {
+export const testing = {
   resetResizeCache(): void {
     resizeCache.clear();
     resizeCacheTotalBytes = 0;
@@ -553,3 +553,4 @@ export const __testing = {
   // same stats with a colliding key.
   computeResizeCacheKey,
 };
+export { testing as __testing };
