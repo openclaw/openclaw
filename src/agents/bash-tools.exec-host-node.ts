@@ -36,6 +36,31 @@ export type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.t
 
 const APPROVED_NODE_INVOKE_SCOPES = [WRITE_SCOPE, APPROVALS_SCOPE];
 
+function findHomeRelativeDeniedPathPattern(entries: string[] | undefined): string | null {
+  for (const entry of entries ?? []) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const rawRoot =
+      trimmed.endsWith("/**") || trimmed.endsWith("\\**") ? trimmed.slice(0, -3) : trimmed;
+    if (rawRoot === "~" || rawRoot.startsWith("~/") || rawRoot.startsWith("~\\")) {
+      return rawRoot;
+    }
+  }
+  return null;
+}
+
+function assertNodeDeniedPathsHaveTrustedHome(entries: string[] | undefined): void {
+  const pattern = findHomeRelativeDeniedPathPattern(entries);
+  if (!pattern) {
+    return;
+  }
+  throw new Error(
+    `Security Violation: exec host=node denied path pattern ${pattern} requires a trusted node HOME to resolve.`,
+  );
+}
+
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
 ): Promise<AgentToolResult<ExecToolDetails>> {
@@ -46,12 +71,12 @@ export async function executeNodeHostCommand(
     host: "node",
   });
   const target = await resolveNodeExecutionTarget(params);
+  assertNodeDeniedPathsHaveTrustedHome(params.deniedPaths);
   assertExecDeniedPaths({
     deniedPaths: params.deniedPaths,
     command: params.command,
     workdir: params.workdir,
     env: target.env ?? {},
-    patternEnv: params.env,
     namespace: resolveExecDeniedPathNamespaceForNode(target.platform),
   });
   if (

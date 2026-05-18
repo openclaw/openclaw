@@ -458,7 +458,7 @@ describe("executeNodeHostCommand", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it("keeps config-loaded home-relative denied paths in the Windows node HOME namespace", async () => {
+  it("rejects config-loaded home-relative denied paths for Windows node without trusted HOME", async () => {
     const config = normalizeConfigPaths({
       tools: {
         exec: {
@@ -490,12 +490,12 @@ describe("executeNodeHostCommand", () => {
         deniedPaths: config.tools?.exec?.deniedPaths,
       }),
     ).rejects.toThrow(
-      "Security Violation: exec command references denied path C:\\Users\\agent\\.openclaw\\credentials\\provider.key",
+      "Security Violation: exec host=node denied path pattern ~/.openclaw/credentials requires a trusted node HOME to resolve.",
     );
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it("blocks Windows node home denied paths when requested env overrides HOME", async () => {
+  it("rejects Windows node home denied paths before trusting requested HOME", async () => {
     const config = normalizeConfigPaths({
       tools: {
         exec: {
@@ -527,7 +527,7 @@ describe("executeNodeHostCommand", () => {
         deniedPaths: config.tools?.exec?.deniedPaths,
       }),
     ).rejects.toThrow(
-      "Security Violation: exec command references denied path C:\\Users\\agent\\.openclaw\\credentials\\provider.key",
+      "Security Violation: exec host=node denied path pattern ~/.openclaw/credentials requires a trusted node HOME to resolve.",
     );
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });

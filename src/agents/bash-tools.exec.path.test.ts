@@ -14,6 +14,11 @@ const shellEnvMocks = vi.hoisted(() => ({
   getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
 }));
+const nodeMocks = vi.hoisted(() => ({
+  callGatewayTool: vi.fn(),
+  listNodes: vi.fn(),
+  resolveNodeIdFromList: vi.fn(() => "node-1"),
+}));
 
 vi.mock("../infra/shell-env.js", async () => {
   const mod =
@@ -31,6 +36,15 @@ vi.mock("../infra/exec-approvals.js", async () => {
   );
   return { ...mod, resolveExecApprovals: () => createExecApprovals() };
 });
+
+vi.mock("./tools/gateway.js", () => ({
+  callGatewayTool: nodeMocks.callGatewayTool,
+}));
+
+vi.mock("./tools/nodes-utils.js", () => ({
+  listNodes: nodeMocks.listNodes,
+  resolveNodeIdFromList: nodeMocks.resolveNodeIdFromList,
+}));
 
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
@@ -436,6 +450,50 @@ describe("exec host env validation", () => {
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
+  });
+
+  it("rejects host=node home-relative denied paths without a trusted node HOME", async () => {
+    const config = normalizeConfigPaths({
+      tools: {
+        exec: {
+          deniedPaths: ["~/.openclaw/credentials/**"],
+        },
+      },
+    });
+    nodeMocks.listNodes.mockReset();
+    nodeMocks.listNodes.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+        platform: "win32",
+      },
+    ]);
+    nodeMocks.resolveNodeIdFromList.mockClear();
+    nodeMocks.callGatewayTool.mockReset();
+    nodeMocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        success: true,
+        stdout: "should-not-run",
+        stderr: "",
+        exitCode: 0,
+      },
+    });
+    const tool = createExecTool({
+      host: "node",
+      security: "full",
+      ask: "off",
+      deniedPaths: config.tools?.exec?.deniedPaths,
+    });
+
+    await expect(
+      tool.execute("call-denied-node-home-path", {
+        command: "type C:\\Users\\agent\\.openclaw\\credentials\\provider.key",
+        workdir: "C:\\Work",
+      }),
+    ).rejects.toThrow(
+      "Security Violation: exec host=node denied path pattern ~/.openclaw/credentials requires a trusted node HOME to resolve.",
+    );
+    expect(nodeMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("blocks home-relative denied path patterns against the resolved home directory", async () => {
