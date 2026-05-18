@@ -595,30 +595,37 @@ describe("install.sh duplicate OpenClaw install detection", () => {
     expect(result.stdout).toContain("npm uninstall -g openclaw");
   });
 
-  it("skips install_homebrew when check_node already passes (#83232)", () => {
+  it("skips install_homebrew when check_node and check_git already pass (#83232)", () => {
     // Real-behavior probe: stub the three step functions, call the exact main()
-    // block, and confirm install_homebrew is NOT called when an existing Node
-    // satisfies the version check (the #83232 scenario).
+    // block, and confirm install_homebrew is NOT called when existing Node and
+    // Git satisfy the checks (the #83232 scenario).
     const result = runInstallShell(
       [
         "set -euo pipefail",
         'CALL_ORDER=""',
-        "install_homebrew() { CALL_ORDER=\"$CALL_ORDER install_homebrew\"; }",
+        'install_homebrew() { CALL_ORDER="$CALL_ORDER install_homebrew"; }',
         'load_nvm_for_node_detection() { CALL_ORDER="$CALL_ORDER load_nvm"; }',
-        "install_node() { CALL_ORDER=\"$CALL_ORDER install_node\"; }",
-        "check_node() { CALL_ORDER=\"$CALL_ORDER check_node_PASS\"; return 0; }",
+        'install_node() { CALL_ORDER="$CALL_ORDER install_node"; }',
+        'install_git() { CALL_ORDER="$CALL_ORDER install_git"; }',
+        'check_node() { CALL_ORDER="$CALL_ORDER check_node_PASS"; return 0; }',
+        'check_git() { CALL_ORDER="$CALL_ORDER check_git_PASS"; return 0; }',
         "load_nvm_for_node_detection",
         "if ! check_node; then",
         "    install_homebrew",
         "    install_node",
         "fi",
+        "if ! check_git; then",
+        "    install_homebrew",
+        "    install_git",
+        "fi",
         'printf "ORDER:%s\\n" "$CALL_ORDER"',
       ].join("\n"),
     );
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("ORDER: load_nvm check_node_PASS");
+    expect(result.stdout).toContain("ORDER: load_nvm check_node_PASS check_git_PASS");
     expect(result.stdout).not.toContain("install_homebrew");
     expect(result.stdout).not.toContain("install_node");
+    expect(result.stdout).not.toContain("install_git");
   });
 
   it("runs install_homebrew before install_node when Node is missing (#83232)", () => {
@@ -626,10 +633,10 @@ describe("install.sh duplicate OpenClaw install detection", () => {
       [
         "set -euo pipefail",
         'CALL_ORDER=""',
-        "install_homebrew() { CALL_ORDER=\"$CALL_ORDER install_homebrew\"; }",
+        'install_homebrew() { CALL_ORDER="$CALL_ORDER install_homebrew"; }',
         'load_nvm_for_node_detection() { CALL_ORDER="$CALL_ORDER load_nvm"; }',
-        "install_node() { CALL_ORDER=\"$CALL_ORDER install_node\"; }",
-        "check_node() { CALL_ORDER=\"$CALL_ORDER check_node_FAIL\"; return 1; }",
+        'install_node() { CALL_ORDER="$CALL_ORDER install_node"; }',
+        'check_node() { CALL_ORDER="$CALL_ORDER check_node_FAIL"; return 1; }',
         "load_nvm_for_node_detection",
         "if ! check_node; then",
         "    install_homebrew",
@@ -642,6 +649,25 @@ describe("install.sh duplicate OpenClaw install detection", () => {
     expect(result.stdout).toContain(
       "ORDER: load_nvm check_node_FAIL install_homebrew install_node",
     );
+  });
+
+  it("runs install_homebrew before install_git when Git is missing (#83232)", () => {
+    const result = runInstallShell(
+      [
+        "set -euo pipefail",
+        'CALL_ORDER=""',
+        'install_homebrew() { CALL_ORDER="$CALL_ORDER install_homebrew"; }',
+        'install_git() { CALL_ORDER="$CALL_ORDER install_git"; }',
+        'check_git() { CALL_ORDER="$CALL_ORDER check_git_FAIL"; return 1; }',
+        "if ! check_git; then",
+        "    install_homebrew",
+        "    install_git",
+        "fi",
+        'printf "ORDER:%s\\n" "$CALL_ORDER"',
+      ].join("\n"),
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("ORDER: check_git_FAIL install_homebrew install_git");
   });
 
   it("stays quiet when only one OpenClaw npm root exists", () => {

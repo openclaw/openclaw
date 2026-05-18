@@ -2371,6 +2371,7 @@ install_openclaw_from_git() {
     fi
 
     if ! check_git; then
+        install_homebrew
         install_git
     fi
 
@@ -2821,8 +2822,8 @@ main() {
     # Step 2: Node.js
     # Node detection runs before Homebrew so users who already have a
     # satisfying Node (>= ${NODE_MIN_VERSION}) on macOS don't need Homebrew at
-    # all. Only install_node uses brew (macOS branch), so install_homebrew is
-    # only a prerequisite for that path. See #83232 — install_homebrew was
+    # all. The macOS branches of install_node and install_git use brew, so
+    # install_homebrew runs only before those consumers. See #83232 — install_homebrew was
     # unconditionally invoked here, which blocked non-admin macOS users with
     # an existing system Node.
     load_nvm_for_node_detection
@@ -2863,6 +2864,7 @@ main() {
 
         # Step 3: Git (required for npm installs that may fetch from git or apply patches)
         if ! check_git; then
+            install_homebrew
             install_git
         fi
 
