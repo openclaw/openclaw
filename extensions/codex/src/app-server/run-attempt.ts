@@ -1228,6 +1228,7 @@ export async function runCodexAppServerAttempt(
               config: threadConfig,
               finalConfigPatch: nativeHookRelayConfig,
               nativeCodeModeEnabled: nativeToolSurfaceEnabled,
+              nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
               userMcpServersEnabled: nativeToolSurfaceEnabled,
               mcpServersFingerprint: bundleMcpThreadConfig.fingerprint,
               mcpServersFingerprintEvaluated: bundleMcpThreadConfig.evaluated,
