@@ -1,17 +1,24 @@
 // Bundled "portable-context" command plugin.
 //
 // Adds a `/export-context` native command. When invoked from a DM it bundles a short
-// header + the gemma workspace USER.md + MEMORY.md into a single .md file and
+// header + the agent workspace USER.md + MEMORY.md into a single .md file and
 // delivers it as a Telegram document (via the outbound mediaUrl path).
 //
 // Scope (P6-3b / stage B): adds a 4th block — a recent-conversation
 // compression section generated via a Gemma4 self-call. On ANY failure the
 // 3-block CONTEXT.md still ships normally (the section is silently omitted).
+//
+// Multi-agent (2026-05-18, "luna support"): supports both gemma (single-tenant
+// workspace) and luna (multi-tenant — caller-specific subdir under
+// workspace/users/) by branching on ctx.accountId. The on-disk layout is the
+// only thing that differs; the resulting CONTEXT.md format is identical.
 
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+
+type AgentId = "gemma" | "luna";
 
 // PluginCommandContext exposes no chat-type field. Telegram group/channel ids
 // are negative; private chats use a positive user id. Treat a negative target
@@ -19,6 +26,56 @@ import { resolvePreferredOpenClawTmpDir, type OpenClawPluginApi } from "openclaw
 function looksLikeGroupTarget(value: string | undefined): boolean {
   const v = (value ?? "").trim();
   return v.length > 0 && v.startsWith("-");
+}
+
+// Map ctx.accountId (openclaw.json channels.telegram.accounts key) to an
+// agentId. Default to gemma for backward compat — only "luna" branches off.
+function resolveAgentId(accountId: string | undefined): AgentId {
+  return accountId === "luna" ? "luna" : "gemma";
+}
+
+// Resolve on-disk paths to USER.md + MEMORY.md for the caller.
+//
+// - gemma: single-tenant. Always reads workspace root.
+// - luna:  multi-tenant. luna's dump_users_to_md.py lays out per-user dirs as
+//          workspace/users/{prefix?}{chat_id}-{slug}/. prefix is "00-" for the
+//          admin row, empty otherwise. Match by exact-or-bounded chat_id.
+async function resolveContextPaths(
+  agentId: AgentId,
+  senderId: string,
+): Promise<{ userMdPath: string; memoryMdPath: string } | null> {
+  if (agentId === "gemma") {
+    const wsDir = path.join(os.homedir(), ".openclaw/agents/gemma/workspace");
+    return {
+      userMdPath: path.join(wsDir, "USER.md"),
+      memoryMdPath: path.join(wsDir, "MEMORY.md"),
+    };
+  }
+  // luna: glob workspace/users/ for an entry whose chat_id segment matches.
+  const usersRoot = path.join(os.homedir(), ".openclaw/agents/luna/workspace/users");
+  let entries: string[];
+  try {
+    entries = await readdir(usersRoot);
+  } catch {
+    return null;
+  }
+  // Skip archive-prefixed dirs (e.g. "_archive-..."). Real per-user dirs are
+  // either "<chat_id>-<slug>" or "<prefix>-<chat_id>-<slug>" where <prefix>
+  // is a short numeric sort prefix like "00" (admin).
+  // senderId is sanitized to digits only before going into the regex.
+  const safeSender = senderId.replace(/[^0-9]/g, "");
+  if (!safeSender) return null;
+  const re = new RegExp(`(?:^|-)${safeSender}-`);
+  const matches = entries.filter((e) => !e.startsWith("_") && re.test(e));
+  if (matches.length === 0) return null;
+  // Prefer admin-prefixed match if present (the operator), but normally there
+  // will be exactly one match.
+  const chosen = matches.find((m) => m.startsWith("00-")) ?? matches[0];
+  const userDir = path.join(usersRoot, chosen);
+  return {
+    userMdPath: path.join(userDir, "USER.md"),
+    memoryMdPath: path.join(userDir, "MEMORY.md"),
+  };
 }
 
 // P6-3b: exact system prompt mandated by the spec (do not paraphrase).
@@ -33,15 +90,19 @@ const COMPRESS_SYSTEM_PROMPT =
   "- 시간 순서를 유지하라.\n" +
   "- 출력은 압축본 본문만. 헤더나 메타 설명 금지.";
 
-// Read the most recent conversation messages for this sender from gemma's
+// Read the most recent conversation messages for this sender from the agent's
 // session jsonl (read-only). Accumulates from newest backwards up to a 50KB
 // raw byte cap, then returns chronological order. Any I/O or parse failure
 // degrades to [] (caller omits the compression section).
 async function readRecentMessages(
+  agentId: AgentId,
   senderId: string,
 ): Promise<Array<{ role: string; text: string }>> {
-  const sessionKey = `agent:gemma:telegram:direct:${senderId}`;
-  const sessionsPath = path.join(os.homedir(), ".openclaw/agents/gemma/sessions/sessions.json");
+  const sessionKey = `agent:${agentId}:telegram:direct:${senderId}`;
+  const sessionsPath = path.join(
+    os.homedir(),
+    `.openclaw/agents/${agentId}/sessions/sessions.json`,
+  );
   let sessions: Record<string, { sessionId?: string } | undefined>;
   try {
     sessions = JSON.parse(await readFile(sessionsPath, "utf-8")) as Record<
@@ -54,7 +115,10 @@ async function readRecentMessages(
   const sessionId = sessions[sessionKey]?.sessionId;
   if (!sessionId) return [];
 
-  const jsonlPath = path.join(os.homedir(), `.openclaw/agents/gemma/sessions/${sessionId}.jsonl`);
+  const jsonlPath = path.join(
+    os.homedir(),
+    `.openclaw/agents/${agentId}/sessions/${sessionId}.jsonl`,
+  );
   let jsonlRaw: string;
   try {
     jsonlRaw = await readFile(jsonlPath, "utf-8");
@@ -171,40 +235,54 @@ export default function register(api: OpenClawPluginApi): void {
         //    context (no display name); use it for the header + filename.
         const senderId = (ctx.senderId ?? "").trim() || "unknown";
 
-        // 3. Read the gemma workspace context (read-only).
-        const wsDir = path.join(os.homedir(), ".openclaw/agents/gemma/workspace");
-        let userMd: string;
-        let memoryMd: string;
-        try {
-          userMd = await readFile(path.join(wsDir, "USER.md"), "utf-8");
-        } catch {
+        // 3. Decide which agent's workspace + sessions to read.
+        const agentId = resolveAgentId(ctx.accountId);
+
+        // 4. Resolve on-disk USER/MEMORY paths for this agent + sender.
+        const paths = await resolveContextPaths(agentId, senderId);
+        if (!paths) {
           return {
-            text: "USER.md 를 찾을 수 없어 내보내기를 중단했어. (gemma workspace 미초기화)",
-            isError: true,
-          };
-        }
-        try {
-          memoryMd = await readFile(path.join(wsDir, "MEMORY.md"), "utf-8");
-        } catch {
-          return {
-            text: "MEMORY.md 를 찾을 수 없어 내보내기를 중단했어. (gemma workspace 미초기화)",
+            text:
+              agentId === "luna"
+                ? `네 정보를 워크스페이스에서 찾지 못했어 (chat_id ${senderId}). 루나에 한 번이라도 말 걸어본 적이 있어야 dump 가 생성돼.`
+                : "워크스페이스가 초기화되지 않아 내보내기를 중단했어.",
             isError: true,
           };
         }
 
-        // 4. Assemble: header + USER.md + MEMORY.md.
+        // 5. Read the workspace context (read-only).
+        let userMd: string;
+        let memoryMd: string;
+        try {
+          userMd = await readFile(paths.userMdPath, "utf-8");
+        } catch {
+          return {
+            text: `USER.md 를 찾을 수 없어 내보내기를 중단했어. (${agentId} workspace 미초기화)`,
+            isError: true,
+          };
+        }
+        try {
+          memoryMd = await readFile(paths.memoryMdPath, "utf-8");
+        } catch {
+          return {
+            text: `MEMORY.md 를 찾을 수 없어 내보내기를 중단했어. (${agentId} workspace 미초기화)`,
+            isError: true,
+          };
+        }
+
+        // 6. Assemble: header + USER.md + MEMORY.md.
         const header =
           "# CONTEXT.md - About This Person\n" +
           `- 이 파일을 업로드한 사람의 식별자: ${senderId}\n` +
           "- 아래 내용은 모두 이 사람에 대한 정보임.\n\n";
         const content = `${header}${userMd.trim()}\n\n${memoryMd.trim()}\n`;
 
-        // 4b. Append recent conversation compression (Gemma4 self-call).
-        //     On any failure (no messages / fetch error / timeout / empty),
-        //     silently omit the section. The 3-block CONTEXT.md still ships.
+        // 7. Append recent conversation compression (Gemma4 self-call).
+        //    On any failure (no messages / fetch error / timeout / empty),
+        //    silently omit the section. The 3-block CONTEXT.md still ships.
         let finalContent = content;
         try {
-          const messages = await readRecentMessages(senderId);
+          const messages = await readRecentMessages(agentId, senderId);
           if (messages.length > 0) {
             const compressed = await compressRecentConversation(messages);
             if (compressed && compressed.trim()) {
@@ -219,7 +297,7 @@ export default function register(api: OpenClawPluginApi): void {
           // silent fallback to 3-block content
         }
 
-        // 5. Write into OpenClaw's preferred tmp dir so the Telegram outbound
+        // 8. Write into OpenClaw's preferred tmp dir so the Telegram outbound
         //    pipeline's mediaLocalRoots allowlist accepts the file:// url.
         //    The basename becomes the delivered document filename.
         const safeId = senderId.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "user";
@@ -229,13 +307,17 @@ export default function register(api: OpenClawPluginApi): void {
         );
         await writeFile(tmpPath, finalContent, "utf-8");
 
-        // 6. Returning mediaUrl lets the outbound pipeline deliver it as a
+        // 9. Returning mediaUrl lets the outbound pipeline deliver it as a
         //    document (`.md` is not image/video/audio → api.sendDocument).
         //    The temp file is intentionally left for OpenClaw's tmp reaper:
         //    the send happens asynchronously after this handler returns, so
         //    unlinking here would race the upload.
+        const guidance =
+          agentId === "luna"
+            ? "내보냈어. 이 봇이 있는 그룹에 첨부 업로드하면 자동 인식돼. ⚠ 첨부 시 USER.md 본문이 그 그룹 jsonl 에 영구 기록되니 사적 내용 확인 후 올려."
+            : "내보냈어. 사용 안내: 젬마 있는 그룹에 이 .md 를 첨부 업로드하면 자동 인식돼.";
         return {
-          text: "내보냈어. 사용 안내: 젬마 있는 그룹에 이 .md 를 첨부 업로드하면 자동 인식돼.",
+          text: guidance,
           mediaUrl: `file://${tmpPath}`,
         };
       } catch (err) {
