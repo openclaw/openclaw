@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
-import { type SerpApiToolCtx, resolveToolConfig } from "../tool-utils.js";
+import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = ["search_query", "hl", "sp", "zero_trace"] as const;
 

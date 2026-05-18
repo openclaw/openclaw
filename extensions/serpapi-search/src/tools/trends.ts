@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
-import { type SerpApiToolCtx, resolveToolConfig } from "../tool-utils.js";
+import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = ["q", "geo", "date", "data_type", "hl", "cat", "gprop", "region", "tz", "zero_trace"] as const;
 
