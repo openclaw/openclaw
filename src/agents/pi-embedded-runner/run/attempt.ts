@@ -31,6 +31,10 @@ import {
   createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import {
+  emitDiagnosticsTimelineEvent,
+  getActiveDiagnosticsTimelineSpan,
+} from "../../../infra/diagnostics-timeline.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
@@ -308,6 +312,7 @@ import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import {
   createEmbeddedRunStageTracker,
   formatEmbeddedRunStageSummary,
+  type EmbeddedRunStageTiming,
   shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
 import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
@@ -1126,6 +1131,37 @@ export function resolveAttemptToolPolicyMessageProvider(params: {
   return params.messageProvider ?? params.messageChannel;
 }
 
+function emitEmbeddedAttemptStageMark(params: {
+  config?: EmbeddedRunAttemptParams["config"];
+  group: "prep" | "core-plugin-tools";
+  stage: EmbeddedRunStageTiming;
+  trigger: EmbeddedRunAttemptParams["trigger"];
+  provider: string;
+  modelId: string;
+  messageChannel?: string;
+}): void {
+  const activeSpan = getActiveDiagnosticsTimelineSpan();
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "mark",
+      name: "embedded_run.stage",
+      phase: activeSpan?.phase ?? "agent-turn",
+      parentSpanId: activeSpan?.spanId,
+      durationMs: params.stage.durationMs,
+      attributes: {
+        group: params.group,
+        stage: params.stage.name,
+        elapsedMs: params.stage.elapsedMs,
+        trigger: params.trigger ?? "",
+        provider: params.provider,
+        model: params.modelId,
+        messageChannel: params.messageChannel ?? "",
+      },
+    },
+    { config: params.config },
+  );
+}
+
 function collectAttemptExplicitToolAllowlistSources(params: {
   config?: EmbeddedRunAttemptParams["config"];
   sessionKey?: string;
@@ -1232,7 +1268,18 @@ export async function runEmbeddedAttempt(
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
   );
-  const prepStages = createEmbeddedRunStageTracker();
+  const prepStages = createEmbeddedRunStageTracker({
+    onMark: (stage) =>
+      emitEmbeddedAttemptStageMark({
+        config: params.config,
+        group: "prep",
+        stage,
+        trigger: params.trigger,
+        provider: params.provider,
+        modelId: params.modelId,
+        messageChannel: params.messageChannel ?? params.messageProvider,
+      }),
+  });
   throwIfAttemptAbortSignalFired(params.abortSignal);
   const emitPrepStageSummary = (phase: string) => {
     const summary = prepStages.snapshot();
@@ -1506,7 +1553,18 @@ export async function runEmbeddedAttempt(
         ...(err && outcome !== "blocked" ? { errorCategory: diagnosticErrorCategory(err) } : {}),
       });
     };
-    const corePluginToolStages = createEmbeddedRunStageTracker();
+    const corePluginToolStages = createEmbeddedRunStageTracker({
+      onMark: (stage) =>
+        emitEmbeddedAttemptStageMark({
+          config: params.config,
+          group: "core-plugin-tools",
+          stage,
+          trigger: params.trigger,
+          provider: params.provider,
+          modelId: params.modelId,
+          messageChannel: params.messageChannel ?? params.messageProvider,
+        }),
+    });
     const toolsAllowWithForcedRuntimeTools = mergeForcedEmbeddedAttemptToolsAllow(
       params.toolsAllow,
       {

@@ -26,6 +26,7 @@ const EMBEDDED_RUN_STAGE_WARN_STAGE_MS = 5_000;
 
 export function createEmbeddedRunStageTracker(options?: {
   now?: () => number;
+  onMark?: (stage: EmbeddedRunStageTiming, summary: EmbeddedRunStageSummary) => void;
 }): EmbeddedRunStageTracker {
   const now = options?.now ?? Date.now;
   const startedAt = now();
@@ -37,12 +38,17 @@ export function createEmbeddedRunStageTracker(options?: {
   return {
     mark(name) {
       const currentAt = now();
-      stages.push({
+      const stage = {
         name,
         durationMs: toMs(currentAt - previousAt),
         elapsedMs: toMs(currentAt - startedAt),
-      });
+      };
+      stages.push(stage);
       previousAt = currentAt;
+      options?.onMark?.(stage, {
+        totalMs: toMs(currentAt - startedAt),
+        stages: stages.slice(),
+      });
     },
     snapshot() {
       return {

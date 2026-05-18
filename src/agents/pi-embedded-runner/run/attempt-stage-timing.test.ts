@@ -26,6 +26,32 @@ describe("embedded run stage timing", () => {
     });
   });
 
+  it("notifies callers as stages are marked", () => {
+    let clock = 100;
+    const marks: Array<{ stage: string; elapsedMs: number; totalMs: number; count: number }> = [];
+    const tracker = createEmbeddedRunStageTracker({
+      now: () => clock,
+      onMark: (stage, summary) => {
+        marks.push({
+          stage: stage.name,
+          elapsedMs: stage.elapsedMs,
+          totalMs: summary.totalMs,
+          count: summary.stages.length,
+        });
+      },
+    });
+
+    clock = 125;
+    tracker.mark("workspace");
+    clock = 160;
+    tracker.mark("tools");
+
+    expect(marks).toEqual([
+      { stage: "workspace", elapsedMs: 25, totalMs: 25, count: 1 },
+      { stage: "tools", elapsedMs: 60, totalMs: 60, count: 2 },
+    ]);
+  });
+
   it("warns only for very slow stage summaries by default", () => {
     expect(
       shouldWarnEmbeddedRunStageSummary({

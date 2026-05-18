@@ -11,6 +11,10 @@ import {
 import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import {
+  emitDiagnosticsTimelineEvent,
+  getActiveDiagnosticsTimelineSpan,
+} from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -126,6 +130,7 @@ import {
   createEmbeddedRunStageTracker,
   EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE,
   formatEmbeddedRunStageSummary,
+  type EmbeddedRunStageTiming,
   shouldWarnEmbeddedRunStageSummary,
 } from "./run/attempt-stage-timing.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
@@ -206,6 +211,35 @@ const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+
+function emitEmbeddedRunStageMark(params: {
+  config?: RunEmbeddedPiAgentParams["config"];
+  group: "startup";
+  stage: EmbeddedRunStageTiming;
+  trigger: RunEmbeddedPiAgentParams["trigger"];
+  provider: string | undefined;
+  model: string | undefined;
+}): void {
+  const activeSpan = getActiveDiagnosticsTimelineSpan();
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "mark",
+      name: "embedded_run.stage",
+      phase: activeSpan?.phase ?? "agent-turn",
+      parentSpanId: activeSpan?.spanId,
+      durationMs: params.stage.durationMs,
+      attributes: {
+        group: params.group,
+        stage: params.stage.name,
+        elapsedMs: params.stage.elapsedMs,
+        trigger: params.trigger ?? "",
+        provider: params.provider ?? "",
+        model: params.model ?? "",
+      },
+    },
+    { config: params.config },
+  );
+}
 
 function resolveAttemptDispatchApiKey(params: {
   apiKeyInfo: ApiKeyInfo | null;
@@ -482,7 +516,19 @@ export async function runEmbeddedPiAgent(
     return enqueueGlobal(async () => {
       throwIfAborted();
       const started = Date.now();
-      const startupStages = createEmbeddedRunStageTracker();
+      let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+      let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      const startupStages = createEmbeddedRunStageTracker({
+        onMark: (stage) =>
+          emitEmbeddedRunStageMark({
+            config: params.config,
+            group: "startup",
+            stage,
+            trigger: params.trigger,
+            provider,
+            model: modelId,
+          }),
+      });
       let startupStagesEmitted = false;
       const notifyExecutionPhase = (
         phase: Parameters<NonNullable<RunEmbeddedPiAgentParams["onExecutionPhase"]>>[0]["phase"],
@@ -547,8 +593,6 @@ export async function runEmbeddedPiAgent(
       startupStages.mark("runtime-plugins");
       notifyExecutionPhase("runtime_plugins");
 
-      let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-      let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir =
         params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
       const normalizedSessionKey = params.sessionKey?.trim();
