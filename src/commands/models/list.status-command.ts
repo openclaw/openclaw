@@ -64,6 +64,7 @@ import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
 import { type AuthProbeSummary } from "./list.probe.js";
+import type { ProviderAuthOverview } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
   DEFAULT_MODEL,
@@ -485,8 +486,38 @@ export async function modelsStatusCommand(
         return hasAny;
       });
     const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
+    const missingProviderAuthEffective: ProviderAuthOverview["effective"] = {
+      kind: "missing",
+      detail: "missing",
+    };
     const resolveProviderAuthHealthId = (provider: string): string =>
       resolveProviderIdForAuth(provider, envLookupParams);
+    const resolveRuntimeAuthRouteEffective = (
+      provider: string,
+    ): ProviderAuthOverview["effective"] => {
+      const direct = providerAuthMap.get(provider)?.effective;
+      if (direct && direct.kind !== "missing") {
+        return direct;
+      }
+      const orderedProfiles = resolveAuthProfileOrder({
+        cfg,
+        store,
+        provider,
+      });
+      const profileId = orderedProfiles[0];
+      const credential = profileId ? store.profiles[profileId] : undefined;
+      if (profileId && credential) {
+        const sourceProvider = resolveProviderAuthHealthId(credential.provider);
+        const source = providerAuthMap.get(sourceProvider)?.effective;
+        return source && source.kind !== "missing"
+          ? source
+          : {
+              kind: "profiles",
+              detail: `${profileId} (${credential.provider})`,
+            };
+      }
+      return direct ?? missingProviderAuthEffective;
+    };
     const hasUsableNonProfileAuth = (provider: string): boolean => {
       const authProvider = resolveProviderAuthHealthId(provider);
       for (const candidate of new Set([provider, authProvider])) {
@@ -534,10 +565,7 @@ export async function modelsStatusCommand(
     const runtimeAuthRoutes = Array.from(
       new Map(
         codexRuntimeAuthUsages.map((usage) => {
-          const effective = providerAuthMap.get(codexProvider)?.effective ?? {
-            kind: "missing" as const,
-            detail: "missing",
-          };
+          const effective = resolveRuntimeAuthRouteEffective(codexProvider);
           return [
             `${usage.provider}:codex:${codexProvider}`,
             {
