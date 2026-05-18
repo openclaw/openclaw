@@ -54,10 +54,10 @@ export type UpdateWizardOptions = {
 const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
 
 export function parseTimeoutMsOrExit(timeout?: string): number | undefined | null {
-  const trimmed = timeout?.trim();
-  if (!trimmed) {
+  if (timeout === undefined) {
     return undefined;
   }
+  const trimmed = timeout.trim();
   const seconds = Number(trimmed);
   if (!/^\d+$/u.test(trimmed) || !Number.isSafeInteger(seconds) || seconds <= 0) {
     defaultRuntime.error(INVALID_TIMEOUT_ERROR);
