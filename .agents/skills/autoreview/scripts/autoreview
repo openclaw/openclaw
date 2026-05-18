@@ -27,6 +27,10 @@ Options:
   --dry-run                  Print selected commands, do not run.
   -h, --help                 Show help.
 
+Environment:
+  OPENCLAW_TESTBOX=1 or AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1
+                              Enable maintainer-only OpenClaw Crabbox/Testbox validation policy.
+
 Modes:
   local   codex review --uncommitted
   branch  codex review --base <base>
@@ -52,6 +56,7 @@ output=${AUTOREVIEW_OUTPUT:-${CODEX_REVIEW_OUTPUT:-}}
 parallel_tests=
 dry_run=false
 codex_review_prompt=
+openclaw_maintainer_validation=${AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION:-${OPENCLAW_TESTBOX:-0}}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -203,12 +208,16 @@ else
 fi
 
 repo_url=$(git -C "$repo_root" config --get remote.origin.url 2>/dev/null || true)
-if [[ "$repo_url" == *"openclaw/openclaw"* ]]; then
+case "$openclaw_maintainer_validation" in
+  1|true|True|TRUE|yes|Yes|YES|on|On|ON) openclaw_maintainer_validation=1 ;;
+  *) openclaw_maintainer_validation=0 ;;
+esac
+if [[ "$repo_url" == *"openclaw/openclaw"* && "$openclaw_maintainer_validation" == 1 ]]; then
   codex_review_prompt=$(cat <<'EOF'
-OpenClaw autoreview validation policy:
+OpenClaw maintainer autoreview validation policy:
 - Review the diff by reading code, tests, and dependency contracts.
 - Do not run local memory-heavy Node validation from review mode. This includes local pnpm checks/tests, Vitest, tsgo, npm test, and node scripts/run-vitest.mjs.
-- If runtime proof is needed, use existing proof or route validation through OPENCLAW_TESTBOX=1 / Crabbox / Blacksmith Testbox and report the exact provider and id.
+- If runtime proof is needed, use existing proof or route validation through Crabbox / Blacksmith Testbox and report the exact provider and id.
 - If remote validation is not necessary for the finding, state the targeted proof that should be run instead of starting local tests.
 EOF
 )
@@ -236,7 +245,7 @@ if [[ "$reviewer" == auto || "$reviewer" == codex ]]; then
   printf ' %q' "${review_cmd[@]}"
   printf '\n'
   if [[ -n "$codex_review_prompt" ]]; then
-    printf 'review policy: OpenClaw Crabbox/Testbox-aware validation prompt injected\n'
+    printf 'review policy: OpenClaw maintainer Crabbox/Testbox-aware validation prompt injected\n'
   fi
 else
   printf 'review: %s prompt review\n' "$reviewer"
@@ -327,7 +336,7 @@ Rules:
 - Review the proposed code change as a closeout reviewer.
 - Focus on the diff below. If your CLI exposes read-only repository tools, inspect surrounding code and tests to verify findings; never modify files.
 - Do not modify files.
-- In OpenClaw, do not run local memory-heavy Node validation from review mode. Avoid local pnpm checks/tests, Vitest, tsgo, npm test, and node scripts/run-vitest.mjs. If runtime proof is needed, use existing proof or route validation through OPENCLAW_TESTBOX=1 / Crabbox / Blacksmith Testbox and report the exact provider and id.
+${codex_review_prompt}
 - Report only discrete, actionable issues introduced by this change.
 - Prioritize correctness, regressions, security, data loss, performance cliffs, and missing tests that would catch a real bug.
 - Do not report pre-existing issues, speculative risks, broad rewrites, style nits, changelog gaps, or findings that depend on unstated assumptions.

@@ -28,7 +28,7 @@ Use when:
 - Treat the helper's successful exit plus absence of actionable findings as the clean review result, even if the underlying Codex CLI output is terse.
 - If rejecting a finding as intentional/not worth fixing, add a brief inline code comment only when it explains a real invariant or ownership decision that future reviewers should know.
 - Do not push just to review. Push only when the user requested push/ship/PR update.
-- In OpenClaw, keep autoreview validation Crabbox/Testbox-aware. A review pass may inspect files and run cheap non-Node probes, but it must not start local `pnpm`, Vitest, `tsgo`, `npm test`, or `node scripts/run-vitest.mjs` from a Codex/worktree review unless the operator explicitly requested local proof. For runtime proof, use existing evidence or route through `OPENCLAW_TESTBOX=1` / Crabbox/Testbox and report the id.
+- For OpenClaw maintainers, keep autoreview validation Crabbox/Testbox-aware when maintainer validation mode is enabled (`OPENCLAW_TESTBOX=1` or `AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1`). A review pass may inspect files and run cheap non-Node probes, but it must not start local `pnpm`, Vitest, `tsgo`, `npm test`, or `node scripts/run-vitest.mjs` from a Codex/worktree review unless the operator explicitly requested local proof. For runtime proof, use existing evidence or route through Crabbox/Testbox and report the id. Do not apply this rule to ordinary contributors who do not have maintainer Testbox access.
 
 ## Pick Target
 
@@ -116,7 +116,7 @@ The helper:
 - writes only to stdout unless `--output` or `AUTOREVIEW_OUTPUT` is set
 - supports `--dry-run`, `--parallel-tests`, and commit refs
 - runs nested review with `--dangerously-bypass-approvals-and-sandbox --sandbox danger-full-access` by default
-- injects OpenClaw validation policy into native Codex review so local memory-heavy Node/Vitest checks are avoided in favor of Crabbox/Testbox proof
+- injects maintainer-only OpenClaw validation policy into native Codex review when `OPENCLAW_TESTBOX=1` or `AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1`, so local memory-heavy Node/Vitest checks are avoided in favor of Crabbox/Testbox proof
 - keeps accepting `--full-access`; use `--no-yolo` or `AUTOREVIEW_YOLO=0` to opt out
 - still accepts legacy `CODEX_REVIEW_*` env vars when the matching `AUTOREVIEW_*` var is unset
 - prints `autoreview clean: no accepted/actionable findings reported` when the selected review command exits 0
