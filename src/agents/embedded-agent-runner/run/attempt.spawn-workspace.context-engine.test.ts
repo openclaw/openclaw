@@ -116,8 +116,12 @@ function mockArg(source: MockCallSource, callIndex: number, argIndex: number, la
   return call[argIndex];
 }
 
-function mockParams(source: MockCallSource, callIndex: number, label: string) {
-  return requireRecord(mockArg(source, callIndex, 0, label), label);
+function mockParams<T = Record<string, unknown>>(
+  source: MockCallSource,
+  callIndex: number,
+  label: string,
+): T {
+  return requireRecord(mockArg(source, callIndex, 0, label), label) as unknown as T;
 }
 
 function expectFields(actual: Record<string, unknown>, expected: Record<string, unknown>) {
@@ -2369,7 +2373,7 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
       },
     });
 
-    const guardParams = mockParams(
+    const guardParams = mockParams<ToolResultGuardInstallParams>(
       hoisted.installToolResultContextGuardMock,
       0,
       "tool result guard params",
