@@ -2,12 +2,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { appendSessionTranscriptMessage } from "../../../config/sessions/transcript-append.js";
 import {
   runWithOwnedSessionTranscriptWriteLock,
   runWithOwnedSessionTranscriptWritePublication,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { SessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
+import {
+  acquireSessionWriteLock,
+  resetSessionWriteLockStateForTest,
+} from "../../session-write-lock.js";
 import {
   createEmbeddedAttemptSessionLockController,
   EmbeddedAttemptSessionTakeoverError,
@@ -26,6 +31,7 @@ const lockOptions = {
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  resetSessionWriteLockStateForTest();
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -751,6 +757,49 @@ describe("embedded attempt session lock lifecycle", () => {
       "second-stream",
       "reacquire",
     ]);
+  });
+
+  it("treats transcript appends during prompt streaming as owned session writes", async () => {
+    const sessionFile = await createTempSessionFile();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: {
+        ...lockOptions,
+        sessionFile,
+        timeoutMs: 1_000,
+      },
+    });
+    const session = {
+      agent: {
+        streamFn: vi.fn(async (..._args: unknown[]) => {
+          await appendSessionTranscriptMessage({
+            transcriptPath: sessionFile,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "mirrored message-tool delivery" }],
+            },
+          });
+        }),
+      },
+    };
+
+    installPromptSubmissionLockRelease({
+      session,
+      waitForSessionEvents: (sessionToDrain) => controller.waitForSessionEvents(sessionToDrain),
+      releaseForPrompt: () => controller.releaseForPrompt(),
+      reacquireAfterPrompt: () => controller.reacquireAfterPrompt(),
+      sessionFile,
+      withSessionWriteLock: (run) => controller.withSessionWriteLock(run),
+    });
+
+    await session.agent.streamFn("model", "context");
+    const cleanupLock = await controller.acquireForCleanup({ session });
+    await cleanupLock.release();
+
+    expect(controller.hasSessionTakeover()).toBe(false);
+    await expect(fs.readFile(sessionFile, "utf8")).resolves.toContain(
+      "mirrored message-tool delivery",
+    );
   });
 
   it("locks agent events that can reach transcript writers or registered extension hooks", async () => {

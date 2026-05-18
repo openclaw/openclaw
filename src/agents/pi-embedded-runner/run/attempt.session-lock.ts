@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { isSessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 
@@ -615,6 +616,12 @@ export function installPromptSubmissionLockRelease(params: {
   waitForSessionEvents: (session: unknown) => Promise<void>;
   releaseForPrompt: () => Promise<void>;
   reacquireAfterPrompt: () => Promise<void>;
+  sessionFile?: string;
+  sessionKey?: string;
+  withSessionWriteLock?: <T>(
+    run: () => Promise<T> | T,
+    options?: SessionWriteLockRunOptions,
+  ) => Promise<T>;
 }): void {
   const agent = (params.session as SessionWithAgentPrompt).agent;
   if (typeof agent?.streamFn !== "function") {
@@ -629,6 +636,16 @@ export function installPromptSubmissionLockRelease(params: {
     await params.waitForSessionEvents(params.session);
     await params.releaseForPrompt();
     try {
+      if (params.sessionFile && params.withSessionWriteLock) {
+        return await withOwnedSessionTranscriptWrites(
+          {
+            sessionFile: params.sessionFile,
+            sessionKey: params.sessionKey,
+            withSessionWriteLock: params.withSessionWriteLock,
+          },
+          async () => await originalStreamFn(...args),
+        );
+      }
       return await originalStreamFn(...args);
     } finally {
       await params.reacquireAfterPrompt();
