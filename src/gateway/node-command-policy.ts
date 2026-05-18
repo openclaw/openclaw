@@ -260,9 +260,20 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
 }
 
 type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &
-  Partial<Pick<NodeSession, "caps" | "commands" | "connId" | "nodeId">> & {
+  Partial<Pick<NodeSession, "caps" | "commands" | "connId" | "nodeId" | "clientId" | "clientMode">> & {
     approvedCommands?: readonly string[];
   };
+
+function isAppNode(node?: NodeCommandPolicyNode): boolean {
+  if (!node) {
+    return false;
+  }
+  return (
+    node.clientMode === "app" ||
+    node.clientId === "openclaw-macos" ||
+    node.clientId === "openclaw-windows"
+  );
+}
 
 function isDesktopPlatformId(platformId: PlatformId): boolean {
   return platformId === "macos" || platformId === "windows" || platformId === "linux";
@@ -337,6 +348,13 @@ function resolveNodeCommandAllowlistInternal(
       .map((cmd) => cmd.trim())
       .filter((cmd) => cmd && !dangerousPluginCommands.has(cmd)),
   );
+
+  if (isAppNode(node)) {
+    for (const cmd of NODE_SYSTEM_RUN_COMMANDS) {
+      allow.delete(cmd);
+    }
+  }
+
   for (const cmd of extra) {
     const trimmed = cmd.trim();
     if (trimmed) {
@@ -363,8 +381,13 @@ export function resolveNodePairingCommandAllowlist(
   cfg: OpenClawConfig,
   node?: NodeCommandPolicyNode,
 ): Set<string> {
+  // App nodes must never get system.run even in the pairing allowlist, because
+  // the declared commands from this allowlist are stored in the pairing record
+  // and later treated as approved on reconnect. Passing includeDesktopHostCommands
+  // to resolveNodeCommandAllowlistInternal is still correct for non-app desktop
+  // nodes that legitimately need system.run at pairing time.
   return resolveNodeCommandAllowlistInternal(cfg, node, {
-    includeDesktopHostCommands: true,
+    includeDesktopHostCommands: !isAppNode(node),
   });
 }
 

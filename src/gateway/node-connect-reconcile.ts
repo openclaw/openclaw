@@ -150,6 +150,8 @@ export async function reconcileNodePairingOnConnect(params: {
     deviceFamily: params.connectParams.client.deviceFamily,
     caps: params.connectParams.caps,
     commands: params.connectParams.commands,
+    clientId: params.connectParams.client.id,
+    clientMode: params.connectParams.client.mode,
   };
   const pairingAllowlist = resolveNodePairingCommandAllowlist(params.cfg, policyNode);
   const declared = normalizeDeclaredNodeCommands({

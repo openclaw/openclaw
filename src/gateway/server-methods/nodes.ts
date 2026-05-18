@@ -346,6 +346,8 @@ function resolveAllowedPendingNodeActions(params: {
     deviceFamily: connect?.client?.deviceFamily,
     caps: connect?.caps,
     commands: declaredCommands,
+    clientId: connect?.client?.id,
+    clientMode: connect?.client?.mode,
   });
   const allowed = pending.filter((entry) => {
     const result = isNodeCommandAllowed({
@@ -775,6 +777,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
         deviceFamily: approvedNode.deviceFamily,
         caps: approvedNode.caps,
         commands: approvedNode.commands,
+        clientId: approvedNode.clientId,
+        clientMode: approvedNode.clientMode,
         approvedCommands: approvedNode.commands,
       });
       const currentAllowedCommands = normalizeDeclaredNodeCommands({

@@ -87,6 +87,13 @@ export async function postJson(
 export async function connectNode(
   inst: GatewayInstance,
   label: string,
+  opts?: {
+    platform?: string;
+    mode?: string;
+    clientId?: string;
+    deviceFamily?: string;
+    commands?: string[];
+  }
 ): Promise<{ client: GatewayClient; nodeId: string }> {
   const identityPath = path.join(inst.homeDir, `${label}-device.json`);
   const deviceIdentity = loadOrCreateDeviceIdentity(identityPath);
@@ -94,15 +101,16 @@ export async function connectNode(
   const client = await connectGatewayClient({
     url: `ws://127.0.0.1:${inst.port}`,
     token: inst.gatewayToken,
-    clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+    clientName: (opts?.clientId as any) ?? GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: label,
     clientVersion: "1.0.0",
-    platform: "ios",
-    mode: GATEWAY_CLIENT_MODES.NODE,
+    platform: opts?.platform ?? "ios",
+    deviceFamily: opts?.deviceFamily,
+    mode: (opts?.mode as any) ?? GATEWAY_CLIENT_MODES.NODE,
     role: "node",
     scopes: [],
     caps: ["system"],
-    commands: ["system.run"],
+    commands: opts?.commands ?? [],
     deviceIdentity,
     timeoutMessage: `timeout waiting for ${label} to connect`,
   });
@@ -171,9 +179,9 @@ export async function waitForNodeStatus(
   try {
     while (Date.now() < deadline) {
       const list = await client.request("node.list", {});
-      const match = list.nodes?.find((n) => n.nodeId === nodeId);
+      const match = list.nodes?.find((n: any) => n.nodeId === nodeId);
       if (match?.connected && match?.paired) {
-        return;
+        return match;
       }
       await sleep(GATEWAY_NODE_STATUS_POLL_MS);
     }
