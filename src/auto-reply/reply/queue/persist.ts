@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
@@ -138,10 +139,25 @@ export function persistFollowupQueues(): void {
       }
       return;
     }
-    fs.writeFileSync(
-      statePath,
-      JSON.stringify({ version: 1, updatedAt: Date.now(), entries }, null, 2),
-    );
+    // Items can carry user prompts, session ids, and channel routing identifiers,
+    // so the state file must be private (0o600) and written atomically — a crash
+    // mid-write must not leave a half-written file that breaks restore on next boot.
+    const tmpPath = `${statePath}.tmp.${process.pid}.${crypto.randomBytes(6).toString("hex")}`;
+    try {
+      fs.writeFileSync(
+        tmpPath,
+        JSON.stringify({ version: 1, updatedAt: Date.now(), entries }, null, 2),
+        { mode: 0o600 },
+      );
+      fs.renameSync(tmpPath, statePath);
+    } catch (err) {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {
+        // Temp file may not exist — ignore.
+      }
+      throw err;
+    }
   } catch (err) {
     defaultRuntime.error?.(`failed to persist followup queues: ${String(err)}`);
   }

@@ -166,6 +166,41 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(peekRestoredPendingDrainKeys().has(TEST_KEY)).toBe(false);
   });
 
+  it("writes the state file with 0o600 permissions and no leftover temp files", () => {
+    // Skip on Windows: chmod semantics differ and POSIX bit checks do not apply.
+    if (process.platform === "win32") {
+      return;
+    }
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push(makeFollowupRun("private"));
+    persistFollowupQueues();
+
+    const statePath = path.join(tmpDir, STATE_FILE);
+    const mode = fs.statSync(statePath).mode & 0o777;
+    expect(mode).toBe(0o600);
+
+    const leftovers = fs
+      .readdirSync(tmpDir)
+      .filter((name) => name.startsWith(`${STATE_FILE}.tmp.`));
+    expect(leftovers).toEqual([]);
+  });
+
+  it("replaces a pre-existing world-readable state file with a 0o600 file", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    // Simulate an install that wrote the file before the private-write fix landed.
+    const statePath = path.join(tmpDir, STATE_FILE);
+    fs.writeFileSync(statePath, JSON.stringify({ version: 1, entries: [] }), { mode: 0o644 });
+    expect(fs.statSync(statePath).mode & 0o777).toBe(0o644);
+
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push(makeFollowupRun("upgrade"));
+    persistFollowupQueues();
+
+    expect(fs.statSync(statePath).mode & 0o777).toBe(0o600);
+  });
+
   it("skips entries with missing or invalid items array", () => {
     const statePath = path.join(tmpDir, STATE_FILE);
     fs.writeFileSync(
