@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("./target-normalization.js", () => ({
+  normalizeTargetForProvider: (_provider: string, raw?: string) => raw?.trim(),
+}));
 import {
   createSourceDeliveryPlan,
   resolveSourceDeliveryOutcome,
