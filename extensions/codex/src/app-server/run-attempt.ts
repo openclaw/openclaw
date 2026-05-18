@@ -686,6 +686,10 @@ function maxFiniteNumber(values: Array<number | undefined>): number | undefined 
   return Math.max(...nums);
 }
 
+function fingerprintCodexPluginAppCacheKeyForLog(key: string): string {
+  return createHash("sha256").update(key).digest("hex").slice(0, 12);
+}
+
 async function rotateOversizedCodexAppServerStartupBinding(params: {
   binding: CodexAppServerThreadBinding | undefined;
   sessionFile: string;
@@ -1202,6 +1206,21 @@ export async function runCodexAppServerAttempt(
           .map((plugin) => plugin.configKey)
           .toSorted()
       : undefined;
+    embeddedAgentLog.info("codex plugin thread config eligibility", {
+      sessionId: params.sessionId,
+      sessionKey: sandboxSessionKey,
+      enabled: pluginThreadConfigEnabled,
+      policyConfigured: resolvedPluginPolicy?.configured === true,
+      policyEnabled: resolvedPluginPolicy?.enabled === true,
+      pluginConfigKeys: resolvedPluginPolicy?.pluginPolicies
+        .map((plugin) => plugin.configKey)
+        .toSorted(),
+      enabledPluginConfigKeys,
+      appCacheKeyFingerprint: fingerprintCodexPluginAppCacheKeyForLog(pluginAppCacheKey),
+      authProfileId: startupAuthProfileId,
+      appServerTransport: appServer.start.transport,
+      appServerCommandSource: appServer.start.commandSource,
+    });
     pluginAppServer =
       resolvedPluginPolicy?.enabled === true
         ? {

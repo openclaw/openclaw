@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   defaultCodexAppInventoryCache,
+  serializeCodexAppInventoryError,
+  type CodexAppInventorySnapshot,
   type CodexAppInventoryCache,
   type CodexAppInventoryRequest,
 } from "./app-inventory-cache.js";
@@ -17,6 +20,8 @@ import {
   readCodexPluginInventory,
   type CodexPluginInventory,
   type CodexPluginInventoryDiagnostic,
+  type CodexPluginInventoryRecord,
+  type CodexPluginOwnedApp,
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
@@ -38,7 +43,10 @@ export type PluginAppPolicyContext = {
 export type CodexPluginThreadConfigDiagnostic =
   | CodexPluginInventoryDiagnostic
   | {
-      code: "plugin_activation_failed" | "app_not_ready";
+      code:
+        | "plugin_activation_failed"
+        | "app_not_ready"
+        | "app_inventory_unavailable_using_plugin_detail";
       plugin?: ResolvedCodexPluginPolicy;
       message: string;
     };
@@ -104,9 +112,13 @@ export async function buildCodexPluginThreadConfig(
     appCache,
     appCacheKey: params.appCacheKey,
     nowMs: params.nowMs,
+    suppressAppInventoryRefresh: true,
   });
   if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
-    await refreshAppInventoryNow(params, appCache);
+    await refreshAppInventoryNow(params, appCache, {
+      forceRefetch: true,
+      reason: "initial_missing",
+    });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
       policy,
@@ -142,7 +154,32 @@ export async function buildCodexPluginThreadConfig(
     }
   }
   if (activationResults.some((activation) => activation.ok && activation.installAttempted)) {
-    await refreshAppInventoryNow(params, appCache, { forceRefetch: true });
+    await refreshAppInventoryNow(params, appCache, {
+      forceRefetch: true,
+      reason: "post_install",
+    });
+    inventory = await readCodexPluginInventory({
+      pluginConfig: params.pluginConfig,
+      policy,
+      request: params.request,
+      appCache,
+      appCacheKey: params.appCacheKey,
+      nowMs: params.nowMs,
+    });
+    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
+      pluginConfig: params.pluginConfig,
+      appCacheKey: params.appCacheKey,
+    });
+  }
+  if (shouldForceRefreshForNotReadyPluginApps(params, policy, inventory)) {
+    embeddedAgentLog.debug("codex plugin thread config forcing app inventory refresh", {
+      reason: "not_ready_plugin_apps",
+      records: summarizePluginAppReadiness(inventory),
+    });
+    await refreshAppInventoryNow(params, appCache, {
+      forceRefetch: true,
+      reason: "not_ready_plugin_apps",
+    });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
       policy,
@@ -183,7 +220,15 @@ export async function buildCodexPluginThreadConfig(
       continue;
     }
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
-    for (const app of record.apps) {
+    const resolvedApps = resolveThreadConfigAppsForRecord({ record, inventory });
+    if (resolvedApps.source === "plugin_detail_without_app_inventory") {
+      diagnostics.push({
+        code: "app_inventory_unavailable_using_plugin_detail",
+        plugin: record.policy,
+        message: `${record.policy.pluginName} app inventory is unavailable; exposing plugin-owned app ids from plugin/read: ${resolvedApps.apps.map((app) => app.id).join(", ")}.`,
+      });
+    }
+    for (const app of resolvedApps.apps) {
       if (!app.accessible || !app.enabled) {
         diagnostics.push({
           code: "app_not_ready",
@@ -211,6 +256,14 @@ export async function buildCodexPluginThreadConfig(
 
   const configPatch = { apps };
   const policyContext = buildPluginAppPolicyContext(policyApps, pluginAppIds);
+  embeddedAgentLog.debug("codex plugin thread config built", {
+    enabledAppIds: Object.keys(policyApps).toSorted(),
+    pluginAppIds,
+    diagnostics: diagnostics.map((diagnostic) => diagnostic.code),
+    inventoryState: inventory.appInventory?.state,
+    inventoryRevision: inventory.appInventory?.revision,
+    inputFingerprint,
+  });
   return {
     enabled: true,
     configPatch,
@@ -321,24 +374,105 @@ function shouldWaitForInitialAppInventory(
 async function refreshAppInventoryNow(
   params: BuildCodexPluginThreadConfigParams,
   appCache: CodexAppInventoryCache,
-  options: { forceRefetch?: boolean } = {},
-): Promise<void> {
+  options: { forceRefetch?: boolean; reason?: string } = {},
+): Promise<CodexAppInventorySnapshot | undefined> {
   const appCacheKey = params.appCacheKey;
   if (!appCacheKey) {
-    return;
+    return undefined;
   }
   const request: CodexAppInventoryRequest = async (method, requestParams) =>
     (await params.request(method, requestParams)) as Awaited<ReturnType<CodexAppInventoryRequest>>;
   try {
-    await appCache.refreshNow({
+    embeddedAgentLog.debug("codex plugin thread config app inventory refresh starting", {
+      reason: options.reason,
+      forceRefetch: options.forceRefetch === true,
+    });
+    const snapshot = await appCache.refreshNow({
       key: appCacheKey,
       request,
       nowMs: params.nowMs,
       forceRefetch: options.forceRefetch,
     });
-  } catch {
-    // Keep the thread fail-closed if app/list refresh is unavailable.
+    embeddedAgentLog.debug("codex plugin thread config app inventory refresh completed", {
+      reason: options.reason,
+      forceRefetch: options.forceRefetch === true,
+      revision: snapshot.revision,
+      appCount: snapshot.apps.length,
+    });
+    return snapshot;
+  } catch (error) {
+    embeddedAgentLog.warn("codex plugin thread config app inventory refresh failed", {
+      reason: options.reason,
+      forceRefetch: options.forceRefetch === true,
+      error: serializeCodexAppInventoryError(error),
+    });
+    // Keep building from the diagnostic inventory state; app exposure remains scoped below.
+    return undefined;
   }
+}
+
+function resolveThreadConfigAppsForRecord(params: {
+  record: CodexPluginInventoryRecord;
+  inventory: CodexPluginInventory;
+}): {
+  source: "app_inventory" | "plugin_detail_without_app_inventory";
+  apps: CodexPluginOwnedApp[];
+} {
+  if (params.record.apps.length > 0 || params.inventory.appInventory?.state !== "missing") {
+    return { source: "app_inventory", apps: params.record.apps };
+  }
+  const detailApps = params.record.detail?.apps ?? [];
+  if (detailApps.length === 0) {
+    return { source: "app_inventory", apps: [] };
+  }
+  return {
+    source: "plugin_detail_without_app_inventory",
+    apps: detailApps
+      .filter((app) => app.id)
+      .map((app) => ({
+        id: app.id,
+        name: app.name,
+        accessible: true,
+        enabled: true,
+        needsAuth: app.needsAuth,
+      }))
+      .toSorted((left, right) => left.id.localeCompare(right.id)),
+  };
+}
+
+function shouldForceRefreshForNotReadyPluginApps(
+  params: BuildCodexPluginThreadConfigParams,
+  policy: ResolvedCodexPluginsPolicy,
+  inventory: CodexPluginInventory,
+): boolean {
+  if (!params.appCacheKey || !policy.pluginPolicies.some((plugin) => plugin.enabled)) {
+    return false;
+  }
+  if (inventory.appInventory?.state === "missing") {
+    return false;
+  }
+  return inventory.records.some(
+    (record) =>
+      record.appOwnership === "proven" &&
+      record.ownedAppIds.length > 0 &&
+      (record.apps.length === 0 || record.apps.some((app) => !app.accessible || !app.enabled)),
+  );
+}
+
+function summarizePluginAppReadiness(inventory: CodexPluginInventory): JsonValue {
+  return inventory.records
+    .filter((record) => record.appOwnership === "proven" && record.ownedAppIds.length > 0)
+    .map((record) => ({
+      configKey: record.policy.configKey,
+      pluginName: record.policy.pluginName,
+      ownedAppIds: record.ownedAppIds,
+      apps: record.apps.map((app) => ({
+        id: app.id,
+        accessible: app.accessible,
+        enabled: app.enabled,
+        needsAuth: app.needsAuth,
+      })),
+    }));
 }
 
 function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {

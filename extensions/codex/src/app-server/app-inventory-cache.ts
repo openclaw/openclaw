@@ -1,6 +1,8 @@
-import type { v2 } from "./protocol.js";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { JsonValue, v2 } from "./protocol.js";
 
 export const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
+const MAX_SERIALIZED_ERROR_MESSAGE_LENGTH = 500;
 
 export type CodexAppInventoryRequest = (
   method: "app/list",
@@ -50,6 +52,7 @@ type RefreshParams = {
   request: CodexAppInventoryRequest;
   nowMs?: number;
   forceRefetch?: boolean;
+  suppressRefresh?: boolean;
 };
 
 export class CodexAppInventoryCache {
@@ -68,7 +71,15 @@ export class CodexAppInventoryCache {
     const nowMs = params.nowMs ?? Date.now();
     const entry = this.entries.get(params.key);
     if (!entry) {
-      const refreshScheduled = this.scheduleRefresh(params);
+      const refreshScheduled = params.suppressRefresh ? false : this.scheduleRefresh(params);
+      embeddedAgentLog.debug("codex app inventory cache read", {
+        state: "missing",
+        refreshScheduled,
+        forceRefetch: params.forceRefetch === true,
+        suppressRefresh: params.suppressRefresh === true,
+        revision: this.revision,
+        keyFingerprint: fingerprintInventoryCacheKey(params.key),
+      });
       return {
         state: "missing",
         key: params.key,
@@ -83,7 +94,20 @@ export class CodexAppInventoryCache {
     const state: CodexAppInventoryReadState =
       entry.invalidated || entry.expiresAtMs <= nowMs ? "stale" : "fresh";
     const refreshScheduled =
-      state === "fresh" && !params.forceRefetch ? false : this.scheduleRefresh(params);
+      params.suppressRefresh || (state === "fresh" && !params.forceRefetch)
+        ? false
+        : this.scheduleRefresh(params);
+    embeddedAgentLog.debug("codex app inventory cache read", {
+      state,
+      refreshScheduled,
+      forceRefetch: params.forceRefetch === true,
+      suppressRefresh: params.suppressRefresh === true,
+      revision: entry.revision,
+      appCount: entry.apps.length,
+      enabledCount: entry.apps.filter((app) => app.isEnabled).length,
+      accessibleCount: entry.apps.filter((app) => app.isAccessible).length,
+      keyFingerprint: fingerprintInventoryCacheKey(params.key),
+    });
     return {
       state,
       key: params.key,
@@ -126,8 +150,16 @@ export class CodexAppInventoryCache {
 
   private scheduleRefresh(params: RefreshParams): boolean {
     if (this.inFlight.has(params.key) && !params.forceRefetch) {
+      embeddedAgentLog.debug("codex app inventory refresh already in flight", {
+        forceRefetch: false,
+        keyFingerprint: fingerprintInventoryCacheKey(params.key),
+      });
       return true;
     }
+    embeddedAgentLog.debug("codex app inventory refresh scheduled", {
+      forceRefetch: params.forceRefetch === true,
+      keyFingerprint: fingerprintInventoryCacheKey(params.key),
+    });
     const promise = this.refresh(params);
     this.inFlight.set(params.key, promise);
     promise.catch(() => undefined);
@@ -159,6 +191,10 @@ export class CodexAppInventoryCache {
   ): Promise<CodexAppInventorySnapshot> {
     const nowMs = params.nowMs ?? Date.now();
     try {
+      embeddedAgentLog.debug("codex app inventory refresh started", {
+        forceRefetch: params.forceRefetch === true,
+        keyFingerprint: fingerprintInventoryCacheKey(params.key),
+      });
       const apps = await listAllApps(params.request, params.forceRefetch ?? false);
       this.revision += 1;
       const snapshot: CodexAppInventorySnapshot = {
@@ -172,10 +208,18 @@ export class CodexAppInventoryCache {
         this.entries.set(params.key, { ...snapshot, invalidated: false });
         this.diagnostics.delete(params.key);
       }
+      embeddedAgentLog.debug("codex app inventory refresh completed", {
+        forceRefetch: params.forceRefetch === true,
+        revision: snapshot.revision,
+        appCount: apps.length,
+        enabledCount: apps.filter((app) => app.isEnabled).length,
+        accessibleCount: apps.filter((app) => app.isAccessible).length,
+        keyFingerprint: fingerprintInventoryCacheKey(params.key),
+      });
       return snapshot;
     } catch (error) {
       const diagnostic = {
-        message: error instanceof Error ? error.message : String(error),
+        message: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
         atMs: nowMs,
       };
       this.diagnostics.set(params.key, diagnostic);
@@ -183,9 +227,30 @@ export class CodexAppInventoryCache {
       if (entry) {
         entry.lastError = diagnostic;
       }
+      embeddedAgentLog.warn("codex app inventory refresh failed", {
+        forceRefetch: params.forceRefetch === true,
+        keyFingerprint: fingerprintInventoryCacheKey(params.key),
+        error: serializeCodexAppInventoryError(error),
+      });
       throw error;
     }
   }
+}
+
+export function serializeCodexAppInventoryError(error: unknown): Record<string, unknown> {
+  const record = isRecord(error) ? error : undefined;
+  const data = record && "data" in record ? redactErrorData(record.data) : undefined;
+  return {
+    name:
+      error instanceof Error
+        ? error.name
+        : typeof record?.name === "string"
+          ? record.name
+          : undefined,
+    message: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
+    ...(typeof record?.code === "number" ? { code: record.code } : {}),
+    ...(data !== undefined ? { data } : {}),
+  };
 }
 
 export const defaultCodexAppInventoryCache = new CodexAppInventoryCache();
@@ -222,4 +287,75 @@ async function listAllApps(
 function stripEntryState(entry: CacheEntry): CodexAppInventorySnapshot {
   const { invalidated: _invalidated, ...snapshot } = entry;
   return snapshot;
+}
+
+function fingerprintInventoryCacheKey(key: string): string {
+  let hash = 0;
+  for (let index = 0; index < key.length; index += 1) {
+    hash = (hash * 31 + key.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function redactErrorData(value: unknown, depth = 0): JsonValue | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null || typeof value === "boolean" || typeof value === "number") {
+    return value;
+  }
+  if (depth > 6) {
+    return "[truncated]";
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactErrorData(entry, depth + 1) ?? null);
+  }
+  if (isRecord(value)) {
+    const redacted: Record<string, JsonValue> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      redacted[key] = isSensitiveErrorDataKey(key)
+        ? "<redacted>"
+        : (redactErrorData(entry, depth + 1) ?? null);
+    }
+    return redacted;
+  }
+  if (typeof value === "string" && value.length > 500) {
+    return `${value.slice(0, 500)}...`;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (typeof value === "symbol") {
+    return value.description ? `Symbol(${value.description})` : "Symbol()";
+  }
+  if (typeof value === "function") {
+    return value.name ? `[function ${value.name}]` : "[function]";
+  }
+  return "[unserializable]";
+}
+
+function sanitizeErrorMessage(message: string): string {
+  const htmlStart = message.search(/<html[\s>]/i);
+  const withoutHtml =
+    htmlStart >= 0
+      ? `${message.slice(0, htmlStart).trimEnd()} [HTML response body omitted]`
+      : message;
+  const redacted = withoutHtml.replace(
+    /([?&][^=\s"'<>]*(?:api[_-]?key|authorization|cookie|credential|password|secret|token|tk)[^=\s"'<>]*=)[^&\s"'<>]+/gi,
+    "$1<redacted>",
+  );
+  return redacted.length > MAX_SERIALIZED_ERROR_MESSAGE_LENGTH
+    ? `${redacted.slice(0, MAX_SERIALIZED_ERROR_MESSAGE_LENGTH)}...`
+    : redacted;
+}
+
+function isSensitiveErrorDataKey(key: string): boolean {
+  return /api[_-]?key|authorization|cookie|credential|password|secret|token/i.test(key);
 }

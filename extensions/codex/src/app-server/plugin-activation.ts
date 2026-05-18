@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   type CodexAppInventoryCache,
   type CodexAppInventoryRequest,
@@ -51,6 +52,12 @@ export type CodexPluginRuntimeRefreshResult = {
 export async function ensureCodexPluginActivation(
   params: EnsureCodexPluginActivationParams,
 ): Promise<CodexPluginActivationResult> {
+  embeddedAgentLog.debug("codex plugin activation check started", {
+    configKey: params.identity.configKey,
+    pluginName: params.identity.pluginName,
+    marketplaceName: params.identity.marketplaceName,
+    installEvenIfActive: params.installEvenIfActive === true,
+  });
   if (params.identity.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME) {
     return activationFailure(params.identity, "marketplace_missing", {
       message: "Only " + CODEX_PLUGINS_MARKETPLACE_NAME + " plugins can be activated.",
@@ -76,6 +83,10 @@ export async function ensureCodexPluginActivation(
   }
 
   if (resolved.summary.installed && resolved.summary.enabled && !params.installEvenIfActive) {
+    embeddedAgentLog.debug("codex plugin already active", {
+      configKey: params.identity.configKey,
+      pluginName: params.identity.pluginName,
+    });
     return {
       identity: params.identity,
       ok: true,
@@ -86,6 +97,10 @@ export async function ensureCodexPluginActivation(
     };
   }
 
+  embeddedAgentLog.debug("codex plugin install requested", {
+    configKey: params.identity.configKey,
+    pluginName: params.identity.pluginName,
+  });
   const installResponse = (await params.request(
     "plugin/install",
     pluginReadParams(
@@ -96,6 +111,10 @@ export async function ensureCodexPluginActivation(
   const refreshDiagnostics: CodexPluginActivationDiagnostic[] = [];
   let refreshFailed = false;
   try {
+    embeddedAgentLog.debug("codex plugin runtime refresh starting", {
+      configKey: params.identity.configKey,
+      pluginName: params.identity.pluginName,
+    });
     const refreshResult = await refreshCodexPluginRuntimeState({
       request: params.request,
       appCache: params.appCache,
@@ -111,6 +130,14 @@ export async function ensureCodexPluginActivation(
     });
   }
   const authRequired = installResponse.appsNeedingAuth.length > 0;
+  embeddedAgentLog.debug("codex plugin activation completed", {
+    configKey: params.identity.configKey,
+    pluginName: params.identity.pluginName,
+    installAttempted: true,
+    authRequired,
+    refreshFailed,
+    appsNeedingAuth: installResponse.appsNeedingAuth.map((app) => app.id),
+  });
   return {
     identity: params.identity,
     ok: !authRequired && !refreshFailed,
@@ -139,14 +166,17 @@ export async function refreshCodexPluginRuntimeState(params: {
   appCacheKey?: string;
 }): Promise<CodexPluginRuntimeRefreshResult> {
   const diagnostics: CodexPluginActivationDiagnostic[] = [];
+  embeddedAgentLog.debug("codex plugin runtime refresh step", { method: "plugin/list" });
   await params.request("plugin/list", {
     cwds: [],
   } satisfies v2.PluginListParams);
+  embeddedAgentLog.debug("codex plugin runtime refresh step", { method: "skills/list" });
   await params.request("skills/list", {
     cwds: [],
     forceReload: true,
   } satisfies v2.SkillsListParams);
   try {
+    embeddedAgentLog.debug("codex plugin runtime refresh step", { method: "hooks/list" });
     await params.request("hooks/list", {
       cwds: [],
     } satisfies v2.HooksListParams);
@@ -155,6 +185,9 @@ export async function refreshCodexPluginRuntimeState(params: {
       message: `Codex hooks refresh skipped: ${error instanceof Error ? error.message : String(error)}`,
     });
   }
+  embeddedAgentLog.debug("codex plugin runtime refresh step", {
+    method: "config/mcpServer/reload",
+  });
   await params.request("config/mcpServer/reload", undefined);
 
   if (params.appCache && params.appCacheKey) {
@@ -162,6 +195,10 @@ export async function refreshCodexPluginRuntimeState(params: {
     const request: CodexAppInventoryRequest = async (method, requestParams) =>
       (await params.request(method, requestParams)) as v2.AppsListResponse;
     try {
+      embeddedAgentLog.debug("codex plugin runtime refresh step", {
+        method: "app/list",
+        forceRefetch: true,
+      });
       await params.appCache.refreshNow({
         key: params.appCacheKey,
         request,
