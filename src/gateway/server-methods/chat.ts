@@ -47,6 +47,7 @@ import {
   saveMediaBuffer,
 } from "../../media/store.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-message.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -278,6 +279,7 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
 const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
 type ChatSendDeliveryEntry = {
+  route?: ChannelRouteRef;
   deliveryContext?: {
     channel?: string;
     to?: string;
