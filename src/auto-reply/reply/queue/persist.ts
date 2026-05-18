@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { loadConfig } from "../../../config/io.js";
+import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -196,19 +196,21 @@ function projectRunForPersist(run: FollowupRun["run"]): PersistedRunFields {
 // Resolve the current process config for restored runs. Prefer the live runtime
 // snapshot (set by the agent runtime layer) so callers never pay disk IO. If
 // the snapshot is not yet populated — e.g. restore runs before
-// setRuntimeConfigSnapshot has been called during cold start — fall back to a
-// fresh loadConfig() so restored followups dispatch with the current
-// provider/channel/auth state rather than an empty stub. If both paths fail,
-// log and return an empty config; the dispatcher's
-// resolveQueuedReplyExecutionConfig still has another chance to fill it from
-// the runtime snapshot before the run is consumed.
+// setRuntimeConfigSnapshot has been called during cold start — fall back to
+// getRuntimeConfig() so restored followups dispatch with the current
+// provider/channel/auth state rather than an empty stub. restoreFollowupQueues
+// runs once at module init from a single point on the gateway boundary, so the
+// getRuntimeConfig() fallback is a bounded process-boundary call (not an
+// ambient hot-path lookup). If both paths fail, log and return an empty config;
+// the dispatcher's resolveQueuedReplyExecutionConfig still has another chance
+// to fill it from the runtime snapshot before the run is consumed.
 function resolveCurrentRunConfig(): OpenClawConfig {
   const snapshot = getRuntimeConfigSnapshot();
   if (snapshot) {
     return snapshot;
   }
   try {
-    return loadConfig();
+    return getRuntimeConfig();
   } catch (err) {
     defaultRuntime.error?.(
       `failed to load current config for followup queue restore: ${String(err)}`,
