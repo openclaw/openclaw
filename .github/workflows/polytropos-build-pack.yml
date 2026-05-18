@@ -10,11 +10,11 @@ on:
         type: string
       releaseTag:
         description: Release tag to name artifacts (v<ver>+poly.<N>)
-        required: true
+        required: false
         type: string
   push:
     branches:
-      - upgrade/upstream-v2026.5.12
+      - main
 
 permissions:
   contents: read
@@ -25,7 +25,6 @@ env:
   OPENCLAW_TSDOWN_NODE_OPTIONS: "--max-old-space-size=6144"
   NODE_VERSION: "24.15.0"
   PNPM_VERSION: "11.0.8"
-  RELEASE_TAG: ${{ inputs.releaseTag || '' }}
 
 jobs:
   build_pack:
@@ -62,6 +61,11 @@ jobs:
 
       - name: Build Control UI
         run: pnpm ui:build
+      - name: Compute artifact tag
+        run: |
+          ver=$(node -p "require("./package.json").version")
+          sha7=${GITHUB_SHA:0:7}
+          echo "RELEASE_TAG=v${ver}+sha.${sha7}" >> "$GITHUB_ENV"
 
       - name: Pack
         id: pack
@@ -80,19 +84,19 @@ jobs:
         run: |
           node -e "const fs=require(\"fs\"); const pkg=require(\"./package.json\"); fs.writeFileSync(\"build-metadata.json\", JSON.stringify({name:pkg.name, version:pkg.version, sha:process.env.GITHUB_SHA, node:process.version, node_options:process.env.NODE_OPTIONS, pnpm:process.env.PNPM_VERSION, releaseTag: process.env.RELEASE_TAG || null}, null, 2));"
       - name: Upload package artifact
-        if: github.event_name == 'workflow_dispatch'
+        if: github.ref_name == "main"
         uses: actions/upload-artifact@v4
         with:
-          name: openclaw-tgz-${{ inputs.releaseTag }}
+          name: openclaw-tgz-${{ env.RELEASE_TAG }}
           path: ${{ steps.pack.outputs.tgz }}
           if-no-files-found: error
           retention-days: 14
 
       - name: Upload dist/ (debug)
-        if: github.event_name == 'workflow_dispatch'
+        if: github.ref_name == "main"
         uses: actions/upload-artifact@v4
         with:
-          name: openclaw-dist-${{ inputs.releaseTag }}
+          name: openclaw-dist-${{ env.RELEASE_TAG }}
           path: |
             dist
             ui/dist
