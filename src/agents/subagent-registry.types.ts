@@ -21,6 +21,81 @@ export type PendingFinalDeliveryPayload = {
   wakeOnDescendantSettle?: boolean;
 };
 
+export type SubagentCompletionDedupeCounters = {
+  seenCount: number;
+  deliveredCount: number;
+  duplicateCount: number;
+  suppressedCount: number;
+  backgroundedCount: number;
+};
+
+export type SubagentCompletionArtifactReference = {
+  artifactId?: string;
+  sha256: string;
+  sizeBytes: number;
+};
+
+export type SubagentCompletionNormalizedResult = {
+  normalizedState: string;
+  contractVerdict: string;
+  acceptanceEligible: boolean;
+  classificationLabels: string[];
+  reasons: string[];
+};
+
+export type SubagentCompletionEvidenceVerifierDecision = {
+  decision: string;
+  acceptanceEligible: boolean;
+  parentObserved: boolean;
+  observedBy?: string;
+  observedAt?: string;
+  reasons: string[];
+};
+
+export type SubagentChildResultRetryAttemptRecord = {
+  contractVerdict?: string;
+  mechanismKey?: string;
+  mechanismChanges?: string[];
+  profileKey?: string;
+  promptHash?: string;
+  attemptFingerprint?: string;
+  recordedAt?: number;
+};
+
+export type SubagentChildResultRetryPolicyRecord = {
+  verdict: string;
+  retryAllowed: boolean;
+  directVerificationRequired: boolean;
+  nextMechanismKey?: string;
+  nextAttemptFingerprint?: string;
+  sameMechanismMalformedRetries?: number;
+  sameAttemptFingerprintMalformedRetries?: number;
+  acceptedMechanismChanges?: string[];
+  changedProfileOrPrompt?: boolean;
+  reasons: string[];
+};
+
+export type SubagentCompletionDedupeRecord = {
+  key: string;
+  activeTaskContractId: string;
+  childRunId: string;
+  childSessionId: string;
+  taskId: string;
+  resultHash: string;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  deliveredAt?: number;
+  counters: SubagentCompletionDedupeCounters;
+  lastSuppressedAt?: number;
+  lastBackgroundedAt?: number;
+  lastQuarantine?: SubagentCompletionArtifactReference;
+  lastRawArtifactReference?: SubagentCompletionArtifactReference;
+  lastNormalizedResult?: SubagentCompletionNormalizedResult;
+  lastEvidenceVerifierDecision?: SubagentCompletionEvidenceVerifierDecision;
+  lastChildResultRetryAttempt?: SubagentChildResultRetryAttemptRecord;
+  lastChildResultRetryPolicy?: SubagentChildResultRetryPolicyRecord;
+};
+
 export type SubagentRunRecord = {
   runId: string;
   childSessionKey: string;
@@ -82,6 +157,9 @@ export type SubagentRunRecord = {
   completionEnqueuedAt?: number;
   completionDeliveredAt?: number;
   completionAnnouncedAt?: number;
+  childResultRetryAttempt?: SubagentChildResultRetryAttemptRecord;
+  completionDedupe?: SubagentCompletionDedupeRecord;
+  completionDedupeRecords?: Record<string, SubagentCompletionDedupeRecord>;
   lastAnnounceDropReason?: "queue_cap" | "parent_run_ended" | "sink_unavailable" | "dedupe";
   attachmentsDir?: string;
   attachmentsRootDir?: string;

@@ -1,7 +1,11 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
+  cleanupVitestProcessGroupAfterExit,
   forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
+  isVitestProcessGroupAlive,
   resolveVitestProcessGroupSignalTarget,
   shouldUseDetachedVitestProcessGroup,
 } from "../../scripts/vitest-process-group.mjs";
@@ -78,6 +82,69 @@ describe("vitest process group helpers", () => {
         kill,
       }),
     ).toBe(false);
+  });
+
+  it("detects and cleans stale descendants scoped to the gate process group", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    unrelated.unref();
+
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        `const { spawn } = require("node:child_process");
+const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+child.unref();
+setTimeout(() => process.exit(0), 50);`,
+      ],
+      {
+        detached: true,
+        stdio: "ignore",
+      },
+    );
+
+    try {
+      const [code] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
+      expect(code).toBe(0);
+      expect(isVitestProcessGroupAlive({ childPid: child.pid, platform: process.platform })).toBe(
+        true,
+      );
+
+      const log = vi.fn();
+      const cleanup = await cleanupVitestProcessGroupAfterExit({
+        childPid: child.pid,
+        platform: process.platform,
+        graceMs: 1000,
+        forceGraceMs: 1000,
+        intervalMs: 25,
+        log,
+      });
+
+      expect(cleanup.staleProcessDetected).toBe(true);
+      expect(cleanup.clean).toBe(true);
+      expect(cleanup.signalsSent).toContain("SIGTERM");
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining("stale process group detected after gate exit"),
+      );
+      expect(
+        isVitestProcessGroupAlive({ childPid: unrelated.pid, platform: process.platform }),
+      ).toBe(true);
+    } finally {
+      if (typeof unrelated.pid === "number") {
+        try {
+          process.kill(-unrelated.pid, "SIGKILL");
+        } catch {
+          // Best-effort cleanup only.
+        }
+      }
+    }
   });
 
   it("installs and removes process cleanup listeners", () => {

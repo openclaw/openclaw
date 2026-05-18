@@ -194,6 +194,30 @@ function createSessionsSpawnToolSchema(params: {
         description: 'Light bootstrap context; runtime="subagent" only.',
       }),
     ),
+    capabilityPreflight: Type.Optional(
+      Type.Object({
+        profile: Type.Optional(optionalStringEnum(["default", "read-only", "image-only"] as const)),
+        requiredTools: Type.Optional(Type.Array(Type.String())),
+        writablePaths: Type.Optional(Type.Array(Type.String())),
+        readableRoots: Type.Optional(Type.Array(Type.String())),
+        expectedRuntimeSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+        artifactOutputPath: Type.Optional(Type.String()),
+        logOutputPath: Type.Optional(Type.String()),
+        scratchPaths: Type.Optional(Type.Array(Type.String())),
+        requiresShell: Type.Optional(Type.Boolean()),
+      }),
+    ),
+    taskSizing: Type.Optional(
+      Type.Object({
+        sourceHeavy: Type.Optional(Type.Boolean()),
+        fileReferenceLimit: Type.Optional(Type.Number({ minimum: 1 })),
+        taskPacketByteLimit: Type.Optional(Type.Number({ minimum: 1 })),
+        readByteSoftLimit: Type.Optional(Type.Number({ minimum: 1 })),
+        finalOutputByteLimit: Type.Optional(Type.Number({ minimum: 1 })),
+        primaryObjectives: Type.Optional(Type.Number({ minimum: 1 })),
+        requiresLogRedirection: Type.Optional(Type.Boolean()),
+      }),
+    ),
 
     // Inline attachments (snapshot-by-value).
     // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
@@ -484,6 +508,14 @@ export function createSessionsSpawnTool(
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"
               ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
+              : undefined,
+          capabilityPreflight:
+            params.capabilityPreflight && typeof params.capabilityPreflight === "object"
+              ? (params.capabilityPreflight as Record<string, unknown>)
+              : undefined,
+          taskSizing:
+            params.taskSizing && typeof params.taskSizing === "object"
+              ? (params.taskSizing as Record<string, unknown>)
               : undefined,
         },
         {

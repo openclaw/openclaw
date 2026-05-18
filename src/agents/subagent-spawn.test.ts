@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
@@ -15,6 +17,7 @@ const hoisted = vi.hoisted(() => ({
   registerSubagentRunMock: vi.fn(),
   emitSessionLifecycleEventMock: vi.fn(),
   resolveAgentConfigMock: vi.fn(),
+  resolveSandboxRuntimeStatusMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
 }));
 
@@ -69,7 +72,7 @@ describe("spawnSubagentDirect seam flow", () => {
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
       resolveAgentConfig: hoisted.resolveAgentConfigMock,
       resolveSubagentSpawnModelSelection: () => "openai-codex/gpt-5.4",
-      resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
+      resolveSandboxRuntimeStatus: (params) => hoisted.resolveSandboxRuntimeStatusMock(params),
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
       resetModules: false,
     }));
@@ -83,6 +86,8 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.emitSessionLifecycleEventMock.mockReset();
     hoisted.resolveAgentConfigMock.mockReset();
+    hoisted.resolveSandboxRuntimeStatusMock.mockReset();
+    hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(() => ({ sandboxed: false }));
     hoisted.resolveAgentConfigMock.mockImplementation(
       (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
         cfg.agents?.list?.find((agent) => agent.id === agentId),
@@ -100,6 +105,180 @@ describe("spawnSubagentDirect seam flow", () => {
         return store;
       },
     );
+  });
+
+  it("fails capability preflight before dispatch when a read-only checker needs shell and verdict writes", async () => {
+    const reportPath = `${os.tmpdir()}/session-issues-wave9-verdict.json`;
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "run checker and write the verdict",
+        capabilityPreflight: {
+          profile: "read-only",
+          requiredTools: ["read", "exec"],
+          readableRoots: [os.tmpdir()],
+          writablePaths: [os.tmpdir()],
+          artifactOutputPath: reportPath,
+          expectedRuntimeSeconds: 30,
+          requiresShell: true,
+        },
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        inheritedToolAllowlist: ["read", "image"],
+      },
+    );
+
+    expect(result.status).toBe("forbidden");
+    expect(result.code).toBe("BLOCKED_INFRA_PROFILE_MISMATCH");
+    expect(result.error).toContain("BLOCKED_INFRA_PROFILE_MISMATCH");
+    expect(result.error).toContain("read-only profile cannot run shell-required checkers");
+    expect(result.error).toContain("required tool(s) unavailable: exec, write");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("fails capability preflight against the target sandbox tool policy before dispatch", async () => {
+    hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(
+      ({ sessionKey }: { sessionKey?: string }) => {
+        if (sessionKey?.includes(":subagent:")) {
+          return {
+            sandboxed: true,
+            toolPolicy: { allow: ["read"], deny: [] },
+          };
+        }
+        return { sandboxed: false };
+      },
+    );
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "write checker verdict from sandboxed target",
+        capabilityPreflight: {
+          requiredTools: ["read", "write"],
+          writablePaths: [os.tmpdir()],
+          artifactOutputPath: `${os.tmpdir()}/session-issues-wave9-sandbox-verdict.json`,
+          expectedRuntimeSeconds: 30,
+        },
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        inheritedToolAllowlist: ["read", "write"],
+      },
+    );
+
+    expect(result.status).toBe("forbidden");
+    expect(result.code).toBe("BLOCKED_INFRA_PROFILE_MISMATCH");
+    expect(result.error).toContain("required tool(s) unavailable: write");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks verdict/log artifact paths outside declared writable scratch roots before dispatch", async () => {
+    const allowedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wave5-preflight-"));
+    const result = await spawnSubagentDirect(
+      {
+        task: "run shell-required checker with file-backed verdict",
+        capabilityPreflight: {
+          requiredTools: ["read", "write", "exec"],
+          writablePaths: [allowedRoot],
+          scratchPaths: [allowedRoot],
+          artifactOutputPath: path.join(allowedRoot, "verdict.json"),
+          logOutputPath: path.join(os.tmpdir(), `wave5-log-outside-${Date.now()}.log`),
+          requiresShell: true,
+        },
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("forbidden");
+    expect(result.code).toBe("BLOCKED_INFRA_PROFILE_MISMATCH");
+    expect(result.error).toContain("log output path is outside declared writable/scratch paths");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks oversized source-heavy packets before dispatch", async () => {
+    const task = Array.from(
+      { length: 8 },
+      (_, index) => `src/agents/file-${index}.ts:1:export const value${index} = ${index};`,
+    ).join("\n");
+
+    const result = await spawnSubagentDirect(
+      {
+        task,
+        taskSizing: {
+          sourceHeavy: true,
+          fileReferenceLimit: 2,
+          taskPacketByteLimit: 128,
+        },
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("forbidden");
+    expect(result.code).toBe("BLOCKED_TASK_PACKET_OVERSIZE");
+    expect(result.error).toContain("SOURCE_HEAVY_FILE_REFERENCES");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("injects file-backed verdict and log-redirection instructions for acceptance-gated spawns", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "run-contract", status: "accepted", acceptedAt: 1000 };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+    const artifactPath = `${os.tmpdir()}/wave5-verdict-artifact.json`;
+    const logPath = `${os.tmpdir()}/wave5-verdict-test.log`;
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "run focused checker",
+        capabilityPreflight: {
+          requiredTools: ["read", "write", "exec"],
+          writablePaths: [os.tmpdir()],
+          readableRoots: [os.tmpdir()],
+          scratchPaths: [os.tmpdir()],
+          artifactOutputPath: artifactPath,
+          logOutputPath: logPath,
+          requiresShell: true,
+          expectedRuntimeSeconds: 10,
+        },
+        taskSizing: {
+          finalOutputByteLimit: 2048,
+          requiresLogRedirection: true,
+        },
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = calls.find((call) => call.method === "agent");
+    const params = requireRecord(agentCall?.params);
+    expect(params.message).toContain("[Subagent Dispatch Contract]");
+    expect(params.message).toContain("schemaVersion: 1");
+    expect(params.message).toContain(`artifactPath: ${artifactPath}`);
+    expect(params.message).toContain(`Redirect long command output to ${logPath}`);
+    expect(params.message).toContain("Keep final chat under 2048 bytes");
+    expect(params.message).toContain("Parent/runtime will read the artifact path");
   });
 
   it("rejects explicit same-agent targets when allowAgents excludes the requester", async () => {

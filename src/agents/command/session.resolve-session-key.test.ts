@@ -127,4 +127,26 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.storePath).toBe("/stores/embedded-agent.json");
     expect(hoisted.loadSessionStoreMock).toHaveBeenCalledTimes(1);
   });
+
+  it("normalizes user-provided TUI session aliases before selecting the store/key", () => {
+    const mainStore = {
+      "agent:main:session tui-wave7": { sessionId: "sid-wave7", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({
+      "/stores/main.json": mainStore,
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        session: {
+          store: "/stores/{agentId}.json",
+        },
+      } satisfies OpenClawConfig,
+      sessionKey: "session:tui-wave7",
+    });
+
+    expect(result.sessionKey).toBe("agent:main:session tui-wave7");
+    expect(result.sessionStore).toBe(mainStore);
+    expect(result.storePath).toBe("/stores/main.json");
+  });
 });

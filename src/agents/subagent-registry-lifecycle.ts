@@ -797,6 +797,7 @@ export function createSubagentRegistryLifecycleController(params: {
         requesterOrigin,
         requesterDisplayKey: pendingPayload.requesterDisplayKey,
         task: pendingPayload.task,
+        ...(entry.workspaceDir ? { workspaceDir: entry.workspaceDir } : {}),
         timeoutMs: params.subagentAnnounceTimeoutMs,
         cleanup: entry.cleanup,
         roundOneReply: pendingPayload.frozenResultText ?? undefined,

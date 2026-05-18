@@ -17,6 +17,7 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { sanitizeChildResultMessagesForModel } from "../child-result-sanitizer.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -793,6 +794,9 @@ export async function sanitizeSessionHistory(params: {
     providerSanitized = providerResult ?? undefined;
   }
   const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
+  const childResultSanitized = sanitizeChildResultMessagesForModel(sanitizedWithProvider, {
+    surface: "prompt-reconstruction",
+  });
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
@@ -804,7 +808,7 @@ export async function sanitizeSessionHistory(params: {
   }
 
   if (!policy.applyGoogleTurnOrdering) {
-    return sanitizedWithProvider;
+    return childResultSanitized;
   }
 
   // Strict OpenAI-compatible providers (vLLM, Gemma, etc.) also reject
@@ -813,7 +817,7 @@ export async function sanitizeSessionHistory(params: {
   // provider-owned ordering rewrite above; keep this generic fallback for the
   // strict OpenAI-compatible path and for any provider that leaves assistant-
   // first repair to core. See #38962.
-  return sanitizeGoogleTurnOrdering(sanitizedWithProvider);
+  return sanitizeGoogleTurnOrdering(childResultSanitized);
 }
 
 /**

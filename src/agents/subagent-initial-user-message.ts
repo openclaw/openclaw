@@ -10,6 +10,7 @@ export function buildSubagentInitialUserMessage(params: {
   maxSpawnDepth: number;
   /** When true, this subagent uses a persistent session for follow-up messages. */
   persistentSession: boolean;
+  acceptanceContractInstructions?: string;
   task?: string;
 }): string {
   const lines = [
@@ -19,6 +20,10 @@ export function buildSubagentInitialUserMessage(params: {
     lines.push(
       "[Subagent Context] This subagent session is persistent and remains available for thread follow-up messages.",
     );
+  }
+  const acceptanceContractInstructions = params.acceptanceContractInstructions?.trim();
+  if (acceptanceContractInstructions) {
+    lines.push("[Subagent Dispatch Contract]", acceptanceContractInstructions);
   }
   const taskBody = params.task?.trim();
   if (taskBody) {

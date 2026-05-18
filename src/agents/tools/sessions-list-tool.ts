@@ -34,6 +34,7 @@ import {
   type SessionRunStatus,
   stripToolMessages,
 } from "./sessions-helpers.js";
+import { buildLocalSessionsIndex, isGatewaySessionsListTimeout } from "./sessions-index.js";
 
 const SessionsListToolSchema = Type.Object({
   kinds: Type.Optional(Type.Array(Type.String())),
@@ -117,31 +118,91 @@ export function createSessionsListTool(opts?: {
       const gatewayCall = opts?.callGateway ?? callGateway;
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
-
-      const list = await gatewayCall<{ sessions: Array<SessionListRow>; path: string }>({
-        method: "sessions.list",
-        params: {
-          limit,
-          activeMinutes,
-          label,
-          agentId,
-          search,
-          includeDerivedTitles: false,
-          includeLastMessage: false,
-          includeGlobal: !restrictToSpawned,
-          includeUnknown: !restrictToSpawned,
-          spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
-        },
-      });
-
-      const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-      const storePath = typeof list?.path === "string" ? list.path : undefined;
       const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
       });
+
+      let list: { sessions: Array<SessionListRow>; path: string } | undefined;
+      try {
+        list = await gatewayCall<{ sessions: Array<SessionListRow>; path: string }>({
+          method: "sessions.list",
+          params: {
+            limit,
+            activeMinutes,
+            label,
+            agentId,
+            search,
+            includeDerivedTitles: false,
+            includeLastMessage: false,
+            includeGlobal: !restrictToSpawned,
+            includeUnknown: !restrictToSpawned,
+            spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
+          },
+        });
+      } catch (err) {
+        if (!isGatewaySessionsListTimeout(err)) {
+          throw err;
+        }
+        const now = Date.now();
+        const fallback = buildLocalSessionsIndex({
+          cfg,
+          limit,
+          reason: "gateway sessions.list timed out",
+          includeAgentIds: agentId ? [agentId] : undefined,
+          filter: (row, raw) => {
+            const access = visibilityGuard.check({
+              key: row.canonicalKey,
+              agentId: resolveAgentIdFromSessionKey(row.canonicalKey),
+              ownerSessionKey:
+                typeof (raw.entry as { ownerSessionKey?: unknown }).ownerSessionKey === "string"
+                  ? (raw.entry as { ownerSessionKey?: string }).ownerSessionKey
+                  : undefined,
+              spawnedBy: typeof raw.entry.spawnedBy === "string" ? raw.entry.spawnedBy : undefined,
+              parentSessionKey:
+                typeof raw.entry.parentSessionKey === "string"
+                  ? raw.entry.parentSessionKey
+                  : undefined,
+            });
+            if (!access.allowed) {
+              return false;
+            }
+            const kind = classifySessionKind({ key: row.canonicalKey, alias, mainKey });
+            if (allowedKinds && !allowedKinds.has(kind)) {
+              return false;
+            }
+            if (label && row.label !== label) {
+              return false;
+            }
+            if (agentId && resolveAgentIdFromSessionKey(row.canonicalKey) !== agentId) {
+              return false;
+            }
+            if (
+              activeMinutes !== undefined &&
+              (row.updatedAt === undefined || now - row.updatedAt > activeMinutes * 60_000)
+            ) {
+              return false;
+            }
+            if (search) {
+              const needle = search.toLowerCase();
+              const haystack = [row.canonicalKey, row.sessionId, row.label, row.channel]
+                .filter((value): value is string => typeof value === "string")
+                .join("\n")
+                .toLowerCase();
+              if (!haystack.includes(needle)) {
+                return false;
+              }
+            }
+            return true;
+          },
+        });
+        return jsonResult(fallback);
+      }
+
+      const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+      const storePath = typeof list?.path === "string" ? list.path : undefined;
       const rows: SessionListRow[] = [];
       const historyTargets: Array<{ row: SessionListRow; resolvedKey: string }> = [];
       const titleTargets: Array<{

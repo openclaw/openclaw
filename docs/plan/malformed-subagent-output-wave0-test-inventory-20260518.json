@@ -1,0 +1,390 @@
+{
+  "kind": "malformed-subagent-output-wave0-test-inventory",
+  "date": "2026-05-18",
+  "plan": "/root/.openclaw/repos/openclaw-mds/handoffs/framework/current/malformed-subagent-output-fix-plan-2026-05-16.md",
+  "worktree": "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517",
+  "packageManager": "pnpm@11.1.0+sha512.0c44e842e5686b2c061a81adda8b2258bd8818e9704b2cf2c63d56b931a7b2e910092e085027003b96ca3911ab56a07f6df5abaed2be9925034cdd686a535b14",
+  "wave0Scope": "source-map/test-inventory/release-surface gate only; no runtime code edits",
+  "explicitNoPatchRule": "Do not manually patch bundled/generated/hashed dist artifacts; source and tests only until accepted source build generates release outputs.",
+  "globalBaselineCommands": [
+    {
+      "command": "git status --short",
+      "purpose": "confirm dirty baseline and that Wave 0 edits are docs/report only"
+    },
+    {
+      "command": "git diff --check -- docs/plan/malformed-subagent-output-wave0-source-map-20260518.md docs/plan/malformed-subagent-output-wave0-test-inventory-20260518.json docs/plan/malformed-subagent-output-wave0-release-surface-20260518.md",
+      "purpose": "Wave 0 artifact whitespace validation"
+    },
+    {
+      "command": "node -e \"const fs=require('fs'); JSON.parse(fs.readFileSync('docs/plan/malformed-subagent-output-wave0-test-inventory-20260518.json','utf8')); JSON.parse(fs.readFileSync('/tmp/malformed-subagent-output-wave0-primary-report.json','utf8'));\"",
+      "purpose": "JSON validation for inventory and primary report"
+    }
+  ],
+  "globalPostWaveCommands": [
+    {
+      "command": "pnpm build",
+      "purpose": "source build before release artifact generation; run only after later source/test waves are accepted"
+    },
+    {
+      "command": "git diff --check",
+      "purpose": "full diff whitespace validation before PR/release readiness"
+    },
+    {
+      "command": "pnpm check:changed",
+      "purpose": "changed-file validation after implementation; acceptable substitute for broad check when scoped"
+    }
+  ],
+  "surfaces": [
+    {
+      "surface": "output selection/fallback capture",
+      "p0": true,
+      "sourceFiles": [
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-announce-capture.ts",
+        "src/agents/subagent-session-cleanup.ts"
+      ],
+      "existingTests": [
+        "src/agents/subagent-announce-output.test.ts",
+        "src/agents/subagent-announce.capture-completion-reply.test.ts",
+        "src/agents/subagent-announce.test.ts",
+        "src/agents/subagent-announce.timeout.test.ts"
+      ],
+      "newTestsRequired": [
+        "latestRawText fallback containing TypeScript/Python source is classified/quarantined and not parent-visible raw text",
+        "partial-progress and timeout fallback produce metadata-only non-success summaries",
+        "silent reply and ANNOUNCE_SKIP remain control metadata without raw body",
+        "descendant frozenResultText aggregation calls normalized parent-visible builder for each child"
+      ],
+      "baselineCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/agents/subagent-announce-output.test.ts src/agents/subagent-announce.capture-completion-reply.test.ts src/agents/subagent-announce.test.ts src/agents/subagent-announce.timeout.test.ts",
+          "purpose": "focused current capture/announce behavior"
+        }
+      ],
+      "postWaveCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/agents/subagent-announce-output.test.ts src/agents/subagent-announce.capture-completion-reply.test.ts src/agents/subagent-announce.test.ts src/agents/subagent-announce.timeout.test.ts",
+          "purpose": "regression after Wave 1/2 capture/quarantine changes"
+        }
+      ]
+    },
+    {
+      "surface": "raw child-result wrapping, parser, quarantine, and acceptance evidence",
+      "p0": true,
+      "sourceFiles": [
+        "src/agents/subagent-child-result-contract.ts",
+        "src/agents/subagent-active-task-contract.ts"
+      ],
+      "existingTests": [
+        "src/agents/subagent-child-result-contract.test.ts",
+        "src/agents/subagent-active-task-contract.test.ts"
+      ],
+      "newTestsRequired": [
+        "valid strict JSON verdict, fenced JSON, prose+JSON, invalid/truncated JSON, invalid enum, and missing fields",
+        "legacy plaintext PASS maps to UNVERIFIED/non-success unless parent/runtime evidence upgrades it",
+        "raw source/diff/log/grep, binary/null/ANSI/unicode noise, and internal envelopes are quarantined",
+        "schema-valid PASS with no/nonexistent/stale/out-of-scope/path-traversal evidence becomes EVIDENCE_UNVERIFIED",
+        "valid FAIL propagates as non-success even with partial output"
+      ],
+      "baselineCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/agents/subagent-child-result-contract.test.ts src/agents/subagent-active-task-contract.test.ts",
+          "purpose": "focused contract parser/classifier baseline"
+        }
+      ],
+      "postWaveCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/agents/subagent-child-result-contract.test.ts src/agents/subagent-active-task-contract.test.ts",
+          "purpose": "parser/quarantine/evidence verifier regression"
+        }
+      ]
+    },
+    {
+      "surface": "subagent announce flow and direct/queued/fallback delivery",
+      "p0": true,
+      "sourceFiles": [
+        "src/agents/subagent-announce.ts",
+        "src/agents/subagent-announce-delivery.ts",
+        "src/agents/subagent-announce-dispatch.ts",
+        "src/gateway/server-methods/agent.ts"
+      ],
+      "existingTests": [
+        "src/agents/subagent-announce.test.ts",
+        "src/agents/subagent-announce-delivery.test.ts",
+        "src/agents/subagent-announce-dispatch.test.ts",
+        "src/agents/subagent-announce.format.e2e.test.ts",
+        "src/gateway/server.agent.subagent-delivery-context.test.ts",
+        "src/gateway/server-methods/agent.test.ts"
+      ],
+      "newTestsRequired": [
+        "direct and queued announce paths behave consistently for raw source/diff/log/empty outputs",
+        "fallback captured output is normalized before internal event or external delivery",
+        "cron/background announce flow preserves provenance but no raw body",
+        "nested subagent handoff receives metadata-only event",
+        "agent-mediated message-tool delivery cannot re-emit raw child result"
+      ],
+      "baselineCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/agents/subagent-announce.test.ts src/agents/subagent-announce-delivery.test.ts src/agents/subagent-announce-dispatch.test.ts src/agents/subagent-announce.format.e2e.test.ts",
+          "purpose": "focused announce runtime baseline"
+        },
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server.agent.subagent-delivery-context.test.ts src/gateway/server-methods/agent.test.ts",
+          "purpose": "gateway delivery/persistence baseline"
+        }
+      ],
+      "postWaveCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/agents/subagent-announce.test.ts src/agents/subagent-announce-delivery.test.ts src/agents/subagent-announce-dispatch.test.ts src/agents/subagent-announce.format.e2e.test.ts",
+          "purpose": "announce fail-closed regression"
+        },
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server.agent.subagent-delivery-context.test.ts src/gateway/server-methods/agent.test.ts",
+          "purpose": "gateway delivery regression"
+        }
+      ]
+    },
+    {
+      "surface": "internal event formatting and prompt reconstruction",
+      "p0": true,
+      "sourceFiles": [
+        "src/agents/internal-event-contract.ts",
+        "src/agents/internal-events.ts",
+        "src/agents/internal-runtime-context.ts",
+        "src/agents/command/attempt-execution.shared.ts",
+        "src/agents/agent-command.ts"
+      ],
+      "existingTests": [
+        "src/agents/internal-events.test.ts",
+        "src/agents/agent-command.live-model-switch.test.ts",
+        "src/commands/agent.test.ts"
+      ],
+      "newTestsRequired": [
+        "task completion event with rawBodySuppressed formats only status-card and child-result summary metadata",
+        "delivery-state/action vocabulary including MALFORMED_QUARANTINED, UNVERIFIED, EVIDENCE_UNVERIFIED, NOT_ACCEPTANCE_EVIDENCE, DUPLICATE_ANNOUNCE_SUPPRESSED, INFRA_BLOCKED renders as non-success metadata",
+        "plain prompt and runtime-context prompt both suppress raw bodies",
+        "resolveInternalEventTranscriptBody strips internal envelope before transcript persistence",
+        "delimiter escaping prevents injected INTERNAL_RUNTIME_CONTEXT_BEGIN/END from leaking",
+        "legacy BEGIN_UNTRUSTED_CHILD_RESULT/END_UNTRUSTED_CHILD_RESULT is stripped by runtime-context sanitizer"
+      ],
+      "baselineCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/agents/internal-events.test.ts src/agents/agent-command.live-model-switch.test.ts src/commands/agent.test.ts",
+          "purpose": "focused internal event/prompt baseline"
+        }
+      ],
+      "postWaveCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/agents/internal-events.test.ts src/agents/agent-command.live-model-switch.test.ts src/commands/agent.test.ts",
+          "purpose": "prompt reconstruction and transcript persistence regression"
+        }
+      ]
+    },
+    {
+      "surface": "announce idempotency and dedupe",
+      "p0": true,
+      "sourceFiles": [
+        "src/agents/announce-idempotency.ts",
+        "src/agents/subagent-registry-completion-dedupe.ts",
+        "src/agents/subagent-registry-runtime.ts",
+        "src/agents/subagent-announce.ts",
+        "src/agents/subagent-active-task-contract.ts"
+      ],
+      "existingTests": [
+        "src/agents/subagent-registry-completion.test.ts",
+        "src/agents/subagent-registry.announce-loop-guard.test.ts",
+        "src/agents/subagent-registry.persistence.resume.test.ts",
+        "src/agents/subagent-announce.test.ts",
+        "src/agents/subagent-child-result-contract.test.ts"
+      ],
+      "newTestsRequired": [
+        "same childRunId/childSessionKey/payloadHash suppresses duplicate parent-visible completion",
+        "duplicate completion quarantines/suppresses raw second body",
+        "registry resume preserves dedupe counters and delivered state",
+        "DUPLICATE_ANNOUNCE_SUPPRESSED is visible as metadata/status only"
+      ],
+      "baselineCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/agents/subagent-registry-completion.test.ts src/agents/subagent-registry.announce-loop-guard.test.ts src/agents/subagent-registry.persistence.resume.test.ts src/agents/subagent-announce.test.ts src/agents/subagent-child-result-contract.test.ts",
+          "purpose": "focused dedupe/registry baseline"
+        }
+      ],
+      "postWaveCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/agents/subagent-registry-completion.test.ts src/agents/subagent-registry.announce-loop-guard.test.ts src/agents/subagent-registry.persistence.resume.test.ts src/agents/subagent-announce.test.ts src/agents/subagent-child-result-contract.test.ts",
+          "purpose": "dedupe and restart/resume regression"
+        }
+      ]
+    },
+    {
+      "surface": "compaction and successor transcript summaries",
+      "p0": true,
+      "sourceFiles": [
+        "src/agents/compaction.ts",
+        "src/agents/pi-hooks/compaction-safeguard.ts",
+        "src/agents/pi-hooks/compaction-safeguard-quality.ts",
+        "src/agents/pi-embedded-runner/compaction-successor-transcript.ts",
+        "src/agents/pi-embedded-runner/transcript-file-state.ts"
+      ],
+      "existingTests": [
+        "src/agents/compaction.test.ts",
+        "src/agents/compaction.tool-result-details.test.ts",
+        "src/agents/compaction.identifier-preservation.test.ts",
+        "src/agents/pi-hooks/compaction-safeguard.test.ts",
+        "src/agents/pi-embedded-runner/compaction-successor-transcript.test.ts",
+        "src/agents/pi-embedded-runner/compaction-runtime-context.test.ts"
+      ],
+      "newTestsRequired": [
+        "marked BEGIN_UNTRUSTED_CHILD_RESULT/END_UNTRUSTED_CHILD_RESULT blocks removed from summaries",
+        "missing/nested/split/escaped markers and code-fence markers sanitize deterministically",
+        "raw source/diff/log without markers never reaches summarizer/provider/LLM",
+        "preserved turns, split-turn context, provider path, LLM path, and successor transcript retain metadata only",
+        "sanitizer is idempotent and does not remove ordinary user content unless classified unsafe child result"
+      ],
+      "baselineCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/agents/compaction.test.ts src/agents/compaction.tool-result-details.test.ts src/agents/compaction.identifier-preservation.test.ts src/agents/pi-hooks/compaction-safeguard.test.ts src/agents/pi-embedded-runner/compaction-successor-transcript.test.ts src/agents/pi-embedded-runner/compaction-runtime-context.test.ts",
+          "purpose": "focused compaction baseline"
+        }
+      ],
+      "postWaveCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/agents/compaction.test.ts src/agents/compaction.tool-result-details.test.ts src/agents/compaction.identifier-preservation.test.ts src/agents/pi-hooks/compaction-safeguard.test.ts src/agents/pi-embedded-runner/compaction-successor-transcript.test.ts src/agents/pi-embedded-runner/compaction-runtime-context.test.ts",
+          "purpose": "compaction sanitizer regression"
+        }
+      ]
+    },
+    {
+      "surface": "memory extraction and session export sanitation",
+      "p0": true,
+      "sourceFiles": [
+        "packages/memory-host-sdk/src/host/session-files.ts",
+        "packages/memory-host-sdk/src/host/openclaw-runtime.ts",
+        "packages/memory-host-sdk/src/host/openclaw-runtime-session.ts"
+      ],
+      "existingTests": [
+        "packages/memory-host-sdk/src/host/session-files.test.ts",
+        "packages/memory-host-sdk/src/host/session-files-yield.test.ts",
+        "packages/memory-host-sdk/src/host/read-file.test.ts",
+        "src/agents/system-prompt.memory.test.ts",
+        "src/agents/memory-search.test.ts"
+      ],
+      "newTestsRequired": [
+        "polluted transcript export strips internal runtime context and child raw bodies",
+        "memory search/index snippets include metadata/hash only, not raw source/diff/log",
+        "legacy markers and inter-session subagent announce prompts are sanitized before memory extraction",
+        "large/raw artifact bodies are not embedded or written to memory host outputs"
+      ],
+      "baselineCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts packages/memory-host-sdk/src/host/session-files.test.ts packages/memory-host-sdk/src/host/session-files-yield.test.ts packages/memory-host-sdk/src/host/read-file.test.ts src/agents/system-prompt.memory.test.ts src/agents/memory-search.test.ts",
+          "purpose": "focused memory/session export baseline"
+        }
+      ],
+      "postWaveCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts packages/memory-host-sdk/src/host/session-files.test.ts packages/memory-host-sdk/src/host/session-files-yield.test.ts packages/memory-host-sdk/src/host/read-file.test.ts src/agents/system-prompt.memory.test.ts src/agents/memory-search.test.ts",
+          "purpose": "memory/session export sanitizer regression"
+        }
+      ]
+    },
+    {
+      "surface": "Control UI/TUI/session history rendering",
+      "p0": true,
+      "sourceFiles": [
+        "src/agents/internal-event-contract.ts",
+        "src/gateway/session-history-state.ts",
+        "src/gateway/chat-display-projection.ts",
+        "src/gateway/live-chat-projector.ts",
+        "ui/src/ui/chat/message-extract.ts",
+        "ui/src/ui/controllers/chat.ts",
+        "src/gateway/protocol/schema/agent.ts"
+      ],
+      "existingTests": [
+        "src/gateway/session-history-state.test.ts",
+        "src/gateway/server.agent.subagent-delivery-context.test.ts",
+        "src/gateway/protocol/schema/agent.test.ts",
+        "ui/src/ui/chat/message-extract.test.ts",
+        "ui/src/ui/controllers/chat.test.ts",
+        "ui/src/ui/chat/build-chat-items.test.ts",
+        "ui/src/ui/chat/tool-cards.test.ts"
+      ],
+      "newTestsRequired": [
+        "subagent_announce inter-session user prompt hidden from displayed history",
+        "live assistant projection strips internal runtime context from text/delta",
+        "malformed/quarantined completion status card renders collapsed metadata only",
+        "downgraded PASS/UNVERIFIED/EVIDENCE_UNVERIFIED not rendered as green success",
+        "raw-open workflow requires explicit operator action and never previews body by default"
+      ],
+      "baselineCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/session-history-state.test.ts src/gateway/server.agent.subagent-delivery-context.test.ts src/gateway/protocol/schema/agent.test.ts",
+          "purpose": "gateway history/protocol baseline"
+        },
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-ui.config.ts ui/src/ui/chat/message-extract.test.ts ui/src/ui/controllers/chat.test.ts ui/src/ui/chat/build-chat-items.test.ts ui/src/ui/chat/tool-cards.test.ts",
+          "purpose": "UI/TUI rendering baseline"
+        }
+      ],
+      "postWaveCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/session-history-state.test.ts src/gateway/server.agent.subagent-delivery-context.test.ts src/gateway/protocol/schema/agent.test.ts",
+          "purpose": "gateway history/protocol regression"
+        },
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-ui.config.ts ui/src/ui/chat/message-extract.test.ts ui/src/ui/controllers/chat.test.ts ui/src/ui/chat/build-chat-items.test.ts ui/src/ui/chat/tool-cards.test.ts",
+          "purpose": "UI/TUI status-card regression"
+        }
+      ],
+      "deferRationale": "UI/status raw-open details are Wave 6 after metadata-only runtime path exists; display projection is mapped and must be tested before rollout.",
+      "priorityNote": "Mapped completely for Wave 0; UI raw-open/status rollout remains Wave 6, but display projection is included in P0 leak-prevention regression coverage."
+    },
+    {
+      "surface": "harness acceptance/finalizer/verdict handling",
+      "p0": true,
+      "sourceFiles": [
+        "src/agents/subagent-child-result-contract.ts",
+        "src/agents/subagent-active-task-contract.ts",
+        "src/agents/subagent-announce.ts",
+        "src/gateway/server-methods/agent.ts",
+        "src/gateway/protocol/schema/agent.ts"
+      ],
+      "existingTests": [
+        "src/agents/subagent-child-result-contract.test.ts",
+        "src/agents/subagent-active-task-contract.test.ts",
+        "src/gateway/protocol/schema/agent.test.ts",
+        "src/gateway/server-methods/agent.test.ts",
+        "src/commands/agent.test.ts"
+      ],
+      "newTestsRequired": [
+        "only VERIFIED_PASS can satisfy acceptance gate; PASS and SCHEMA_VALID remain advisory",
+        "checker/mediator acceptance cannot be child chat self-attestation",
+        "parent/runtime-observed artifact/log/session/commit/scope evidence required",
+        "restart/resume revalidates cached decisions and downgrades stale evidence",
+        "concurrent child completions cannot cross-contaminate evidence or status"
+      ],
+      "baselineCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/agents/subagent-child-result-contract.test.ts src/agents/subagent-active-task-contract.test.ts src/commands/agent.test.ts",
+          "purpose": "runtime acceptance contract baseline"
+        },
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/protocol/schema/agent.test.ts src/gateway/server-methods/agent.test.ts",
+          "purpose": "gateway finalizer/protocol baseline"
+        }
+      ],
+      "postWaveCommands": [
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/agents/subagent-child-result-contract.test.ts src/agents/subagent-active-task-contract.test.ts src/commands/agent.test.ts",
+          "purpose": "acceptance verifier regression"
+        },
+        {
+          "command": "OPENCLAW_TEST_FAST=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/protocol/schema/agent.test.ts src/gateway/server-methods/agent.test.ts",
+          "purpose": "gateway finalizer/protocol regression"
+        }
+      ]
+    }
+  ],
+  "focusedCommandPolicy": "Use focused vitest commands above for baseline/post-wave gates. Avoid broad pnpm check, broad tsc, broad tsgo during Wave 0; later release readiness may add broader gates only after source changes are complete.",
+  "unresolvedGaps": []
+}

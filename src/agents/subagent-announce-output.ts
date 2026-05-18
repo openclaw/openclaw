@@ -12,6 +12,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
+import { buildParentVisibleChildResult } from "./subagent-child-result-contract.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { extractAssistantText, sanitizeTextContent } from "./tools/session-message-text.js";
@@ -417,11 +418,45 @@ function describeSubagentOutcome(outcome?: SubagentRunOutcome): string {
   return "unknown";
 }
 
-function formatChildResultData(resultText?: string | null): string {
+function formatChildResultData(resultText?: string | null, outcome?: SubagentRunOutcome): string {
+  const rawText = resultText?.trim() ?? "";
+  if (rawText && isSilentReplyText(rawText, SILENT_REPLY_TOKEN)) {
+    const suppressionMetadata = JSON.stringify(
+      {
+        kind: "user_delivery_suppression",
+        reason: "silent_reply_control",
+        renderAsText: false,
+      },
+      null,
+      2,
+    );
+    return (
+      wrapPromptDataBlock({
+        label: "Child result control metadata",
+        text: suppressionMetadata,
+      }) || "Child result control metadata: silent reply suppressed"
+    );
+  }
+  if (rawText && isAnnounceSkip(rawText)) {
+    return (
+      wrapPromptDataBlock({
+        label: "Child result",
+        text: rawText,
+      }) || rawText
+    );
+  }
+  const parentVisible = buildParentVisibleChildResult({
+    rawText: resultText,
+    rawSource: "assistant_output",
+    outcome,
+  });
+  if (parentVisible.rawBodySuppressed) {
+    return parentVisible.parentVisibleText;
+  }
   return (
     wrapPromptDataBlock({
       label: "Child result",
-      text: resultText?.trim() || "(no output)",
+      text: parentVisible.parentVisibleText || "(no output)",
     }) || "Child result: (no output)"
   );
 }
@@ -464,9 +499,11 @@ export function buildChildCompletionFindings(
       `child ${index + 1}`;
     const displayIndex = sections.length + 1;
     sections.push(
-      [`${displayIndex}. ${title}`, `status: ${outcome}`, formatChildResultData(resultText)].join(
-        "\n",
-      ),
+      [
+        `${displayIndex}. ${title}`,
+        `status: ${outcome}`,
+        formatChildResultData(resultText, child.outcome),
+      ].join("\n"),
     );
   }
 
@@ -477,8 +514,17 @@ export function buildChildCompletionFindings(
   return ["Child completion results:", "", ...sections].join("\n\n");
 }
 
+function buildChildCompletionRowDedupeKey(child: {
+  activeTaskContractId?: string;
+  childSessionKey: string;
+}): string {
+  const activeTaskContractId = child.activeTaskContractId?.trim() ?? "";
+  return `${activeTaskContractId}\u0000${child.childSessionKey}`;
+}
+
 export function dedupeLatestChildCompletionRows(
   children: Array<{
+    activeTaskContractId?: string;
     childSessionKey: string;
     task: string;
     label?: string;
@@ -488,14 +534,15 @@ export function dedupeLatestChildCompletionRows(
     outcome?: SubagentRunOutcome;
   }>,
 ) {
-  const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
+  const latestByDedupeKey = new Map<string, (typeof children)[number]>();
   for (const child of children) {
-    const existing = latestByChildSessionKey.get(child.childSessionKey);
+    const dedupeKey = buildChildCompletionRowDedupeKey(child);
+    const existing = latestByDedupeKey.get(dedupeKey);
     if (!existing || child.createdAt > existing.createdAt) {
-      latestByChildSessionKey.set(child.childSessionKey, child);
+      latestByDedupeKey.set(dedupeKey, child);
     }
   }
-  return [...latestByChildSessionKey.values()];
+  return [...latestByDedupeKey.values()];
 }
 
 export function filterCurrentDirectChildCompletionRows(

@@ -134,7 +134,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveSandboxRuntimeStatus?: (params: {
     cfg?: Record<string, unknown>;
     sessionKey?: string;
-  }) => { sandboxed: boolean };
+  }) => { sandboxed: boolean; toolPolicy?: { allow?: string[]; deny?: string[] } };
   getSessionBindingService?: () => {
     listBySession: (targetSessionKey: string) => Array<{
       status?: string;

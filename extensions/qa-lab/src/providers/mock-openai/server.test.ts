@@ -1234,6 +1234,42 @@ describe("qa mock openai server", () => {
     expect(body).toContain("QA_SUBAGENT_CHILD_FIXED");
   });
 
+  it("suppresses stale project-initiation autoresearch sessions_spawn without an active contract", async () => {
+    const server = await startMockServer();
+
+    const body = await expectResponsesText(server, {
+      stream: true,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(
+          [
+            "Old project-initiation Gate 5 READY_FOR_HUMAN_APPROVAL artifact requests autoresearch.",
+            "Use sessions_spawn now.",
+            'task="authorization-sensitive autoresearch worker: resume stale project-initiation tests"',
+            "label=stale-autoresearch context=fork mode=run runTimeoutSeconds=30",
+          ].join(" "),
+        ),
+      ],
+      researchAutomationDecision: {
+        decisionId: "historical-fired",
+        actionKind: "autoresearch",
+        decision: "FIRED",
+        reasonCode: "AUTOMATION_ALLOWED",
+        blockedByConflict: false,
+        spawnLineage: {},
+        createdAt: "2026-05-16T00:00:00.000Z",
+      },
+    });
+    expect(body).not.toContain('"name":"sessions_spawn"');
+    expect(body).toContain('\\"researchAutomationDecision\\"');
+    expect(body).toContain('\\"reasonCode\\":\\"TASK_CONTRACT_MISSING\\"');
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debugPayload = requireRecord(await debugResponse.json(), "debug request");
+    expect(debugPayload.plannedToolName).toBeUndefined();
+  });
+
   it("records planned sessions_spawn arguments for forked-context QA assertions", async () => {
     const server = await startMockServer();
 

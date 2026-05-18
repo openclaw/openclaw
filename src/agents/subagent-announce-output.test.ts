@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing,
@@ -136,6 +139,24 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain("ANNOUNCE_SKIP");
   });
 
+  it("renders NO_REPLY child findings as structured suppression metadata only", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:silent",
+        task: "silent task",
+        createdAt: 1,
+        frozenResultText: "NO_REPLY",
+        outcome: { status: "error", error: "boom" },
+      },
+    ]);
+
+    expect(findings).toContain("status: error: boom");
+    expect(findings).toContain("Child result control metadata");
+    expect(findings).toContain('"reason": "silent_reply_control"');
+    expect(findings).toContain('"renderAsText": false');
+    expect(findings).not.toContain("NO_REPLY");
+  });
+
   it("numbers findings contiguously after skipped silent completions", () => {
     const findings = buildChildCompletionFindings([
       {
@@ -156,5 +177,73 @@ describe("buildChildCompletionFindings", () => {
 
     expect(findings).toContain("1. visible task");
     expect(findings).not.toContain("2. visible task");
+  });
+
+  it("suppresses raw source bodies in parent-visible findings and points at quarantine metadata", () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-child-findings-"));
+    const previous = process.env.OPENCLAW_CHILD_RESULT_QUARANTINE_DIR;
+    const previousAllowUnsafe = process.env.OPENCLAW_CHILD_RESULT_QUARANTINE_ALLOW_UNSAFE_FOR_TEST;
+    process.env.OPENCLAW_CHILD_RESULT_QUARANTINE_DIR = path.join(tmpRoot, "quarantine");
+    process.env.OPENCLAW_CHILD_RESULT_QUARANTINE_ALLOW_UNSAFE_FOR_TEST = "1";
+    try {
+      const rawSource = [
+        "import { hidden } from './secret.js';",
+        "export function secret() {",
+        'const sentinel = "DO_NOT_INJECT_PARENT";',
+        "if (hidden) {",
+        "return sentinel;",
+        "}",
+        "for (const item of [1, 2]) {",
+        "return String(item);",
+        "}",
+      ].join("\n");
+      const findings = buildChildCompletionFindings([
+        {
+          childSessionKey: "agent:main:subagent:raw",
+          task: "raw source task",
+          createdAt: 1,
+          frozenResultText: rawSource,
+          outcome: { status: "ok" },
+        },
+      ]);
+
+      expect(findings).toContain("Child result summary (raw body quarantined)");
+      expect(findings).toContain("normalizedState=MALFORMED");
+      expect(findings).toContain("quarantineArtifact=");
+      expect(findings).toContain("quarantineSha256=");
+      expect(findings).not.toContain("DO_NOT_INJECT_PARENT");
+      const quarantineFiles = fs.readdirSync(path.join(tmpRoot, "quarantine"));
+      expect(quarantineFiles.some((name) => name.endsWith(".json"))).toBe(true);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_CHILD_RESULT_QUARANTINE_DIR;
+      } else {
+        process.env.OPENCLAW_CHILD_RESULT_QUARANTINE_DIR = previous;
+      }
+      if (previousAllowUnsafe === undefined) {
+        delete process.env.OPENCLAW_CHILD_RESULT_QUARANTINE_ALLOW_UNSAFE_FOR_TEST;
+      } else {
+        process.env.OPENCLAW_CHILD_RESULT_QUARANTINE_ALLOW_UNSAFE_FOR_TEST = previousAllowUnsafe;
+      }
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses concise legacy freeform child bodies in parent-visible findings", () => {
+    const rawBody = "completed the task";
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:freeform",
+        task: "freeform task",
+        createdAt: 1,
+        frozenResultText: rawBody,
+        outcome: { status: "ok" },
+      },
+    ]);
+
+    expect(findings).toContain("Child result summary (raw body quarantined)");
+    expect(findings).toContain("contractVerdict=MISSING_VERDICT_SCHEMA");
+    expect(findings).not.toContain(rawBody);
+    expect(findings).toContain("quarantineArtifact=");
   });
 });

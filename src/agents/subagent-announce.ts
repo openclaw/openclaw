@@ -15,7 +15,18 @@ import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
+import {
+  type AgentTaskCompletionDedupeMetadata,
+  type AgentTaskCompletionDeliveryAction,
+  type AgentTaskCompletionDeliveryState,
+  type AgentTaskCompletionStatusCard,
+} from "./internal-event-contract.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
+import {
+  buildActiveTaskChildCompletionDedupeKey,
+  buildActiveTaskStatusCardData,
+  readActiveTaskContractFromEnv,
+} from "./subagent-active-task-contract.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
@@ -44,9 +55,41 @@ import {
   getRuntimeConfig,
   waitForEmbeddedPiRunEnd,
 } from "./subagent-announce.runtime.js";
+import {
+  buildChildCompletionResultHash,
+  buildParentVisibleChildResult,
+  parseChildResultReport,
+  CHILD_RESULT_DUPLICATE_COMPLETION,
+  CHILD_RESULT_FAILED_GATES,
+  CHILD_RESULT_MALFORMED_RAW_SOURCE_OUTPUT,
+  CHILD_RESULT_MALFORMED_TOOL_LOG_OUTPUT,
+  CHILD_RESULT_MISSING_REQUIRED_ARTIFACT,
+  CHILD_RESULT_MISSING_VERDICT_SCHEMA,
+  CHILD_RESULT_REJECTED,
+  CHILD_RESULT_SCHEMA_VALID,
+  CHILD_RESULT_TASK_CONTRACT_MISSING,
+  CHILD_RESULT_EVIDENCE_UNVERIFIED,
+  type ChildResultClassification,
+  type ChildResultParentRuntimeEvidence,
+  type ChildResultRetryAttempt,
+  type ChildResultRetryPolicyDecision,
+  type ChildResultScopeCheck,
+  type ChildResultScopedGateProcess,
+} from "./subagent-child-result-contract.js";
+import { renderChildResultDashboardStatus } from "./subagent-child-result-rollout.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import type {
+  SubagentChildResultRetryAttemptRecord,
+  SubagentChildResultRetryPolicyRecord,
+  SubagentRunRecord,
+} from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+import {
+  collectSubagentStaleProcessSweep,
+  shouldRunSubagentStaleProcessSweep,
+  SUBAGENT_STALE_PROCESS_RISK,
+} from "./subagent-stale-process-sweep.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 type SubagentAnnounceDeps = {
@@ -79,18 +122,321 @@ export type { SubagentRunOutcome } from "./subagent-announce-output.js";
 
 export type SubagentAnnounceType = "subagent task" | "cron job";
 
+type ChildCompletionDeliveryPolicy = {
+  deliveryState: AgentTaskCompletionDeliveryState;
+  action: AgentTaskCompletionDeliveryAction;
+  userDeliveryEligible: boolean;
+  userVisibleSuppressed?: boolean;
+  userVisibleSuppressedReason?: string;
+};
+
+type ChildCompletionDedupeDecision = {
+  metadata: AgentTaskCompletionDedupeMetadata;
+  duplicateCompletion: boolean;
+  parentEventSuppressed: boolean;
+  backgrounded: boolean;
+};
+
+type ChildCompletionDedupeCounter = {
+  seenCount: number;
+  duplicateCount: number;
+};
+
+type CompletionStatusProvenance = {
+  childRunId?: string;
+  childSessionKey?: string;
+  childSessionId?: string;
+  requesterSessionKey?: string;
+  taskLabel?: string;
+};
+
+const childCompletionDedupeCounters = new Map<string, ChildCompletionDedupeCounter>();
+
+function finiteTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function registryRunMatchesChildRun(entry: unknown, childRunId: string): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const entryRunId = (entry as { runId?: unknown }).runId;
+  if (typeof entryRunId !== "string" || !entryRunId.trim()) {
+    return true;
+  }
+  return entryRunId.trim() === childRunId.trim();
+}
+
+function registryRunHasCompletionMarker(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const typed = entry as {
+    completionAnnouncedAt?: unknown;
+    completionDeliveredAt?: unknown;
+  };
+  return (
+    finiteTimestamp(typed.completionAnnouncedAt) !== undefined ||
+    finiteTimestamp(typed.completionDeliveredAt) !== undefined
+  );
+}
+
+function latestRegistryRunIndicatesDuplicateCompletion(params: {
+  latestRun: unknown;
+  childRunId: string;
+}): boolean {
+  return (
+    registryRunMatchesChildRun(params.latestRun, params.childRunId) &&
+    registryRunHasCompletionMarker(params.latestRun)
+  );
+}
+
+function resolveAnnounceActiveTaskContract(explicit: unknown | undefined): unknown | undefined {
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  const envContract = readActiveTaskContractFromEnv();
+  return envContract.ok ? envContract.contract : undefined;
+}
+
+function buildChildCompletionDedupeDecision(params: {
+  activeTaskContract?: unknown;
+  activeTaskContractId?: string;
+  childRunId: string;
+  childSessionId?: string;
+  childSessionKey: string;
+  childTaskId?: string;
+  resultText?: string | null;
+  duplicateHint?: boolean;
+}): ChildCompletionDedupeDecision {
+  const resultHash = buildChildCompletionResultHash(params.resultText);
+  const keyInfo = buildActiveTaskChildCompletionDedupeKey({
+    activeTaskContract: params.activeTaskContract,
+    activeTaskContractId: params.activeTaskContractId,
+    childRunId: params.childRunId,
+    childSessionId: params.childSessionId,
+    childSessionKey: params.childSessionKey,
+    childTaskId: params.childTaskId,
+    resultHash,
+  });
+  const existing = childCompletionDedupeCounters.get(keyInfo.key);
+  const duplicateHint = params.duplicateHint === true;
+  const priorSeenCount = existing?.seenCount ?? 0;
+  const seenCount = priorSeenCount + 1 + (priorSeenCount === 0 && duplicateHint ? 1 : 0);
+  const duplicateCount = Math.max(0, seenCount - 1);
+  const duplicateCompletion = duplicateHint || priorSeenCount > 0;
+  const parentEventSuppressed = duplicateCompletion && duplicateCount > 1;
+  childCompletionDedupeCounters.set(keyInfo.key, { seenCount, duplicateCount });
+  return {
+    duplicateCompletion,
+    parentEventSuppressed,
+    metadata: {
+      key: keyInfo.key,
+      resultHash,
+      seenCount,
+      deliveredCount: 0,
+      duplicateCount,
+      suppressedCount: duplicateCount,
+      backgroundedCount: keyInfo.backgrounded ? seenCount : 0,
+      duplicate: duplicateCompletion,
+      parentEventSuppressed,
+      activeTaskContractId: keyInfo.components.activeTaskContractId,
+      childRunId: params.childRunId,
+      childSessionId: keyInfo.components.childSessionId,
+      taskId: keyInfo.components.taskId,
+    },
+    backgrounded: keyInfo.backgrounded,
+  };
+}
+
+function completionRecordContractVerdict(entry: SubagentRunRecord): string | undefined {
+  const records = entry.completionDedupeRecords ? Object.values(entry.completionDedupeRecords) : [];
+  const candidates = [entry.completionDedupe, ...records].filter(Boolean) as NonNullable<
+    SubagentRunRecord["completionDedupe"]
+  >[];
+  candidates.sort((left, right) => (right.lastSeenAt ?? 0) - (left.lastSeenAt ?? 0));
+  return candidates.find((record) => record.lastNormalizedResult?.contractVerdict)
+    ?.lastNormalizedResult?.contractVerdict;
+}
+
+function retryAttemptFromRunRecord(entry: SubagentRunRecord): ChildResultRetryAttempt | undefined {
+  const stored =
+    entry.completionDedupe?.lastChildResultRetryAttempt ?? entry.childResultRetryAttempt;
+  const fallback: ChildResultRetryAttempt = {
+    mechanismKey: stored?.mechanismKey ?? entry.spawnMode ?? "subagent",
+    mechanismChanges: stored?.mechanismChanges,
+    profileKey: stored?.profileKey ?? entry.model ?? "default",
+    promptHash: stored?.promptHash,
+    prompt: stored?.promptHash ? undefined : entry.task,
+    contractVerdict: stored?.contractVerdict ?? completionRecordContractVerdict(entry),
+  };
+  if (
+    !fallback.contractVerdict &&
+    !fallback.mechanismKey &&
+    !fallback.promptHash &&
+    !fallback.prompt
+  ) {
+    return undefined;
+  }
+  return fallback;
+}
+
+function currentRetryAttemptFromRunRecord(params: {
+  entry?: SubagentRunRecord | null;
+  task: string;
+  spawnMode?: SpawnSubagentMode;
+}): Pick<
+  ChildResultRetryAttempt,
+  "mechanismKey" | "mechanismChanges" | "profileKey" | "promptHash" | "prompt"
+> {
+  const stored = params.entry?.childResultRetryAttempt;
+  return {
+    mechanismKey: stored?.mechanismKey ?? params.entry?.spawnMode ?? params.spawnMode ?? "subagent",
+    mechanismChanges: stored?.mechanismChanges,
+    profileKey: stored?.profileKey ?? params.entry?.model ?? "default",
+    promptHash: stored?.promptHash,
+    prompt: stored?.promptHash ? undefined : params.task,
+  };
+}
+
+function retryPolicyRecord(
+  decision: ChildResultRetryPolicyDecision | undefined,
+): SubagentChildResultRetryPolicyRecord | undefined {
+  if (!decision) {
+    return undefined;
+  }
+  return {
+    verdict: decision.verdict,
+    retryAllowed: decision.retryAllowed,
+    directVerificationRequired: decision.directVerificationRequired,
+    nextMechanismKey: decision.nextMechanismKey,
+    nextAttemptFingerprint: decision.nextAttemptFingerprint,
+    sameMechanismMalformedRetries: decision.sameMechanismMalformedRetries,
+    sameAttemptFingerprintMalformedRetries: decision.sameAttemptFingerprintMalformedRetries,
+    acceptedMechanismChanges: decision.acceptedMechanismChanges,
+    changedProfileOrPrompt: decision.changedProfileOrPrompt,
+    reasons: decision.reasons,
+  };
+}
+
+function retryAttemptRecord(params: {
+  attempt: Pick<
+    ChildResultRetryAttempt,
+    "mechanismKey" | "mechanismChanges" | "profileKey" | "promptHash" | "prompt"
+  >;
+  contractVerdict: string;
+}): SubagentChildResultRetryAttemptRecord {
+  return {
+    contractVerdict: params.contractVerdict,
+    mechanismKey: params.attempt.mechanismKey,
+    mechanismChanges: params.attempt.mechanismChanges,
+    profileKey: params.attempt.profileKey,
+    promptHash: params.attempt.promptHash,
+    recordedAt: Date.now(),
+  };
+}
+
+const MALFORMED_OR_MISSING_CHILD_VERDICTS = new Set<string>([
+  CHILD_RESULT_MALFORMED_RAW_SOURCE_OUTPUT,
+  CHILD_RESULT_MALFORMED_TOOL_LOG_OUTPUT,
+  CHILD_RESULT_MISSING_REQUIRED_ARTIFACT,
+  CHILD_RESULT_MISSING_VERDICT_SCHEMA,
+  CHILD_RESULT_TASK_CONTRACT_MISSING,
+  CHILD_RESULT_EVIDENCE_UNVERIFIED,
+]);
+
+function resolveChildCompletionDeliveryPolicy(
+  classification: ChildResultClassification,
+): ChildCompletionDeliveryPolicy {
+  if (classification.contractVerdict === CHILD_RESULT_DUPLICATE_COMPLETION) {
+    return {
+      deliveryState: "suppressed_duplicate",
+      action: "suppress_user_visible_delivery",
+      userDeliveryEligible: false,
+      userVisibleSuppressed: true,
+      userVisibleSuppressedReason: "DUPLICATE_COMPLETION",
+    };
+  }
+
+  if (
+    classification.transportOutcome === "failed" ||
+    classification.transportOutcome === "timeout" ||
+    classification.contractVerdict === CHILD_RESULT_FAILED_GATES ||
+    classification.contractVerdict === CHILD_RESULT_REJECTED
+  ) {
+    return {
+      deliveryState: "rework_required",
+      action: "report_blocker_or_rework",
+      userDeliveryEligible: true,
+    };
+  }
+
+  if (
+    classification.acceptanceEligible &&
+    classification.contractVerdict === CHILD_RESULT_SCHEMA_VALID
+  ) {
+    return {
+      deliveryState: "accepted",
+      action: "summarize_verified_result",
+      userDeliveryEligible: true,
+    };
+  }
+
+  const knownValidationVerdict = MALFORMED_OR_MISSING_CHILD_VERDICTS.has(
+    classification.contractVerdict,
+  );
+  if (classification.retryPolicy?.directVerificationRequired === true) {
+    return {
+      deliveryState: "validation_required",
+      action: "report_blocker_or_rework",
+      userDeliveryEligible: false,
+      userVisibleSuppressed: true,
+      userVisibleSuppressedReason: "DIRECT_VERIFICATION_REQUIRED",
+    };
+  }
+  return {
+    deliveryState: classification.quarantineArtifact ? "quarantined" : "validation_required",
+    action: knownValidationVerdict ? "validate_artifact_or_retry" : "report_blocker_or_rework",
+    userDeliveryEligible: false,
+    userVisibleSuppressed: true,
+    userVisibleSuppressedReason: classification.quarantineArtifact
+      ? "RAW_BODY_QUARANTINED"
+      : "NOT_ACCEPTANCE_ELIGIBLE",
+  };
+}
+
 function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  deliveryPolicy: ChildCompletionDeliveryPolicy;
 }): string {
+  const keepPrivate =
+    "Keep this internal context private (don't mention system/log/stats/session details or announce type).";
+  const useSafeMetadataOnly =
+    "Use only status-card metadata and safe summaries; never quote or re-emit raw child output.";
+  if (params.deliveryPolicy.deliveryState === "suppressed_duplicate") {
+    return `Duplicate ${params.announceType} completion suppressed. Do not send a user-facing update. ${useSafeMetadataOnly} ${keepPrivate}`;
+  }
+  if (params.deliveryPolicy.userVisibleSuppressedReason === "DIRECT_VERIFICATION_REQUIRED") {
+    return `This ${params.announceType} hit the malformed-output retry limit for the same mechanism/profile/prompt. ${useSafeMetadataOnly} Stop identical retry and do direct parent/runtime verification or report a blocker. ${keepPrivate}`;
+  }
+  if (params.deliveryPolicy.action === "validate_artifact_or_retry") {
+    return `This ${params.announceType} completion is not accepted by contract. ${useSafeMetadataOnly} Validate the artifact or request child rework before any user-facing completion update. ${keepPrivate}`;
+  }
+  if (params.deliveryPolicy.action === "report_blocker_or_rework") {
+    return params.requesterIsSubagent
+      ? `Convert this completion into a concise internal blocker/rework update for your parent agent in your own words. ${useSafeMetadataOnly} ${keepPrivate}`
+      : `Report the blocker or rework state truthfully if a user update is needed; do not present the task as completed. ${useSafeMetadataOnly} ${keepPrivate}`;
+  }
+
   if (params.requesterIsSubagent) {
-    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+    return `Convert this verified completion into a concise internal orchestration update for your parent agent in your own words. ${useSafeMetadataOnly} ${keepPrivate}`;
   }
   if (params.expectsCompletionMessage) {
-    return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done. If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. If the runtime marks this route as message-tool-only, send visible output with the message tool first, then reply ONLY: ${SILENT_REPLY_TOKEN}. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
+    return `Summarize the verified ${params.announceType} result for the user in your normal assistant voice. ${useSafeMetadataOnly} If the runtime marks this route as message-tool-only, send visible output with the message tool first, then use the structured silent-reply suppression control to avoid duplicate final text. ${keepPrivate}`;
   }
-  return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done. If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
+  return `Summarize the verified ${params.announceType} result for the user in your normal assistant voice. Do not copy internal event text verbatim. ${useSafeMetadataOnly} ${keepPrivate}`;
 }
 
 function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
@@ -98,6 +444,306 @@ function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
     formatAgentInternalEventsForPrompt(events) ||
     "A background task finished. Process the completion update now."
   );
+}
+
+function buildCompletionStatusLabel(params: {
+  outcome: SubagentRunOutcome;
+  deliveryPolicy: ChildCompletionDeliveryPolicy;
+}): string {
+  if (params.deliveryPolicy.action === "summarize_verified_result") {
+    return "verified completion; summarize for user or parent review";
+  }
+  if (params.deliveryPolicy.action === "report_blocker_or_rework") {
+    if (params.outcome.status === "timeout") {
+      return "timed out; blocker/rework report required";
+    }
+    if (params.outcome.status === "error") {
+      return `failed; blocker/rework report required: ${params.outcome.error || "unknown error"}`;
+    }
+    return "blocked or rejected; rework report required";
+  }
+  if (params.deliveryPolicy.deliveryState === "suppressed_duplicate") {
+    return "duplicate completion suppressed";
+  }
+  return params.deliveryPolicy.deliveryState === "quarantined"
+    ? "child result quarantined; validation required"
+    : "child result not accepted; validation required";
+}
+
+function uniqueStatusLabels(values: Array<string | undefined | false>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function buildCompletionStatusLabels(params: {
+  classification: ChildResultClassification;
+  deliveryPolicy: ChildCompletionDeliveryPolicy;
+  notAcceptanceEvidence: boolean;
+  verifierDecision: string;
+}): string[] {
+  return uniqueStatusLabels([
+    ...(params.classification.classificationLabels ?? []),
+    params.deliveryPolicy.deliveryState === "quarantined" && "MALFORMED_QUARANTINED",
+    params.classification.normalizedState === "UNVERIFIED" && "UNVERIFIED",
+    params.verifierDecision === "EVIDENCE_UNVERIFIED" && "EVIDENCE_UNVERIFIED",
+    params.notAcceptanceEvidence && "NOT_ACCEPTANCE_EVIDENCE",
+    params.deliveryPolicy.deliveryState === "suppressed_duplicate" &&
+      "DUPLICATE_ANNOUNCE_SUPPRESSED",
+    params.classification.normalizedState === "INFRA_BLOCKED" && "INFRA_BLOCKED",
+  ]);
+}
+
+function buildCompletionDebugRefs(params: {
+  classification: ChildResultClassification;
+  payloadHash?: string;
+  byteCount?: number;
+  dedupe?: AgentTaskCompletionDedupeMetadata;
+}): AgentTaskCompletionStatusCard["debugRefs"] {
+  const refs = {
+    ...(params.classification.quarantineArtifact?.artifactId
+      ? { artifactId: params.classification.quarantineArtifact.artifactId }
+      : {}),
+    ...(params.payloadHash ? { payloadHash: params.payloadHash } : {}),
+    ...(params.dedupe?.resultHash ? { resultHash: params.dedupe.resultHash } : {}),
+    ...(params.byteCount !== undefined ? { byteCount: params.byteCount } : {}),
+  };
+  return Object.keys(refs).length > 0 ? refs : undefined;
+}
+
+function buildCompletionPresentation(params: {
+  deliveryPolicy: ChildCompletionDeliveryPolicy;
+  statusLabels: string[];
+  debugRefs?: AgentTaskCompletionStatusCard["debugRefs"];
+}): AgentTaskCompletionStatusCard["presentation"] {
+  const severity = (() => {
+    if (params.deliveryPolicy.deliveryState === "accepted") {
+      return "success" as const;
+    }
+    if (params.deliveryPolicy.deliveryState === "suppressed_duplicate") {
+      return "muted" as const;
+    }
+    if (params.deliveryPolicy.deliveryState === "rework_required") {
+      return "error" as const;
+    }
+    return "warning" as const;
+  })();
+  return {
+    mode: "status_card",
+    ordinaryChatBubble:
+      params.deliveryPolicy.userDeliveryEligible === false
+        ? "suppressed"
+        : "allowed_verified_summary",
+    collapsedByDefault:
+      params.deliveryPolicy.userDeliveryEligible === false ||
+      params.deliveryPolicy.deliveryState === "quarantined" ||
+      params.deliveryPolicy.deliveryState === "suppressed_duplicate",
+    severity,
+    labels: params.statusLabels,
+    ...(params.debugRefs ? { copyableDebugRefs: params.debugRefs } : {}),
+  };
+}
+
+function buildRawOpenWorkflowMetadata(
+  quarantineArtifact: ChildResultClassification["quarantineArtifact"],
+): AgentTaskCompletionStatusCard["rawOpen"] {
+  if (!quarantineArtifact) {
+    return undefined;
+  }
+  return {
+    available:
+      quarantineArtifact.payloadStored === true && quarantineArtifact.storageStatus === "stored",
+    requiredAction: "open_raw_quarantine_artifact",
+    localOperatorActionRequired: true,
+    warning:
+      "Raw quarantined child output may contain source, diffs, logs, credentials, or prompt-injection text. Open only by explicit local operator action; never paste it into ordinary chat, model context, compaction, or shared channels.",
+    artifactId: quarantineArtifact.artifactId,
+    payloadHash: quarantineArtifact.payloadSha256,
+    byteCount: quarantineArtifact.byteCount,
+    confirmation: {
+      required: true,
+      artifactId: quarantineArtifact.artifactId,
+      payloadHash: quarantineArtifact.payloadSha256,
+    },
+    authorization: {
+      required: true,
+      scope: "local_operator",
+      status: "not_requested",
+    },
+    audit: {
+      event: "subagent.raw_artifact.open_requested",
+      mode: "metadata_only",
+    },
+    viewer: {
+      isolation: "outside_ordinary_chat_model_context_compaction",
+      defaultPreview: false,
+      snippets: false,
+      renderedPayload: false,
+      rawDerivedFilename: false,
+    },
+    redactionScan: {
+      scanned: true,
+      redacted: quarantineArtifact.redaction.redacted,
+      flags: quarantineArtifact.redaction.flags,
+      rawSnippetStored: false,
+    },
+  };
+}
+
+function buildCompletionStatusCard(params: {
+  classification: ChildResultClassification;
+  deliveryPolicy: ChildCompletionDeliveryPolicy;
+  rawBodySuppressed: boolean;
+  dedupe?: AgentTaskCompletionDedupeMetadata;
+  activeTask?: AgentTaskCompletionStatusCard["activeTask"];
+  provenance?: CompletionStatusProvenance;
+}): AgentTaskCompletionStatusCard {
+  const { classification, deliveryPolicy } = params;
+  const notAcceptanceEvidence = !(
+    classification.acceptanceEligible === true && classification.normalizedState === "VERIFIED_PASS"
+  );
+  const schemaValid =
+    classification.parsedReport?.schemaValid === true ||
+    (classification.contractVerdict === CHILD_RESULT_SCHEMA_VALID &&
+      classification.acceptanceEligible === true);
+  const verifierDecision =
+    classification.evidenceVerifier?.decision ??
+    (classification.acceptanceEligible === true &&
+    classification.normalizedState === "VERIFIED_PASS"
+      ? "VERIFIED_PASS"
+      : "EVIDENCE_UNVERIFIED");
+  const evidenceReasons = classification.evidenceVerifier?.reasons?.length
+    ? classification.evidenceVerifier.reasons
+    : undefined;
+  const quarantine = classification.quarantineArtifact
+    ? ({
+        sha256: classification.quarantineArtifact.payloadSha256,
+        sizeBytes: classification.quarantineArtifact.byteCount,
+        storedSizeBytes: classification.quarantineArtifact.storedSizeBytes,
+        source: classification.quarantineArtifact.source,
+        capturedAt: classification.quarantineArtifact.capturedAt,
+        truncated: classification.quarantineArtifact.truncated,
+        redacted: classification.quarantineArtifact.redacted,
+        reason: classification.quarantineArtifact.reason,
+        artifactId: classification.quarantineArtifact.artifactId,
+        payloadSha256: classification.quarantineArtifact.payloadSha256,
+        payloadHash: classification.quarantineArtifact.payloadSha256,
+        byteCount: classification.quarantineArtifact.byteCount,
+        storageStatus: classification.quarantineArtifact.storageStatus,
+        payloadStored: classification.quarantineArtifact.payloadStored,
+      } as AgentTaskCompletionStatusCard["quarantine"] & Record<string, unknown>)
+    : undefined;
+  const payloadHash = classification.quarantineArtifact?.payloadSha256 ?? params.dedupe?.resultHash;
+  const byteCount = classification.quarantineArtifact?.byteCount;
+  const statusLabels = buildCompletionStatusLabels({
+    classification,
+    deliveryPolicy,
+    notAcceptanceEvidence,
+    verifierDecision,
+  });
+  const debugRefs = buildCompletionDebugRefs({
+    classification,
+    payloadHash,
+    byteCount,
+    dedupe: params.dedupe,
+  });
+  const presentation = buildCompletionPresentation({
+    deliveryPolicy,
+    statusLabels,
+    debugRefs,
+  });
+  const dashboard = renderChildResultDashboardStatus(classification);
+  const rawOpen = buildRawOpenWorkflowMetadata(classification.quarantineArtifact);
+  const sanitizedMetadata = classification.sanitizedMetadata;
+  const evidenceVerifier = sanitizedMetadata?.evidenceVerifier ?? classification.evidenceVerifier;
+  const retryPolicy = retryPolicyRecord(classification.retryPolicy);
+  const provenanceEntries = Object.entries(params.provenance ?? {}).filter(
+    ([, value]) => typeof value === "string" && value.trim(),
+  );
+  const provenance =
+    provenanceEntries.length > 0 ? Object.fromEntries(provenanceEntries) : undefined;
+  return {
+    kind: "subagent_completion_status",
+    schemaVersion: classification.schemaVersion,
+    normalizedState: classification.normalizedState,
+    classificationLabels: classification.classificationLabels,
+    labels: statusLabels,
+    presentation,
+    dashboard,
+    ...(debugRefs ? { debugRefs } : {}),
+    schemaValid,
+    notAcceptanceEvidence,
+    verifierDecision,
+    ...(classification.evidenceVerifier
+      ? {
+          evidenceParentObserved: classification.evidenceVerifier.parentObserved,
+          ...(classification.evidenceVerifier.observedBy
+            ? { evidenceObservedBy: classification.evidenceVerifier.observedBy }
+            : {}),
+          ...(evidenceReasons ? { evidenceReasons } : {}),
+        }
+      : {}),
+    ...(payloadHash ? { payloadHash } : {}),
+    ...(byteCount !== undefined ? { byteCount } : {}),
+    deliveryState: deliveryPolicy.deliveryState,
+    action: deliveryPolicy.action,
+    transportOutcome: classification.transportOutcome,
+    contractVerdict: classification.contractVerdict,
+    acceptanceEligible: classification.acceptanceEligible,
+    reasons: classification.reasons,
+    ...(quarantine ? { quarantine } : {}),
+    ...(rawOpen ? { rawOpen } : {}),
+    ...(sanitizedMetadata?.verifiedArtifacts?.length
+      ? { verifiedArtifacts: sanitizedMetadata.verifiedArtifacts }
+      : {}),
+    ...(evidenceVerifier ? { evidenceVerifier } : {}),
+    ...(retryPolicy ? { retryPolicy } : {}),
+    rawBodySuppressed: params.rawBodySuppressed,
+    ...(deliveryPolicy.userVisibleSuppressed !== undefined
+      ? { userVisibleSuppressed: deliveryPolicy.userVisibleSuppressed }
+      : {}),
+    ...(deliveryPolicy.userVisibleSuppressedReason
+      ? { userVisibleSuppressedReason: deliveryPolicy.userVisibleSuppressedReason }
+      : {}),
+    ...(params.dedupe ? { dedupe: params.dedupe } : {}),
+    ...(params.activeTask ? { activeTask: params.activeTask } : {}),
+    ...(provenance ? { provenance } : {}),
+  } as AgentTaskCompletionStatusCard;
+}
+
+export function buildChildCompletionDeliveryDecision(params: {
+  classification: ChildResultClassification;
+  rawBodySuppressed: boolean;
+  outcome: SubagentRunOutcome;
+  requesterIsSubagent: boolean;
+  announceType: SubagentAnnounceType;
+  expectsCompletionMessage?: boolean;
+  dedupe?: AgentTaskCompletionDedupeMetadata;
+  activeTask?: AgentTaskCompletionStatusCard["activeTask"];
+  provenance?: CompletionStatusProvenance;
+}): {
+  deliveryPolicy: ChildCompletionDeliveryPolicy;
+  replyInstruction: string;
+  statusCard: AgentTaskCompletionStatusCard;
+  statusLabel: string;
+} {
+  const deliveryPolicy = resolveChildCompletionDeliveryPolicy(params.classification);
+  return {
+    deliveryPolicy,
+    replyInstruction: buildAnnounceReplyInstruction({
+      requesterIsSubagent: params.requesterIsSubagent,
+      announceType: params.announceType,
+      expectsCompletionMessage: params.expectsCompletionMessage,
+      deliveryPolicy,
+    }),
+    statusCard: buildCompletionStatusCard({
+      classification: params.classification,
+      deliveryPolicy,
+      rawBodySuppressed: params.rawBodySuppressed,
+      dedupe: params.dedupe,
+      activeTask: params.activeTask,
+      provenance: params.provenance,
+    }),
+    statusLabel: buildCompletionStatusLabel({ outcome: params.outcome, deliveryPolicy }),
+  };
 }
 
 function hasUsableSessionEntry(entry: unknown): boolean {
@@ -232,6 +878,7 @@ export async function runSubagentAnnounceFlow(params: {
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
+  workspaceDir?: string;
   timeoutMs: number;
   cleanup: "delete" | "keep";
   roundOneReply?: string;
@@ -247,6 +894,12 @@ export async function runSubagentAnnounceFlow(params: {
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  activeTaskContract?: unknown;
+  childTaskId?: string;
+  parentRuntimeEvidence?: ChildResultParentRuntimeEvidence;
+  parentScopeCheck?: ChildResultScopeCheck;
+  scopedGateProcesses?: ChildResultScopedGateProcess[];
+  parentPostflightHashes?: Record<string, string>;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
   signal?: AbortSignal;
@@ -457,19 +1110,187 @@ export async function runSubagentAnnounceFlow(params: {
       outcome = { status: "unknown" };
     }
 
-    // Build status label
-    const statusLabel =
-      outcome.status === "ok"
-        ? "completed; ready for parent review"
-        : outcome.status === "timeout"
-          ? "timed out"
-          : outcome.status === "error"
-            ? `failed: ${outcome.error || "unknown error"}`
-            : "finished with unknown status";
-
     const taskLabel = params.label || params.task || "task";
     const announceSessionId = childSessionId || "unknown";
-    const findings = childCompletionFindings || reply || "(no output)";
+    const activeTaskContract = resolveAnnounceActiveTaskContract(params.activeTaskContract);
+    const identityResultText = childCompletionFindings ?? reply;
+    const parsedIdentity = parseChildResultReport(identityResultText ?? "");
+    const childTaskId =
+      params.childTaskId ?? parsedIdentity?.taskId ?? parsedIdentity?.activeTaskContractId;
+    let latestRunForChild: SubagentRunRecord | null | undefined;
+    const duplicateHintFromRegistry = (() => {
+      try {
+        latestRunForChild = subagentRegistryRuntime?.getLatestSubagentRunByChildSessionKey?.(
+          params.childSessionKey,
+        ) as SubagentRunRecord | null | undefined;
+        return latestRegistryRunIndicatesDuplicateCompletion({
+          latestRun: latestRunForChild,
+          childRunId: params.childRunId,
+        });
+      } catch {
+        return false;
+      }
+    })();
+    let completionDedupe = buildChildCompletionDedupeDecision({
+      activeTaskContract,
+      activeTaskContractId: parsedIdentity?.activeTaskContractId,
+      childRunId: params.childRunId,
+      childSessionId,
+      childSessionKey: params.childSessionKey,
+      childTaskId,
+      resultText: identityResultText,
+      duplicateHint: duplicateHintFromRegistry,
+    });
+    if (subagentRegistryRuntime?.beginSubagentCompletionDedupe) {
+      try {
+        const dedupeBegin = subagentRegistryRuntime.beginSubagentCompletionDedupe({
+          childRunId: params.childRunId,
+          childSessionKey: params.childSessionKey,
+          dedupeKey: completionDedupe.metadata.key,
+          activeTaskContractId: completionDedupe.metadata.activeTaskContractId ?? "unknown",
+          childSessionId: completionDedupe.metadata.childSessionId ?? announceSessionId,
+          taskId: completionDedupe.metadata.taskId ?? "unknown",
+          resultHash: completionDedupe.metadata.resultHash,
+          backgrounded: completionDedupe.backgrounded,
+        });
+        const registryDuplicate = dedupeBegin.duplicate === true;
+        const duplicateCompletion = completionDedupe.duplicateCompletion || registryDuplicate;
+        const registrySeenCount = Math.max(1, dedupeBegin.counters.seenCount ?? 1);
+        const registryDeliveredCount = Math.max(0, dedupeBegin.counters.deliveredCount ?? 0);
+        const registryDuplicateCount = Math.max(0, dedupeBegin.counters.duplicateCount ?? 0);
+        const registrySuppressedCount = Math.max(0, dedupeBegin.counters.suppressedCount ?? 0);
+        const registryBackgroundedCount = Math.max(0, dedupeBegin.counters.backgroundedCount ?? 0);
+        const parentEventSuppressed =
+          completionDedupe.parentEventSuppressed ||
+          (registryDuplicate && registryDuplicateCount > 1);
+        completionDedupe = {
+          ...completionDedupe,
+          duplicateCompletion,
+          parentEventSuppressed,
+          metadata: {
+            ...completionDedupe.metadata,
+            seenCount: Math.max(completionDedupe.metadata.seenCount, registrySeenCount),
+            deliveredCount: Math.max(
+              completionDedupe.metadata.deliveredCount ?? 0,
+              registryDeliveredCount,
+            ),
+            duplicateCount: Math.max(
+              completionDedupe.metadata.duplicateCount,
+              registryDuplicateCount,
+            ),
+            suppressedCount: Math.max(
+              completionDedupe.metadata.suppressedCount ?? 0,
+              registrySuppressedCount,
+            ),
+            backgroundedCount: Math.max(
+              completionDedupe.metadata.backgroundedCount ?? 0,
+              registryBackgroundedCount,
+            ),
+            duplicate: duplicateCompletion,
+            parentEventSuppressed,
+          },
+        };
+      } catch {
+        // Best-effort idempotency bookkeeping; keep fallback in-memory suppression.
+      }
+    }
+    if (completionDedupe.parentEventSuppressed) {
+      params.onDeliveryResult?.({ delivered: true, path: "none" });
+      didAnnounce = true;
+      return true;
+    }
+    const duplicateCompletion = completionDedupe.duplicateCompletion;
+    const staleProcessParentRuntimeEvidence = (() => {
+      if (params.parentRuntimeEvidence?.staleProcessSweep) {
+        return params.parentRuntimeEvidence;
+      }
+      if (
+        !shouldRunSubagentStaleProcessSweep({
+          task: params.task,
+          outcomeStatus: outcome.status,
+        })
+      ) {
+        return params.parentRuntimeEvidence;
+      }
+      const sweep = collectSubagentStaleProcessSweep({
+        childRunId: params.childRunId,
+        childSessionKey: params.childSessionKey,
+        workspaceDir: params.workspaceDir,
+      });
+      if (sweep.status !== SUBAGENT_STALE_PROCESS_RISK) {
+        return params.parentRuntimeEvidence;
+      }
+      const observedAtMs = Date.now();
+      return {
+        ...(params.parentRuntimeEvidence ?? {}),
+        observedBy: params.parentRuntimeEvidence?.observedBy ?? "parent_runtime",
+        observedAtMs: params.parentRuntimeEvidence?.observedAtMs ?? observedAtMs,
+        childRunId: params.parentRuntimeEvidence?.childRunId ?? params.childRunId,
+        childSessionKey: params.parentRuntimeEvidence?.childSessionKey ?? params.childSessionKey,
+        staleProcessSweep: {
+          status: SUBAGENT_STALE_PROCESS_RISK,
+          noRunningProcesses: false,
+          observedAtMs,
+          childRunId: params.childRunId,
+          childSessionKey: params.childSessionKey,
+        },
+      } satisfies ChildResultParentRuntimeEvidence;
+    })();
+    const previousRetryAttempts = (() => {
+      try {
+        const runs = subagentRegistryRuntime?.listSubagentRunsForRequester?.(
+          params.requesterSessionKey,
+        );
+        if (!Array.isArray(runs)) {
+          return [];
+        }
+        return runs
+          .filter((entry): entry is SubagentRunRecord =>
+            Boolean(entry && entry.runId !== params.childRunId),
+          )
+          .map((entry) => retryAttemptFromRunRecord(entry))
+          .filter((attempt): attempt is ChildResultRetryAttempt => Boolean(attempt));
+      } catch {
+        return [];
+      }
+    })();
+    const currentRetryAttempt = currentRetryAttemptFromRunRecord({
+      entry: latestRunForChild,
+      task: params.task,
+      spawnMode: params.spawnMode,
+    });
+    const parentVisibleChildResult = buildParentVisibleChildResult({
+      rawText: duplicateCompletion && !reply?.trim() ? childCompletionFindings : reply,
+      rawSource: "assistant_output",
+      outcome,
+      duplicateCompletion,
+      activeTaskContract,
+      childTaskId,
+      spawnedAtMs: params.startedAt,
+      parentPostflightHashes: params.parentPostflightHashes,
+      parentScopeCheck: params.parentScopeCheck,
+      scopedGateProcesses: params.scopedGateProcesses,
+      parentRuntimeEvidence: staleProcessParentRuntimeEvidence,
+      childSessionKey: params.childSessionKey,
+      childSessionId: announceSessionId,
+      childRunId: params.childRunId,
+      requesterSessionKey: targetRequesterSessionKey,
+      taskLabel,
+      previousRetryAttempts,
+      currentRetryAttempt,
+    });
+    const findings = duplicateCompletion
+      ? parentVisibleChildResult.parentVisibleText || "(duplicate completion suppressed)"
+      : childCompletionFindings || parentVisibleChildResult.parentVisibleText || "(no output)";
+    const activeTaskStatusCard = activeTaskContract
+      ? buildActiveTaskStatusCardData({
+          activeTaskContract,
+          childTaskId,
+          outputArtifactPaths:
+            parentVisibleChildResult.classification.parsedReport?.outputArtifactPaths ??
+            parsedIdentity?.outputArtifactPaths,
+        })
+      : undefined;
 
     let requesterIsSubagent = requesterIsInternalSession();
     if (requesterIsSubagent) {
@@ -500,11 +1321,24 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
-    const replyInstruction = buildAnnounceReplyInstruction({
+    const completionDecision = buildChildCompletionDeliveryDecision({
+      classification: parentVisibleChildResult.classification,
+      rawBodySuppressed: parentVisibleChildResult.rawBodySuppressed,
+      outcome,
       requesterIsSubagent,
       announceType,
       expectsCompletionMessage,
+      dedupe: completionDedupe.metadata,
+      activeTask: activeTaskStatusCard,
+      provenance: {
+        childRunId: params.childRunId,
+        childSessionKey: params.childSessionKey,
+        childSessionId: announceSessionId,
+        requesterSessionKey: targetRequesterSessionKey,
+        taskLabel,
+      },
     });
+    const { deliveryPolicy, replyInstruction, statusCard, statusLabel } = completionDecision;
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
       startedAt: params.startedAt,
@@ -523,6 +1357,7 @@ export async function runSubagentAnnounceFlow(params: {
         result: findings,
         statsLine,
         replyInstruction,
+        statusCard,
       },
     ];
     const triggerMessage = buildAnnounceSteerMessage(internalEvents);
@@ -545,7 +1380,9 @@ export async function runSubagentAnnounceFlow(params: {
             expectsCompletionMessage,
           })
         : targetRequesterOrigin;
-    const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
+    const directIdempotencyKey = buildAnnounceIdempotencyKey(
+      activeTaskContract ? `v2:${completionDedupe.metadata.key}` : announceId,
+    );
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
       announceId,
@@ -566,10 +1403,81 @@ export async function runSubagentAnnounceFlow(params: {
       targetRequesterSessionKey,
       requesterIsSubagent,
       expectsCompletionMessage: expectsCompletionMessage,
+      userDeliveryEligible: deliveryPolicy.userDeliveryEligible,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,
       signal: params.signal,
     });
+    if (delivery.delivered && subagentRegistryRuntime?.markSubagentCompletionDedupeDelivered) {
+      try {
+        subagentRegistryRuntime.markSubagentCompletionDedupeDelivered({
+          childRunId: params.childRunId,
+          childSessionKey: params.childSessionKey,
+          dedupeKey: completionDedupe.metadata.key,
+          activeTaskContractId: completionDedupe.metadata.activeTaskContractId ?? "unknown",
+          childSessionId: completionDedupe.metadata.childSessionId ?? announceSessionId,
+          taskId: completionDedupe.metadata.taskId ?? "unknown",
+          resultHash: completionDedupe.metadata.resultHash,
+          backgrounded: completionDedupe.backgrounded,
+          ...(parentVisibleChildResult.classification.quarantineArtifact
+            ? {
+                quarantine: {
+                  artifactId: parentVisibleChildResult.classification.quarantineArtifact.artifactId,
+                  sha256: parentVisibleChildResult.classification.quarantineArtifact.payloadSha256,
+                  sizeBytes: parentVisibleChildResult.classification.quarantineArtifact.byteCount,
+                },
+                rawArtifactReference: {
+                  artifactId: parentVisibleChildResult.classification.quarantineArtifact.artifactId,
+                  sha256: parentVisibleChildResult.classification.quarantineArtifact.payloadSha256,
+                  sizeBytes: parentVisibleChildResult.classification.quarantineArtifact.byteCount,
+                },
+              }
+            : {}),
+          normalizedResult: {
+            normalizedState: parentVisibleChildResult.classification.normalizedState,
+            contractVerdict: parentVisibleChildResult.classification.contractVerdict,
+            acceptanceEligible: parentVisibleChildResult.classification.acceptanceEligible,
+            classificationLabels: parentVisibleChildResult.classification.classificationLabels,
+            reasons: parentVisibleChildResult.classification.reasons,
+          },
+          ...(parentVisibleChildResult.classification.evidenceVerifier
+            ? {
+                evidenceVerifierDecision: {
+                  decision: parentVisibleChildResult.classification.evidenceVerifier.decision,
+                  acceptanceEligible:
+                    parentVisibleChildResult.classification.evidenceVerifier.acceptanceEligible,
+                  parentObserved:
+                    parentVisibleChildResult.classification.evidenceVerifier.parentObserved,
+                  ...(parentVisibleChildResult.classification.evidenceVerifier.observedBy
+                    ? {
+                        observedBy:
+                          parentVisibleChildResult.classification.evidenceVerifier.observedBy,
+                      }
+                    : {}),
+                  ...(parentVisibleChildResult.classification.evidenceVerifier.observedAt
+                    ? {
+                        observedAt:
+                          parentVisibleChildResult.classification.evidenceVerifier.observedAt,
+                      }
+                    : {}),
+                  reasons: parentVisibleChildResult.classification.evidenceVerifier.reasons,
+                },
+              }
+            : {}),
+          retryAttempt: retryAttemptRecord({
+            attempt: currentRetryAttempt,
+            contractVerdict: parentVisibleChildResult.classification.contractVerdict,
+          }),
+          ...(parentVisibleChildResult.classification.retryPolicy
+            ? {
+                retryPolicy: retryPolicyRecord(parentVisibleChildResult.classification.retryPolicy),
+              }
+            : {}),
+        });
+      } catch {
+        // Best-effort idempotency bookkeeping; delivery already succeeded.
+      }
+    }
     params.onDeliveryResult?.(delivery);
     didAnnounce = delivery.delivered;
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
@@ -605,6 +1513,9 @@ export async function runSubagentAnnounceFlow(params: {
 }
 
 export const testing = {
+  resetCompletionDedupeForTest() {
+    childCompletionDedupeCounters.clear();
+  },
   setDepsForTest(
     overrides?: Partial<SubagentAnnounceDeps> & {
       callGateway?: typeof callGateway;

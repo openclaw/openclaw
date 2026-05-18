@@ -11,3 +11,7 @@ export {
   shouldIgnorePostCompletionAnnounceForSession,
 } from "./subagent-registry-announce-read.js";
 export { replaceSubagentRunAfterSteer } from "./subagent-registry-steer-runtime.js";
+export {
+  beginSubagentCompletionDedupe,
+  markSubagentCompletionDedupeDelivered,
+} from "./subagent-registry-completion-dedupe.js";

@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "description": "Wave 7 named replay corpus fixtures. Raw fixture input is intentionally kept here; replay reports and telemetry must emit metadata only.",
+  "cases": [
+    {
+      "name": "polluted-session-raw-source",
+      "group": "polluted_sessions",
+      "rawText": "export function leakedOne() {\n  return 1;\n}\nexport const leakedTwo = () => {\n  return 2;\n};\nif (leakedTwo()) {\n  console.log('DO_NOT_LEAK_WAVE7_SOURCE');\n}\nclass LeakedThree {\n  run() {\n    return leakedOne();\n  }\n}",
+      "expected": {
+        "normalizedState": "MALFORMED",
+        "contractVerdict": "MALFORMED_RAW_SOURCE_OUTPUT",
+        "acceptanceEligible": false,
+        "classificationLabels": ["RAW_SOURCE_LIKE"],
+        "dashboardSemanticStatus": "error"
+      }
+    },
+    {
+      "name": "polluted-session-internal-envelope",
+      "group": "polluted_sessions",
+      "rawText": "BEGIN_UNTRUSTED_CHILD_RESULT\nsourceTool=subagent_announce\nDO_NOT_LEAK_WAVE7_ENVELOPE\nEND_UNTRUSTED_CHILD_RESULT",
+      "expected": {
+        "normalizedState": "MALFORMED",
+        "contractVerdict": "MISSING_VERDICT_SCHEMA",
+        "acceptanceEligible": false,
+        "classificationLabels": ["INTERNAL_ENVELOPE"],
+        "dashboardSemanticStatus": "error"
+      }
+    },
+    {
+      "name": "clean-prose-only-legacy-pass",
+      "group": "clean_prose_only_subagents",
+      "rawText": "PASS - completed without structured evidence",
+      "classificationParams": { "requireActiveTaskContract": false },
+      "expected": {
+        "normalizedState": "UNVERIFIED",
+        "contractVerdict": "EVIDENCE_UNVERIFIED",
+        "acceptanceEligible": false,
+        "classificationLabels": ["EVIDENCE_UNVERIFIED"],
+        "dashboardSemanticStatus": "warning"
+      }
+    },
+    {
+      "name": "read-only-auditor-schema-pass-no-evidence",
+      "group": "read_only_auditors",
+      "rawText": "{\"schemaVersion\":1,\"verdict\":\"PASS\"}",
+      "classificationParams": { "requireActiveTaskContract": false },
+      "expected": {
+        "normalizedState": "UNVERIFIED",
+        "contractVerdict": "EVIDENCE_UNVERIFIED",
+        "acceptanceEligible": false,
+        "classificationLabels": ["EVIDENCE_UNVERIFIED"],
+        "dashboardSemanticStatus": "warning"
+      }
+    },
+    {
+      "name": "timeout-child-empty-output",
+      "group": "timeout_cancelled_children",
+      "rawText": "",
+      "classificationParams": { "outcome": { "status": "timeout" } },
+      "expected": {
+        "normalizedState": "TIMEOUT",
+        "contractVerdict": "MISSING_VERDICT_SCHEMA",
+        "acceptanceEligible": false,
+        "classificationLabels": ["NO_OUTPUT"],
+        "dashboardSemanticStatus": "muted"
+      }
+    },
+    {
+      "name": "cancelled-child-empty-output",
+      "group": "timeout_cancelled_children",
+      "rawText": "",
+      "classificationParams": { "outcome": { "status": "cancelled" } },
+      "expected": {
+        "normalizedState": "CANCELLED",
+        "contractVerdict": "MISSING_VERDICT_SCHEMA",
+        "acceptanceEligible": false,
+        "classificationLabels": ["NO_OUTPUT"],
+        "dashboardSemanticStatus": "muted"
+      }
+    },
+    {
+      "name": "cron-background-failed-run",
+      "group": "cron_background_tasks",
+      "rawText": "FAILED (failures=1)",
+      "expected": {
+        "normalizedState": "FAIL",
+        "contractVerdict": "FAILED_GATES",
+        "acceptanceEligible": false,
+        "dashboardSemanticStatus": "error"
+      }
+    },
+    {
+      "name": "direct-announcement-duplicate-suppressed",
+      "group": "direct_queued_announcements",
+      "rawText": "PASS duplicate completion body should remain quarantined",
+      "classificationParams": { "duplicateCompletion": true },
+      "expected": {
+        "normalizedState": "CANCELLED",
+        "contractVerdict": "DUPLICATE_COMPLETION",
+        "acceptanceEligible": false,
+        "classificationLabels": ["DUPLICATE_ANNOUNCE_SUPPRESSED"],
+        "dashboardSemanticStatus": "muted"
+      }
+    },
+    {
+      "name": "dashboard-session-history-unverified-pass",
+      "group": "dashboard_session_history_views",
+      "rawText": "{\"schemaVersion\":1,\"verdict\":\"PASS\",\"outputArtifactPaths\":[\"artifact.json\"]}",
+      "classificationParams": { "requireActiveTaskContract": false },
+      "expected": {
+        "normalizedState": "UNVERIFIED",
+        "contractVerdict": "EVIDENCE_UNVERIFIED",
+        "acceptanceEligible": false,
+        "classificationLabels": ["EVIDENCE_UNVERIFIED"],
+        "dashboardSemanticStatus": "warning"
+      }
+    },
+    {
+      "name": "restart-resume-cached-pass-revalidated",
+      "group": "restart_resume_cases",
+      "rawText": "{\"schemaVersion\":1,\"verdict\":\"PASS\",\"outputArtifactPaths\":[\"resume-artifact.json\"]}",
+      "classificationParams": { "requireActiveTaskContract": false },
+      "expected": {
+        "normalizedState": "UNVERIFIED",
+        "contractVerdict": "EVIDENCE_UNVERIFIED",
+        "acceptanceEligible": false,
+        "classificationLabels": ["EVIDENCE_UNVERIFIED"],
+        "dashboardSemanticStatus": "warning"
+      }
+    }
+  ]
+}

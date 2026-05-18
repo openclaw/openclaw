@@ -271,6 +271,7 @@ describe("sessions tools", () => {
     };
 
     expect(schemaProp("sessions_history", "limit").type).toBe("number");
+    expect(schemaProp("sessions_history", "audit").type).toBe("boolean");
     expect(schemaProp("sessions_list", "limit").type).toBe("number");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("number");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
@@ -738,6 +739,7 @@ describe("sessions tools", () => {
 
   it("sessions_history sets contentRedacted when sensitive data is redacted", async () => {
     callGatewayMock.mockReset();
+    const fakeOpenAiKey = "sk-" + "1234567890abcdef1234";
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "chat.history") {
@@ -746,7 +748,7 @@ describe("sessions tools", () => {
             {
               role: "assistant",
               content: [
-                { type: "text", text: "Use sk-1234567890abcdef1234 to authenticate with the API." },
+                { type: "text", text: `Use ${fakeOpenAiKey} to authenticate with the API.` },
               ],
             },
           ],
@@ -773,13 +775,14 @@ describe("sessions tools", () => {
     const msg = details.messages?.[0] as { content?: Array<{ type?: string; text?: string }> };
     const textBlock = msg?.content?.find((b) => b.type === "text");
     expect(typeof textBlock?.text).toBe("string");
-    expect(textBlock?.text).not.toContain("sk-1234567890abcdef1234");
+    expect(textBlock?.text).not.toContain(fakeOpenAiKey);
   });
 
   it("sessions_history sets both contentRedacted and contentTruncated independently", async () => {
     callGatewayMock.mockReset();
     const longPrefix = "safe text ".repeat(420);
-    const sensitiveText = `${longPrefix} sk-9876543210fedcba9876 end`;
+    const fakeOpenAiKey = "sk-" + "9876543210fedcba9876";
+    const sensitiveText = `${longPrefix} ${fakeOpenAiKey} end`;
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "chat.history") {

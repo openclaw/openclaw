@@ -82,6 +82,7 @@ import {
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
+import { sanitizeChildResultMessagesForModel } from "../../child-result-sanitizer.js";
 import {
   addClientToolsToCodeModeCatalog,
   applyCodeModeCatalog,
@@ -886,7 +887,12 @@ export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): Agent
   const normalized = stripToolResultDetails(normalizeAssistantReplayContent(messages));
   const withoutHistoricalInboundMetadata =
     stripHistoricalInboundMetadataFromUserMessages(normalized);
-  return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
+  const withoutHistoricalRuntimeContext = stripHistoricalRuntimeContextCustomMessages(
+    withoutHistoricalInboundMetadata,
+  );
+  return sanitizeChildResultMessagesForModel(withoutHistoricalRuntimeContext, {
+    surface: "active-transcript-prompt-reconstruction",
+  });
 }
 
 function stripHistoricalInboundMetadataFromUserMessages(messages: AgentMessage[]): AgentMessage[] {

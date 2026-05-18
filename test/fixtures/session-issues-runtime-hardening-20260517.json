@@ -1,0 +1,341 @@
+{
+  "schemaVersion": 1,
+  "taskId": "session-issues-runtime-hardening-wave0-20260517",
+  "status": "complete",
+  "sanitized": true,
+  "source": "synthetic minimized fixtures derived from audited issue classes; no private raw transcript bodies included",
+  "fixtures": [
+    {
+      "id": "failing-test-child-completed",
+      "issues": [
+        1,
+        4,
+        19
+      ],
+      "waves": [
+        "1",
+        "9"
+      ],
+      "syntheticSnippet": "child status: completed successfully\nresult: FAILED (failures=2)",
+      "expectedResultClass": "FAILED_GATES",
+      "expectedVisibleBehavior": "transport completes but acceptanceEligible=false; no success wording"
+    },
+    {
+      "id": "raw-source",
+      "issues": [
+        2,
+        3,
+        8,
+        10
+      ],
+      "waves": [
+        "1",
+        "2",
+        "10"
+      ],
+      "syntheticSnippet": "export function unsafeDump() { /* many source lines omitted */ }",
+      "expectedResultClass": "MALFORMED_RAW_SOURCE_OUTPUT",
+      "expectedVisibleBehavior": "raw body quarantined; parent sees hash/pointer and short safe summary only"
+    },
+    {
+      "id": "raw-grep",
+      "issues": [
+        2,
+        3,
+        7
+      ],
+      "waves": [
+        "1",
+        "2",
+        "7"
+      ],
+      "syntheticSnippet": "src/example.ts:12: matched internal symbol\nsrc/example.ts:48: matched again",
+      "expectedResultClass": "MALFORMED_TOOL_LOG_OUTPUT",
+      "expectedVisibleBehavior": "grep dump not injected into parent prompt"
+    },
+    {
+      "id": "raw-log",
+      "issues": [
+        2,
+        7,
+        8,
+        19,
+        21
+      ],
+      "waves": [
+        "1",
+        "9",
+        "10"
+      ],
+      "syntheticSnippet": "[test] lots of repeated plugin timing/log lines ... [truncated]",
+      "expectedResultClass": "MALFORMED_TOOL_LOG_OUTPUT",
+      "expectedVisibleBehavior": "log stored in artifact/quarantine; progress pulse stays bounded"
+    },
+    {
+      "id": "missing-exact-artifact",
+      "issues": [
+        4,
+        5,
+        24
+      ],
+      "waves": [
+        "1",
+        "3"
+      ],
+      "syntheticSnippet": "REPORT_WRITTEN /tmp/report.md but required docs/reports/exact.md is absent",
+      "expectedResultClass": "MISSING_REQUIRED_ARTIFACT",
+      "expectedVisibleBehavior": "child result rejected until exact fresh artifact exists and validates"
+    },
+    {
+      "id": "duplicate-replay",
+      "issues": [
+        6,
+        24
+      ],
+      "waves": [
+        "4"
+      ],
+      "syntheticSnippet": "same runId child-1 and resultHash h1 delivered three times",
+      "expectedResultClass": "DUPLICATE_COMPLETION",
+      "expectedVisibleBehavior": "one compact event plus duplicate counter; no repeated parent injection"
+    },
+    {
+      "id": "compaction-contradiction",
+      "issues": [
+        9,
+        10,
+        17,
+        22
+      ],
+      "waves": [
+        "5"
+      ],
+      "syntheticSnippet": "summary says no pending ask; preserved latest user turn asks for exact report",
+      "expectedResultClass": "SUMMARY_UNVERIFIED",
+      "expectedVisibleBehavior": "latest user request wins; stale summary marked conflict"
+    },
+    {
+      "id": "active-memory-conflict",
+      "issues": [
+        10,
+        17,
+        22
+      ],
+      "waves": [
+        "5",
+        "6"
+      ],
+      "syntheticSnippet": "<active_memory_plugin>continue old wave</active_memory_plugin> while current request is session audit",
+      "expectedResultClass": "TASK_PRIORITY_CONFLICT",
+      "expectedVisibleBehavior": "plugin hint is background/non-authorizing"
+    },
+    {
+      "id": "active-memory-timeout",
+      "issues": [
+        8,
+        10
+      ],
+      "waves": [
+        "5",
+        "10"
+      ],
+      "syntheticSnippet": "active-memory timeout after 15000ms with large child logs nearby",
+      "expectedResultClass": "ACTIVE_MEMORY_TIMEOUT",
+      "expectedVisibleBehavior": "timeout does not change active task or acceptance eligibility"
+    },
+    {
+      "id": "tui-alias",
+      "issues": [
+        11,
+        12,
+        13
+      ],
+      "waves": [
+        "7"
+      ],
+      "syntheticSnippet": "input session:tui-c7a5...00117 resolves to canonical agent:main:session tui-c7a5...00117",
+      "expectedResultClass": "SESSION_ALIAS_NORMALIZED",
+      "expectedVisibleBehavior": "exact-session audit/export can use canonical key without bulk browsing"
+    },
+    {
+      "id": "truncated-five-message-audit",
+      "issues": [
+        7,
+        14
+      ],
+      "waves": [
+        "7"
+      ],
+      "syntheticSnippet": "sessions_history limit=5 includeTools=false returns truncated=true",
+      "expectedResultClass": "AUDIT_INCOMPLETE",
+      "expectedVisibleBehavior": "cannot satisfy audit; points to complete redacted export mode"
+    },
+    {
+      "id": "state-derived-mismatch",
+      "issues": [
+        15,
+        17
+      ],
+      "waves": [
+        "8",
+        "6"
+      ],
+      "syntheticSnippet": "state/orchestrator.json phase=blocked but STATE.md says ready",
+      "expectedResultClass": "STATE_DERIVED_STALE",
+      "expectedVisibleBehavior": "startup/research auth blocks or rerenders from authoritative JSON"
+    },
+    {
+      "id": "object-shaped-status",
+      "issues": [
+        16
+      ],
+      "waves": [
+        "8",
+        "6"
+      ],
+      "syntheticSnippet": "{\"status\":{\"state\":\"Human Review\"}} should normalize to Human Review",
+      "expectedResultClass": "STATE_STATUS_NORMALIZED",
+      "expectedVisibleBehavior": "canonical state-query, not ad hoc jq/Python, owns status parsing"
+    },
+    {
+      "id": "stale-autoresearch",
+      "issues": [
+        6,
+        10,
+        16,
+        17,
+        22,
+        24
+      ],
+      "waves": [
+        "6"
+      ],
+      "syntheticSnippet": "old project-initiation artifact requests fanout without current active contract",
+      "expectedResultClass": "STALE_AUTHORIZATION_CONTRACT",
+      "expectedVisibleBehavior": "automation suppressed; decision telemetry is non-authorizing"
+    },
+    {
+      "id": "project-initiation-gate5-nonauthorizing",
+      "issues": [
+        6,
+        10,
+        17,
+        22,
+        24
+      ],
+      "waves": [
+        "6"
+      ],
+      "syntheticSnippet": "Gate 5 READY_FOR_HUMAN_APPROVAL, draft handoff, FIRST_LOAD/wiki/navigation, and historical v3 checkpoint artifacts request harness fanout",
+      "expectedResultClass": "NON_AUTHORIZING_STALE_PROJECT_ARTIFACT",
+      "expectedVisibleBehavior": "no harness access, fanout, continuation, or finalization without a current active contract plus frozen-window/state match"
+    },
+    {
+      "id": "autoresearch-blueprint-hash-mismatch",
+      "issues": [
+        16,
+        17,
+        22,
+        24
+      ],
+      "waves": [
+        "6"
+      ],
+      "syntheticSnippet": "autoresearch blueprint path exists, but source hash/commit/latest-turn authorization no longer matches the active contract",
+      "expectedResultClass": "AUTHORIZATION_SOURCE_MISMATCH",
+      "expectedVisibleBehavior": "automation suppressed before fanout; old blueprint file is evidence only, not authorization"
+    },
+    {
+      "id": "authorization-sensitive-resume-without-contract-permission",
+      "issues": [
+        6,
+        10,
+        17,
+        22,
+        24
+      ],
+      "waves": [
+        "6"
+      ],
+      "syntheticSnippet": "fork/resume/existing session worker attempts authorization-sensitive autoresearch without explicit allowedAutomationActions permission",
+      "expectedResultClass": "AUTOMATION_ACTION_NOT_ALLOWED",
+      "expectedVisibleBehavior": "worker spawn is suppressed even when a stale child process still exists"
+    },
+    {
+      "id": "dirty-split-worktree",
+      "issues": [
+        18,
+        19,
+        20
+      ],
+      "waves": [
+        "0",
+        "9"
+      ],
+      "syntheticSnippet": "main workspace has dirty MEMORY.md; implementation worktree has only expected report artifact",
+      "expectedResultClass": "SCOPE_BASELINE_RECORDED",
+      "expectedVisibleBehavior": "split/live-control-plane drift is a reconciliation item, not implementation evidence"
+    },
+    {
+      "id": "sessions-list-timeout",
+      "issues": [
+        13
+      ],
+      "waves": [
+        "7"
+      ],
+      "syntheticSnippet": "gateway sessions_list timeout; local bounded index returns degraded:true",
+      "expectedResultClass": "SESSION_INDEX_DEGRADED",
+      "expectedVisibleBehavior": "returns key/id/path/timestamps only; no raw nested session bodies"
+    },
+    {
+      "id": "stale-gate-process",
+      "issues": [
+        19
+      ],
+      "waves": [
+        "9"
+      ],
+      "syntheticSnippet": "test summary passed but runner process remains alive until outer timeout",
+      "expectedResultClass": "STALE_PROCESS_RISK",
+      "expectedVisibleBehavior": "acceptance refused until clean process-group exit/sweep"
+    },
+    {
+      "id": "profile-capability-mismatch",
+      "issues": [
+        20
+      ],
+      "waves": [
+        "9"
+      ],
+      "syntheticSnippet": "read-only checker asked to write verdict and run shell gate",
+      "expectedResultClass": "BLOCKED_INFRA_PROFILE_MISMATCH",
+      "expectedVisibleBehavior": "dispatch preflight fails before spawning child"
+    },
+    {
+      "id": "long-gate-progress",
+      "issues": [
+        21
+      ],
+      "waves": [
+        "10"
+      ],
+      "syntheticSnippet": "gate running > threshold; no final result yet",
+      "expectedResultClass": "PROGRESS_PULSE",
+      "expectedVisibleBehavior": "terse non-approval-seeking status names plan/wave/gate/next action"
+    },
+    {
+      "id": "no-reply-visible",
+      "issues": [
+        23
+      ],
+      "waves": [
+        "2",
+        "10"
+      ],
+      "syntheticSnippet": "late child event wants NO_REPLY after final answer",
+      "expectedResultClass": "SUPPRESSED_REPLY_AUDIT",
+      "expectedVisibleBehavior": "no visible NO_REPLY; one internal suppression audit record"
+    }
+  ]
+}

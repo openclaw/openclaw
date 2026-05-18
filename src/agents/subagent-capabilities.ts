@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,6 +15,7 @@ import {
 } from "./inherited-tool-deny.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { normalizeSubagentSessionKey } from "./subagent-session-key.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 export type SubagentSessionRole = "main" | "orchestrator" | "leaf";
 const SUBAGENT_SESSION_ROLES: readonly SubagentSessionRole[] = [
@@ -46,6 +49,302 @@ export type SessionCapabilityStore = Record<
     inheritedToolDeny?: unknown;
   }
 >;
+
+export const SUBAGENT_CAPABILITY_PREFLIGHT_PROFILE_MISMATCH =
+  "BLOCKED_INFRA_PROFILE_MISMATCH" as const;
+
+export type SubagentCapabilityPreflightProfile = "default" | "read-only" | "image-only";
+
+export type SubagentCapabilityPreflightRequest = {
+  requiredTools?: unknown;
+  writablePaths?: unknown;
+  readableRoots?: unknown;
+  expectedRuntimeSeconds?: unknown;
+  artifactOutputPath?: unknown;
+  logOutputPath?: unknown;
+  scratchPaths?: unknown;
+  requiresShell?: unknown;
+  profile?: unknown;
+};
+
+export type SubagentCapabilityPreflightResult =
+  | {
+      ok: true;
+      normalized: {
+        profile: SubagentCapabilityPreflightProfile;
+        requiredTools: string[];
+        writablePaths: string[];
+        readableRoots: string[];
+        artifactOutputPath?: string;
+        logOutputPath?: string;
+        scratchPaths: string[];
+        expectedRuntimeSeconds?: number;
+        requiresShell: boolean;
+      };
+    }
+  | {
+      ok: false;
+      code: typeof SUBAGENT_CAPABILITY_PREFLIGHT_PROFILE_MISMATCH;
+      message: string;
+      reasons: string[];
+      missingTools: string[];
+      blockedPaths: string[];
+    };
+
+const SUBAGENT_PREFLIGHT_WRITE_TOOLS = new Set(["write", "edit", "apply_patch", "fs_write"]);
+const SUBAGENT_PREFLIGHT_SHELL_TOOLS = new Set(["exec", "process", "shell", "spawn"]);
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const normalized = entry.trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function normalizePreflightProfile(value: unknown): SubagentCapabilityPreflightProfile {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (normalized === "read-only" || normalized === "readonly" || normalized === "read_only") {
+    return "read-only";
+  }
+  if (normalized === "image-only" || normalized === "imageonly" || normalized === "image_only") {
+    return "image-only";
+  }
+  return "default";
+}
+
+function normalizePositiveDurationSeconds(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.ceil(value);
+}
+
+function resolvePathForPreflight(value: string, workspaceDir?: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return path.resolve(workspaceDir || process.cwd(), trimmed);
+}
+
+function isPathEqualOrInside(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function resolveWritableCheckPath(pathValue: string, workspaceDir?: string): string {
+  const resolved = resolvePathForPreflight(pathValue, workspaceDir);
+  if (!resolved) {
+    return "";
+  }
+  if (fs.existsSync(resolved)) {
+    return resolved;
+  }
+  return path.dirname(resolved);
+}
+
+function isPathAccessible(pathValue: string, mode: number): boolean {
+  try {
+    fs.accessSync(pathValue, mode);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isToolAllowedByInheritedPolicy(
+  toolName: string,
+  inheritedAllowlist: string[],
+  inheritedDenylist: string[],
+): boolean {
+  const allowPolicy = inheritedAllowlist.length > 0 ? { allow: inheritedAllowlist } : undefined;
+  const denyPolicy = inheritedDenylist.length > 0 ? { deny: inheritedDenylist } : undefined;
+  return (
+    isToolAllowedByPolicyName(toolName, allowPolicy) &&
+    isToolAllowedByPolicyName(toolName, denyPolicy)
+  );
+}
+
+function makePreflightFailure(params: {
+  reasons: string[];
+  missingTools?: string[];
+  blockedPaths?: string[];
+}): SubagentCapabilityPreflightResult {
+  const reasons = params.reasons.filter(Boolean);
+  return {
+    ok: false,
+    code: SUBAGENT_CAPABILITY_PREFLIGHT_PROFILE_MISMATCH,
+    message: `${SUBAGENT_CAPABILITY_PREFLIGHT_PROFILE_MISMATCH}: ${reasons.join("; ")}`,
+    reasons,
+    missingTools: [...new Set(params.missingTools ?? [])].sort(),
+    blockedPaths: [...new Set(params.blockedPaths ?? [])].sort(),
+  };
+}
+
+export function validateSubagentCapabilityPreflight(
+  request: SubagentCapabilityPreflightRequest | undefined,
+  runtime?: {
+    inheritedToolAllowlist?: unknown;
+    inheritedToolDenylist?: unknown;
+    isToolAllowed?: (toolName: string) => boolean;
+    workspaceDir?: string;
+    runTimeoutSeconds?: number;
+  },
+): SubagentCapabilityPreflightResult {
+  const profile = normalizePreflightProfile(request?.profile);
+  const requiredTools = normalizeInheritedToolAllowlist(request?.requiredTools);
+  const writablePaths = normalizeStringList(request?.writablePaths);
+  const readableRoots = normalizeStringList(request?.readableRoots);
+  const artifactOutputPath =
+    typeof request?.artifactOutputPath === "string" && request.artifactOutputPath.trim()
+      ? request.artifactOutputPath.trim()
+      : undefined;
+  const logOutputPath =
+    typeof request?.logOutputPath === "string" && request.logOutputPath.trim()
+      ? request.logOutputPath.trim()
+      : undefined;
+  const scratchPaths = normalizeStringList(request?.scratchPaths);
+  const expectedRuntimeSeconds = normalizePositiveDurationSeconds(request?.expectedRuntimeSeconds);
+  const requiresShell = request?.requiresShell === true;
+  const inheritedToolAllowlist = normalizeInheritedToolAllowlist(runtime?.inheritedToolAllowlist);
+  const inheritedToolDenylist = normalizeInheritedToolDenylist(runtime?.inheritedToolDenylist);
+  const reasons: string[] = [];
+  const missingTools: string[] = [];
+  const blockedPaths: string[] = [];
+
+  const effectiveRequiredTools = new Set(requiredTools);
+  if (requiresShell) {
+    effectiveRequiredTools.add("exec");
+  }
+  if (writablePaths.length > 0 || artifactOutputPath || logOutputPath || scratchPaths.length > 0) {
+    effectiveRequiredTools.add("write");
+  }
+  if (readableRoots.length > 0) {
+    effectiveRequiredTools.add("read");
+  }
+
+  const writeRequested =
+    writablePaths.length > 0 ||
+    Boolean(artifactOutputPath) ||
+    Boolean(logOutputPath) ||
+    scratchPaths.length > 0 ||
+    [...effectiveRequiredTools].some((tool) => SUBAGENT_PREFLIGHT_WRITE_TOOLS.has(tool));
+  const shellRequested =
+    requiresShell ||
+    [...effectiveRequiredTools].some((tool) => SUBAGENT_PREFLIGHT_SHELL_TOOLS.has(tool));
+
+  if (profile === "read-only" || profile === "image-only") {
+    if (writeRequested) {
+      reasons.push(`${profile} profile cannot satisfy writable artifact/output requirements`);
+    }
+    if (shellRequested) {
+      reasons.push(`${profile} profile cannot run shell-required checkers`);
+    }
+  }
+
+  for (const toolName of effectiveRequiredTools) {
+    const allowedByRuntime = runtime?.isToolAllowed?.(toolName) ?? true;
+    const allowedByInherited = isToolAllowedByInheritedPolicy(
+      toolName,
+      inheritedToolAllowlist,
+      inheritedToolDenylist,
+    );
+    if (!allowedByRuntime || !allowedByInherited) {
+      missingTools.push(toolName);
+    }
+  }
+  if (missingTools.length > 0) {
+    reasons.push(`required tool(s) unavailable: ${[...new Set(missingTools)].sort().join(", ")}`);
+  }
+
+  if (expectedRuntimeSeconds && runtime?.runTimeoutSeconds && runtime.runTimeoutSeconds > 0) {
+    if (expectedRuntimeSeconds > runtime.runTimeoutSeconds) {
+      reasons.push(
+        `expected runtime ${expectedRuntimeSeconds}s exceeds spawn timeout ${runtime.runTimeoutSeconds}s`,
+      );
+    }
+  }
+
+  for (const root of readableRoots) {
+    const resolved = resolvePathForPreflight(root, runtime?.workspaceDir);
+    if (!resolved || !isPathAccessible(resolved, fs.constants.R_OK)) {
+      blockedPaths.push(root);
+      reasons.push(`readable root is unavailable: ${root}`);
+    }
+  }
+
+  const writableCandidates = [...writablePaths, ...scratchPaths];
+  if (artifactOutputPath) {
+    writableCandidates.push(artifactOutputPath);
+  }
+  if (logOutputPath) {
+    writableCandidates.push(logOutputPath);
+  }
+  for (const candidate of writableCandidates) {
+    const checkPath = resolveWritableCheckPath(candidate, runtime?.workspaceDir);
+    if (!checkPath || !isPathAccessible(checkPath, fs.constants.W_OK | fs.constants.R_OK)) {
+      blockedPaths.push(candidate);
+      reasons.push(`writable/readable path is unavailable: ${candidate}`);
+    }
+  }
+
+  const declaredWritableRoots = [...writablePaths, ...scratchPaths];
+  if (artifactOutputPath && declaredWritableRoots.length > 0) {
+    const artifactAbsPath = resolvePathForPreflight(artifactOutputPath, runtime?.workspaceDir);
+    const insideWritableRoot = declaredWritableRoots.some((writablePath) => {
+      const writableAbsPath = resolvePathForPreflight(writablePath, runtime?.workspaceDir);
+      return writableAbsPath && isPathEqualOrInside(artifactAbsPath, writableAbsPath);
+    });
+    if (!insideWritableRoot) {
+      blockedPaths.push(artifactOutputPath);
+      reasons.push("artifact output path is outside declared writable/scratch paths");
+    }
+  }
+
+  if (logOutputPath && declaredWritableRoots.length > 0) {
+    const logAbsPath = resolvePathForPreflight(logOutputPath, runtime?.workspaceDir);
+    const insideWritableRoot = declaredWritableRoots.some((writablePath) => {
+      const writableAbsPath = resolvePathForPreflight(writablePath, runtime?.workspaceDir);
+      return writableAbsPath && isPathEqualOrInside(logAbsPath, writableAbsPath);
+    });
+    if (!insideWritableRoot) {
+      blockedPaths.push(logOutputPath);
+      reasons.push("log output path is outside declared writable/scratch paths");
+    }
+  }
+
+  if (reasons.length > 0) {
+    return makePreflightFailure({ reasons, missingTools, blockedPaths });
+  }
+
+  return {
+    ok: true,
+    normalized: {
+      profile,
+      requiredTools: [...effectiveRequiredTools].sort(),
+      writablePaths,
+      readableRoots,
+      scratchPaths,
+      ...(artifactOutputPath ? { artifactOutputPath } : {}),
+      ...(logOutputPath ? { logOutputPath } : {}),
+      ...(expectedRuntimeSeconds ? { expectedRuntimeSeconds } : {}),
+      requiresShell,
+    },
+  };
+}
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);

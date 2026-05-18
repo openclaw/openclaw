@@ -2,6 +2,9 @@ import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/que
 import { localeLowercasePreservingWhitespace } from "../../shared/string-coerce.js";
 import type { CompactionSummarizationInstructions } from "../compaction.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
+import { SUMMARY_UNVERIFIED } from "../subagent-active-task-contract.js";
+
+export const COMPACTION_SUMMARY_UNVERIFIED = "SUMMARY_UNVERIFIED" as const;
 
 const MAX_EXTRACTED_IDENTIFIERS = 12;
 const MAX_UNTRUSTED_INSTRUCTION_CHARS = 4000;
@@ -78,6 +81,25 @@ function normalizedSummaryLines(summary: string): string[] {
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
+}
+
+function extractSummarySectionLines(summary: string, heading: string): string[] {
+  const lines = summary.split(/\r?\n/u);
+  const startIndex = lines.findIndex((line) => line.trim() === heading);
+  if (startIndex < 0) {
+    return [];
+  }
+  const sectionLines: string[] = [];
+  for (const line of lines.slice(startIndex + 1)) {
+    if (/^##\s+\S/u.test(line.trim())) {
+      break;
+    }
+    const trimmed = line.trim();
+    if (trimmed) {
+      sectionLines.push(trimmed);
+    }
+  }
+  return sectionLines;
 }
 
 function hasRequiredSummarySections(summary: string): boolean {
@@ -217,6 +239,142 @@ function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
   return overlapCount >= requiredMatches;
 }
 
+function extractSummarySectionBody(summary: string, heading: string): string {
+  const lines = summary.split(/\r?\n/u);
+  const headingIndex = lines.findIndex((line) => line.trim() === heading);
+  if (headingIndex < 0) {
+    return "";
+  }
+  const bodyLines: string[] = [];
+  for (let index = headingIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (/^##\s+/u.test(line.trim())) {
+      break;
+    }
+    bodyLines.push(line);
+  }
+  return bodyLines.join("\n").trim();
+}
+
+function deniesPendingUserAsk(text: string): boolean {
+  const normalized = localeLowercasePreservingWhitespace(text.normalize("NFKC"))
+    .replace(/[\t\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /^(?:[-*]\s*)?(?:none|n\/a|nothing|no pending asks?\.?|no pending user asks?\.?)$/iu.test(
+      normalized,
+    ) || /\bno\s+pending\s+(?:user\s+)?asks?\b/iu.test(normalized)
+  );
+}
+
+export function summaryContradictsLatestUserAsk(params: {
+  summary: string;
+  latestAsk: string | null;
+}): boolean {
+  const latestAsk = params.latestAsk?.trim();
+  if (!latestAsk) {
+    return false;
+  }
+  const pendingAskBody = extractSummarySectionBody(params.summary, "## Pending user asks");
+  if (deniesPendingUserAsk(pendingAskBody)) {
+    return true;
+  }
+  return deniesPendingUserAsk(params.summary);
+}
+
+export function formatSummaryUnverifiedSection(params: {
+  summary: string;
+  latestAsk: string | null;
+  maxLatestAskChars?: number;
+}): string {
+  if (!summaryContradictsLatestUserAsk(params)) {
+    return "";
+  }
+  const maxLatestAskChars = Math.max(1, Math.floor(params.maxLatestAskChars ?? 1200));
+  const latestAsk = (params.latestAsk ?? "").trim();
+  const boundedLatestAsk =
+    latestAsk.length > maxLatestAskChars
+      ? `${latestAsk.slice(0, maxLatestAskChars)}...`
+      : latestAsk;
+  return [
+    `## ${SUMMARY_UNVERIFIED}`,
+    `${SUMMARY_UNVERIFIED}: the summary's pending-ask state contradicted the latest explicit user request. Treat the summary body as unverified until re-distilled.`,
+    "Latest explicit user request preserved verbatim:",
+    boundedLatestAsk,
+  ].join("\n");
+}
+
+function pendingAskSectionContradictsLatestAsk(summary: string, latestAsk: string | null): boolean {
+  if (!latestAsk) {
+    return false;
+  }
+  const pendingAskSection = extractSummarySectionLines(summary, "## Pending user asks").join(" ");
+  if (!pendingAskSection) {
+    return false;
+  }
+  const saysNoPendingAsk =
+    /^(?:[-*]\s*)?(?:none|no pending asks?|no pending user asks?|nothing pending|n\/a)\.?$/iu.test(
+      pendingAskSection,
+    ) || /\bno pending (?:user )?asks?\b/iu.test(pendingAskSection);
+  return saysNoPendingAsk && !hasAskOverlap(pendingAskSection, latestAsk);
+}
+
+export function findCompactionSummaryVerificationIssues(params: {
+  summary: string;
+  latestAsk: string | null;
+}): string[] {
+  if (!params.latestAsk) {
+    return [];
+  }
+  const reasons: string[] = [];
+  if (!hasAskOverlap(params.summary, params.latestAsk)) {
+    reasons.push("latest_user_ask_not_reflected");
+  }
+  if (pendingAskSectionContradictsLatestAsk(params.summary, params.latestAsk)) {
+    reasons.push("pending_user_asks_contradicts_latest_user_request");
+  }
+  return Array.from(new Set(reasons));
+}
+
+export function buildSummaryUnverifiedSection(params: {
+  latestAsk: string | null;
+  reasons: string[];
+}): string {
+  if (!params.latestAsk || params.reasons.length === 0) {
+    return "";
+  }
+  const boundedLatestAsk = params.latestAsk.replace(/\s+/gu, " ").trim().slice(0, 600);
+  return [
+    "",
+    "",
+    "## Summary verification",
+    COMPACTION_SUMMARY_UNVERIFIED,
+    `- Reasons: ${params.reasons.join(", ")}`,
+    `- Latest explicit user request preserved: ${boundedLatestAsk}`,
+  ].join("\n");
+}
+
+export function buildSummaryVerificationSection(params: {
+  summary: string;
+  latestAsk: string | null;
+  extraReasons?: string[];
+}): string {
+  const reasons = Array.from(
+    new Set([
+      ...findCompactionSummaryVerificationIssues({
+        summary: params.summary,
+        latestAsk: params.latestAsk,
+      }),
+      ...(params.extraReasons ?? []),
+    ]),
+  );
+  return buildSummaryUnverifiedSection({ latestAsk: params.latestAsk, reasons });
+}
+
 export function auditSummaryQuality(params: {
   summary: string;
   identifiers: string[];
@@ -239,8 +397,6 @@ export function auditSummaryQuality(params: {
       reasons.push(`missing_identifiers:${missingIdentifiers.slice(0, 3).join(",")}`);
     }
   }
-  if (!hasAskOverlap(params.summary, params.latestAsk)) {
-    reasons.push("latest_user_ask_not_reflected");
-  }
+  reasons.push(...findCompactionSummaryVerificationIssues(params));
   return { ok: reasons.length === 0, reasons };
 }

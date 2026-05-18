@@ -20,6 +20,7 @@ import {
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
+import { sanitizeChildResultTextForMemory } from "./session-child-result-sanitizer.js";
 
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // Keep the historical one-line-per-message export shape for normal turns, but
@@ -498,7 +499,10 @@ export function extractSessionText(
   if (rawText === null) {
     return null;
   }
-  return sanitizeSessionText(rawText, role);
+  return sanitizeChildResultTextForMemory(
+    sanitizeSessionText(rawText, role),
+    "memory-session-extract",
+  );
 }
 
 function parseSessionTimestampMs(
@@ -642,7 +646,10 @@ export async function buildSessionEntry(
         lineMap.length = 0;
         messageTimestampsMs.length = 0;
       }
-      const text = sanitizeSessionText(rawText, message.role);
+      const text = sanitizeChildResultTextForMemory(
+        sanitizeSessionText(rawText, message.role),
+        "memory-session-index",
+      );
       if (!text) {
         // Assistant-side machinery (silent replies, system wrappers) is already
         // dropped by sanitizeSessionText. We deliberately do NOT use the prior

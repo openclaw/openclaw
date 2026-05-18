@@ -313,6 +313,58 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("passes capability preflight requirements to subagent dispatch", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+    const schema = tool.parameters as {
+      properties?: Record<
+        string,
+        { type?: string; properties?: Record<string, unknown> } | undefined
+      >;
+    };
+
+    expect(requireSchemaProperty(schema.properties, "capabilityPreflight").type).toBe("object");
+
+    await tool.execute("call-capability-preflight", {
+      task: "run checker",
+      capabilityPreflight: {
+        profile: "read-only",
+        requiredTools: ["read", "exec"],
+        writablePaths: ["/tmp"],
+        readableRoots: ["/workspace"],
+        expectedRuntimeSeconds: 30,
+        artifactOutputPath: "/tmp/verdict.json",
+        logOutputPath: "/tmp/checker.log",
+        scratchPaths: ["/tmp"],
+        requiresShell: true,
+      },
+      taskSizing: {
+        sourceHeavy: true,
+        fileReferenceLimit: 12,
+        finalOutputByteLimit: 2048,
+      },
+    });
+
+    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+    expect(spawnArgs.capabilityPreflight).toEqual({
+      profile: "read-only",
+      requiredTools: ["read", "exec"],
+      writablePaths: ["/tmp"],
+      readableRoots: ["/workspace"],
+      expectedRuntimeSeconds: 30,
+      artifactOutputPath: "/tmp/verdict.json",
+      logOutputPath: "/tmp/checker.log",
+      scratchPaths: ["/tmp"],
+      requiresShell: true,
+    });
+    expect(spawnArgs.taskSizing).toEqual({
+      sourceHeavy: true,
+      fileReferenceLimit: 12,
+      finalOutputByteLimit: 2048,
+    });
+  });
+
   it("passes inherited tool denies to subagent spawns", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

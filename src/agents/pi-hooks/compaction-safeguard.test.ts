@@ -38,6 +38,7 @@ const {
   formatPreservedTurnsSection,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
+  buildSummaryVerificationSection,
   prependPreviousSummaryForRedistill,
   appendSummarySection,
   resolveRecentTurnsPreserve,
@@ -1075,6 +1076,40 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(quality.ok).toBe(true);
   });
 
+  it("marks summaries unverified when Pending user asks contradicts the preserved latest ask", () => {
+    const summary = [
+      "## Decisions",
+      "Keep current flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Follow policy.",
+      "## Pending user asks",
+      "No pending asks.",
+      "## Exact identifiers",
+      "None.",
+      "",
+      "## Recent turns preserved verbatim",
+      "- User: Audit session:tui-c7a5 and write the requested session issue report.",
+    ].join("\n");
+
+    const quality = auditSummaryQuality({
+      summary,
+      identifiers: [],
+      latestAsk: "Audit session:tui-c7a5 and write the requested session issue report.",
+    });
+    expect(quality.ok).toBe(false);
+    expect(quality.reasons).toContain("pending_user_asks_contradicts_latest_user_request");
+
+    const verification = buildSummaryVerificationSection({
+      summary,
+      latestAsk: "Audit session:tui-c7a5 and write the requested session issue report.",
+    });
+    expect(verification).toContain("SUMMARY_UNVERIFIED");
+    expect(verification).toContain("Latest explicit user request preserved");
+    expect(verification).toContain("Audit session:tui-c7a5");
+  });
+
   it("flags missing non-latin latest asks when summary omits them", () => {
     const quality = auditSummaryQuality({
       summary: [
@@ -1936,6 +1971,71 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(compaction.summary).toContain("## Recent turns preserved verbatim");
     expect(compaction.summary).toContain("latest ask status");
     expect(compaction.summary).toContain("latest assistant reply");
+  });
+
+  it("provider summaries that contradict the latest preserved ask are marked SUMMARY_UNVERIFIED", async () => {
+    mockSummarizeInStages.mockReset();
+    const providerSummarize = vi
+      .fn()
+      .mockResolvedValue(
+        [
+          "## Decisions",
+          "Keep current flow.",
+          "## Open TODOs",
+          "None.",
+          "## Constraints/Rules",
+          "Follow policy.",
+          "## Pending user asks",
+          "No pending asks.",
+          "## Exact identifiers",
+          "None.",
+        ].join("\n"),
+      );
+    registerCompactionProvider({
+      id: "contradictory-provider",
+      label: "Contradictory Provider",
+      summarize: providerSummarize,
+    });
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "contradictory-provider",
+      recentTurnsPreserve: 1,
+    });
+
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "assistant", content: "ready", timestamp: 1 } as unknown as AgentMessage,
+          {
+            role: "user",
+            content: "Audit session:tui-c7a5 and write the requested session issue report.",
+            timestamp: 2,
+          },
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: null,
+    });
+
+    const compaction = expectCompactionResult(result);
+    expect(compaction.summary).toContain("SUMMARY_UNVERIFIED");
+    expect(compaction.summary).toContain("pending_user_asks_contradicts_latest_user_request");
+    expect(compaction.summary).toContain("Latest explicit user request preserved");
+    expect(compaction.summary).toContain("Audit session:tui-c7a5");
   });
 });
 

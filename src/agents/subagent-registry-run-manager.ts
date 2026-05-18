@@ -27,7 +27,10 @@ import {
   resolveArchiveAfterMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  SubagentChildResultRetryAttemptRecord,
+  SubagentRunRecord,
+} from "./subagent-registry.types.js";
 import type { SubagentSessionCompletion } from "./subagent-session-reconciliation.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
@@ -101,6 +104,7 @@ export type RegisterSubagentRunParams = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  childResultRetryAttempt?: SubagentChildResultRetryAttemptRecord;
 };
 
 export function createSubagentRunManager(params: {
@@ -505,6 +509,7 @@ export function createSubagentRunManager(params: {
       archiveAtMs,
       cleanupHandled: false,
       completionAnnouncedAt: undefined,
+      childResultRetryAttempt: registerParams.childResultRetryAttempt,
       wakeOnDescendantSettle: undefined,
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,

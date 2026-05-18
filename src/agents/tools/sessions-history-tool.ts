@@ -5,6 +5,7 @@ import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readStringValue } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
@@ -13,6 +14,11 @@ import {
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
+import {
+  buildAuditIncompleteResult,
+  exportExactSessionAudit,
+  fullAuditModePointer,
+} from "./sessions-audit.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -27,6 +33,7 @@ const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
   limit: Type.Optional(Type.Number({ minimum: 1 })),
   includeTools: Type.Optional(Type.Boolean()),
+  audit: Type.Optional(Type.Boolean()),
 });
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
@@ -178,6 +185,7 @@ export function createSessionsHistoryTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  auditExportDir?: string;
 }): AnyAgentTool {
   return {
     label: "Session History",
@@ -248,6 +256,31 @@ export function createSessionsHistoryTool(opts?: {
           ? Math.max(1, Math.floor(params.limit))
           : undefined;
       const includeTools = Boolean(params.includeTools);
+      const auditRequested = params.audit === true;
+      if (auditRequested) {
+        if (limit !== undefined) {
+          return jsonResult({
+            sessionKey: displayKey,
+            ...buildAuditIncompleteResult({
+              sessionKey: resolvedKey,
+              defaultAgentId: resolveAgentIdFromSessionKey(effectiveRequesterKey),
+              reason: "Limited sessions_history views cannot satisfy exact-session audit mode.",
+            }),
+            fullAuditMode: fullAuditModePointer(sessionKeyParam),
+          });
+        }
+        const auditExport = await exportExactSessionAudit({
+          cfg,
+          sessionKey: resolvedKey,
+          defaultAgentId: resolveAgentIdFromSessionKey(effectiveRequesterKey),
+          exportDir: opts?.auditExportDir,
+        });
+        return jsonResult({
+          sessionKey: displayKey,
+          ...auditExport,
+        });
+      }
+
       const result = await gatewayCall<{ messages: Array<unknown> }>({
         method: "chat.history",
         params: { sessionKey: resolvedKey, limit },
@@ -267,14 +300,24 @@ export function createSessionsHistoryTool(opts?: {
         bytes: cappedMessages.bytes,
         maxBytes: SESSIONS_HISTORY_MAX_BYTES,
       });
+      const truncated = droppedMessages || contentTruncated || hardened.hardCapped;
       return jsonResult({
         sessionKey: displayKey,
         messages: hardened.items,
-        truncated: droppedMessages || contentTruncated || hardened.hardCapped,
+        truncated,
         droppedMessages: droppedMessages || hardened.hardCapped,
         contentTruncated,
         contentRedacted,
         bytes: hardened.bytes,
+        auditGrade: false,
+        auditComplete: false,
+        auditIncompleteReason:
+          limit !== undefined
+            ? "Limited sessions_history view is not audit-grade."
+            : truncated
+              ? "Bounded/truncated sessions_history view is not audit-grade."
+              : "sessions_history is a bounded recall view, not file-backed audit export mode.",
+        fullAuditMode: fullAuditModePointer(sessionKeyParam),
       });
     },
   };

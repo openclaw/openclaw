@@ -8,4 +8,6 @@ export {
   replaceSubagentRunAfterSteer,
   resolveRequesterForChildSession,
   shouldIgnorePostCompletionAnnounceForSession,
+  beginSubagentCompletionDedupe,
+  markSubagentCompletionDedupeDelivered,
 } from "./subagent-registry-runtime.js";

@@ -30,6 +30,7 @@ import {
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
+import { normalizeUserProvidedSessionKey } from "../tools/sessions-key-normalization.js";
 
 export type SessionResolution = {
   sessionId: string;
@@ -209,14 +210,17 @@ export function resolveSessionKeyForRequest(opts: {
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(opts.cfg));
   const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
   const requestedSessionId = opts.sessionId?.trim() || undefined;
-  const explicitSessionKey =
-    opts.sessionKey?.trim() ||
-    (!requestedSessionId
+  const rawExplicitSessionKey = opts.sessionKey?.trim();
+  const explicitSessionKey = rawExplicitSessionKey
+    ? normalizeUserProvidedSessionKey(rawExplicitSessionKey, {
+        defaultAgentId: requestedAgentId ?? defaultAgentId,
+      })
+    : !requestedSessionId
       ? resolveExplicitAgentSessionKey({
           cfg: opts.cfg,
           agentId: requestedAgentId,
         })
-      : undefined);
+      : undefined;
   const storeAgentId = explicitSessionKey
     ? resolveAgentIdFromSessionKey(explicitSessionKey)
     : (requestedAgentId ?? defaultAgentId);

@@ -4,6 +4,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
+import {
+  evaluateResearchAutomationAuthorization,
+  type ResearchAutomationActionKind,
+  type ResearchAutomationGateResult,
+} from "./research-authorization-gate.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
@@ -174,6 +179,8 @@ const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill 
 const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small project/i;
 const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
+const QA_AUTHORIZATION_SENSITIVE_RESEARCH_PROMPT_RE =
+  /\b(?:auto[-\s]?research|autoresearch|research automation|project[-\s]?initiation|authorization-sensitive autoresearch|ready_for_human_approval|gate\s*5)\b/i;
 
 type MockScenarioState = {
   subagentFanoutPhase: number;
@@ -210,6 +217,10 @@ function readBody(req: IncomingMessage): Promise<string> {
     maxBytes: MOCK_OPENAI_MAX_BODY_BYTES,
     timeoutMs: MOCK_OPENAI_BODY_TIMEOUT_MS,
   });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function writeJson(res: ServerResponse, status: number, body: unknown) {
@@ -915,6 +926,171 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
   };
 }
 
+function stringField(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function numberField(record: Record<string, unknown>, ...keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function nestedRecordField(
+  body: Record<string, unknown>,
+  ...keys: string[]
+): Record<string, unknown> {
+  for (const key of keys) {
+    const value = body[key];
+    if (isRecord(value)) {
+      return value;
+    }
+  }
+  return {};
+}
+
+function readResearchAutomationActionKind(
+  gateInput: Record<string, unknown>,
+  allInputText: string,
+  explicitSessionsSpawnArgs: Record<string, unknown> | null,
+): ResearchAutomationActionKind {
+  const requested = stringField(gateInput, "actionKind", "automationActionKind");
+  if (
+    requested &&
+    [
+      "manual_research",
+      "autoresearch",
+      "research_automation",
+      "fanout",
+      "continuation",
+      "finalization",
+      "project_initiation",
+      "authorization_sensitive_spawn",
+      "fork_resume_worker",
+    ].includes(requested)
+  ) {
+    return requested as ResearchAutomationActionKind;
+  }
+  const haystack = [allInputText, String(explicitSessionsSpawnArgs?.task ?? "")].join("\n");
+  if (/\bmanual research\b/i.test(haystack)) {
+    return "manual_research";
+  }
+  if (/\bf(?:ork|orked)|\bresume\b|\bexisting session\b|\bACP resume\b/i.test(haystack)) {
+    return "authorization_sensitive_spawn";
+  }
+  if (/\bfinali[sz]/i.test(haystack)) {
+    return "finalization";
+  }
+  if (/\bcontinu(?:e|ation)/i.test(haystack)) {
+    return "continuation";
+  }
+  if (/\bfanout\b|\bsessions_spawn\b|\bdelegate\b/i.test(haystack)) {
+    return "fanout";
+  }
+  if (/\bproject[-\s]?initiation\b/i.test(haystack)) {
+    return "project_initiation";
+  }
+  return "autoresearch";
+}
+
+function isAuthorizationSensitiveResearchRequest(
+  allInputText: string,
+  explicitSessionsSpawnArgs: Record<string, unknown> | null,
+) {
+  const haystack = [allInputText, String(explicitSessionsSpawnArgs?.task ?? "")].join("\n");
+  return QA_AUTHORIZATION_SENSITIVE_RESEARCH_PROMPT_RE.test(haystack);
+}
+
+function evaluateMockResearchAuthorizationGate(params: {
+  body: Record<string, unknown>;
+  allInputText: string;
+  explicitSessionsSpawnArgs: Record<string, unknown> | null;
+}): ResearchAutomationGateResult | null {
+  if (
+    !isAuthorizationSensitiveResearchRequest(params.allInputText, params.explicitSessionsSpawnArgs)
+  ) {
+    return null;
+  }
+  const gateInput = nestedRecordField(
+    params.body,
+    "researchAutomationAuthorization",
+    "researchAuthorizationGate",
+    "researchAutomationGate",
+  );
+  const actionKind = readResearchAutomationActionKind(
+    gateInput,
+    params.allInputText,
+    params.explicitSessionsSpawnArgs,
+  );
+  const activeTaskContract =
+    gateInput.activeTaskContract ??
+    params.body.activeTaskContract ??
+    nestedRecordField(params.body, "metadata").activeTaskContract;
+  const frozenWindowValue = gateInput.frozenWindow ?? params.body.frozenWindow;
+  const stateQueryValue =
+    gateInput.stateQuery ??
+    params.body.stateQuery ??
+    params.body.canonicalStateQuery ??
+    nestedRecordField(params.body, "metadata").stateQuery;
+  const truthBudgetLaneValue = gateInput.truthBudgetLane ?? params.body.truthBudgetLane;
+  const spawnLineageValue = gateInput.spawnLineage ?? params.body.spawnLineage;
+  const priorDecisionValue = gateInput.priorDecision ?? params.body.researchAutomationDecision;
+  return evaluateResearchAutomationAuthorization({
+    actionKind,
+    activeTaskContract,
+    latestUserTurnId:
+      stringField(gateInput, "latestUserTurnId") ?? stringField(params.body, "latestUserTurnId"),
+    authorizedRootIssue:
+      stringField(gateInput, "authorizedRootIssue") ??
+      stringField(params.body, "authorizedRootIssue"),
+    frozenWindow: isRecord(frozenWindowValue) ? (frozenWindowValue as never) : undefined,
+    stateQuery: isRecord(stateQueryValue) ? (stateQueryValue as never) : undefined,
+    backgroundHints: Array.isArray(gateInput.backgroundHints)
+      ? (gateInput.backgroundHints as never)
+      : Array.isArray(params.body.backgroundHints)
+        ? (params.body.backgroundHints as never)
+        : undefined,
+    truthBudgetLane: isRecord(truthBudgetLaneValue) ? (truthBudgetLaneValue as never) : undefined,
+    fanoutCount: numberField(gateInput, "fanoutCount") ?? numberField(params.body, "fanoutCount"),
+    authorizationSourceContent:
+      stringField(gateInput, "authorizationSourceContent") ??
+      stringField(params.body, "authorizationSourceContent"),
+    verifyAuthorizationSourceFile:
+      gateInput.verifyAuthorizationSourceFile === true ||
+      params.body.verifyAuthorizationSourceFile === true,
+    priorDecision: isRecord(priorDecisionValue) ? (priorDecisionValue as never) : undefined,
+    spawnLineage: isRecord(spawnLineageValue)
+      ? (spawnLineageValue as never)
+      : {
+          contextMode: stringField(params.explicitSessionsSpawnArgs ?? {}, "context"),
+          resumeMode: /\bresume\b/i.test(params.allInputText) ? "resume" : undefined,
+        },
+    nowMs: numberField(gateInput, "nowMs") ?? numberField(params.body, "nowMs"),
+  });
+}
+
+function buildSuppressedResearchAutomationEvents(
+  result: ResearchAutomationGateResult,
+): StreamEvent[] {
+  return buildAssistantEvents(
+    JSON.stringify({
+      researchAutomationDecision: result.decision,
+      suppressed: true,
+      reasonCode: result.decision.reasonCode,
+    }),
+  );
+}
+
 function extractToolErrorForNamedCall(params: {
   allInputText: string;
   input: ResponsesInputItem[];
@@ -1563,13 +1739,14 @@ async function buildResponsesPayload(
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
   const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
+  const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
   const canCallMockSubagentTool =
     QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText) ||
     /subagent fanout synthesis check/i.test(allInputText) ||
     /forked subagent context qa check/i.test(allInputText) ||
     /delegate (?:one |a )bounded qa task/i.test(allInputText) ||
     /subagent handoff/i.test(allInputText) ||
-    buildExplicitSessionsSpawnArgs(allInputText) !== null;
+    explicitSessionsSpawnArgs !== null;
   const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn") || canCallMockSubagentTool;
   const canCallSessionsYield =
     hasDeclaredTool(body, "sessions_yield") ||
@@ -1601,6 +1778,16 @@ async function buildResponsesPayload(
     }
     if (targetTool && (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
+    }
+  }
+  if (!toolOutput) {
+    const researchGate = evaluateMockResearchAuthorizationGate({
+      body,
+      allInputText,
+      explicitSessionsSpawnArgs,
+    });
+    if (researchGate && !researchGate.allowed) {
+      return buildSuppressedResearchAutomationEvents(researchGate);
     }
   }
   if (
@@ -2096,7 +2283,6 @@ async function buildResponsesPayload(
     scenarioState.subagentFanoutPhase = 3;
     return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
   }
-  const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
   if (explicitSessionsSpawnArgs && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }

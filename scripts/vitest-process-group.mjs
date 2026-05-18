@@ -34,6 +34,150 @@ export function forwardSignalToVitestProcessGroup(params) {
   }
 }
 
+function isIgnorableProcessLookupError(error) {
+  return (
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error.code === "ESRCH" || error.code === "EPERM")
+  );
+}
+
+export function isVitestProcessGroupAlive(params) {
+  const target = resolveVitestProcessGroupSignalTarget({
+    childPid: params.childPid,
+    platform: params.platform,
+  });
+  if (target === null) {
+    return false;
+  }
+  const kill = params.kill ?? process.kill.bind(process);
+  try {
+    kill(target, 0);
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ESRCH") {
+      return false;
+    }
+    if (error && typeof error === "object" && "code" in error && error.code === "EPERM") {
+      return true;
+    }
+    throw error;
+  }
+}
+
+export async function waitForVitestProcessGroupExit(params) {
+  const timeoutMs = Math.max(0, Math.floor(params.timeoutMs ?? 5_000));
+  const intervalMs = Math.max(10, Math.floor(params.intervalMs ?? 100));
+  const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
+  const startedAt = Date.now();
+  while (
+    isVitestProcessGroupAlive({
+      childPid: params.childPid,
+      platform: params.platform,
+      kill: params.kill,
+    })
+  ) {
+    if (Date.now() - startedAt >= timeoutMs) {
+      return false;
+    }
+    await new Promise((resolve) => setTimeoutFn(resolve, intervalMs));
+  }
+  return true;
+}
+
+export async function cleanupVitestProcessGroupAfterExit(params) {
+  const childPid = params.childPid ?? params.child?.pid;
+  const platform = params.platform ?? process.platform;
+  const kill = params.kill ?? process.kill.bind(process);
+  const graceMs = Math.max(0, Math.floor(params.graceMs ?? 5_000));
+  const forceGraceMs = Math.max(0, Math.floor(params.forceGraceMs ?? 2_000));
+  const log = params.log ?? (() => {});
+  if (typeof childPid !== "number" || !Number.isInteger(childPid) || childPid <= 0) {
+    return {
+      staleProcessDetected: false,
+      clean: true,
+      signalsSent: [],
+    };
+  }
+
+  if (!isVitestProcessGroupAlive({ childPid, platform, kill })) {
+    return {
+      staleProcessDetected: false,
+      clean: true,
+      signalsSent: [],
+    };
+  }
+
+  const signalsSent = [];
+  log(
+    `[vitest] stale process group detected after gate exit (pid=${childPid}); cleaning up scoped group.`,
+  );
+  try {
+    if (
+      forwardSignalToVitestProcessGroup({
+        child: { pid: childPid },
+        signal: "SIGTERM",
+        platform,
+        kill,
+      })
+    ) {
+      signalsSent.push("SIGTERM");
+    }
+  } catch (error) {
+    if (!isIgnorableProcessLookupError(error)) {
+      throw error;
+    }
+  }
+
+  const cleanAfterTerm = await waitForVitestProcessGroupExit({
+    childPid,
+    platform,
+    kill,
+    timeoutMs: graceMs,
+    intervalMs: params.intervalMs,
+    setTimeoutFn: params.setTimeoutFn,
+  });
+  if (cleanAfterTerm) {
+    return {
+      staleProcessDetected: true,
+      clean: true,
+      signalsSent,
+    };
+  }
+
+  try {
+    if (
+      forwardSignalToVitestProcessGroup({
+        child: { pid: childPid },
+        signal: "SIGKILL",
+        platform,
+        kill,
+      })
+    ) {
+      signalsSent.push("SIGKILL");
+    }
+  } catch (error) {
+    if (!isIgnorableProcessLookupError(error)) {
+      throw error;
+    }
+  }
+
+  const cleanAfterKill = await waitForVitestProcessGroupExit({
+    childPid,
+    platform,
+    kill,
+    timeoutMs: forceGraceMs,
+    intervalMs: params.intervalMs,
+    setTimeoutFn: params.setTimeoutFn,
+  });
+  return {
+    staleProcessDetected: true,
+    clean: cleanAfterKill,
+    signalsSent,
+  };
+}
+
 function ensureProcessListenerCapacity(processObject, eventName, additionalListeners = 1) {
   if (
     typeof processObject.getMaxListeners !== "function" ||

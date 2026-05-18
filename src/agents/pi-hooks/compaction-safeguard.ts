@@ -16,6 +16,10 @@ import {
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
 import {
+  sanitizeChildResultMessagesForModel,
+  sanitizeChildResultTextForModel,
+} from "../child-result-sanitizer.js";
+import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
@@ -46,6 +50,7 @@ import {
   auditSummaryQuality,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
+  buildSummaryVerificationSection,
   extractOpaqueIdentifiers,
   wrapUntrustedInstructionBlock,
 } from "./compaction-safeguard-quality.js";
@@ -236,6 +241,9 @@ async function summarizeViaLLM(params: {
   summarizationInstructions?: Parameters<typeof summarizeInStages>[0]["summarizationInstructions"];
   previousSummary?: string;
 }): Promise<string> {
+  const sanitizedMessagesForSummary = sanitizeChildResultMessagesForModel(params.messages, {
+    surface: "compaction-llm-summary-input",
+  });
   const messages = prependPreviousSummaryForRedistill({
     messages: params.messages,
     previousSummary: params.previousSummary,
@@ -265,6 +273,7 @@ function assembleSuffix(parts: {
   toolFailureSection?: string;
   fileOpsSummary?: string;
   workspaceContext?: string;
+  summaryVerificationSection?: string;
 }): string {
   let suffix = "";
   suffix = appendSummarySection(suffix, parts.splitTurnSection ?? "");
@@ -272,6 +281,7 @@ function assembleSuffix(parts: {
   suffix = appendSummarySection(suffix, parts.toolFailureSection ?? "");
   suffix = appendSummarySection(suffix, parts.fileOpsSummary ?? "");
   suffix = appendSummarySection(suffix, parts.workspaceContext ?? "");
+  suffix = appendSummarySection(suffix, parts.summaryVerificationSection ?? "");
   // Ensure leading separator so suffix does not merge with body (e.g. when body
   // ends without newline: "...## Exact identifiers## Tool Failures").
   if (suffix && !/^\s/.test(suffix)) {
@@ -545,6 +555,7 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
 }
 
 function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
+  summary = sanitizeChildResultTextForModel(summary, { surface: "compaction-summary-output" });
   if (maxChars <= 0 || summary.length <= maxChars) {
     return summary;
   }
@@ -562,6 +573,10 @@ function capCompactionSummaryPreservingSuffix(
   suffix: string,
   maxChars = MAX_COMPACTION_SUMMARY_CHARS,
 ): string {
+  summaryBody = sanitizeChildResultTextForModel(summaryBody, {
+    surface: "compaction-summary-output",
+  });
+  suffix = sanitizeChildResultTextForModel(suffix, { surface: "compaction-summary-suffix" });
   if (!suffix) {
     return capCompactionSummary(summaryBody, maxChars);
   }
@@ -877,15 +892,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
     const rawTurnPrefixMessages = preparation.turnPrefixMessages ?? [];
-    let baseMessagesToSummarize = stripRuntimeContextCustomMessages(
-      preparation.messagesToSummarize,
+    let baseMessagesToSummarize = sanitizeChildResultMessagesForModel(
+      stripRuntimeContextCustomMessages(preparation.messagesToSummarize),
+      { surface: "compaction-summary-input" },
     );
-    let baseTurnPrefixMessages = stripRuntimeContextCustomMessages(rawTurnPrefixMessages);
+    let baseTurnPrefixMessages = sanitizeChildResultMessagesForModel(
+      stripRuntimeContextCustomMessages(rawTurnPrefixMessages),
+      { surface: "compaction-turn-prefix-input" },
+    );
     let hasRealSummarizable = containsRealConversation(baseMessagesToSummarize);
     let hasRealTurnPrefix = containsRealConversation(baseTurnPrefixMessages);
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
-      const branchMessages = stripRuntimeContextCustomMessages(
-        collectSessionBranchMessages(ctx.sessionManager),
+      const branchMessages = sanitizeChildResultMessagesForModel(
+        stripRuntimeContextCustomMessages(collectSessionBranchMessages(ctx.sessionManager)),
+        { surface: "compaction-branch-summary-input" },
       );
       if (containsRealConversation(branchMessages)) {
         log.info(
@@ -958,6 +978,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       customInstructions,
       summarizationInstructions,
     );
+    const latestExplicitUserAsk = extractLatestUserAsk([
+      ...baseMessagesToSummarize,
+      ...turnPrefixMessages,
+    ]);
 
     // -----------------------------------------------------------------------
     // Provider path — one call with all messages, no LLM-specific prep.
@@ -982,12 +1006,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             // Provider succeeded — assemble suffix metadata and return.
             // No quality guard: the provider is trusted.
             const workspaceContext = await readWorkspaceContextForSummary();
+            const summaryVerificationSection = buildSummaryVerificationSection({
+              summary: `${providerResult}${splitTurnSection}${preservedTurnsSection}`,
+              latestAsk: latestExplicitUserAsk,
+            });
             const suffix = assembleSuffix({
               splitTurnSection,
               preservedTurnsSection,
               toolFailureSection,
               fileOpsSummary,
               workspaceContext,
+              summaryVerificationSection,
             });
             const summary = capCompactionSummaryPreservingSuffix(providerResult, suffix);
             return {
@@ -1140,8 +1169,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       });
       messagesToSummarize = summaryTargetMessages;
       const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
-      const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
-      const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
+      const latestSummaryTargetUserAsk = extractLatestUserAsk([
+        ...messagesToSummarize,
+        ...turnPrefixMessages,
+      ]);
+      const identifierSeedText = [
+        ...messagesToSummarize,
+        ...preservedRecentMessages,
+        ...turnPrefixMessages,
+      ]
         .slice(-10)
         .map((message) => extractMessageText(message))
         .filter(Boolean)
@@ -1245,7 +1281,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         const quality = auditSummaryQuality({
           summary: summaryWithoutPreservedTurns,
           identifiers,
-          latestAsk: latestUserAsk,
+          latestAsk: latestSummaryTargetUserAsk,
           identifierPolicy,
         });
         summary = summaryWithPreservedTurns;
@@ -1269,14 +1305,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // Cap the main history body first, then append split-turn context, preserved
       // turns, diagnostics, and workspace rules so they survive truncation.
       const workspaceContext = await readWorkspaceContextForSummary();
+      const bodyToCap = lastHistorySummary || summary;
+      const summaryVerificationSection = buildSummaryVerificationSection({
+        summary: `${bodyToCap}${lastSplitTurnSection}${preservedTurnsSection}`,
+        latestAsk: latestExplicitUserAsk,
+      });
       const suffix = assembleSuffix({
         splitTurnSection: lastSplitTurnSection,
         preservedTurnsSection,
         toolFailureSection,
         fileOpsSummary,
         workspaceContext,
+        summaryVerificationSection,
       });
-      const bodyToCap = lastHistorySummary || summary;
       summary = capCompactionSummaryPreservingSuffix(bodyToCap, suffix);
 
       return {
@@ -1312,6 +1353,7 @@ export const testing = {
   formatSplitTurnContextSection,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
+  buildSummaryVerificationSection,
   prependPreviousSummaryForRedistill,
   appendSummarySection,
   resolveRecentTurnsPreserve,

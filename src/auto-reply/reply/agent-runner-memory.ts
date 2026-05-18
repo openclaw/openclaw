@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { sanitizeChildResultTextForModel } from "../../agents/child-result-sanitizer.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
@@ -115,7 +116,9 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
 }
 
 function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
-  const trimmed = normalizeOptionalString(prompt);
+  const trimmed = sanitizeChildResultTextForModel(normalizeOptionalString(prompt), {
+    surface: "memory-extraction-prompt-estimate",
+  });
   if (!trimmed) {
     return undefined;
   }
@@ -377,7 +380,10 @@ async function appendPostCompactionRefreshPrompt(params: {
     return;
   }
 
-  const existingPrompt = normalizeOptionalString(params.followupRun.run.extraSystemPrompt);
+  const existingPrompt = sanitizeChildResultTextForModel(
+    normalizeOptionalString(params.followupRun.run.extraSystemPrompt),
+    { surface: "post-compaction-context-existing-prompt" },
+  );
   if (existingPrompt?.includes(refreshPrompt)) {
     return;
   }
@@ -1020,7 +1026,9 @@ export async function runMemoryFlushIfNeeded(params: {
     }) ?? memoryFlushPlan;
   const memoryFlushWritePath = activeMemoryFlushPlan.relativePath;
   const flushSystemPrompt = [
-    params.followupRun.run.extraSystemPrompt,
+    sanitizeChildResultTextForModel(params.followupRun.run.extraSystemPrompt ?? "", {
+      surface: "memory-extraction-flush-system-prompt",
+    }),
     activeMemoryFlushPlan.systemPrompt,
   ]
     .filter(Boolean)

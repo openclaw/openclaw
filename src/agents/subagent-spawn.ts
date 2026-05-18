@@ -30,10 +30,20 @@ import {
   materializeSubagentAttachments,
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
-import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
+import {
+  validateSubagentCapabilityPreflight,
+  type SubagentCapabilityPreflightRequest,
+  resolveSubagentCapabilities,
+} from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import {
+  buildSubagentAcceptanceContractInstructions,
+  evaluateSubagentTaskSizingPreflight,
+  type SubagentTaskSizingRequest,
+} from "./subagent-dispatch-contracts.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
+import type { SubagentChildResultRetryAttemptRecord } from "./subagent-registry.types.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
@@ -42,6 +52,7 @@ export {
   SUBAGENT_SPAWN_ACCEPTED_NOTE,
   SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
 } from "./subagent-spawn-accepted-note.js";
+import { isToolAllowed as isSandboxToolAllowed } from "./sandbox/tool-policy.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
@@ -120,6 +131,51 @@ const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
 const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
 
+function sha256Hex(text: string): string {
+  return crypto.createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function normalizeRetryTokenPart(value: string | undefined, fallback: string): string {
+  const normalized = value
+    ?.trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized || fallback;
+}
+
+function buildChildResultRetryAttemptForSpawn(params: {
+  task: string;
+  targetAgentId: string;
+  spawnMode: SpawnSubagentMode;
+  sandbox: SpawnSubagentSandboxMode;
+  contextMode: SpawnSubagentContextMode;
+  capabilityPreflight: ReturnType<typeof validateSubagentCapabilityPreflight>;
+  taskSizingPreflight: ReturnType<typeof evaluateSubagentTaskSizingPreflight>;
+}): SubagentChildResultRetryAttemptRecord {
+  const mechanismParts = ["subagent", params.spawnMode];
+  if (params.capabilityPreflight.ok && params.capabilityPreflight.normalized.artifactOutputPath) {
+    mechanismParts.push("artifact_contract");
+  }
+  if (params.capabilityPreflight.ok && params.capabilityPreflight.normalized.logOutputPath) {
+    mechanismParts.push("log_contract");
+  }
+  if (params.taskSizingPreflight.ok && params.taskSizingPreflight.budget.sourceHeavy) {
+    mechanismParts.push("source_sizing");
+  }
+  const profile = params.capabilityPreflight.ok
+    ? params.capabilityPreflight.normalized.profile
+    : "default";
+  return {
+    mechanismKey: mechanismParts.map((part) => normalizeRetryTokenPart(part, "default")).join("_"),
+    profileKey: [profile, params.targetAgentId, params.sandbox, params.contextMode]
+      .map((part) => normalizeRetryTokenPart(part, "default"))
+      .join("_"),
+    promptHash: sha256Hex(params.task),
+    recordedAt: Date.now(),
+  };
+}
+
 export type SpawnSubagentParams = {
   task: string;
   label?: string;
@@ -143,6 +199,8 @@ export type SpawnSubagentParams = {
     mimeType?: string;
   }>;
   attachMountPath?: string;
+  capabilityPreflight?: SubagentCapabilityPreflightRequest;
+  taskSizing?: SubagentTaskSizingRequest;
 };
 
 export type SpawnSubagentContext = {
@@ -173,6 +231,7 @@ export type SpawnSubagentResult = {
   note?: string;
   modelApplied?: boolean;
   error?: string;
+  code?: string;
   attachments?: {
     count: number;
     totalBytes: number;
@@ -891,6 +950,47 @@ export async function spawnSubagentDirect(
     };
   }
   const { resolvedModel, thinkingOverride } = plan;
+  const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
+    agentGroupId: ctx.agentGroupId,
+    agentGroupChannel: ctx.agentGroupChannel,
+    agentGroupSpace: ctx.agentGroupSpace,
+    workspaceDir: ctx.workspaceDir,
+  });
+  const inheritedWorkspaceDir =
+    targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir;
+  const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
+    config: cfg,
+    targetAgentId,
+    explicitWorkspaceDir: explicitWorkspaceDir ?? inheritedWorkspaceDir,
+  });
+  const capabilityPreflight = validateSubagentCapabilityPreflight(params.capabilityPreflight, {
+    inheritedToolAllowlist: ctx.inheritedToolAllowlist,
+    inheritedToolDenylist: ctx.inheritedToolDenylist,
+    isToolAllowed: childRuntime.sandboxed
+      ? (toolName) => isSandboxToolAllowed(childRuntime.toolPolicy, toolName)
+      : undefined,
+    workspaceDir: spawnedWorkspaceDir,
+    runTimeoutSeconds,
+  });
+  if (!capabilityPreflight.ok) {
+    return {
+      status: "forbidden",
+      code: capabilityPreflight.code,
+      error: capabilityPreflight.message,
+    };
+  }
+  const taskSizingPreflight = evaluateSubagentTaskSizingPreflight({
+    task,
+    request: params.taskSizing,
+  });
+  if (!taskSizingPreflight.ok) {
+    return {
+      status: "forbidden",
+      code: taskSizingPreflight.code,
+      error: taskSizingPreflight.message,
+    };
+  }
+
   const patchChildSession = async (patch: Record<string, unknown>): Promise<string | undefined> => {
     try {
       const target = resolveGatewaySessionStoreTarget({
@@ -1041,20 +1141,6 @@ export async function spawnSubagentDirect(
     | undefined;
   let attachmentAbsDir: string | undefined;
   let attachmentRootDir: string | undefined;
-  const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
-    agentGroupId: ctx.agentGroupId,
-    agentGroupChannel: ctx.agentGroupChannel,
-    agentGroupSpace: ctx.agentGroupSpace,
-    workspaceDir: ctx.workspaceDir,
-  });
-  const inheritedWorkspaceDir =
-    targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir;
-  const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
-    config: cfg,
-    targetAgentId,
-    explicitWorkspaceDir: explicitWorkspaceDir ?? inheritedWorkspaceDir,
-  });
-
   const materializedAttachments = await materializeSubagentAttachments({
     config: cfg,
     targetAgentId,
@@ -1084,11 +1170,29 @@ export async function spawnSubagentDirect(
     ? "lightweight"
     : undefined;
 
+  const acceptanceContractInstructions = buildSubagentAcceptanceContractInstructions({
+    capabilityPreflight,
+    childSessionKey,
+    taskLabel: label || taskName,
+    taskSizingInstructions: taskSizingPreflight.instructions,
+  });
+
   const childTaskMessage = buildSubagentInitialUserMessage({
     childDepth,
     maxSpawnDepth,
     persistentSession: spawnMode === "session",
+    acceptanceContractInstructions,
     task,
+  });
+
+  const childResultRetryAttempt = buildChildResultRetryAttemptForSpawn({
+    task,
+    targetAgentId,
+    spawnMode,
+    sandbox: sandboxMode,
+    contextMode,
+    capabilityPreflight,
+    taskSizingPreflight,
   });
 
   const spawnedMetadata = normalizeSpawnedRunMetadata({
@@ -1266,6 +1370,7 @@ export async function spawnSubagentDirect(
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,
       retainAttachmentsOnKeep: retainOnSessionKeep,
+      childResultRetryAttempt,
     });
   } catch (err) {
     await rollbackPreparedContextEngine(contextEnginePreparation);

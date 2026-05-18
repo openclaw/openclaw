@@ -9,9 +9,14 @@ import {
   listSpawnedSessionKeys,
   sessionVisibilityGatewayTesting,
 } from "../../plugin-sdk/session-visibility.js";
-import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  normalizeMainKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import { looksLikeSessionId } from "../../sessions/session-id.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeUserProvidedSessionKey } from "./sessions-key-normalization.js";
 
 type GatewayCaller = typeof callGateway;
 
@@ -156,6 +161,9 @@ export function looksLikeSessionKey(value: string): boolean {
   const raw = normalizeOptionalString(value) ?? "";
   if (!raw) {
     return false;
+  }
+  if (normalizeUserProvidedSessionKey(raw) !== raw) {
+    return true;
   }
   // These are canonical key shapes that should never be treated as sessionIds.
   if (raw === "main" || raw === "global" || raw === "unknown" || raw === "current") {
@@ -392,11 +400,14 @@ export async function resolveSessionReference(params: {
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
 }): Promise<SessionReferenceResolution> {
-  const rawInput =
+  const rawInputUnnormalized =
     resolveCurrentSessionClientAlias({
       key: params.sessionKey,
       requesterInternalKey: params.requesterInternalKey,
     }) ?? params.sessionKey.trim();
+  const rawInput = normalizeUserProvidedSessionKey(rawInputUnnormalized, {
+    defaultAgentId: resolveAgentIdFromSessionKey(params.requesterInternalKey ?? params.alias),
+  });
   if (rawInput === "current") {
     const resolvedCurrent = await resolveSessionReferenceByKeyOrSessionId({
       raw: rawInput,

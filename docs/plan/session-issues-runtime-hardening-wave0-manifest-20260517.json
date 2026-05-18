@@ -1,0 +1,2133 @@
+{
+  "schemaVersion": 1,
+  "taskId": "session-issues-runtime-hardening-wave0-20260517",
+  "status": "complete",
+  "planPath": "/root/.openclaw/workspace/docs/reports/session-issues-2026-05-17/session-issues-runtime-hardening-implementation-plan.md",
+  "planSha256": "b3d6ccf18dd9d54e2a5600103c75e48a756fc00912706b5133fd43e03d35b99f",
+  "sourceRepo": {
+    "path": "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517",
+    "branch": "runtime-hardening-20260517",
+    "head": "f0fc8c27d397028b2ae7f1ea8a6a4a52e47c1bb5",
+    "sourcePackageVersion": "2026.5.17",
+    "installedOpenClawVersion": "2026.5.5 (b1abf9d)",
+    "versionDelta": "installed CLI is older than source worktree; source edits must be made in worktree and never patched into installed dist manually"
+  },
+  "baseline": {
+    "gitHead": "f0fc8c27d397028b2ae7f1ea8a6a4a52e47c1bb5",
+    "gitStatusShortSummary": "only Wave 0 artifact files untracked after mandatory stubs; no tracked source changes observed",
+    "dirtyBaseline": {
+      "baselineCapturedAfterMandatoryStubCreation": true,
+      "preExistingDirtyTrackedFilesObserved": [],
+      "preExistingUntrackedRelevantFilesObserved": [
+        "docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md",
+        "docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "test/fixtures/session-issues-runtime-hardening-20260517.json"
+      ],
+      "intendedWorktreeRoot": "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517",
+      "scratchRoots": [
+        "/tmp/session-issues-runtime-hardening-wave0-*"
+      ],
+      "currentWaveAllowedChangedPaths": [
+        "docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md",
+        "docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/tmp/session-issues-runtime-hardening-wave0-primary-retry-verdict.json"
+      ],
+      "laterWaveAllowedSourceGlobs": {
+        "1A": [
+          "src/agents/**subagent**",
+          "src/agents/internal-event*",
+          "test/fixtures/session-issues-runtime-hardening-20260517.json"
+        ],
+        "1": [
+          "src/agents/subagent-announce-output.ts",
+          "src/agents/subagent-announce-capture.ts",
+          "src/agents/internal-event*",
+          "src/agents/session-tool-result-guard.ts"
+        ],
+        "2": [
+          "src/agents/internal-events.ts",
+          "src/agents/subagent-announce*.ts",
+          "src/agents/tools/sessions-send-tokens.ts"
+        ],
+        "3": [
+          "src/agents/subagent-spawn.ts",
+          "src/agents/subagent-registry*.ts",
+          "src/agents/subagent-announce-output.ts"
+        ],
+        "4": [
+          "src/agents/announce-idempotency.ts",
+          "src/agents/subagent-registry-queries.ts",
+          "src/agents/subagent-registry-state.ts"
+        ],
+        "5": [
+          "src/agents/compaction*.ts",
+          "src/agents/pi-hooks/compaction-safeguard.ts",
+          "src/agents/pi-embedded-runner/compaction-successor-transcript.ts",
+          "extensions/active-memory/index.ts"
+        ],
+        "6": [
+          "extensions/active-memory/index.ts",
+          "src/**/state-query*",
+          "extensions/qa-lab/**"
+        ],
+        "7": [
+          "src/agents/tools/sessions-*.ts",
+          "src/agents/command/session.ts"
+        ],
+        "8": [
+          "src/**/state-query*",
+          "scripts/render-state.*"
+        ],
+        "9": [
+          "scripts/run-vitest*.mjs",
+          "scripts/vitest-process-group.mjs",
+          "src/agents/subagent-capabilities.ts",
+          "src/agents/subagent-spawn.ts"
+        ],
+        "10": [
+          "src/agents/internal-events.ts",
+          "src/agents/subagent-announce*.ts",
+          "src/agents/compaction*.ts"
+        ]
+      },
+      "forbiddenGeneratedOrBundledPaths": [
+        "/usr/lib/node_modules/openclaw/dist/**",
+        "dist/**",
+        "extensions/**/dist/**"
+      ],
+      "derivedStatePathsRequireExplicitReconciliation": [
+        "STATE.md",
+        "state/orchestrator.json",
+        "state/issues/*.json"
+      ],
+      "scopeCheckRequirement": "Later waves must compare actual changed paths against this manifest and fail on unmapped source or generated/dist edits unless fresh authorization expands scope."
+    },
+    "baselineTests": {
+      "subagentAnnounceOutput": {
+        "exitCode": 124,
+        "summary": "2 files / 12 tests passed in Vitest output; runner did not exit before 240s wrapper timeout",
+        "logPath": "/tmp/session-issues-runtime-hardening-wave0-subagent-announce-output.test.log",
+        "acceptanceStatus": "superseded_by_combined_focused_pass; retain timeout as Wave 9 stale-process baseline evidence, not a Wave 0 gate failure"
+      },
+      "compactionFocused": {
+        "exitCode": 0,
+        "summary": "4 files / 212 tests passed",
+        "logPath": "/tmp/session-issues-runtime-hardening-wave0-compaction-focused-tests.log"
+      },
+      "combinedFocused": {
+        "exitCode": 0,
+        "summary": "6 files / 224 tests passed: subagent-announce-output, compaction, and compaction-safeguard suites across agents-core/agents-support",
+        "logPath": "/tmp/session-issues-wave0-focused-tests.log",
+        "acceptanceStatus": "accepted Wave 0 focused baseline gate"
+      }
+    },
+    "noManualDistPatchPolicy": "Do not edit bundled/generated/hashed dist artifacts directly; map traces back to source and regenerate only in an authorized build/release step."
+  },
+  "surfaces": [
+    {
+      "id": "subagent-completion-event-formatting",
+      "waves": [
+        "1A",
+        "1",
+        "2",
+        "4",
+        "10"
+      ],
+      "owner": "formats internal task_completion events and plain-prompt variants used to wake/requester sessions",
+      "sourcePaths": [
+        "src/agents/internal-events.ts",
+        "src/agents/internal-event-contract.ts",
+        "src/agents/subagent-announce.ts"
+      ],
+      "tests": [
+        "src/agents/subagent-announce.format.e2e.test.ts",
+        "src/agents/subagent-announce.test.ts",
+        "src/agents/subagent-announce.timeout.test.ts"
+      ],
+      "existingSymbols": [
+        "AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION",
+        "AGENT_INTERNAL_EVENT_STATUSES",
+        "formatAgentInternalEventsForPrompt",
+        "formatAgentInternalEventsForPlainPrompt",
+        "runSubagentAnnounceFlow"
+      ],
+      "generatedBreadcrumbs": [
+        "/usr/lib/node_modules/openclaw/dist/subagent-followup.runtime-*.js",
+        "/usr/lib/node_modules/openclaw/dist/run-subagent-registry.runtime*.js"
+      ],
+      "blocker": null
+    },
+    {
+      "id": "child-result-selection-capture",
+      "waves": [
+        "1",
+        "3",
+        "4"
+      ],
+      "owner": "selects latest child visible output, result text, compact findings, and completion reply capture",
+      "sourcePaths": [
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-announce-capture.ts",
+        "src/agents/subagent-yield-output.ts"
+      ],
+      "tests": [
+        "src/agents/subagent-announce-output.test.ts",
+        "src/agents/subagent-announce.capture-completion-reply.test.ts"
+      ],
+      "existingSymbols": [
+        "SubagentRunOutcome",
+        "readSubagentOutput",
+        "readLatestSubagentOutputWithRetry",
+        "waitForSubagentRunOutcome",
+        "applySubagentWaitOutcome",
+        "captureSubagentCompletionReply",
+        "buildChildCompletionFindings",
+        "dedupeLatestChildCompletionRows",
+        "filterCurrentDirectChildCompletionRows"
+      ],
+      "generatedBreadcrumbs": [
+        "/usr/lib/node_modules/openclaw/dist/subagent-announce.registry.runtime*.js"
+      ],
+      "blocker": null
+    },
+    {
+      "id": "typed-verdict-schema-classifier",
+      "waves": [
+        "1A",
+        "1",
+        "3"
+      ],
+      "owner": "no existing canonical child contract/classifier module; current runtime only has transport/status constants and text extraction",
+      "sourcePaths": [
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/internal-event-contract.ts"
+      ],
+      "tests": [
+        "src/agents/subagent-announce-output.test.ts"
+      ],
+      "existingSymbols": [
+        "SubagentRunOutcome",
+        "AGENT_INTERNAL_EVENT_STATUSES"
+      ],
+      "generatedBreadcrumbs": [],
+      "blocker": "Wave 1 must add/own canonical transportOutcome, contractVerdict, acceptanceEligible, and classifier enum validation before acceptance gating."
+    },
+    {
+      "id": "artifact-contract-postflight",
+      "waves": [
+        "1A",
+        "1",
+        "3",
+        "9"
+      ],
+      "owner": "exact artifact reservation/freshness/hash/schema postflight is not centralized today; spawn and announce surfaces carry child/task data but do not enforce file-backed verdict acceptance",
+      "sourcePaths": [
+        "src/agents/subagent-spawn.ts",
+        "src/agents/subagent-registry-completion.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-registry-state.ts"
+      ],
+      "tests": [
+        "src/agents/subagent-spawn.test.ts",
+        "src/agents/subagent-registry-completion.test.ts",
+        "src/agents/subagent-registry.persistence.test.ts"
+      ],
+      "existingSymbols": [
+        "spawnSubagentDirect",
+        "runOutcomesEqual",
+        "shouldUpdateRunOutcome",
+        "persistSubagentRunsToDisk"
+      ],
+      "generatedBreadcrumbs": [
+        "/usr/lib/node_modules/openclaw/dist/subagent-registry.runtime*.js",
+        "/usr/lib/node_modules/openclaw/dist/run-subagent-registry.runtime*.js"
+      ],
+      "blocker": "No current source owner found for exact required-output artifact schema/hash/freshness persistence; Wave 3 should create or explicitly assign this owner."
+    },
+    {
+      "id": "malformed-output-quarantine-retention-redaction",
+      "waves": [
+        "1",
+        "2",
+        "10"
+      ],
+      "owner": "tool-result capping/redaction exists for session persistence; child raw-body quarantine storage for malformed subagent output is not yet a first-class surface",
+      "sourcePaths": [
+        "src/agents/session-tool-result-guard.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/config/sessions/artifacts.ts"
+      ],
+      "tests": [
+        "src/agents/session-tool-result-guard.test.ts",
+        "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
+        "src/agents/session-tool-result-guard.transcript-events.test.ts",
+        "src/agents/subagent-announce-output.test.ts"
+      ],
+      "existingSymbols": [
+        "installSessionToolResultGuard",
+        "buildChildCompletionFindings",
+        "isTrajectoryRuntimeArtifactName",
+        "isTrajectoryPointerArtifactName"
+      ],
+      "generatedBreadcrumbs": [
+        "/usr/lib/node_modules/openclaw/dist/session-updates.runtime*.js"
+      ],
+      "blocker": "Need new quarantine artifact schema/location and retention policy; do not use raw transcript injection as storage."
+    },
+    {
+      "id": "retry-policy-dedupe-counter-persistence",
+      "waves": [
+        "3",
+        "4",
+        "24"
+      ],
+      "owner": "announce idempotency and registry query/read-index helpers own stable child-run lookup; retry mechanism limits are not yet contract-aware",
+      "sourcePaths": [
+        "src/agents/announce-idempotency.ts",
+        "src/agents/subagent-registry-queries.ts",
+        "src/agents/subagent-registry-state.ts",
+        "src/agents/subagent-registry-run-manager.ts",
+        "src/agents/subagent-announce-output.ts"
+      ],
+      "tests": [
+        "src/agents/subagent-registry-queries.test.ts",
+        "src/agents/subagent-registry.persistence.test.ts",
+        "src/agents/subagent-registry.lifecycle-retry-grace.e2e.test.ts",
+        "src/agents/subagent-announce-output.test.ts"
+      ],
+      "existingSymbols": [
+        "buildAnnounceIdFromChildRun",
+        "buildAnnounceIdempotencyKey",
+        "buildSubagentRunReadIndexFromRuns",
+        "shouldIgnorePostCompletionAnnounceForSessionFromRuns",
+        "createSubagentRunManager",
+        "dedupeLatestChildCompletionRows"
+      ],
+      "generatedBreadcrumbs": [
+        "/usr/lib/node_modules/openclaw/dist/subagent-registry.runtime*.js"
+      ],
+      "blocker": "Need persistent duplicate counters keyed by active task contract plus child/run/session/result hash."
+    },
+    {
+      "id": "parent-session-delivery-path",
+      "waves": [
+        "2",
+        "4",
+        "10"
+      ],
+      "owner": "mediated/direct requester wake, origin resolution, retry, and delivery result selection",
+      "sourcePaths": [
+        "src/agents/subagent-announce-delivery.ts",
+        "src/agents/subagent-announce-dispatch.ts",
+        "src/agents/subagent-announce.ts",
+        "src/config/sessions/delivery-info.ts"
+      ],
+      "tests": [
+        "src/agents/subagent-announce-delivery.test.ts",
+        "src/agents/subagent-announce-dispatch.test.ts",
+        "src/agents/subagent-announce.test.ts"
+      ],
+      "existingSymbols": [
+        "deliverSubagentAnnouncement",
+        "sendSubagentAnnounceDirectly",
+        "runAnnounceDeliveryWithRetry",
+        "resolveSubagentCompletionOrigin",
+        "runSubagentAnnounceDispatch",
+        "extractDeliveryInfo"
+      ],
+      "generatedBreadcrumbs": [
+        "/usr/lib/node_modules/openclaw/dist/run-delivery.runtime*.js",
+        "/usr/lib/node_modules/openclaw/dist/delivery-logger.runtime*.js"
+      ],
+      "blocker": null
+    },
+    {
+      "id": "no-reply-routing-suppression",
+      "waves": [
+        "2",
+        "10",
+        "23"
+      ],
+      "owner": "skip-token helpers and agent step reply extraction own non-deliverable reply suppression paths",
+      "sourcePaths": [
+        "src/agents/tools/sessions-send-tokens.ts",
+        "src/agents/tools/agent-step.ts",
+        "src/agents/tools/session-message-text.ts",
+        "src/agents/subagent-yield-output.ts"
+      ],
+      "tests": [
+        "src/agents/tools/sessions-send-helpers.test.ts",
+        "src/agents/tools/sessions-yield-tool.test.ts",
+        "src/agents/openclaw-tools.subagents.steer-failure-clears-suppression.test.ts"
+      ],
+      "existingSymbols": [
+        "ANNOUNCE_SKIP_TOKEN",
+        "REPLY_SKIP_TOKEN",
+        "isNonDeliverableSessionsReply",
+        "runAgentStep",
+        "assistantCallsSessionsYield",
+        "isSessionsYieldToolResult"
+      ],
+      "generatedBreadcrumbs": [
+        "/usr/lib/node_modules/openclaw/dist/send.runtime*.js",
+        "/usr/lib/node_modules/openclaw/dist/message.gateway.runtime.js"
+      ],
+      "blocker": "Need explicit NO_REPLY/suppressed_reply audit event handling; existing token helpers cover ANNOUNCE_SKIP/REPLY_SKIP but not full Wave 2 status-card contract."
+    },
+    {
+      "id": "progress-pulse-status-card-rendering",
+      "waves": [
+        "2",
+        "10",
+        "21"
+      ],
+      "owner": "current internal-event formatter is closest owner; structured status-card/progress-pulse schema is absent",
+      "sourcePaths": [
+        "src/agents/internal-events.ts",
+        "src/agents/subagent-announce-delivery.ts",
+        "src/agents/subagent-announce.ts"
+      ],
+      "tests": [
+        "src/agents/subagent-announce.format.e2e.test.ts",
+        "src/agents/subagent-announce-delivery.test.ts"
+      ],
+      "existingSymbols": [
+        "formatAgentInternalEventsForPrompt",
+        "deliverSubagentAnnouncement"
+      ],
+      "generatedBreadcrumbs": [
+        "/usr/lib/node_modules/openclaw/dist/status-subagents.runtime*.js",
+        "/usr/lib/node_modules/openclaw/dist/status-message.runtime*.js"
+      ],
+      "blocker": "No current typed status-card schema; Wave 2/10 should add bounded data-only rendering."
+    },
+    {
+      "id": "compaction-reconstruction-summary-guards",
+      "waves": [
+        "5",
+        "10"
+      ],
+      "owner": "summary generation/chunking, real-conversation filtering, quality safeguard, and successor transcript rotation",
+      "sourcePaths": [
+        "src/agents/compaction.ts",
+        "src/agents/compaction-real-conversation.ts",
+        "src/agents/pi-hooks/compaction-safeguard.ts",
+        "src/agents/pi-embedded-runner/compaction-successor-transcript.ts"
+      ],
+      "tests": [
+        "src/agents/compaction.test.ts",
+        "src/agents/compaction.identifier-preservation.test.ts",
+        "src/agents/pi-hooks/compaction-safeguard.test.ts",
+        "src/agents/pi-embedded-runner/compaction-successor-transcript.test.ts"
+      ],
+      "existingSymbols": [
+        "summarizeForHandoff",
+        "summarizeInStages",
+        "isRealConversationMessage",
+        "extractLatestUserAsk",
+        "rotateTranscriptAfterCompaction"
+      ],
+      "generatedBreadcrumbs": [
+        "/usr/lib/node_modules/openclaw/dist/commands-compact.runtime*.js",
+        "/usr/lib/node_modules/openclaw/dist/compact.runtime.js",
+        "/usr/lib/node_modules/openclaw/dist/pi-embedded-subscribe.handlers.compaction.runtime*.js"
+      ],
+      "blocker": null
+    },
+    {
+      "id": "active-memory-task-priority-injection",
+      "waves": [
+        "5",
+        "6",
+        "10"
+      ],
+      "owner": "active-memory plugin registers before_prompt_build prependContext and command toggles; its output is explicitly untrusted context but can still enter prompt prefix",
+      "sourcePaths": [
+        "extensions/active-memory/index.ts"
+      ],
+      "tests": [
+        "extensions/active-memory/index.test.ts",
+        "extensions/active-memory/plugin.test.ts"
+      ],
+      "existingSymbols": [
+        "ACTIVE_MEMORY_PLUGIN_TAG",
+        "buildPromptPrefix",
+        "maybeResolveActiveRecall",
+        "api.on(\"before_prompt_build\")",
+        "timeoutCircuitBreaker"
+      ],
+      "generatedBreadcrumbs": [],
+      "blocker": "Need task-priority conflict metadata at core prompt assembly; plugin should remain non-authorizing background context."
+    },
+    {
+      "id": "session-key-normalization-history-export",
+      "waves": [
+        "7"
+      ],
+      "owner": "session reference resolution, session history/list tools, helper row shaping, and CLI session-key resolution",
+      "sourcePaths": [
+        "src/agents/tools/sessions-resolution.ts",
+        "src/agents/tools/sessions-history-tool.ts",
+        "src/agents/tools/sessions-list-tool.ts",
+        "src/agents/tools/sessions-helpers.ts",
+        "src/agents/command/session.ts"
+      ],
+      "tests": [
+        "src/agents/tools/sessions-resolution.test.ts",
+        "src/agents/tools/sessions-history-tool.test.ts",
+        "src/agents/tools/sessions-list-tool.test.ts",
+        "src/agents/command/session.resolve-session-key.test.ts"
+      ],
+      "existingSymbols": [
+        "resolveSessionReference",
+        "resolveVisibleSessionReference",
+        "looksLikeSessionKey",
+        "createSessionsHistoryTool",
+        "createSessionsListTool",
+        "resolveSessionKeyForRequest"
+      ],
+      "generatedBreadcrumbs": [
+        "/usr/lib/node_modules/openclaw/dist/session-store.runtime*.js",
+        "/usr/lib/node_modules/openclaw/dist/transcript-resolve.runtime*.js"
+      ],
+      "blocker": "src/agents/command/session.resolve-session-key.ts is not a source file; its test maps to src/agents/command/session.ts."
+    },
+    {
+      "id": "sessions-list-index-lookup",
+      "waves": [
+        "7"
+      ],
+      "owner": "sessions list tool sanitizes transcript fields and status rows; local bounded fallback is not yet identified as a separate helper",
+      "sourcePaths": [
+        "src/agents/tools/sessions-list-tool.ts",
+        "src/agents/tools/sessions-helpers.ts",
+        "src/agents/tools/sessions-resolution.ts"
+      ],
+      "tests": [
+        "src/agents/tools/sessions-list-tool.test.ts",
+        "src/agents/openclaw-tools.sessions.test.ts",
+        "src/agents/openclaw-tools.sessions-visibility.test.ts"
+      ],
+      "existingSymbols": [
+        "createSessionsListTool",
+        "SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS",
+        "classifySessionKind",
+        "deriveChannel",
+        "listSpawnedSessionKeys"
+      ],
+      "generatedBreadcrumbs": [
+        "/usr/lib/node_modules/openclaw/dist/status-subagents.runtime*.js"
+      ],
+      "blocker": "Need safe local-index fallback that emits canonical key/session id/file path/label/timestamps only after gateway timeout."
+    },
+    {
+      "id": "orchestrator-state-query-render-state",
+      "waves": [
+        "6",
+        "8"
+      ],
+      "owner": "no state/orchestrator source-state helper exists in this worktree; source tree lacks scripts/render-state.py, state/orchestrator.json, STATE.md, and src/orchestrator/state-query.ts",
+      "sourcePaths": [],
+      "tests": [],
+      "existingSymbols": [],
+      "generatedBreadcrumbs": [],
+      "blocker": "Wave 8 must create/find canonical state-query helper before Wave 6 authorization gates; current worktree has no authoritative owner."
+    },
+    {
+      "id": "research-autoresearch-fanout-finalization-authz",
+      "waves": [
+        "6"
+      ],
+      "owner": "no OpenClaw core autoresearch/project-initiation automation owner found in this source tree from targeted search; QA-lab has subagent fanout scenario tests only",
+      "sourcePaths": [
+        "extensions/qa-lab/src/agentic-parity.ts",
+        "extensions/qa-lab/src/providers/mock-openai/server.ts"
+      ],
+      "tests": [
+        "extensions/qa-lab/src/scenario-catalog.test.ts",
+        "extensions/qa-lab/src/providers/mock-openai/server.test.ts"
+      ],
+      "existingSymbols": [
+        "subagent-fanout-synthesis scenario metadata"
+      ],
+      "generatedBreadcrumbs": [],
+      "blocker": "Existing autonomous research/autoresearch source surface may live in an unmerged/other branch or runtime state; Wave 6 must first bind only discovered/mapped triggers and must not invent new automation."
+    },
+    {
+      "id": "gate-test-process-runner",
+      "waves": [
+        "9",
+        "19"
+      ],
+      "owner": "vitest runner process groups, no-output watchdog, signal forwarding, profiling wrapper, and log output forwarding",
+      "sourcePaths": [
+        "scripts/run-vitest.mjs",
+        "scripts/vitest-process-group.mjs",
+        "scripts/run-vitest-profile.mjs"
+      ],
+      "tests": [
+        "test/run-vitest.test.mjs",
+        "test/vitest-process-group.test.mjs"
+      ],
+      "existingSymbols": [
+        "spawnWatchedVitestProcess",
+        "installVitestNoOutputWatchdog",
+        "forwardSignalToVitestProcessGroup",
+        "installVitestProcessGroupCleanup",
+        "buildVitestProfileCommand"
+      ],
+      "generatedBreadcrumbs": [],
+      "blocker": "Baseline observed subagent-announce-output tests reported pass but wrapper timed out waiting for process exit; Wave 9 should treat stale process cleanup as acceptance-gating."
+    },
+    {
+      "id": "dispatcher-profile-capability-preflight",
+      "waves": [
+        "9",
+        "20"
+      ],
+      "owner": "subagent capability store, spawn runtime preparation, and tool allow/deny inheritance determine what a spawned checker can use",
+      "sourcePaths": [
+        "src/agents/subagent-capabilities.ts",
+        "src/agents/subagent-spawn.ts",
+        "src/agents/subagent-spawn.types.ts"
+      ],
+      "tests": [
+        "src/agents/subagent-spawn.test.ts",
+        "src/agents/subagent-spawn.workspace.test.ts",
+        "src/agents/openclaw-tools.subagents.sessions-spawn.allowlist.test.ts"
+      ],
+      "existingSymbols": [
+        "resolveSubagentCapabilities",
+        "resolveStoredSubagentCapabilities",
+        "spawnSubagentDirect",
+        "SUBAGENT_SPAWN_CONTEXT_MODES"
+      ],
+      "generatedBreadcrumbs": [
+        "/usr/lib/node_modules/openclaw/dist/commands-subagents-control.runtime*.js"
+      ],
+      "blocker": "Current preflight is capability/session-shape oriented; Wave 9 must add required artifact write/read/tool/runtime-duration checks before dispatch."
+    },
+    {
+      "id": "dirty-baseline-diff-manifest-scope-validation",
+      "waves": [
+        "0",
+        "9",
+        "18"
+      ],
+      "owner": "no dedicated source helper found for per-task dirty baseline/expected-diff enforcement; Wave 0 artifact acts as seed manifest",
+      "sourcePaths": [],
+      "tests": [
+        "test/git-hooks-pre-commit.test.ts"
+      ],
+      "existingSymbols": [],
+      "generatedBreadcrumbs": [],
+      "blocker": "Need source-owned scope-check helper before later waves can machine-reject unexpected path edits."
+    },
+    {
+      "id": "generated-bundled-hashed-release-surface",
+      "waves": [
+        "0",
+        "all"
+      ],
+      "owner": "authoritative source is this worktree; installed/bundled hashed outputs under /usr/lib/node_modules/openclaw/dist are breadcrumbs only",
+      "sourcePaths": [
+        "src/**",
+        "extensions/**/src/**",
+        "scripts/**"
+      ],
+      "tests": [
+        "scripts/test-built-status-message-runtime.mjs",
+        "scripts/write-cli-compat.ts"
+      ],
+      "existingSymbols": [],
+      "generatedBreadcrumbs": [
+        "/usr/lib/node_modules/openclaw/dist/*.runtime*.js",
+        "/usr/lib/node_modules/openclaw/dist/*-*.js"
+      ],
+      "blocker": "Manual edits to bundled/generated/hashed dist artifacts are forbidden; regenerate only from mapped source in an explicitly authorized release/build wave."
+    }
+  ],
+  "issueCoverage": [
+    {
+      "issue": 1,
+      "title": "Runtime completion status conflates process success with semantic/task success",
+      "owningWaves": [
+        "1A",
+        "1"
+      ],
+      "fixtureTests": [
+        "failing-test-child-completed"
+      ],
+      "expectedResultClass": "FAILED_GATES / acceptanceEligible=false",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": false,
+      "blockerRationale": null,
+      "sourceSurfaceIds": [
+        "subagent-completion-event-formatting",
+        "child-result-selection-capture",
+        "typed-verdict-schema-classifier",
+        "artifact-contract-postflight",
+        "malformed-output-quarantine-retention-redaction"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/internal-events.ts",
+        "src/agents/internal-event-contract.ts",
+        "src/agents/subagent-announce.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-announce-capture.ts",
+        "src/agents/subagent-yield-output.ts",
+        "src/agents/subagent-spawn.ts",
+        "src/agents/subagent-registry-completion.ts",
+        "src/agents/subagent-registry-state.ts",
+        "src/agents/session-tool-result-guard.ts",
+        "src/config/sessions/artifacts.ts"
+      ],
+      "fixtureIds": [
+        "failing-test-child-completed"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 2,
+      "title": "Malformed raw child payloads are injected into parent/user context",
+      "owningWaves": [
+        "1",
+        "2",
+        "10"
+      ],
+      "fixtureTests": [
+        "raw-source",
+        "raw-grep",
+        "raw-log"
+      ],
+      "expectedResultClass": "MALFORMED_RAW_SOURCE_OUTPUT / MALFORMED_TOOL_LOG_OUTPUT",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": false,
+      "blockerRationale": null,
+      "sourceSurfaceIds": [
+        "subagent-completion-event-formatting",
+        "child-result-selection-capture",
+        "typed-verdict-schema-classifier",
+        "artifact-contract-postflight",
+        "malformed-output-quarantine-retention-redaction",
+        "parent-session-delivery-path",
+        "no-reply-routing-suppression",
+        "progress-pulse-status-card-rendering",
+        "compaction-reconstruction-summary-guards",
+        "active-memory-task-priority-injection"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/internal-events.ts",
+        "src/agents/internal-event-contract.ts",
+        "src/agents/subagent-announce.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-announce-capture.ts",
+        "src/agents/subagent-yield-output.ts",
+        "src/agents/subagent-spawn.ts",
+        "src/agents/subagent-registry-completion.ts",
+        "src/agents/subagent-registry-state.ts",
+        "src/agents/session-tool-result-guard.ts",
+        "src/config/sessions/artifacts.ts",
+        "src/agents/subagent-announce-delivery.ts",
+        "src/agents/subagent-announce-dispatch.ts",
+        "src/config/sessions/delivery-info.ts",
+        "src/agents/tools/sessions-send-tokens.ts",
+        "src/agents/tools/agent-step.ts",
+        "src/agents/tools/session-message-text.ts",
+        "src/agents/compaction.ts",
+        "src/agents/compaction-real-conversation.ts",
+        "src/agents/pi-hooks/compaction-safeguard.ts",
+        "src/agents/pi-embedded-runner/compaction-successor-transcript.ts",
+        "extensions/active-memory/index.ts"
+      ],
+      "fixtureIds": [
+        "raw-source",
+        "raw-grep",
+        "raw-log"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 3,
+      "title": "Completion-event action text tells parent to deliver untrusted results",
+      "owningWaves": [
+        "2"
+      ],
+      "fixtureTests": [
+        "raw-source",
+        "raw-grep"
+      ],
+      "expectedResultClass": "QUARANTINE_INVALID_CHILD_RESULT",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": false,
+      "blockerRationale": null,
+      "sourceSurfaceIds": [
+        "subagent-completion-event-formatting",
+        "malformed-output-quarantine-retention-redaction",
+        "parent-session-delivery-path",
+        "no-reply-routing-suppression",
+        "progress-pulse-status-card-rendering"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/internal-events.ts",
+        "src/agents/internal-event-contract.ts",
+        "src/agents/subagent-announce.ts",
+        "src/agents/session-tool-result-guard.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/config/sessions/artifacts.ts",
+        "src/agents/subagent-announce-delivery.ts",
+        "src/agents/subagent-announce-dispatch.ts",
+        "src/config/sessions/delivery-info.ts",
+        "src/agents/tools/sessions-send-tokens.ts",
+        "src/agents/tools/agent-step.ts",
+        "src/agents/tools/session-message-text.ts",
+        "src/agents/subagent-yield-output.ts"
+      ],
+      "fixtureIds": [
+        "raw-source",
+        "raw-grep"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 4,
+      "title": "Primary/checker/mediator handoff contract is prompt-only",
+      "owningWaves": [
+        "1",
+        "3",
+        "9"
+      ],
+      "fixtureTests": [
+        "failing-test-child-completed",
+        "missing-exact-artifact"
+      ],
+      "expectedResultClass": "MISSING_VERDICT_SCHEMA or MISSING_REQUIRED_ARTIFACT",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": true,
+      "blockerRationale": "typed verdict schema source owner is not centralized yet",
+      "sourceSurfaceIds": [
+        "subagent-completion-event-formatting",
+        "child-result-selection-capture",
+        "typed-verdict-schema-classifier",
+        "artifact-contract-postflight",
+        "malformed-output-quarantine-retention-redaction",
+        "retry-policy-dedupe-counter-persistence",
+        "gate-test-process-runner",
+        "dispatcher-profile-capability-preflight",
+        "dirty-baseline-diff-manifest-scope-validation"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/internal-events.ts",
+        "src/agents/internal-event-contract.ts",
+        "src/agents/subagent-announce.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-announce-capture.ts",
+        "src/agents/subagent-yield-output.ts",
+        "src/agents/subagent-spawn.ts",
+        "src/agents/subagent-registry-completion.ts",
+        "src/agents/subagent-registry-state.ts",
+        "src/agents/session-tool-result-guard.ts",
+        "src/config/sessions/artifacts.ts",
+        "src/agents/announce-idempotency.ts",
+        "src/agents/subagent-registry-queries.ts",
+        "src/agents/subagent-registry-run-manager.ts",
+        "scripts/run-vitest.mjs",
+        "scripts/vitest-process-group.mjs",
+        "scripts/run-vitest-profile.mjs",
+        "src/agents/subagent-capabilities.ts",
+        "src/agents/subagent-spawn.types.ts"
+      ],
+      "fixtureIds": [
+        "failing-test-child-completed",
+        "missing-exact-artifact"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 5,
+      "title": "Required file-backed reports missing, wrong-path, or ephemeral",
+      "owningWaves": [
+        "3"
+      ],
+      "fixtureTests": [
+        "missing-exact-artifact"
+      ],
+      "expectedResultClass": "MISSING_REQUIRED_ARTIFACT",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": true,
+      "blockerRationale": "exact artifact postflight source owner is not centralized yet",
+      "sourceSurfaceIds": [
+        "child-result-selection-capture",
+        "typed-verdict-schema-classifier",
+        "artifact-contract-postflight",
+        "retry-policy-dedupe-counter-persistence"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-announce-capture.ts",
+        "src/agents/subagent-yield-output.ts",
+        "src/agents/internal-event-contract.ts",
+        "src/agents/subagent-spawn.ts",
+        "src/agents/subagent-registry-completion.ts",
+        "src/agents/subagent-registry-state.ts",
+        "src/agents/announce-idempotency.ts",
+        "src/agents/subagent-registry-queries.ts",
+        "src/agents/subagent-registry-run-manager.ts"
+      ],
+      "fixtureIds": [
+        "missing-exact-artifact"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 6,
+      "title": "Duplicate/replayed child completion events bloat timeline",
+      "owningWaves": [
+        "4",
+        "6"
+      ],
+      "fixtureTests": [
+        "duplicate-replay",
+        "stale-autoresearch"
+      ],
+      "expectedResultClass": "DUPLICATE_COMPLETION / stale task backgrounded",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": true,
+      "blockerRationale": "persistent duplicate counter schema not present yet",
+      "sourceSurfaceIds": [
+        "subagent-completion-event-formatting",
+        "child-result-selection-capture",
+        "retry-policy-dedupe-counter-persistence",
+        "parent-session-delivery-path",
+        "active-memory-task-priority-injection",
+        "orchestrator-state-query-render-state",
+        "research-autoresearch-fanout-finalization-authz"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/internal-events.ts",
+        "src/agents/internal-event-contract.ts",
+        "src/agents/subagent-announce.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-announce-capture.ts",
+        "src/agents/subagent-yield-output.ts",
+        "src/agents/announce-idempotency.ts",
+        "src/agents/subagent-registry-queries.ts",
+        "src/agents/subagent-registry-state.ts",
+        "src/agents/subagent-registry-run-manager.ts",
+        "src/agents/subagent-announce-delivery.ts",
+        "src/agents/subagent-announce-dispatch.ts",
+        "src/config/sessions/delivery-info.ts",
+        "extensions/active-memory/index.ts",
+        "extensions/qa-lab/src/agentic-parity.ts",
+        "extensions/qa-lab/src/providers/mock-openai/server.ts"
+      ],
+      "fixtureIds": [
+        "duplicate-replay",
+        "stale-autoresearch"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 7,
+      "title": "Raw diagnostic output caused truncation and hid facts",
+      "owningWaves": [
+        "7",
+        "10"
+      ],
+      "fixtureTests": [
+        "raw-log",
+        "truncated-five-message-audit"
+      ],
+      "expectedResultClass": "BOUNDED_SESSION_INDEX / AUDIT_INCOMPLETE",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": false,
+      "blockerRationale": null,
+      "sourceSurfaceIds": [
+        "subagent-completion-event-formatting",
+        "malformed-output-quarantine-retention-redaction",
+        "parent-session-delivery-path",
+        "no-reply-routing-suppression",
+        "progress-pulse-status-card-rendering",
+        "compaction-reconstruction-summary-guards",
+        "active-memory-task-priority-injection",
+        "session-key-normalization-history-export",
+        "sessions-list-index-lookup"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/internal-events.ts",
+        "src/agents/internal-event-contract.ts",
+        "src/agents/subagent-announce.ts",
+        "src/agents/session-tool-result-guard.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/config/sessions/artifacts.ts",
+        "src/agents/subagent-announce-delivery.ts",
+        "src/agents/subagent-announce-dispatch.ts",
+        "src/config/sessions/delivery-info.ts",
+        "src/agents/tools/sessions-send-tokens.ts",
+        "src/agents/tools/agent-step.ts",
+        "src/agents/tools/session-message-text.ts",
+        "src/agents/subagent-yield-output.ts",
+        "src/agents/compaction.ts",
+        "src/agents/compaction-real-conversation.ts",
+        "src/agents/pi-hooks/compaction-safeguard.ts",
+        "src/agents/pi-embedded-runner/compaction-successor-transcript.ts",
+        "extensions/active-memory/index.ts",
+        "src/agents/tools/sessions-resolution.ts",
+        "src/agents/tools/sessions-history-tool.ts",
+        "src/agents/tools/sessions-list-tool.ts",
+        "src/agents/tools/sessions-helpers.ts",
+        "src/agents/command/session.ts"
+      ],
+      "fixtureIds": [
+        "raw-log",
+        "truncated-five-message-audit"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 8,
+      "title": "Context overflow, active-memory timeouts, and truncation co-occurred",
+      "owningWaves": [
+        "5",
+        "10"
+      ],
+      "fixtureTests": [
+        "active-memory-timeout",
+        "raw-log"
+      ],
+      "expectedResultClass": "ACTIVE_MEMORY_TIMEOUT / BUDGETED_SUMMARY",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": false,
+      "blockerRationale": null,
+      "sourceSurfaceIds": [
+        "subagent-completion-event-formatting",
+        "malformed-output-quarantine-retention-redaction",
+        "parent-session-delivery-path",
+        "no-reply-routing-suppression",
+        "progress-pulse-status-card-rendering",
+        "compaction-reconstruction-summary-guards",
+        "active-memory-task-priority-injection"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/internal-events.ts",
+        "src/agents/internal-event-contract.ts",
+        "src/agents/subagent-announce.ts",
+        "src/agents/session-tool-result-guard.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/config/sessions/artifacts.ts",
+        "src/agents/subagent-announce-delivery.ts",
+        "src/agents/subagent-announce-dispatch.ts",
+        "src/config/sessions/delivery-info.ts",
+        "src/agents/tools/sessions-send-tokens.ts",
+        "src/agents/tools/agent-step.ts",
+        "src/agents/tools/session-message-text.ts",
+        "src/agents/subagent-yield-output.ts",
+        "src/agents/compaction.ts",
+        "src/agents/compaction-real-conversation.ts",
+        "src/agents/pi-hooks/compaction-safeguard.ts",
+        "src/agents/pi-embedded-runner/compaction-successor-transcript.ts",
+        "extensions/active-memory/index.ts"
+      ],
+      "fixtureIds": [
+        "active-memory-timeout",
+        "raw-log"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 9,
+      "title": "Auto-compaction produced misleading pending-ask summary",
+      "owningWaves": [
+        "5"
+      ],
+      "fixtureTests": [
+        "compaction-contradiction"
+      ],
+      "expectedResultClass": "SUMMARY_UNVERIFIED",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": false,
+      "blockerRationale": null,
+      "sourceSurfaceIds": [
+        "compaction-reconstruction-summary-guards",
+        "active-memory-task-priority-injection"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/compaction.ts",
+        "src/agents/compaction-real-conversation.ts",
+        "src/agents/pi-hooks/compaction-safeguard.ts",
+        "src/agents/pi-embedded-runner/compaction-successor-transcript.ts",
+        "extensions/active-memory/index.ts"
+      ],
+      "fixtureIds": [
+        "compaction-contradiction"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 10,
+      "title": "Stale prior-task/active-memory/compaction hints threaten current request",
+      "owningWaves": [
+        "5",
+        "6"
+      ],
+      "fixtureTests": [
+        "active-memory-conflict",
+        "active-memory-timeout",
+        "stale-autoresearch"
+      ],
+      "expectedResultClass": "TASK_PRIORITY_CONFLICT",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": false,
+      "blockerRationale": null,
+      "sourceSurfaceIds": [
+        "compaction-reconstruction-summary-guards",
+        "active-memory-task-priority-injection",
+        "orchestrator-state-query-render-state",
+        "research-autoresearch-fanout-finalization-authz"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/compaction.ts",
+        "src/agents/compaction-real-conversation.ts",
+        "src/agents/pi-hooks/compaction-safeguard.ts",
+        "src/agents/pi-embedded-runner/compaction-successor-transcript.ts",
+        "extensions/active-memory/index.ts",
+        "extensions/qa-lab/src/agentic-parity.ts",
+        "extensions/qa-lab/src/providers/mock-openai/server.ts"
+      ],
+      "fixtureIds": [
+        "active-memory-conflict",
+        "active-memory-timeout",
+        "stale-autoresearch"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 11,
+      "title": "User-facing session:tui-* keys not normalized by sessions_history",
+      "owningWaves": [
+        "7"
+      ],
+      "fixtureTests": [
+        "tui-alias"
+      ],
+      "expectedResultClass": "SESSION_ALIAS_NORMALIZED",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": false,
+      "blockerRationale": null,
+      "sourceSurfaceIds": [
+        "session-key-normalization-history-export",
+        "sessions-list-index-lookup"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/tools/sessions-resolution.ts",
+        "src/agents/tools/sessions-history-tool.ts",
+        "src/agents/tools/sessions-list-tool.ts",
+        "src/agents/tools/sessions-helpers.ts",
+        "src/agents/command/session.ts"
+      ],
+      "fixtureIds": [
+        "tui-alias"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 12,
+      "title": "First-class session history cannot access requested older sibling session",
+      "owningWaves": [
+        "7"
+      ],
+      "fixtureTests": [
+        "tui-alias"
+      ],
+      "expectedResultClass": "EXACT_SESSION_AUDIT or FORBIDDEN_BUT_RESOLVABLE",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": false,
+      "blockerRationale": null,
+      "sourceSurfaceIds": [
+        "session-key-normalization-history-export",
+        "sessions-list-index-lookup"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/tools/sessions-resolution.ts",
+        "src/agents/tools/sessions-history-tool.ts",
+        "src/agents/tools/sessions-list-tool.ts",
+        "src/agents/tools/sessions-helpers.ts",
+        "src/agents/command/session.ts"
+      ],
+      "fixtureIds": [
+        "tui-alias"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 13,
+      "title": "sessions_list timed out during session resolution",
+      "owningWaves": [
+        "7"
+      ],
+      "fixtureTests": [
+        "sessions-list-timeout",
+        "tui-alias"
+      ],
+      "expectedResultClass": "SESSION_INDEX_DEGRADED",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": true,
+      "blockerRationale": "local sessions-index fallback not present yet",
+      "sourceSurfaceIds": [
+        "session-key-normalization-history-export",
+        "sessions-list-index-lookup"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/tools/sessions-resolution.ts",
+        "src/agents/tools/sessions-history-tool.ts",
+        "src/agents/tools/sessions-list-tool.ts",
+        "src/agents/tools/sessions-helpers.ts",
+        "src/agents/command/session.ts"
+      ],
+      "fixtureIds": [
+        "sessions-list-timeout",
+        "tui-alias"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 14,
+      "title": "Audit retrieval attempted through truncated five-message history",
+      "owningWaves": [
+        "7"
+      ],
+      "fixtureTests": [
+        "truncated-five-message-audit"
+      ],
+      "expectedResultClass": "AUDIT_INCOMPLETE",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": false,
+      "blockerRationale": null,
+      "sourceSurfaceIds": [
+        "session-key-normalization-history-export",
+        "sessions-list-index-lookup"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/tools/sessions-resolution.ts",
+        "src/agents/tools/sessions-history-tool.ts",
+        "src/agents/tools/sessions-list-tool.ts",
+        "src/agents/tools/sessions-helpers.ts",
+        "src/agents/command/session.ts"
+      ],
+      "fixtureIds": [
+        "truncated-five-message-audit"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 15,
+      "title": "Derived STATE.md disagreed with authoritative orchestrator state",
+      "owningWaves": [
+        "8"
+      ],
+      "fixtureTests": [
+        "state-derived-mismatch"
+      ],
+      "expectedResultClass": "STATE_DERIVED_STALE",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": true,
+      "blockerRationale": "state-query/render-state helper not present in worktree",
+      "sourceSurfaceIds": [
+        "orchestrator-state-query-render-state"
+      ],
+      "sourceSurfacePaths": [],
+      "fixtureIds": [
+        "state-derived-mismatch"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 16,
+      "title": "Ad hoc issue-state parsers failed against live schema",
+      "owningWaves": [
+        "8",
+        "6"
+      ],
+      "fixtureTests": [
+        "object-shaped-status"
+      ],
+      "expectedResultClass": "STATE_STATUS_NORMALIZED",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": true,
+      "blockerRationale": "state-query helper not present in worktree",
+      "sourceSurfaceIds": [
+        "active-memory-task-priority-injection",
+        "orchestrator-state-query-render-state",
+        "research-autoresearch-fanout-finalization-authz"
+      ],
+      "sourceSurfacePaths": [
+        "extensions/active-memory/index.ts",
+        "extensions/qa-lab/src/agentic-parity.ts",
+        "extensions/qa-lab/src/providers/mock-openai/server.ts"
+      ],
+      "fixtureIds": [
+        "object-shaped-status"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 17,
+      "title": "Old unrelated orchestrator blocker polluted recovery",
+      "owningWaves": [
+        "5",
+        "6",
+        "8"
+      ],
+      "fixtureTests": [
+        "compaction-contradiction",
+        "active-memory-conflict",
+        "state-derived-mismatch"
+      ],
+      "expectedResultClass": "TASK_PRIORITY_CONFLICT / STATE_DERIVED_STALE",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": false,
+      "blockerRationale": null,
+      "sourceSurfaceIds": [
+        "compaction-reconstruction-summary-guards",
+        "active-memory-task-priority-injection",
+        "orchestrator-state-query-render-state",
+        "research-autoresearch-fanout-finalization-authz"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/compaction.ts",
+        "src/agents/compaction-real-conversation.ts",
+        "src/agents/pi-hooks/compaction-safeguard.ts",
+        "src/agents/pi-embedded-runner/compaction-successor-transcript.ts",
+        "extensions/active-memory/index.ts",
+        "extensions/qa-lab/src/agentic-parity.ts",
+        "extensions/qa-lab/src/providers/mock-openai/server.ts"
+      ],
+      "fixtureIds": [
+        "compaction-contradiction",
+        "active-memory-conflict",
+        "state-derived-mismatch"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 18,
+      "title": "Dirty workspace and split main/worktree obscured scope",
+      "owningWaves": [
+        "0",
+        "9"
+      ],
+      "fixtureTests": [
+        "dirty-split-worktree"
+      ],
+      "expectedResultClass": "SCOPE_BASELINE_RECORDED",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": false,
+      "blockerRationale": null,
+      "sourceSurfaceIds": [
+        "artifact-contract-postflight",
+        "gate-test-process-runner",
+        "dispatcher-profile-capability-preflight",
+        "dirty-baseline-diff-manifest-scope-validation",
+        "generated-bundled-hashed-release-surface"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/subagent-spawn.ts",
+        "src/agents/subagent-registry-completion.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-registry-state.ts",
+        "scripts/run-vitest.mjs",
+        "scripts/vitest-process-group.mjs",
+        "scripts/run-vitest-profile.mjs",
+        "src/agents/subagent-capabilities.ts",
+        "src/agents/subagent-spawn.types.ts",
+        "src/**",
+        "extensions/**/src/**",
+        "scripts/**"
+      ],
+      "fixtureIds": [
+        "dirty-split-worktree"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 19,
+      "title": "Stale/long-running gate processes and SIGTERM invalidated evidence",
+      "owningWaves": [
+        "9"
+      ],
+      "fixtureTests": [
+        "stale-gate-process",
+        "failing-test-child-completed"
+      ],
+      "expectedResultClass": "STALE_PROCESS_RISK",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": true,
+      "blockerRationale": "baseline test showed runner exit/stale-process concern",
+      "sourceSurfaceIds": [
+        "artifact-contract-postflight",
+        "gate-test-process-runner",
+        "dispatcher-profile-capability-preflight",
+        "dirty-baseline-diff-manifest-scope-validation"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/subagent-spawn.ts",
+        "src/agents/subagent-registry-completion.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-registry-state.ts",
+        "scripts/run-vitest.mjs",
+        "scripts/vitest-process-group.mjs",
+        "scripts/run-vitest-profile.mjs",
+        "src/agents/subagent-capabilities.ts",
+        "src/agents/subagent-spawn.types.ts"
+      ],
+      "fixtureIds": [
+        "stale-gate-process",
+        "failing-test-child-completed"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 20,
+      "title": "Checker/auditor profile capability mismatches",
+      "owningWaves": [
+        "9"
+      ],
+      "fixtureTests": [
+        "profile-capability-mismatch"
+      ],
+      "expectedResultClass": "BLOCKED_INFRA_PROFILE_MISMATCH",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": true,
+      "blockerRationale": "artifact/tool/write capability preflight missing",
+      "sourceSurfaceIds": [
+        "artifact-contract-postflight",
+        "gate-test-process-runner",
+        "dispatcher-profile-capability-preflight",
+        "dirty-baseline-diff-manifest-scope-validation"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/subagent-spawn.ts",
+        "src/agents/subagent-registry-completion.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-registry-state.ts",
+        "scripts/run-vitest.mjs",
+        "scripts/vitest-process-group.mjs",
+        "scripts/run-vitest-profile.mjs",
+        "src/agents/subagent-capabilities.ts",
+        "src/agents/subagent-spawn.types.ts"
+      ],
+      "fixtureIds": [
+        "profile-capability-mismatch"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 21,
+      "title": "Progress-update contract missed during long waits",
+      "owningWaves": [
+        "10"
+      ],
+      "fixtureTests": [
+        "long-gate-progress",
+        "raw-log"
+      ],
+      "expectedResultClass": "PROGRESS_PULSE",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": true,
+      "blockerRationale": "status-card/progress-pulse schema absent",
+      "sourceSurfaceIds": [
+        "subagent-completion-event-formatting",
+        "malformed-output-quarantine-retention-redaction",
+        "parent-session-delivery-path",
+        "no-reply-routing-suppression",
+        "progress-pulse-status-card-rendering",
+        "compaction-reconstruction-summary-guards",
+        "active-memory-task-priority-injection"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/internal-events.ts",
+        "src/agents/internal-event-contract.ts",
+        "src/agents/subagent-announce.ts",
+        "src/agents/session-tool-result-guard.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/config/sessions/artifacts.ts",
+        "src/agents/subagent-announce-delivery.ts",
+        "src/agents/subagent-announce-dispatch.ts",
+        "src/config/sessions/delivery-info.ts",
+        "src/agents/tools/sessions-send-tokens.ts",
+        "src/agents/tools/agent-step.ts",
+        "src/agents/tools/session-message-text.ts",
+        "src/agents/subagent-yield-output.ts",
+        "src/agents/compaction.ts",
+        "src/agents/compaction-real-conversation.ts",
+        "src/agents/pi-hooks/compaction-safeguard.ts",
+        "src/agents/pi-embedded-runner/compaction-successor-transcript.ts",
+        "extensions/active-memory/index.ts"
+      ],
+      "fixtureIds": [
+        "long-gate-progress",
+        "raw-log"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 22,
+      "title": "Task-contract drift replaced requested MD deliverable",
+      "owningWaves": [
+        "1A",
+        "5"
+      ],
+      "fixtureTests": [
+        "compaction-contradiction",
+        "active-memory-conflict"
+      ],
+      "expectedResultClass": "ACTIVE_TASK_CONTRACT_PINNED",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": false,
+      "blockerRationale": null,
+      "sourceSurfaceIds": [
+        "subagent-completion-event-formatting",
+        "typed-verdict-schema-classifier",
+        "artifact-contract-postflight",
+        "compaction-reconstruction-summary-guards",
+        "active-memory-task-priority-injection"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/internal-events.ts",
+        "src/agents/internal-event-contract.ts",
+        "src/agents/subagent-announce.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-spawn.ts",
+        "src/agents/subagent-registry-completion.ts",
+        "src/agents/subagent-registry-state.ts",
+        "src/agents/compaction.ts",
+        "src/agents/compaction-real-conversation.ts",
+        "src/agents/pi-hooks/compaction-safeguard.ts",
+        "src/agents/pi-embedded-runner/compaction-successor-transcript.ts",
+        "extensions/active-memory/index.ts"
+      ],
+      "fixtureIds": [
+        "compaction-contradiction",
+        "active-memory-conflict"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 23,
+      "title": "NO_REPLY sentinel appears in visible transcript path",
+      "owningWaves": [
+        "2",
+        "10"
+      ],
+      "fixtureTests": [
+        "no-reply-visible"
+      ],
+      "expectedResultClass": "SUPPRESSED_REPLY_AUDIT",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": true,
+      "blockerRationale": "NO_REPLY structured suppression audit absent",
+      "sourceSurfaceIds": [
+        "subagent-completion-event-formatting",
+        "malformed-output-quarantine-retention-redaction",
+        "parent-session-delivery-path",
+        "no-reply-routing-suppression",
+        "progress-pulse-status-card-rendering",
+        "compaction-reconstruction-summary-guards",
+        "active-memory-task-priority-injection"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/internal-events.ts",
+        "src/agents/internal-event-contract.ts",
+        "src/agents/subagent-announce.ts",
+        "src/agents/session-tool-result-guard.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/config/sessions/artifacts.ts",
+        "src/agents/subagent-announce-delivery.ts",
+        "src/agents/subagent-announce-dispatch.ts",
+        "src/config/sessions/delivery-info.ts",
+        "src/agents/tools/sessions-send-tokens.ts",
+        "src/agents/tools/agent-step.ts",
+        "src/agents/tools/session-message-text.ts",
+        "src/agents/subagent-yield-output.ts",
+        "src/agents/compaction.ts",
+        "src/agents/compaction-real-conversation.ts",
+        "src/agents/pi-hooks/compaction-safeguard.ts",
+        "src/agents/pi-embedded-runner/compaction-successor-transcript.ts",
+        "extensions/active-memory/index.ts"
+      ],
+      "fixtureIds": [
+        "no-reply-visible"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    },
+    {
+      "issue": 24,
+      "title": "Retry policy burned cycles without changed mechanism",
+      "owningWaves": [
+        "3",
+        "4"
+      ],
+      "fixtureTests": [
+        "duplicate-replay",
+        "missing-exact-artifact",
+        "stale-autoresearch"
+      ],
+      "expectedResultClass": "RETRY_POLICY_EXHAUSTED / DUPLICATE_COMPLETION",
+      "acceptanceEvidencePaths": [
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/test/fixtures/session-issues-runtime-hardening-20260517.json",
+        "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517/docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md"
+      ],
+      "sourceMapBlocker": true,
+      "blockerRationale": "changed-mechanism retry policy not centralized yet",
+      "sourceSurfaceIds": [
+        "subagent-completion-event-formatting",
+        "child-result-selection-capture",
+        "typed-verdict-schema-classifier",
+        "artifact-contract-postflight",
+        "retry-policy-dedupe-counter-persistence",
+        "parent-session-delivery-path"
+      ],
+      "sourceSurfacePaths": [
+        "src/agents/internal-events.ts",
+        "src/agents/internal-event-contract.ts",
+        "src/agents/subagent-announce.ts",
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-announce-capture.ts",
+        "src/agents/subagent-yield-output.ts",
+        "src/agents/subagent-spawn.ts",
+        "src/agents/subagent-registry-completion.ts",
+        "src/agents/subagent-registry-state.ts",
+        "src/agents/announce-idempotency.ts",
+        "src/agents/subagent-registry-queries.ts",
+        "src/agents/subagent-registry-run-manager.ts",
+        "src/agents/subagent-announce-delivery.ts",
+        "src/agents/subagent-announce-dispatch.ts",
+        "src/config/sessions/delivery-info.ts"
+      ],
+      "fixtureIds": [
+        "duplicate-replay",
+        "missing-exact-artifact",
+        "stale-autoresearch"
+      ],
+      "coverageBasis": "explicit Wave 0 mapping; sourceSurfaceIds are direct, not only inferred from owningWaves"
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "failing-test-child-completed",
+      "issues": [
+        1,
+        4,
+        19
+      ],
+      "expectedResultClass": "FAILED_GATES"
+    },
+    {
+      "id": "raw-source",
+      "issues": [
+        2,
+        3,
+        8,
+        10
+      ],
+      "expectedResultClass": "MALFORMED_RAW_SOURCE_OUTPUT"
+    },
+    {
+      "id": "raw-grep",
+      "issues": [
+        2,
+        3,
+        7
+      ],
+      "expectedResultClass": "MALFORMED_TOOL_LOG_OUTPUT"
+    },
+    {
+      "id": "raw-log",
+      "issues": [
+        2,
+        7,
+        8,
+        19,
+        21
+      ],
+      "expectedResultClass": "MALFORMED_TOOL_LOG_OUTPUT"
+    },
+    {
+      "id": "missing-exact-artifact",
+      "issues": [
+        4,
+        5,
+        24
+      ],
+      "expectedResultClass": "MISSING_REQUIRED_ARTIFACT"
+    },
+    {
+      "id": "duplicate-replay",
+      "issues": [
+        6,
+        24
+      ],
+      "expectedResultClass": "DUPLICATE_COMPLETION"
+    },
+    {
+      "id": "compaction-contradiction",
+      "issues": [
+        9,
+        10,
+        17,
+        22
+      ],
+      "expectedResultClass": "SUMMARY_UNVERIFIED"
+    },
+    {
+      "id": "active-memory-conflict",
+      "issues": [
+        10,
+        17,
+        22
+      ],
+      "expectedResultClass": "TASK_PRIORITY_CONFLICT"
+    },
+    {
+      "id": "active-memory-timeout",
+      "issues": [
+        8,
+        10
+      ],
+      "expectedResultClass": "ACTIVE_MEMORY_TIMEOUT"
+    },
+    {
+      "id": "tui-alias",
+      "issues": [
+        11,
+        12,
+        13
+      ],
+      "expectedResultClass": "SESSION_ALIAS_NORMALIZED"
+    },
+    {
+      "id": "truncated-five-message-audit",
+      "issues": [
+        7,
+        14
+      ],
+      "expectedResultClass": "AUDIT_INCOMPLETE"
+    },
+    {
+      "id": "state-derived-mismatch",
+      "issues": [
+        15,
+        17
+      ],
+      "expectedResultClass": "STATE_DERIVED_STALE"
+    },
+    {
+      "id": "object-shaped-status",
+      "issues": [
+        16
+      ],
+      "expectedResultClass": "STATE_STATUS_NORMALIZED"
+    },
+    {
+      "id": "stale-autoresearch",
+      "issues": [
+        6,
+        10,
+        16,
+        17,
+        22,
+        24
+      ],
+      "expectedResultClass": "STALE_AUTHORIZATION_CONTRACT"
+    },
+    {
+      "id": "dirty-split-worktree",
+      "issues": [
+        18,
+        19,
+        20
+      ],
+      "expectedResultClass": "SCOPE_BASELINE_RECORDED"
+    },
+    {
+      "id": "sessions-list-timeout",
+      "issues": [
+        13
+      ],
+      "expectedResultClass": "SESSION_INDEX_DEGRADED"
+    },
+    {
+      "id": "stale-gate-process",
+      "issues": [
+        19
+      ],
+      "expectedResultClass": "STALE_PROCESS_RISK"
+    },
+    {
+      "id": "profile-capability-mismatch",
+      "issues": [
+        20
+      ],
+      "expectedResultClass": "BLOCKED_INFRA_PROFILE_MISMATCH"
+    },
+    {
+      "id": "long-gate-progress",
+      "issues": [
+        21
+      ],
+      "expectedResultClass": "PROGRESS_PULSE"
+    },
+    {
+      "id": "no-reply-visible",
+      "issues": [
+        23
+      ],
+      "expectedResultClass": "SUPPRESSED_REPLY_AUDIT"
+    }
+  ],
+  "expectedDiff": {
+    "baselineCapturedAfterMandatoryStubCreation": true,
+    "preExistingDirtyTrackedFilesObserved": [],
+    "preExistingUntrackedRelevantFilesObserved": [
+      "docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md",
+      "docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+      "test/fixtures/session-issues-runtime-hardening-20260517.json"
+    ],
+    "intendedWorktreeRoot": "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517",
+    "scratchRoots": [
+      "/tmp/session-issues-runtime-hardening-wave0-*"
+    ],
+    "currentWaveAllowedChangedPaths": [
+      "docs/plan/session-issues-runtime-hardening-wave0-source-map-20260517.md",
+      "docs/plan/session-issues-runtime-hardening-wave0-manifest-20260517.json",
+      "test/fixtures/session-issues-runtime-hardening-20260517.json"
+    ],
+    "laterWaveAllowedSourceGlobs": {
+      "1A": [
+        "src/agents/**subagent**",
+        "src/agents/internal-event*",
+        "test/fixtures/session-issues-runtime-hardening-20260517.json"
+      ],
+      "1": [
+        "src/agents/subagent-announce-output.ts",
+        "src/agents/subagent-announce-capture.ts",
+        "src/agents/internal-event*",
+        "src/agents/session-tool-result-guard.ts"
+      ],
+      "2": [
+        "src/agents/internal-events.ts",
+        "src/agents/subagent-announce*.ts",
+        "src/agents/tools/sessions-send-tokens.ts"
+      ],
+      "3": [
+        "src/agents/subagent-spawn.ts",
+        "src/agents/subagent-registry*.ts",
+        "src/agents/subagent-announce-output.ts"
+      ],
+      "4": [
+        "src/agents/announce-idempotency.ts",
+        "src/agents/subagent-registry-queries.ts",
+        "src/agents/subagent-registry-state.ts"
+      ],
+      "5": [
+        "src/agents/compaction*.ts",
+        "src/agents/pi-hooks/compaction-safeguard.ts",
+        "src/agents/pi-embedded-runner/compaction-successor-transcript.ts",
+        "extensions/active-memory/index.ts"
+      ],
+      "6": [
+        "extensions/active-memory/index.ts",
+        "src/**/state-query*",
+        "extensions/qa-lab/**"
+      ],
+      "7": [
+        "src/agents/tools/sessions-*.ts",
+        "src/agents/command/session.ts"
+      ],
+      "8": [
+        "src/**/state-query*",
+        "scripts/render-state.*"
+      ],
+      "9": [
+        "scripts/run-vitest*.mjs",
+        "scripts/vitest-process-group.mjs",
+        "src/agents/subagent-capabilities.ts",
+        "src/agents/subagent-spawn.ts"
+      ],
+      "10": [
+        "src/agents/internal-events.ts",
+        "src/agents/subagent-announce*.ts",
+        "src/agents/compaction*.ts"
+      ]
+    },
+    "forbiddenGeneratedOrBundledPaths": [
+      "/usr/lib/node_modules/openclaw/dist/**",
+      "dist/**",
+      "extensions/**/dist/**"
+    ],
+    "derivedStatePathsRequireExplicitReconciliation": [
+      "STATE.md",
+      "state/orchestrator.json",
+      "state/issues/*.json"
+    ],
+    "scopeCheckRequirement": "Later waves must compare actual repo changed paths against currentWaveAllowedChangedPaths/laterWaveAllowedSourceGlobs/sourceImplementationRoots and fail on unmapped source, generated/dist, live-config, secret, or broad-staging edits unless fresh authorization expands scope.",
+    "sourceWorktreeRoot": "/root/.openclaw/worktrees/openclaw-runtime-hardening-20260517",
+    "sourceImplementationRoots": [
+      "src/**",
+      "extensions/**/src/**",
+      "extensions/active-memory/**",
+      "extensions/qa-lab/**",
+      "scripts/**",
+      "test/**",
+      "docs/plan/**"
+    ],
+    "externalHarnessRoots": [
+      "/root/.openclaw/workspace/state/orchestrator.json",
+      "/root/.openclaw/workspace/state/issues/fwk-dual-runtime-hardening-20260517.json",
+      "/root/.openclaw/workspace/state/issues/fwk-session-issues-runtime-hardening-20260517.json",
+      "/root/.openclaw/workspace/state/issues/fwk-malformed-subagent-hardening-20260517.json",
+      "/root/.openclaw/workspace/state/active-tasks.json",
+      "/root/.openclaw/workspace/STATE.md",
+      "/root/.openclaw/workspace/memory/2026-05-17.md",
+      "/root/.openclaw/workspace/state/temporary-continuity/dual-plan-runtime-hardening-20260517.json",
+      "/root/.openclaw/workspace/docs/reports/session-issues-2026-05-17/session-issues-runtime-hardening-implementation-plan.md"
+    ],
+    "externalHarnessPolicy": "External workspace/control-plane paths may be reconciled for orchestrator bookkeeping only; they are not OpenClaw source implementation evidence and must be reviewed separately.",
+    "scratchArtifacts": [
+      "/tmp/session-issues-runtime-hardening-wave0-primary-retry-verdict.json",
+      "/tmp/session-issues-runtime-hardening-wave0-primary-bridge-verdict.json",
+      "/tmp/session-issues-runtime-hardening-wave0-checker-verdict.json",
+      "/tmp/session-issues-wave0-focused-tests.log",
+      "/tmp/session-issues-runtime-hardening-wave0-*.log",
+      "/tmp/session-issues-runtime-hardening-wave0-*.status"
+    ],
+    "forbiddenSurfacesByDefault": [
+      "manual edits to bundled/generated/hashed dist artifacts",
+      "live installed package edits under /usr/lib/node_modules/openclaw/**",
+      "live gateway config/provider/channel changes or gateway restart as part of implementation",
+      "secrets, private keys, tokens, .env files, auth profiles, and credential stores",
+      "external messages/public posts/real-money/private-key operations",
+      "force push/history rewrite",
+      "broad git add -A staging instead of exact-path staging",
+      "scope expansion beyond the two named authorized plans"
+    ]
+  },
+  "commandsRun": [
+    {
+      "name": "plan-sha256",
+      "command": "sha256sum /root/.openclaw/workspace/docs/reports/session-issues-2026-05-17/session-issues-runtime-hardening-implementation-plan.md",
+      "exitCode": 0,
+      "summary": "b3d6ccf18dd9d54e2a5600103c75e48a756fc00912706b5133fd43e03d35b99f verified",
+      "logPath": null
+    },
+    {
+      "name": "git-head",
+      "command": "git rev-parse HEAD",
+      "exitCode": 0,
+      "summary": "f0fc8c27d397028b2ae7f1ea8a6a4a52e47c1bb5",
+      "logPath": null
+    },
+    {
+      "name": "git-status-short",
+      "command": "git status --short",
+      "exitCode": 0,
+      "summary": "after mandatory stubs/source-map work: only Wave 0 artifact files are untracked; no tracked source dirty observed",
+      "logPath": "/tmp/session-issues-runtime-hardening-wave0-current-diff.txt"
+    },
+    {
+      "name": "version-baseline",
+      "command": "node -p require(\"./package.json\").version; openclaw --version",
+      "exitCode": 0,
+      "summary": "source package 2026.5.17; installed OpenClaw 2026.5.5 (b1abf9d)",
+      "logPath": "/tmp/session-issues-runtime-hardening-wave0-version-baseline.txt"
+    },
+    {
+      "name": "subagent-announce-output-focused-test",
+      "command": "OPENCLAW_TEST_FAST=1 OPENCLAW_TEST_PROJECTS_SERIAL=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=90000 timeout 240s node scripts/run-vitest.mjs run src/agents/subagent-announce-output.test.ts",
+      "exitCode": 124,
+      "summary": "Vitest summary reported 2 files / 12 tests passed in 21.35s, but outer timeout killed runner after it did not exit within 240s; superseded for Wave 0 gate by combined-focused-baseline-tests exit 0",
+      "logPath": "/tmp/session-issues-runtime-hardening-wave0-subagent-announce-output.test.log",
+      "statusPath": "/tmp/session-issues-runtime-hardening-wave0-subagent-announce-output.test.status",
+      "status": "SUPERSEDED_TIMEOUT_EVIDENCE",
+      "acceptanceUse": "not an acceptance pass; stale-process baseline for Wave 9"
+    },
+    {
+      "name": "compaction-focused-tests",
+      "command": "OPENCLAW_TEST_FAST=1 OPENCLAW_TEST_PROJECTS_SERIAL=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=90000 timeout 300s node scripts/run-vitest.mjs run src/agents/compaction.test.ts src/agents/pi-hooks/compaction-safeguard.test.ts",
+      "exitCode": 0,
+      "summary": "4 files / 212 tests passed in 10.18s",
+      "logPath": "/tmp/session-issues-runtime-hardening-wave0-compaction-focused-tests.log",
+      "statusPath": "/tmp/session-issues-runtime-hardening-wave0-compaction-focused-tests.status"
+    },
+    {
+      "name": "targeted-source-export-inventory",
+      "command": "targeted rg over planned source files for exported symbols; output redirected to /tmp",
+      "exitCode": 0,
+      "summary": "source/test ownership summarized manually; raw search output not copied into chat",
+      "logPath": "/tmp/session-issues-runtime-hardening-wave0-source-exports.txt"
+    },
+    {
+      "name": "combined-focused-baseline-tests",
+      "command": "node scripts/run-vitest.mjs run src/agents/subagent-announce-output.test.ts src/agents/compaction.test.ts src/agents/pi-hooks/compaction-safeguard.test.ts",
+      "exitCode": 0,
+      "status": "PASS",
+      "summary": "6 files / 224 tests passed; parent-observed process exited 0",
+      "logPath": "/tmp/session-issues-wave0-focused-tests.log",
+      "acceptanceUse": "Wave 0 focused baseline gate"
+    }
+  ],
+  "blockers": [
+    {
+      "id": "typed-child-contract-not-centralized",
+      "severity": "source-map-blocker",
+      "rationale": "No current source module owns canonical transportOutcome/contractVerdict/acceptanceEligible or classifier enum validation.",
+      "nextWave": "1A/1"
+    },
+    {
+      "id": "exact-artifact-postflight-not-centralized",
+      "severity": "source-map-blocker",
+      "rationale": "No current source owner found for exact required-output path reservation, freshness/hash/schema validation, and artifact hash persistence.",
+      "nextWave": "3"
+    },
+    {
+      "id": "quarantine-store-not-first-class",
+      "severity": "source-map-blocker",
+      "rationale": "Session tool-result capping exists, but malformed subagent raw-output quarantine artifact storage/retention is not mapped as a first-class owner.",
+      "nextWave": "1"
+    },
+    {
+      "id": "state-query-helper-absent",
+      "severity": "source-map-blocker",
+      "rationale": "Worktree lacks scripts/render-state.py, src/orchestrator/state-query.ts, state/orchestrator.json, and STATE.md; Wave 8 must create/find canonical state query before Wave 6 relies on it.",
+      "nextWave": "8 before 6"
+    },
+    {
+      "id": "research-automation-owner-not-found",
+      "severity": "source-map-blocker",
+      "rationale": "Targeted search found QA-lab fanout scenarios but no core autoresearch/project-initiation automation source in this worktree; Wave 6 must bind only real mapped triggers.",
+      "nextWave": "6"
+    },
+    {
+      "id": "subagent-announce-output-test-runner-timeout",
+      "severity": "baseline-gap",
+      "rationale": "Focused subagent output tests reported pass but run wrapper timed out waiting for process exit; recorded as stale-process/gate-management baseline evidence.",
+      "nextWave": "9"
+    }
+  ],
+  "gateEvidenceReconciliation": {
+    "acceptedWave0FocusedGate": {
+      "command": "node scripts/run-vitest.mjs run src/agents/subagent-announce-output.test.ts src/agents/compaction.test.ts src/agents/pi-hooks/compaction-safeguard.test.ts",
+      "exitCode": 0,
+      "logPath": "/tmp/session-issues-wave0-focused-tests.log",
+      "summary": "6 files / 224 tests passed; parent-observed process exited 0"
+    },
+    "supersededIndividualGate": {
+      "commandName": "subagent-announce-output-focused-test",
+      "recordedExitCode": 124,
+      "summary": "Vitest reported 2 files / 12 tests passed but wrapper timeout killed non-exiting runner; retained only as Wave 9 stale-process evidence"
+    },
+    "acceptanceDecision": "Wave 0 source-map/fixture gate acceptance should rely on artifact validation, git status/diff-check, and the combined focused gate exit 0; the 124 record is not claimed as a passing acceptance gate."
+  },
+  "wave0AcceptanceNotes": [
+    "All 24 audited issues now carry explicit sourceSurfaceIds and fixtureIds in the manifest.",
+    "Expected diff separates current source-repo artifact paths, external harness/control-plane roots, and scratch /tmp artifacts.",
+    "Generated/bundled dist, live config/restart, secrets/credentials, force-push/history rewrite, broad git add -A, and external side-effect surfaces are forbidden by default.",
+    "Focused baseline acceptance uses the combined 224-test log that exited 0; the earlier individual subagent-output timeout is recorded only as Wave 9 stale-process evidence.",
+    "No runtime/source implementation changes were made in Wave 0 beyond source-map/manifest/fixture artifacts."
+  ],
+  "privacyPolicy": "Wave 0 fixtures and manifests use synthetic minimized shapes only. Raw child chat payloads, private transcripts, logs, env/auth/secret data, and long grep/source dumps must not be pasted into parent-visible artifacts."
+}

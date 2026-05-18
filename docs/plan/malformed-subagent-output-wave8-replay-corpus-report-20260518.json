@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-18T13:08:00Z",
+  "sourceFixture": "test/fixtures/malformed-subagent-output-wave7-replay-corpus.json",
+  "metadataOnly": true,
+  "rawFixtureBodiesExcluded": true,
+  "caseCount": 10,
+  "groups": {
+    "polluted_sessions": 2,
+    "clean_prose_only_subagents": 1,
+    "read_only_auditors": 1,
+    "timeout_cancelled_children": 2,
+    "cron_background_tasks": 1,
+    "direct_queued_announcements": 1,
+    "dashboard_session_history_views": 1,
+    "restart_resume_cases": 1
+  },
+  "expectedNormalizedStates": {
+    "MALFORMED": 2,
+    "UNVERIFIED": 4,
+    "TIMEOUT": 1,
+    "CANCELLED": 2,
+    "FAIL": 1
+  },
+  "expectedContractVerdicts": {
+    "MALFORMED_RAW_SOURCE_OUTPUT": 1,
+    "MISSING_VERDICT_SCHEMA": 3,
+    "EVIDENCE_UNVERIFIED": 4,
+    "FAILED_GATES": 1,
+    "DUPLICATE_COMPLETION": 1
+  },
+  "wave7CheckerVerdict": {
+    "artifact": "operator-local-wave7-checker-verdict-json",
+    "verdict": "ACCEPT",
+    "wave7AcceptedByChecker": true
+  },
+  "wave8CoverageAdditions": [
+    "primary_checker_mediator_verified_pass_flow",
+    "schema_valid_pass_without_parent_evidence_not_acceptance_eligible",
+    "restart_resume_separate_normalized_quarantine_verifier_fields",
+    "concurrent_evidence_session_cross_contamination_blocked",
+    "rollback_direct_verification_required_without_disabling_raw_output_protections"
+  ],
+  "ordinarySurfaces": {
+    "telemetry": "metadata_only",
+    "dashboards": "metadata_only",
+    "sessionHistorySearchExport": "metadata_only",
+    "compactionMemory": "raw_body_excluded"
+  }
+}

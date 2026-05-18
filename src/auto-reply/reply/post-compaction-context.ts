@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
+import { sanitizeChildResultTextForModel } from "../../agents/child-result-sanitizer.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -93,6 +94,9 @@ export async function readPostCompactionContext(
         fs.closeSync(opened.fd);
       }
     })();
+    const sanitizedContent = sanitizeChildResultTextForModel(content, {
+      surface: "post-compaction-context-refresh",
+    });
 
     // Extract configured sections from AGENTS.md (default: Session Startup + Red Lines).
     // An explicit empty array disables post-compaction context injection entirely.
@@ -106,7 +110,7 @@ export async function readPostCompactionContext(
     }
 
     const foundSectionNames: string[] = [];
-    let sections = extractSections(content, sectionNames, foundSectionNames);
+    let sections = extractSections(sanitizedContent, sectionNames, foundSectionNames);
 
     // Fall back to legacy section names ("Every Session" / "Safety") when using
     // defaults and the current headings aren't found — preserves compatibility
@@ -117,7 +121,11 @@ export async function readPostCompactionContext(
       !Array.isArray(configuredSections) ||
       matchesSectionSet(configuredSections, DEFAULT_POST_COMPACTION_SECTIONS);
     if (sections.length === 0 && isDefaultSections) {
-      sections = extractSections(content, LEGACY_POST_COMPACTION_SECTIONS, foundSectionNames);
+      sections = extractSections(
+        sanitizedContent,
+        LEGACY_POST_COMPACTION_SECTIONS,
+        foundSectionNames,
+      );
     }
 
     if (sections.length === 0) {

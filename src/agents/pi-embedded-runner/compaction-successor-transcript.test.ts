@@ -482,4 +482,29 @@ describe("shouldRotateCompactionTranscript", () => {
       }),
     ).toBe(true);
   });
+
+  it("sanitizes kept child-result text before writing successor transcript", async () => {
+    const dir = await createTmpDir();
+    const { manager, sessionFile } = createCompactedSession(dir);
+    const rawNeedle = ["SUCCESSOR", "TRANSCRIPT", "SECRET", "LINE"].join("_");
+    const begin = ["<<<", "BEGIN_UNTRUSTED_CHILD_RESULT", ">>>"].join("");
+    const end = ["<<<", "END_UNTRUSTED_CHILD_RESULT", ">>>"].join("");
+    manager.appendMessage({
+      role: "assistant",
+      content: `${begin}\n${rawNeedle}\n${end}`,
+      timestamp: 7,
+    });
+
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile,
+      now: () => new Date("2026-05-18T00:00:00.000Z"),
+    });
+
+    expect(result.rotated).toBe(true);
+    const successor = SessionManager.open(requireString(result.sessionFile, "successor file"));
+    const serialized = JSON.stringify(successor.getEntries());
+    expect(serialized).toContain("[OpenClaw sanitized child result:");
+    expect(serialized).not.toContain(rawNeedle);
+  });
 });

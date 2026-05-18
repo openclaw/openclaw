@@ -58,4 +58,139 @@ describe("AgentParamsSchema", () => {
 
     expect(Value.Check(AgentParamsSchema, params)).toBe(false);
   });
+
+  it("accepts strict task completion status-card metadata with verifier fields", () => {
+    const params = makeAgentParamsWithInternalEvent({
+      ...musicCompletionEvent,
+      statusCard: {
+        kind: "subagent_completion_status",
+        schemaVersion: 1,
+        normalizedState: "UNVERIFIED",
+        classificationLabels: ["UNVERIFIED", "EVIDENCE_UNVERIFIED", "NOT_ACCEPTANCE_EVIDENCE"],
+        labels: ["UNVERIFIED", "EVIDENCE_UNVERIFIED", "NOT_ACCEPTANCE_EVIDENCE"],
+        presentation: {
+          mode: "status_card",
+          ordinaryChatBubble: "suppressed",
+          collapsedByDefault: true,
+          severity: "warning",
+          labels: ["UNVERIFIED", "EVIDENCE_UNVERIFIED", "NOT_ACCEPTANCE_EVIDENCE"],
+          copyableDebugRefs: {
+            artifactId: "q_abc123",
+            payloadHash: "abc123",
+            byteCount: 42,
+          },
+        },
+        debugRefs: {
+          artifactId: "q_abc123",
+          payloadHash: "abc123",
+          byteCount: 42,
+        },
+        schemaValid: true,
+        notAcceptanceEvidence: true,
+        verifierDecision: "EVIDENCE_UNVERIFIED",
+        evidenceParentObserved: false,
+        evidenceObservedBy: "child",
+        evidenceReasons: ["PARENT_RUNTIME_EVIDENCE_CHILD_SELF_ATTESTED"],
+        payloadHash: "abc123",
+        byteCount: 42,
+        deliveryState: "quarantined",
+        action: "validate_artifact_or_retry",
+        transportOutcome: "completed",
+        contractVerdict: "MISSING_VERDICT_SCHEMA",
+        acceptanceEligible: false,
+        reasons: ["VERDICT_SCHEMA_MISSING_RAW_BODY_SUPPRESSED"],
+        quarantine: {
+          sha256: "abc123",
+          payloadSha256: "abc123",
+          payloadHash: "abc123",
+          sizeBytes: 42,
+          byteCount: 42,
+          artifactId: "q_abc123",
+          storageStatus: "stored",
+          payloadStored: true,
+          source: "assistant_output",
+        },
+        rawOpen: {
+          available: true,
+          requiredAction: "open_raw_quarantine_artifact",
+          localOperatorActionRequired: true,
+          warning: "Raw artifact open requires explicit local operator action.",
+          artifactId: "q_abc123",
+          payloadHash: "abc123",
+          byteCount: 42,
+          confirmation: {
+            required: true,
+            artifactId: "q_abc123",
+            payloadHash: "abc123",
+          },
+          authorization: {
+            required: true,
+            scope: "local_operator",
+            status: "not_requested",
+          },
+          audit: {
+            event: "subagent.raw_artifact.open_requested",
+            mode: "metadata_only",
+          },
+          viewer: {
+            isolation: "outside_ordinary_chat_model_context_compaction",
+            defaultPreview: false,
+            snippets: false,
+            renderedPayload: false,
+            rawDerivedFilename: false,
+          },
+          redactionScan: {
+            scanned: true,
+            redacted: false,
+            flags: [],
+            rawSnippetStored: false,
+          },
+        },
+        evidenceVerifier: {
+          decision: "EVIDENCE_UNVERIFIED",
+          acceptanceEligible: false,
+          parentObserved: false,
+          observedBy: "child",
+          reasons: ["PARENT_RUNTIME_EVIDENCE_CHILD_SELF_ATTESTED"],
+        },
+        rawBodySuppressed: true,
+        userVisibleSuppressed: true,
+        userVisibleSuppressedReason: "raw_output_quarantined",
+        dedupe: {
+          key: "contract=current|childRun=run-1|childSession=session-1|task=current|result=abc",
+          resultHash: "abc",
+          seenCount: 1,
+          duplicateCount: 0,
+          duplicate: false,
+          parentEventSuppressed: false,
+          activeTaskContractId: "current",
+          childRunId: "run-1",
+          childSessionId: "session-1",
+          taskId: "current",
+        },
+      },
+    });
+
+    expect(Value.Check(AgentParamsSchema, params)).toBe(true);
+  });
+
+  it("rejects nested or raw status-card data", () => {
+    const params = makeAgentParamsWithInternalEvent({
+      ...musicCompletionEvent,
+      statusCard: {
+        kind: "subagent_completion_status",
+        deliveryState: "quarantined",
+        action: "validate_artifact_or_retry",
+        transportOutcome: "completed",
+        contractVerdict: "MISSING_VERDICT_SCHEMA",
+        acceptanceEligible: false,
+        reasons: ["VERDICT_SCHEMA_MISSING_RAW_BODY_SUPPRESSED"],
+        rawBodySuppressed: true,
+        delivery: { disposition: "quarantine_validate_only" },
+        bodyPreview: "raw child output",
+      },
+    } as unknown as AgentInternalEvent);
+
+    expect(Value.Check(AgentParamsSchema, params)).toBe(false);
+  });
 });

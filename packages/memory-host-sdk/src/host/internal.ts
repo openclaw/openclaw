@@ -28,6 +28,7 @@ import {
   resolveCanonicalRootMemoryFile,
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-memory.js";
+import { sanitizeChildResultTextForMemory } from "./session-child-result-sanitizer.js";
 
 export { hashText } from "./hash.js";
 import { hashText } from "./hash.js";
@@ -276,7 +277,10 @@ export async function buildFileEntry(
   }
   let content: string;
   try {
-    content = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
+    content = sanitizeChildResultTextForMemory(
+      (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8"),
+      "memory-file-entry",
+    );
   } catch (err) {
     if (isFileMissingError(err)) {
       return null;
@@ -363,7 +367,8 @@ export function chunkMarkdown(
   content: string,
   chunking: { tokens: number; overlap: number },
 ): MemoryChunk[] {
-  const lines = content.split("\n");
+  const sanitizedContent = sanitizeChildResultTextForMemory(content, "memory-chunk-index");
+  const lines = sanitizedContent.split("\n");
   if (lines.length === 0) {
     return [];
   }

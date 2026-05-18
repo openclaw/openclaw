@@ -7,6 +7,7 @@ import {
   type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sanitizeChildResultValueForModel } from "../child-result-sanitizer.js";
 import { collectDuplicateUserMessageEntryIdsForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
   readTranscriptFileState,
@@ -174,9 +175,12 @@ function buildSuccessorEntries(params: {
       parentId = entryById.get(parentId)?.parentId ?? null;
     }
 
-    keptEntries.push(
-      parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry),
-    );
+    const successorEntry =
+      parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
+    const sanitizedEntry = sanitizeSuccessorEntry(successorEntry);
+    if (sanitizedEntry) {
+      keptEntries.push(sanitizedEntry);
+    }
   }
 
   return orderSuccessorEntries({
@@ -198,6 +202,21 @@ function collectLatestStateEntryIds(entries: SessionEntry[]): Set<string> {
     ids.add(entry.id);
   }
   return ids;
+}
+
+function sanitizeSuccessorEntry(entry: SessionEntry): SessionEntry | null {
+  const sanitized = sanitizeChildResultValueForModel(entry, {
+    surface: "compaction-successor-transcript",
+  });
+  if (
+    !sanitized ||
+    typeof sanitized !== "object" ||
+    !("id" in sanitized) ||
+    !("type" in sanitized)
+  ) {
+    return null;
+  }
+  return sanitized as SessionEntry;
 }
 
 function isDedupedStateEntry(entry: SessionEntry): boolean {

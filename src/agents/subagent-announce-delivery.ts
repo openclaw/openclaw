@@ -604,6 +604,7 @@ async function sendSubagentAnnounceDirectly(params: {
   sourceChannel?: string;
   sourceTool?: string;
   requesterIsSubagent: boolean;
+  userDeliveryEligible?: boolean;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
@@ -619,6 +620,7 @@ async function sendSubagentAnnounceDirectly(params: {
     params.targetRequesterSessionKey,
   );
   try {
+    const userDeliveryEligible = params.userDeliveryEligible !== false;
     const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
     const requesterSessionOrigin = normalizeDeliveryContext(params.requesterSessionOrigin);
@@ -660,7 +662,7 @@ async function sendSubagentAnnounceDirectly(params: {
       sourceTool: params.sourceTool,
     });
     const expectedMediaUrls = collectExpectedMediaFromInternalEvents(params.internalEvents);
-    const requiresMessageToolDelivery =
+    const completionWantsMessageToolDelivery =
       agentMediatedCompletion &&
       (expectedMediaUrls.length > 0 ||
         completionRequiresMessageToolDelivery({
@@ -671,10 +673,12 @@ async function sendSubagentAnnounceDirectly(params: {
           directOrigin: effectiveDirectOrigin,
           requesterSessionOrigin,
         }));
-    const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
+    const requiresMessageToolDelivery = userDeliveryEligible && completionWantsMessageToolDelivery;
+    const completionSourceReplyDeliveryMode = completionWantsMessageToolDelivery
       ? "message_tool_only"
       : undefined;
-    const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
+    const shouldDeliverAgentFinal =
+      userDeliveryEligible && deliveryTarget.deliver && !requiresMessageToolDelivery;
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
@@ -686,7 +690,7 @@ async function sendSubagentAnnounceDirectly(params: {
         directOrigin?.channel,
       sessionEntry: requesterEntry,
     });
-    if (params.expectsCompletionMessage && requesterActivity.sessionId) {
+    if (userDeliveryEligible && params.expectsCompletionMessage && requesterActivity.sessionId) {
       const wakeOutcome = await resolveQueueEmbeddedPiMessageOutcome(
         requesterActivity.sessionId,
         params.triggerMessage,
@@ -802,6 +806,7 @@ async function sendSubagentAnnounceDirectly(params: {
       };
     }
     if (
+      userDeliveryEligible &&
       agentMediatedCompletion &&
       expectedMediaUrls.length > 0 &&
       !hasGatewayAgentDeliveredExpectedMedia(directAnnounceResponse, expectedMediaUrls)
@@ -864,10 +869,35 @@ export async function deliverSubagentAnnouncement(params: {
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
+  userDeliveryEligible?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
+  const runDirect = async () =>
+    await sendSubagentAnnounceDirectly({
+      requesterSessionKey: params.requesterSessionKey,
+      targetRequesterSessionKey: params.targetRequesterSessionKey,
+      triggerMessage: params.triggerMessage,
+      internalEvents: params.internalEvents,
+      directIdempotencyKey: params.directIdempotencyKey,
+      completionDirectOrigin: params.completionDirectOrigin,
+      directOrigin: params.directOrigin,
+      requesterSessionOrigin: params.requesterSessionOrigin,
+      sourceSessionKey: params.sourceSessionKey,
+      sourceChannel: params.sourceChannel,
+      sourceTool: params.sourceTool,
+      requesterIsSubagent: params.requesterIsSubagent,
+      expectsCompletionMessage: params.expectsCompletionMessage,
+      userDeliveryEligible: params.userDeliveryEligible,
+      signal: params.signal,
+      bestEffortDeliver: params.bestEffortDeliver,
+    });
+
+  if (params.userDeliveryEligible === false) {
+    return await runDirect();
+  }
+
   return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
     signal: params.signal,
@@ -880,24 +910,7 @@ export async function deliverSubagentAnnouncement(params: {
         steerMessage: params.steerMessage,
         signal: params.signal,
       }),
-    direct: async () =>
-      await sendSubagentAnnounceDirectly({
-        requesterSessionKey: params.requesterSessionKey,
-        targetRequesterSessionKey: params.targetRequesterSessionKey,
-        triggerMessage: params.triggerMessage,
-        internalEvents: params.internalEvents,
-        directIdempotencyKey: params.directIdempotencyKey,
-        completionDirectOrigin: params.completionDirectOrigin,
-        directOrigin: params.directOrigin,
-        requesterSessionOrigin: params.requesterSessionOrigin,
-        sourceSessionKey: params.sourceSessionKey,
-        sourceChannel: params.sourceChannel,
-        sourceTool: params.sourceTool,
-        requesterIsSubagent: params.requesterIsSubagent,
-        expectsCompletionMessage: params.expectsCompletionMessage,
-        signal: params.signal,
-        bestEffortDeliver: params.bestEffortDeliver,
-      }),
+    direct: runDirect,
   });
 }
 
