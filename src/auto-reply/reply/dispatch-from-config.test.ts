@@ -5838,6 +5838,38 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("status reply");
   });
 
+  it("does not synthesize TTS audio for explicit command replies", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    ttsMocks.maybeApplyTtsToPayload.mockClear();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(
+      async () =>
+        ({
+          text: "Active memory status: enabled",
+        }) satisfies ReplyPayload,
+    );
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        BodyForCommands: "/active-memory status",
+        SessionKey: "test:telegram:direct:owner",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "Active memory status: enabled",
+    });
+  });
+
   it("keeps default group/channel source delivery automatic", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
