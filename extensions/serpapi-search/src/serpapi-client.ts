@@ -43,13 +43,10 @@ export type SerpApiCallParams = {
 export async function callSerpApi(opts: SerpApiCallParams): Promise<Record<string, unknown>> {
   const apiKey = resolveSerpApiKey(opts.cfg);
   if (!apiKey) {
-    return {
-      error: "missing_serpapi_api_key",
-      message:
-        "serpapi-search needs a SerpApi API key. Set SERPAPI_API_KEY in the Gateway environment, " +
+    throw new Error(
+      "serpapi-search needs a SerpApi API key. Set SERPAPI_API_KEY in the Gateway environment, " +
         "or configure plugins.entries.serpapi-search.config.apiKey.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    };
+    );
   }
 
   const hl = resolveSerpApiLanguage(opts.cfg);
