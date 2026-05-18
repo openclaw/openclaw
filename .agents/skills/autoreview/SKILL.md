@@ -23,7 +23,7 @@ Use when:
 - Prefer small fixes at the right ownership boundary; no refactor unless it clearly improves the bug class.
 - Keep going until the selected review path returns no accepted/actionable findings.
 - If a review-triggered fix changes code, rerun focused tests and rerun the review helper.
-- Default to Codex review. If Codex is unavailable or exits with an error, the helper may fall back to `claude -p`; `pi -p`, `opencode run`, `droid exec`, and `copilot` are explicit reviewer/fallback options. Prefer Codex for final closeout because it uses native review mode; non-Codex reviewers use a Codex-inspired generated diff prompt. The helper runs nested Codex review in yolo/full-access mode by default; use `--no-yolo` only when intentionally testing sandbox behavior.
+- Default to Codex review. If Codex is unavailable or exits with an error, the helper falls back to the first configured CLI from `claude -p`, `pi -p`, `opencode run`, `droid exec`, or `copilot`. Prefer Codex for final closeout because it uses native review mode; non-Codex reviewers use a Codex-inspired generated diff prompt. The helper runs nested Codex review in yolo/full-access mode by default; use `--no-yolo` only when intentionally testing sandbox behavior.
 - Stop as soon as the review command/helper exits 0 with no accepted/actionable findings. Do not run an extra direct `codex review` just to get a nicer "clean" line, a second opinion, or clearer closeout wording.
 - Treat the helper's successful exit plus absence of actionable findings as the clean review result, even if the underlying Codex CLI output is terse.
 - If rejecting a finding as intentional/not worth fixing, add a brief inline code comment only when it explains a real invariant or ownership decision that future reviewers should know.
@@ -109,8 +109,8 @@ The helper:
 - otherwise uses `origin/main` for non-main branches
 - use `--mode commit --commit <ref>` for already-committed work, especially clean `main` after landing
 - should be left in `--mode auto` or forced to `--mode branch` for PR/branch work; do not force `--mode local` after committing
-- supports `--reviewer codex|claude|pi|opencode|droid|copilot|auto`; `auto` runs Codex first
-- supports `--fallback-reviewer claude|pi|opencode|droid|copilot|none`; default is `claude`
+- supports `--reviewer codex|claude|pi|opencode|droid|copilot|auto`; `auto` means Codex first
+- supports `--fallback-reviewer auto|claude|pi|opencode|droid|copilot|none`; default is configured CLI fallback
 - falls back only when Codex is unavailable or exits nonzero, not when Codex reports findings
 - writes only to stdout unless `--output` or `AUTOREVIEW_OUTPUT` is set
 - supports `--dry-run`, `--parallel-tests`, and commit refs

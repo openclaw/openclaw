@@ -11,9 +11,9 @@ Options:
   --base REF                 Base ref for branch review. Default: PR base or origin/main.
   --commit REF               Commit ref for commit review. Default: HEAD.
   --reviewer codex|claude|pi|opencode|droid|copilot|auto
-                              Review engine. Default: auto (Codex, fallback reviewer on error).
-  --fallback-reviewer claude|pi|opencode|droid|copilot|none
-                              Fallback when Codex is unavailable or exits nonzero. Default: claude.
+                              Review engine. Default: Codex with configured fallback on error.
+  --fallback-reviewer auto|claude|pi|opencode|droid|copilot|none
+                              Fallback when Codex is unavailable or exits nonzero. Default: auto.
   --codex-bin PATH           Codex binary. Default: codex.
   --claude-bin PATH          Claude binary. Default: claude.
   --pi-bin PATH              Pi binary. Default: pi.
@@ -39,7 +39,7 @@ mode=auto
 base_ref=
 commit_ref=HEAD
 reviewer=${AUTOREVIEW_REVIEWER:-${CODEX_REVIEW_REVIEWER:-auto}}
-fallback_reviewer=${AUTOREVIEW_FALLBACK_REVIEWER:-${CODEX_REVIEW_FALLBACK_REVIEWER:-claude}}
+fallback_reviewer=${AUTOREVIEW_FALLBACK_REVIEWER:-${CODEX_REVIEW_FALLBACK_REVIEWER:-auto}}
 codex_bin=${CODEX_BIN:-codex}
 claude_bin=${CLAUDE_BIN:-claude}
 pi_bin=${PI_BIN:-pi}
@@ -151,7 +151,7 @@ case "$reviewer" in
 esac
 
 case "$fallback_reviewer" in
-  claude|pi|opencode|droid|copilot|none) ;;
+  auto|claude|pi|opencode|droid|copilot|none) ;;
   *)
     echo "invalid --fallback-reviewer: $fallback_reviewer" >&2
     exit 2
@@ -206,15 +206,13 @@ printf 'branch: %s\n' "${current_branch:-detached}"
 if [[ -n "$pr_url" ]]; then
   printf 'pr: %s\n' "$pr_url"
 fi
-printf 'reviewer: %s\n' "$reviewer"
 if [[ "$reviewer" == auto ]]; then
-  printf 'fallback-reviewer: %s\n' "$fallback_reviewer"
+  printf 'reviewer: codex\n'
+else
+  printf 'reviewer: %s\n' "$reviewer"
 fi
 case "$reviewer" in
-  codex) ;;
-  auto)
-    printf 'note: Codex native review mode is the recommended and best-supported review path; fallback reviewers use a generated diff prompt.\n'
-    ;;
+  codex|auto) ;;
   *)
     printf 'note: Codex native review mode is the recommended and best-supported review path; %s uses a generated diff prompt.\n' "$reviewer"
     ;;
@@ -455,6 +453,36 @@ run_selected_review() {
   esac
 }
 
+fallback_reviewer_is_available() {
+  local selected=$1
+  case "$selected" in
+    claude) command -v "$claude_bin" >/dev/null 2>&1 ;;
+    pi) command -v "$pi_bin" >/dev/null 2>&1 ;;
+    opencode) command -v "$opencode_bin" >/dev/null 2>&1 ;;
+    droid) command -v "$droid_bin" >/dev/null 2>&1 ;;
+    copilot) command -v "$copilot_bin" >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
+run_auto_fallback_review() {
+  local selected
+  if [[ "$fallback_reviewer" != auto ]]; then
+    run_selected_review "$fallback_reviewer"
+    return $?
+  fi
+
+  for selected in claude pi opencode droid copilot; do
+    if fallback_reviewer_is_available "$selected"; then
+      run_selected_review "$selected"
+      return $?
+    fi
+  done
+
+  echo "fallback reviewer unavailable: no configured fallback CLI found" >&2
+  return 127
+}
+
 run_auto_review() {
   run_selected_review codex
   local status=$?
@@ -470,8 +498,12 @@ run_auto_review() {
   if [[ "$fallback_reviewer" == none ]]; then
     return "$status"
   fi
-  printf 'autoreview warning: codex exited %s; falling back to %s\n' "$status" "$fallback_reviewer" >&2
-  run_selected_review "$fallback_reviewer"
+  if [[ "$fallback_reviewer" == auto ]]; then
+    printf 'autoreview warning: codex exited %s; trying configured fallback reviewers\n' "$status" >&2
+  else
+    printf 'autoreview warning: codex exited %s; falling back to %s\n' "$status" "$fallback_reviewer" >&2
+  fi
+  run_auto_fallback_review
 }
 
 elapsed_since() {
