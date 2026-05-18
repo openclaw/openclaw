@@ -993,7 +993,21 @@ function extractToolErrorForNamedCall(params: {
     return undefined;
   }
   const namedFunctionCall = params.input.some(
-    (item) => item.type === "function_call" && item.name === params.name,
+    (item) =>
+      (item.type === "function_call" && item.name === params.name) ||
+      (Array.isArray(item.content) &&
+        item.content.some((block) => {
+          if (!block || typeof block !== "object") {
+            return false;
+          }
+          const record = block as Record<string, unknown>;
+          return (
+            (record.type === "toolCall" ||
+              record.type === "tool_use" ||
+              record.type === "function_call") &&
+            record.name === params.name
+          );
+        })),
   );
   if (namedFunctionCall) {
     return error;
