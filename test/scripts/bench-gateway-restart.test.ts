@@ -144,7 +144,7 @@ describe("gateway restart benchmark script", () => {
     const restartTrace: Record<string, number> = {};
 
     __testing.collectTraceLine(
-      "[gateway] restart trace: restart.ready 12.5ms total=45.0ms rssMb=200.5 heapUsedMb=80.1 activeHandlesCount=12 activeTimersCount=2",
+      "[gateway] restart trace: restart.ready 12.5ms total=45.0ms rssMb=200.5 heapUsedMb=80.1 activeHandlesCount=12 activeTimersCount=2 indexPlugins=50",
       "restart trace",
       restartTrace,
     );
@@ -155,6 +155,27 @@ describe("gateway restart benchmark script", () => {
     expect(restartTrace["restart.ready.heapUsedMb"]).toBe(80.1);
     expect(restartTrace["restart.ready.activeHandlesCount"]).toBe(12);
     expect(restartTrace["restart.ready.activeTimersCount"]).toBe(2);
+    expect(restartTrace["restart.ready.indexPlugins"]).toBeUndefined();
+  });
+
+  it("requires initial ready logs before restart attribution", () => {
+    expect(
+      __testing.hasInitialReadyLogs({
+        initialGatewayReadyLogMs: 20,
+        initialHttpListenLogMs: 10,
+      }),
+    ).toBe(true);
+    expect(
+      __testing.hasInitialReadyLogs({
+        initialGatewayReadyLogMs: 20,
+        initialHttpListenLogMs: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("reports deadline expiry separately from child exit", () => {
+    expect(__testing.resolveRestartDeadlineFailure(false)).toBe("restart_deadline_timeout");
+    expect(__testing.resolveRestartDeadlineFailure(true)).toBe("restart_child_exited");
   });
 
   it("summarizes failure rate, restart.ready totals, and resource slope", () => {

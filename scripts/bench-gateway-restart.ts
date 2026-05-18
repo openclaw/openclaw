@@ -56,7 +56,9 @@ type BenchmarkEvent = {
 
 type GatewayRestartFailureCode =
   | "initial_healthz_timeout"
+  | "initial_ready_log_timeout"
   | "initial_readyz_timeout"
+  | "restart_deadline_timeout"
   | "restart_signal_failed"
   | "restart_child_exited"
   | "no_unavailable_window"
@@ -1050,11 +1052,20 @@ function parseTraceMetrics(raw: string): Array<{ key: string; value: number }> {
     if (!metricMatch) {
       continue;
     }
+    const key = metricMatch[1];
     const value = Number(metricMatch[2]);
     if (!Number.isFinite(value)) {
       continue;
     }
-    metrics.push({ key: metricMatch[1], value });
+    if (
+      key !== "eventLoopMax" &&
+      !key.endsWith("Ms") &&
+      !key.endsWith("Mb") &&
+      !key.endsWith("Count")
+    ) {
+      continue;
+    }
+    metrics.push({ key, value });
   }
   return metrics;
 }
@@ -1156,6 +1167,17 @@ function hasRestartReadySignal(iteration: RestartIteration): boolean {
     typeof iteration.restartTrace["restart.ready.total"] === "number" &&
     iteration.gatewayReadyLogMs !== null
   );
+}
+
+function hasInitialReadyLogs(params: {
+  initialGatewayReadyLogMs: number | null;
+  initialHttpListenLogMs: number | null;
+}): boolean {
+  return params.initialGatewayReadyLogMs !== null && params.initialHttpListenLogMs !== null;
+}
+
+function resolveRestartDeadlineFailure(childExited: boolean): GatewayRestartFailureCode {
+  return childExited ? "restart_child_exited" : "restart_deadline_timeout";
 }
 
 function computeResourceSlope(iterations: RestartIteration[]): ResourceSlope {
@@ -1372,11 +1394,23 @@ async function runGatewaySample(options: {
     failureCode = "initial_readyz_timeout";
   }
 
+  if (failureCode === null) {
+    flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
+    await waitForIterationCondition(
+      () => hasInitialReadyLogs({ initialGatewayReadyLogMs, initialHttpListenLogMs }),
+      deadlineAt,
+    );
+    flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
+    if (!hasInitialReadyLogs({ initialGatewayReadyLogMs, initialHttpListenLogMs })) {
+      failureCode = "initial_ready_log_timeout";
+    }
+  }
+
   const iterations: RestartIteration[] = [];
   if (failureCode === null) {
     for (let index = 1; index <= options.restarts; index += 1) {
       if (performance.now() >= deadlineAt || childExited) {
-        failureCode = "restart_child_exited";
+        failureCode = resolveRestartDeadlineFailure(childExited);
         break;
       }
       const iteration = createRestartIteration(index);
@@ -1612,8 +1646,10 @@ export const __testing = {
   ensureSupportedRestartPlatform,
   finalizeRestartIteration,
   flushOutputLineBuffers,
+  hasInitialReadyLogs,
   parseNonNegativeInt,
   parsePositiveInt,
+  resolveRestartDeadlineFailure,
   resolveEntry,
   sanitizedEnv,
   summarizeCase,
