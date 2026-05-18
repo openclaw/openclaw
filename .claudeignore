@@ -1,0 +1,74 @@
+# Keep coding-agent context focused on source, docs, and tests.
+# Ignored paths remain in git; ask for an exact path when an asset is needed.
+
+# Dependencies and build output
+node_modules/
+**/node_modules/
+dist/
+dist-runtime/
+dist-sea/
+coverage/
+vendor/
+bin/
+Core/
+.pnpm-store/
+.worktrees/
+.tmp/
+.cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+target/
+**/.gradle/
+**/.build/
+**/.swiftpm/
+**/.derivedData/
+**/build/
+**/.next/
+**/out/
+
+# Package manager and generated locks
+pnpm-lock.yaml
+bun.lock
+bun.lockb
+package-lock.json
+skills-lock.json
+
+# Generated docs and localization baselines
+docs/.generated/
+docs/.i18n/
+ui/src/i18n/.i18n/
+dist/protocol.schema.json
+
+# Screenshots, reports, and bulky UI test artifacts
+**/__screenshots__/
+**/screenshots/
+ui/playwright-report/
+ui/test-results/
+apps/ios/fastlane/screenshots/
+apps/ios/fastlane/test_output/
+apps/ios/fastlane/logs/
+
+# Binary/media assets are rarely useful for code navigation.
+# Keep SVG visible because many tracked docs/UI SVGs are source-like text.
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.icns
+*.ico
+*.mp4
+*.mov
+*.pdf
+*.zip
+*.tgz
+*.tar.gz
+
+# Local secrets and operator state
+.env
+*.mobileprovision
+client_secret_*.json
+/memory/
+.agent/*.json
+/local/
