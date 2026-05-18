@@ -1,3 +1,5 @@
+import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
+import { resolveDefaultAgentDir } from "../../agents/agent-scope-config.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -153,13 +155,41 @@ function buildUnavailableResult(params: {
   };
 }
 
+async function resolveProbeApiKey(
+  providerCfg: ModelProviderConfig | undefined,
+  provider: string,
+  cfg: OpenClawConfig,
+): Promise<string | undefined> {
+  // Use the same API key resolution chain as normal inference calls
+  // (getApiKeyForModel → resolveApiKeyForProvider). This checks all sources:
+  // config apiKey, env vars, auth-profiles.json, OAuth tokens, plugin synthetic auth.
+  try {
+    const agentDir = resolveDefaultAgentDir(cfg);
+    const result = await resolveApiKeyForProvider({
+      provider,
+      cfg,
+      agentDir,
+    });
+    if (result.apiKey && typeof result.apiKey === "string" && result.apiKey.trim()) {
+      return result.apiKey.trim();
+    }
+  } catch {
+    // If resolution fails, probe without auth (existing behavior for authless providers)
+  }
+  return undefined;
+}
+
 async function probeLocalProviderEndpoint(params: {
   api: PreflightApi;
   baseUrl: string;
+  apiKey?: string;
 }): Promise<void> {
+  const headers: Record<string, string> | undefined = params.apiKey
+    ? { Authorization: `Bearer ${params.apiKey}` }
+    : undefined;
   const { response, release } = await fetchWithSsrFGuard({
     url: buildProbeUrl(params.api, params.baseUrl),
-    init: { method: "GET" },
+    init: { method: "GET", ...(headers ? { headers } : {}) },
     policy: buildLocalProviderSsrFPolicy(params.baseUrl),
     timeoutMs: PREFLIGHT_TIMEOUT_MS,
     auditContext: "cron-model-provider-preflight",
@@ -207,7 +237,12 @@ export async function preflightCronModelProvider(params: {
 
   let result: EndpointPreflightResult;
   try {
-    await probeLocalProviderEndpoint({ api, baseUrl });
+    const probeApiKey = await resolveProbeApiKey(providerConfig, params.provider, params.cfg);
+    await probeLocalProviderEndpoint({
+      api,
+      baseUrl,
+      apiKey: probeApiKey,
+    });
     result = { status: "available" };
   } catch (error) {
     result = { status: "unavailable", error };
