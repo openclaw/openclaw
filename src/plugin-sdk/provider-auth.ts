@@ -7,7 +7,6 @@ import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import {
-  COPILOT_GITHUB_API_VERSION,
   COPILOT_INTEGRATION_ID,
   buildCopilotIdeHeaders,
 } from "../agents/copilot-dynamic-headers.js";
