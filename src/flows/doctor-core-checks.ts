@@ -698,7 +698,7 @@ const finalConfigValidationCheck: HealthCheck = {
   source: "doctor",
   async detect() {
     const { readConfigFileSnapshot } = await import("../config/config.js");
-    const snap = await readConfigFileSnapshot();
+    const snap = await readConfigFileSnapshot({ observe: false });
     if (!snap.exists || snap.valid) {
       return [];
     }

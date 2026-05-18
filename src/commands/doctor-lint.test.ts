@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
 }));
 
-vi.mock("../config/config.js", () => ({
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
 
@@ -37,7 +38,6 @@ describe("runDoctorLintCli", () => {
       const exitCode = await runDoctorLintCli(runtime, {
         json: true,
         severityMin: "error",
-        onlyIds: ["core/doctor/gateway-config"],
       });
 
       expect(exitCode).toBe(0);
@@ -62,7 +62,6 @@ describe("runDoctorLintCli", () => {
     try {
       const exitCode = await runDoctorLintCli(runtime, {
         severityMin: "error",
-        onlyIds: ["core/doctor/gateway-config"],
       });
 
       expect(exitCode).toBe(0);
