@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   registerAgentRunContext: vi.fn(),
   emitAgentEvent: vi.fn(),
   performGatewaySessionReset: vi.fn(),
+  emitGatewaySessionStartPluginHook: vi.fn(),
   getLatestSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
   resolveExplicitAgentSessionKey: vi.fn(),
@@ -125,6 +126,8 @@ vi.mock("../session-subagent-reactivation.runtime.js", () => ({
 vi.mock("../session-reset-service.js", () => ({
   performGatewaySessionReset: (...args: unknown[]) =>
     (mocks.performGatewaySessionReset as (...args: unknown[]) => unknown)(...args),
+  emitGatewaySessionStartPluginHook: (...args: unknown[]) =>
+    (mocks.emitGatewaySessionStartPluginHook as (...args: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../../infra/voicewake-routing.js", () => ({
@@ -690,6 +693,51 @@ describe("gateway agent handler", () => {
       expect(capturedEntry?.status).toBe("failed");
       expect(capturedEntry?.sessionFile).toBe("relative-present.jsonl");
     });
+  });
+
+  it("emits session_start when agent.send rotates to a caller-supplied session id", async () => {
+    const cfg = { session: { mainKey: "main" } };
+    const existingEntry = {
+      sessionId: "old-session-id",
+      sessionFile: "/tmp/openclaw/agents/main/sessions/old-session-id.jsonl",
+      updatedAt: Date.now(),
+    };
+    mockMainSessionEntry(existingEntry, cfg);
+    mocks.emitGatewaySessionStartPluginHook.mockClear();
+
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": { ...existingEntry },
+      };
+      return updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "test",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "new-session-id",
+        idempotencyKey: "test-idem-session-start-hook-auto-rotation",
+      },
+      { reqId: "test-session-start-hook-auto-rotation" },
+    );
+
+    expect(mocks.emitGatewaySessionStartPluginHook).toHaveBeenCalledTimes(1);
+    expect(mocks.emitGatewaySessionStartPluginHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        sessionKey: "agent:main:main",
+        sessionId: "new-session-id",
+        storePath: "/tmp/sessions.json",
+        sessionFile: undefined,
+        agentId: "main",
+      }),
+    );
   });
 
   it("keeps stored group metadata when a trusted group session receives caller-supplied selectors", async () => {

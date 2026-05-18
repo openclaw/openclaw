@@ -972,6 +972,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       let sessionEntry: SessionEntry | undefined;
       let bestEffortDeliver = requestedBestEffortDeliver ?? false;
       let cfgForAgent: OpenClawConfig | undefined;
+      let resolvedSessionCfg: OpenClawConfig | undefined;
+      let resolvedSessionStorePath: string | undefined;
       let resolvedSessionKey = requestedSessionKey;
       let isNewSession = false;
       let skipTimestampInjection = false;
@@ -1065,6 +1067,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (requestedSessionKey) {
         const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
         cfgForAgent = cfg;
+        resolvedSessionCfg = cfg;
+        resolvedSessionStorePath = storePath;
         const now = Date.now();
         const resetPolicy = resolveSessionResetPolicy({
           sessionCfg: cfg.session,
@@ -1517,7 +1521,13 @@ export const agentHandlers: GatewayRequestHandlers = {
             });
           }
 
-          if (requestedSessionKey && resolvedSessionKey && isNewSession) {
+          if (
+            requestedSessionKey &&
+            resolvedSessionKey &&
+            isNewSession &&
+            resolvedSessionCfg &&
+            resolvedSessionStorePath
+          ) {
             emitSessionsChanged(context, {
               sessionKey: resolvedSessionKey,
               reason: "create",
@@ -1532,10 +1542,10 @@ export const agentHandlers: GatewayRequestHandlers = {
             // after the daily boundary. Emit the hook here so the contract
             // is consistent across all session-creation paths.
             emitGatewaySessionStartPluginHook({
-              cfg,
+              cfg: resolvedSessionCfg,
               sessionKey: resolvedSessionKey,
               sessionId: resolvedSessionId,
-              storePath,
+              storePath: resolvedSessionStorePath,
               sessionFile: sessionEntry?.sessionFile,
               agentId: resolveAgentIdFromSessionKey(resolvedSessionKey),
             });
