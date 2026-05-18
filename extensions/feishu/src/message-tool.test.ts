@@ -23,6 +23,7 @@ vi.mock("./client.js", () => ({
 }));
 
 let registerFeishuMessageTools: typeof import("./message-tool.js").registerFeishuMessageTools;
+let FeishuMessageSchema: typeof import("./message-schema.js").FeishuMessageSchema;
 
 function createConfig(params?: {
   toolsA?: { messages?: boolean };
@@ -59,6 +60,7 @@ function lastClientAppId(): string | undefined {
 describe("registerFeishuMessageTools", () => {
   beforeAll(async () => {
     ({ registerFeishuMessageTools } = await import("./message-tool.js"));
+    ({ FeishuMessageSchema } = await import("./message-schema.js"));
   });
 
   afterAll(() => {
@@ -76,6 +78,23 @@ describe("registerFeishuMessageTools", () => {
     messageReadUsersMock.mockResolvedValue({
       code: 0,
       data: { has_more: false, page_token: undefined, items: [] },
+    });
+  });
+
+  it("exposes a flat provider-compatible parameter schema", () => {
+    const serialized = JSON.stringify(FeishuMessageSchema);
+
+    expect(serialized).not.toContain('"anyOf"');
+    expect(serialized).not.toContain('"oneOf"');
+    expect(serialized).not.toContain('"allOf"');
+    expect(FeishuMessageSchema).toMatchObject({
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "delete", "recall", "read_receipts", "read_users"],
+        },
+      },
     });
   });
 
@@ -163,6 +182,25 @@ describe("registerFeishuMessageTools", () => {
 
     expect(messageListMock).not.toHaveBeenCalled();
     expect(result.details.error).toContain("start_time must be a Unix timestamp in seconds");
+  });
+
+  it("validates action-specific required fields at runtime", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuMessageTools(api);
+
+    const tool = resolveTool("feishu_message", { agentAccountId: "a" });
+    const missingChat = await tool.execute("call", { action: "list" });
+    const missingDeleteMessage = await tool.execute("call", { action: "delete" });
+    const missingReadMessage = await tool.execute("call", { action: "read_receipts" });
+
+    expect(messageListMock).not.toHaveBeenCalled();
+    expect(messageDeleteMock).not.toHaveBeenCalled();
+    expect(messageReadUsersMock).not.toHaveBeenCalled();
+    expect(missingChat.details.error).toBe("feishu_message list requires chat_id");
+    expect(missingDeleteMessage.details.error).toBe("feishu_message delete requires message_id");
+    expect(missingReadMessage.details.error).toBe(
+      "feishu_message read_receipts requires message_id",
+    );
   });
 
   it("returns delete-specific success details", async () => {

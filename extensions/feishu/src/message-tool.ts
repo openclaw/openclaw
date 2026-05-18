@@ -13,6 +13,12 @@ import {
 import { resolveToolsConfig } from "./tools-config.js";
 
 type FeishuMessageExecuteParams = FeishuMessageParams & { accountId?: string };
+type FeishuMessageAction = FeishuMessageExecuteParams["action"];
+type FeishuMessageSortType = NonNullable<FeishuMessageExecuteParams["sort_type"]>;
+type FeishuMessageUserIdType = NonNullable<FeishuMessageExecuteParams["user_id_type"]>;
+
+const SORT_TYPE_VALUES = new Set<FeishuMessageSortType>(["ByCreateTimeAsc", "ByCreateTimeDesc"]);
+const USER_ID_TYPE_VALUES = new Set<FeishuMessageUserIdType>(["open_id", "user_id", "union_id"]);
 
 type FeishuMessageSender = {
   id?: string;
@@ -137,6 +143,49 @@ function normalizeUnixSeconds(value: string | undefined, field: string): string 
     throw new Error(`${field} must be a Unix timestamp in seconds, encoded as a decimal string`);
   }
   return trimmed;
+}
+
+function requireToolString(
+  value: string | undefined,
+  field: "chat_id" | "message_id",
+  action: FeishuMessageAction,
+): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`feishu_message ${action} requires ${field}`);
+  }
+  return value.trim();
+}
+
+function normalizeOptionalToolString(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizeSortType(
+  value: FeishuMessageSortType | undefined,
+): FeishuMessageSortType | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!SORT_TYPE_VALUES.has(value)) {
+    throw new Error("sort_type must be ByCreateTimeAsc or ByCreateTimeDesc");
+  }
+  return value;
+}
+
+function normalizeUserIdType(
+  value: FeishuMessageUserIdType | undefined,
+): FeishuMessageUserIdType | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!USER_ID_TYPE_VALUES.has(value)) {
+    throw new Error("user_id_type must be open_id, user_id, or union_id");
+  }
+  return value;
 }
 
 function normalizePageSize(value: number | undefined): number {
@@ -362,20 +411,20 @@ export function registerFeishuMessageTools(api: OpenClawPluginApi) {
               case "list":
                 return jsonToolResult(
                   await listFeishuMessages(client, {
-                    chatId: p.chat_id,
+                    chatId: requireToolString(p.chat_id, "chat_id", p.action),
                     startTime: p.start_time,
                     endTime: p.end_time,
                     pageSize: p.page_size,
                     pageToken: p.page_token,
-                    sortType: p.sort_type,
+                    sortType: normalizeSortType(p.sort_type),
                   }),
                 );
               case "read_receipts":
               case "read_users":
                 return jsonToolResult(
                   await listFeishuMessageReadReceipts(client, {
-                    messageId: p.message_id,
-                    userIdType: p.user_id_type,
+                    messageId: requireToolString(p.message_id, "message_id", p.action),
+                    userIdType: normalizeUserIdType(p.user_id_type),
                     pageSize: p.page_size,
                     pageToken: p.page_token,
                   }),
@@ -383,15 +432,15 @@ export function registerFeishuMessageTools(api: OpenClawPluginApi) {
               case "delete":
                 return jsonToolResult(
                   await deleteFeishuMessage(client, {
-                    messageId: p.message_id,
-                    chatId: p.chat_id,
+                    messageId: requireToolString(p.message_id, "message_id", p.action),
+                    chatId: normalizeOptionalToolString(p.chat_id),
                   }),
                 );
               case "recall":
                 return jsonToolResult(
                   await recallFeishuMessage(client, {
-                    messageId: p.message_id,
-                    chatId: p.chat_id,
+                    messageId: requireToolString(p.message_id, "message_id", p.action),
+                    chatId: normalizeOptionalToolString(p.chat_id),
                   }),
                 );
               default:
