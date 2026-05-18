@@ -3,6 +3,7 @@ export {
   HEARTBEAT_TOKEN,
   SILENT_REPLY_TOKEN,
   hasInterSessionUserProvenance,
+  isBootRunSessionKey,
   isCompactionCheckpointTranscriptFileName,
   isCronRunSessionKey,
   isExecCompletionEvent,

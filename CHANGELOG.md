@@ -43,6 +43,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - CLI: enforce the documented Node.js 22.19 runtime floor in the source launcher.
+- Gateway/boot: route BOOT.md health-check turns through a dedicated `agent:<id>:boot:run:<id>` session key so dreaming session-corpus ingestion and short-term recall stop indexing boot prompts as user conversation, and extend the cron session reaper to prune expired boot-run entries alongside cron-run entries. Thanks @happydog-bot.
 - Agents/replies: persist queued follow-up user messages and assistant error stubs only once across model-fallback retries, preventing repeated provider rejections from corrupted same-role session transcripts. Fixes #83404. (#83417) Thanks @yetval.
 - Slack: persist delivered inbound message IDs and fail closed when same-channel thread replies lose their thread context, preventing delayed duplicate replies and accidental channel-root posts. Fixes #83521. Thanks @shannon0430.
 - Codex app-server: complete OpenClaw dynamic tool diagnostics at the request boundary so successful, failed, timed out, aborted, and blocked tool calls do not leave active tool state behind. Fixes #83474. Thanks @rozmiarD.

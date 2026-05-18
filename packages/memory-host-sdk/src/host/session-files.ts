@@ -8,6 +8,7 @@ import {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
   hasInterSessionUserProvenance,
+  isBootRunSessionKey,
   isCompactionCheckpointTranscriptFileName,
   isCronRunSessionKey,
   isExecCompletionEvent,
@@ -45,6 +46,8 @@ export type SessionFileEntry = {
   generatedByDreamingNarrative?: boolean;
   /** True when this transcript belongs to an isolated cron run session. */
   generatedByCronRun?: boolean;
+  /** True when this transcript belongs to a gateway-startup BOOT.md run. */
+  generatedByBootRun?: boolean;
 };
 
 export type BuildSessionEntryOptions = {
@@ -52,6 +55,8 @@ export type BuildSessionEntryOptions = {
   generatedByDreamingNarrative?: boolean;
   /** Optional preclassification from a caller-managed cron transcript lookup. */
   generatedByCronRun?: boolean;
+  /** Optional preclassification from a caller-managed boot transcript lookup. */
+  generatedByBootRun?: boolean;
   /** Override for tests or specialized callers that need a tighter parse yield cadence. */
   parseYieldEveryLines?: number;
 };
@@ -59,6 +64,7 @@ export type BuildSessionEntryOptions = {
 export type SessionTranscriptClassification = {
   dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
   cronRunTranscriptPaths: ReadonlySet<string>;
+  bootRunTranscriptPaths: ReadonlySet<string>;
 };
 
 type SessionTranscriptStoreEntry = {
@@ -228,6 +234,7 @@ export function loadSessionTranscriptClassificationForSessionsDir(
   const store = readSessionTranscriptClassificationStore(storePath);
   const dreamingTranscriptPaths = new Set<string>();
   const cronRunTranscriptPaths = new Set<string>();
+  const bootRunTranscriptPaths = new Set<string>();
   for (const [sessionKey, entry] of Object.entries(store)) {
     const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
     if (!transcriptPath) {
@@ -239,10 +246,14 @@ export function loadSessionTranscriptClassificationForSessionsDir(
     if (isCronRunSessionKey(sessionKey)) {
       cronRunTranscriptPaths.add(transcriptPath);
     }
+    if (isBootRunSessionKey(sessionKey)) {
+      bootRunTranscriptPaths.add(transcriptPath);
+    }
   }
   return {
     dreamingNarrativeTranscriptPaths: dreamingTranscriptPaths,
     cronRunTranscriptPaths,
+    bootRunTranscriptPaths,
   };
 }
 
@@ -277,6 +288,7 @@ export function loadSessionTranscriptClassificationForAgent(
 function classifySessionTranscriptFromSessionStore(absPath: string): {
   generatedByDreamingNarrative: boolean;
   generatedByCronRun: boolean;
+  generatedByBootRun: boolean;
 } {
   const sessionsDir = path.dirname(absPath);
   const normalizedAbsPath = normalizeComparablePath(absPath);
@@ -294,6 +306,7 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
       classification.dreamingNarrativeTranscriptPaths,
     ),
     generatedByCronRun: hasClassifiedPath(classification.cronRunTranscriptPaths),
+    generatedByBootRun: hasClassifiedPath(classification.bootRunTranscriptPaths),
   };
 }
 
@@ -570,7 +583,9 @@ export async function buildSessionEntry(
     const messageTimestampsMs: number[] = [];
     const parseYieldEveryLines = resolveSessionEntryParseYieldLines(opts);
     const sessionStoreClassification =
-      opts.generatedByDreamingNarrative === undefined || opts.generatedByCronRun === undefined
+      opts.generatedByDreamingNarrative === undefined ||
+      opts.generatedByCronRun === undefined ||
+      opts.generatedByBootRun === undefined
         ? classifySessionTranscriptFromSessionStore(absPath)
         : null;
     let generatedByDreamingNarrative =
@@ -579,6 +594,8 @@ export async function buildSessionEntry(
       false;
     let generatedByCronRun =
       opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
+    const generatedByBootRun =
+      opts.generatedByBootRun ?? sessionStoreClassification?.generatedByBootRun ?? false;
     const allowArchiveContentCronClassification =
       isUsageCountedSessionArchiveTranscriptPath(absPath);
     for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
@@ -653,7 +670,7 @@ export async function buildSessionEntry(
         // prefixing their own prompt. See PR #70737 review (aisle-research-bot).
         continue;
       }
-      if (generatedByDreamingNarrative || generatedByCronRun) {
+      if (generatedByDreamingNarrative || generatedByCronRun || generatedByBootRun) {
         continue;
       }
       const safe = redactSensitiveText(text, { mode: "tools" });
@@ -679,6 +696,7 @@ export async function buildSessionEntry(
       messageTimestampsMs,
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
       ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
+      ...(generatedByBootRun ? { generatedByBootRun: true } : {}),
     };
   } catch (err) {
     void logSessionFileReadFailure(absPath, err);

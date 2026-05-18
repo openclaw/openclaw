@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeEach } from "vitest";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isBootRunSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from "./session-reaper.js";
 
@@ -61,6 +61,38 @@ describe("isCronRunSessionKey", () => {
   it("does not match non-canonical cron-like keys", () => {
     expect(isCronRunSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
     expect(isCronRunSessionKey("cron:job:run:uuid")).toBe(false);
+  });
+
+  it("does not match boot run keys", () => {
+    expect(isCronRunSessionKey("agent:main:boot:run:abc-123")).toBe(false);
+  });
+});
+
+describe("isBootRunSessionKey", () => {
+  it("matches boot run session keys", () => {
+    expect(isBootRunSessionKey("agent:main:boot:run:abc-123")).toBe(true);
+    expect(isBootRunSessionKey("agent:ops:boot:run:boot-2026-05-18_13-25-49-368-abcd1234")).toBe(
+      true,
+    );
+  });
+
+  it("matches boot run descendant session keys", () => {
+    expect(isBootRunSessionKey("agent:main:boot:run:abc-123:subagent:worker")).toBe(true);
+    expect(isBootRunSessionKey("agent:main:boot:run:abc-123:thread:reply")).toBe(true);
+  });
+
+  it("does not match cron run keys", () => {
+    expect(isBootRunSessionKey("agent:main:cron:job1:run:abc-123")).toBe(false);
+  });
+
+  it("does not match regular session keys", () => {
+    expect(isBootRunSessionKey("agent:main:telegram:dm:123")).toBe(false);
+    expect(isBootRunSessionKey("agent:main:main")).toBe(false);
+  });
+
+  it("does not match non-canonical boot-like keys", () => {
+    expect(isBootRunSessionKey("agent:main:slack:boot:run:uuid")).toBe(false);
+    expect(isBootRunSessionKey("boot:run:uuid")).toBe(false);
   });
 });
 
@@ -256,6 +288,45 @@ describe("sweepCronRunSessions", () => {
       log,
     });
     expect(r2.swept).toBe(false);
+  });
+
+  it("prunes expired boot run sessions alongside cron run sessions", async () => {
+    const now = Date.now();
+    const store: Record<string, { sessionId: string; updatedAt: number }> = {
+      "agent:main:boot:run:old-boot": {
+        sessionId: "old-boot",
+        updatedAt: now - 25 * 3_600_000, // expired
+      },
+      "agent:main:boot:run:recent-boot": {
+        sessionId: "recent-boot",
+        updatedAt: now - 1 * 3_600_000, // not expired
+      },
+      "agent:main:cron:job1:run:old-cron": {
+        sessionId: "old-cron",
+        updatedAt: now - 25 * 3_600_000, // expired
+      },
+      "agent:main:telegram:dm:123": {
+        sessionId: "regular-session",
+        updatedAt: now - 100 * 3_600_000, // old but not a single-shot run
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.swept).toBe(true);
+    expect(result.pruned).toBe(2);
+
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, unknown>;
+    expect(updated["agent:main:boot:run:old-boot"]).toBeUndefined();
+    expect(updated["agent:main:cron:job1:run:old-cron"]).toBeUndefined();
+    expect(updated["agent:main:boot:run:recent-boot"]).toBeDefined();
+    expect(updated["agent:main:telegram:dm:123"]).toBeDefined();
   });
 
   it("throttles per store path", async () => {

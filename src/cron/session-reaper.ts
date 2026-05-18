@@ -1,9 +1,11 @@
 /**
- * Cron session reaper — prunes completed isolated cron run sessions
- * from the session store after a configurable retention period.
+ * Cron session reaper — prunes completed isolated cron run and gateway
+ * boot run sessions from the session store after a configurable retention
+ * period.
  *
- * Pattern: sessions keyed as `...:cron:<jobId>:run:<uuid>` are ephemeral
- * run records. The base session (`...:cron:<jobId>`) is kept as-is.
+ * Pattern: sessions keyed as `...:cron:<jobId>:run:<uuid>` or
+ * `...:boot:run:<uuid>` are ephemeral single-shot run records. Their base
+ * sessions (e.g. `...:cron:<jobId>`) are kept as-is.
  */
 
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -11,8 +13,12 @@ import { loadSessionStore } from "../config/sessions/store-load.js";
 import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isBootRunSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
+
+function isReapableRunSessionKey(key: string): boolean {
+  return isCronRunSessionKey(key) || isBootRunSessionKey(key);
+}
 
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
 
@@ -81,7 +87,7 @@ export async function sweepCronRunSessions(params: {
     await updateSessionStore(storePath, (store) => {
       const cutoff = now - retentionMs;
       for (const key of Object.keys(store)) {
-        if (!isCronRunSessionKey(key)) {
+        if (!isReapableRunSessionKey(key)) {
           continue;
         }
         const entry = store[key];

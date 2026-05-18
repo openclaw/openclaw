@@ -225,6 +225,43 @@ describe("buildSessionEntry", () => {
     expect(entry.generatedByCronRun).toBe(true);
   });
 
+  it("keeps boot-run transcripts opaque when the session store maps them to a boot run key", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const sessionId = "boot-2026-05-18_13-25-49-368-abcd1234";
+    const transcriptPath = path.join(sessionsDir, `${sessionId}.jsonl`);
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content:
+            "You are running a boot check. Follow BOOT.md instructions exactly.\nBOOT.md:\n# BOOT.md — Gateway startup health check",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "OK" },
+      }),
+    ];
+    fsSync.writeFileSync(transcriptPath, jsonlLines.join("\n"));
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        [`agent:main:boot:run:${sessionId}`]: {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+
+    const entry = requireSessionEntry(await buildSessionEntry(transcriptPath));
+
+    expect(entry.content).toBe("");
+    expect(entry.lineMap).toStrictEqual([]);
+    expect(entry.generatedByBootRun).toBe(true);
+  });
+
   it("skips blank lines and invalid JSON without breaking lineMap", async () => {
     const jsonlLines = [
       "",

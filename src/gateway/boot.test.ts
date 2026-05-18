@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionScope } from "../config/sessions/types.js";
+import { isBootRunSessionKey } from "../sessions/session-key-utils.js";
 
 const agentCommand = vi.fn();
 
@@ -12,7 +13,7 @@ vi.mock("../commands/agent.js", () => ({
 }));
 
 const { runBootOnce } = await import("./boot.js");
-const { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey, resolveMainSessionKey } =
+const { resolveAgentIdFromSessionKey, resolveMainSessionKey } =
   await import("../config/sessions/main-session.js");
 const { resolveStorePath } = await import("../config/sessions/paths.js");
 const { loadSessionStore, saveSessionStore } = await import("../config/sessions/store.js");
@@ -68,10 +69,13 @@ describe("runBootOnce", () => {
     }
   };
 
-  const mockAgentUpdatesMainSession = (storePath: string, sessionKey: string) => {
-    agentCommand.mockImplementation(async (opts: { sessionId?: string }) => {
+  const mockAgentWritesBootSession = (storePath: string) => {
+    agentCommand.mockImplementation(async (opts: { sessionId?: string; sessionKey?: string }) => {
+      if (!opts.sessionKey) {
+        return;
+      }
       const current = loadSessionStore(storePath, { skipCache: true });
-      current[sessionKey] = {
+      current[opts.sessionKey] = {
         sessionId: String(opts.sessionId),
         updatedAt: Date.now(),
       };
@@ -85,19 +89,6 @@ describe("runBootOnce", () => {
       throw new Error("expected agent command call");
     }
     return call as Record<string, unknown>;
-  };
-
-  const expectMainSessionRestored = (params: {
-    storePath: string;
-    sessionKey: string;
-    expectedSessionId?: string;
-  }) => {
-    const restored = loadSessionStore(params.storePath, { skipCache: true });
-    if (params.expectedSessionId === undefined) {
-      expect(restored[params.sessionKey]).toBeUndefined();
-      return;
-    }
-    expect(restored[params.sessionKey]?.sessionId).toBe(params.expectedSessionId);
   };
 
   it("skips when BOOT.md is missing", async () => {
@@ -134,7 +125,7 @@ describe("runBootOnce", () => {
     });
   });
 
-  it("runs agent command when BOOT.md exists", async () => {
+  it("runs agent command against a boot-shaped session key, not the main session", async () => {
     const content = "Say hello when you wake up.";
     await withBootWorkspace({ bootContent: content }, async (workspaceDir) => {
       agentCommand.mockResolvedValue(undefined);
@@ -145,7 +136,9 @@ describe("runBootOnce", () => {
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const call = requireAgentCall();
       expect(call.deliver).toBe(false);
-      expect(call.sessionKey).toBe(resolveMainSessionKey({}));
+      expect(call.sessionKey).not.toBe(resolveMainSessionKey({}));
+      expect(typeof call.sessionKey).toBe("string");
+      expect(isBootRunSessionKey(call.sessionKey as string)).toBe(true);
       expect(call.message).toContain("BOOT.md:");
       expect(call.message).toContain(content);
       expect(call.message).toContain("NO_REPLY");
@@ -163,104 +156,77 @@ describe("runBootOnce", () => {
     });
   });
 
-  it("uses per-agent session key when agentId is provided", async () => {
+  it("scopes the boot session key to the agentId when provided", async () => {
     await withBootWorkspace({ bootContent: "Check status." }, async (workspaceDir) => {
       agentCommand.mockResolvedValue(undefined);
-      const cfg = {};
       const agentId = "ops";
-      await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir, agentId })).resolves.toEqual({
-        status: "ran",
-      });
+      await expect(
+        runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir, agentId }),
+      ).resolves.toEqual({ status: "ran" });
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      expect(requireAgentCall().sessionKey).toBe(resolveAgentMainSessionKey({ cfg, agentId }));
+      const sessionKey = requireAgentCall().sessionKey as string;
+      expect(isBootRunSessionKey(sessionKey)).toBe(true);
+      expect(sessionKey.startsWith(`agent:${agentId}:boot:run:`)).toBe(true);
     });
   });
 
-  it("generates new session ID when no existing session exists", async () => {
-    const content = "Say hello when you wake up.";
-    await withBootWorkspace({ bootContent: content }, async (workspaceDir) => {
-      agentCommand.mockResolvedValue(undefined);
-      const cfg = {};
-      await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir })).resolves.toEqual({
-        status: "ran",
-      });
+  it("generates a boot-style session ID", async () => {
+    await withBootWorkspace(
+      { bootContent: "Say hello when you wake up." },
+      async (workspaceDir) => {
+        agentCommand.mockResolvedValue(undefined);
+        await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+          status: "ran",
+        });
 
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const call = requireAgentCall();
-
-      // Verify a boot-style session ID was generated (format: boot-YYYY-MM-DD_HH-MM-SS-xxx-xxxxxxxx)
-      expect(call.sessionId).toMatch(
-        /^boot-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}-[0-9a-f]{8}$/,
-      );
-    });
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+        expect(requireAgentCall().sessionId).toMatch(
+          /^boot-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}-[0-9a-f]{8}$/,
+        );
+      },
+    );
   });
 
-  it("uses a fresh boot session ID even when main session mapping already exists", async () => {
-    const content = "Say hello when you wake up.";
-    await withBootWorkspace({ bootContent: content }, async (workspaceDir) => {
-      const cfg = {};
-      const { sessionKey, storePath } = resolveMainStore(cfg);
-      const existingSessionId = "main-session-abc123";
+  it("leaves the main session mapping untouched even when it already exists", async () => {
+    await withBootWorkspace(
+      { bootContent: "Check if the system is healthy." },
+      async (workspaceDir) => {
+        const cfg = {};
+        const { sessionKey: mainSessionKey, storePath } = resolveMainStore(cfg);
+        const existingSessionId = "main-session-xyz789";
 
-      await saveSessionStore(storePath, {
-        [sessionKey]: {
-          sessionId: existingSessionId,
-          updatedAt: Date.now(),
-        },
-      });
+        await saveSessionStore(storePath, {
+          [mainSessionKey]: {
+            sessionId: existingSessionId,
+            updatedAt: Date.now() - 60_000,
+          },
+        });
 
-      agentCommand.mockResolvedValue(undefined);
-      await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir })).resolves.toEqual({
-        status: "ran",
-      });
+        mockAgentWritesBootSession(storePath);
+        await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+          status: "ran",
+        });
 
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const call = requireAgentCall();
-
-      expect(call.sessionId).not.toBe(existingSessionId);
-      expect(call.sessionId).toMatch(
-        /^boot-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}-[0-9a-f]{8}$/,
-      );
-      expect(call.sessionKey).toBe(sessionKey);
-    });
+        const after = loadSessionStore(storePath, { skipCache: true });
+        expect(after[mainSessionKey]?.sessionId).toBe(existingSessionId);
+      },
+    );
   });
 
-  it("restores the original main session mapping after the boot run", async () => {
-    const content = "Check if the system is healthy.";
-    await withBootWorkspace({ bootContent: content }, async (workspaceDir) => {
-      const cfg = {};
-      const { sessionKey, storePath } = resolveMainStore(cfg);
-      const existingSessionId = "main-session-xyz789";
-
-      await saveSessionStore(storePath, {
-        [sessionKey]: {
-          sessionId: existingSessionId,
-          updatedAt: Date.now() - 60_000, // 1 minute ago
-        },
-      });
-
-      mockAgentUpdatesMainSession(storePath, sessionKey);
-      await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir })).resolves.toEqual({
-        status: "ran",
-      });
-
-      expectMainSessionRestored({ storePath, sessionKey, expectedSessionId: existingSessionId });
-    });
-  });
-
-  it("removes a boot-created main-session mapping when none existed before", async () => {
+  it("clears its own boot session mapping after the run", async () => {
     await withBootWorkspace({ bootContent: "health check" }, async (workspaceDir) => {
       const cfg = {};
-      const { sessionKey, storePath } = resolveMainStore(cfg);
+      const { storePath } = resolveMainStore(cfg);
 
-      mockAgentUpdatesMainSession(storePath, sessionKey);
-
+      mockAgentWritesBootSession(storePath);
       await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir })).resolves.toEqual({
         status: "ran",
       });
 
-      expectMainSessionRestored({ storePath, sessionKey });
+      const bootSessionKey = requireAgentCall().sessionKey as string;
+      const after = loadSessionStore(storePath, { skipCache: true });
+      expect(after[bootSessionKey]).toBeUndefined();
     });
   });
 });
