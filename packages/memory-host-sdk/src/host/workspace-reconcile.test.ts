@@ -82,6 +82,7 @@ describe("workspace reconcile package helpers", () => {
       path: "MEMORY.md",
       root: "MEMORY.md",
       chunk_index: 0,
+      payload_schema_version: 2,
       synced_at: "2026-05-17T00:00:00.000Z",
     });
     expect(plan.points[3]?.payload).toMatchObject({

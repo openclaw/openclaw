@@ -4,6 +4,7 @@ import { isFileMissingError, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
 
 export const WORKSPACE_RECONCILER_ID = "workspace-reconciler";
+export const WORKSPACE_RECONCILE_PAYLOAD_SCHEMA_VERSION = 2;
 export const WORKSPACE_RECONCILER_ROOTS = [
   "MEMORY.md",
   "memory",
@@ -33,6 +34,7 @@ export type WorkspaceReconcilePayload = {
   root: WorkspaceReconcileRoot;
   chunk_index: number;
   content_hash: string;
+  payload_schema_version: number;
   document: string;
   text_preview: string;
   synced_at: string;
@@ -392,6 +394,7 @@ export async function buildWorkspaceReconcilePlan(
           root: file.root,
           chunk_index: chunkIndex,
           content_hash: contentHash,
+          payload_schema_version: WORKSPACE_RECONCILE_PAYLOAD_SCHEMA_VERSION,
           document: chunk.text,
           text_preview: buildTextPreview(chunk.text),
           synced_at: nowIso,
@@ -408,6 +411,9 @@ export function computeWorkspaceReconcileDeleteCandidates(
   existingPoints: ExistingWorkspacePoint[],
   nextIds: ReadonlySet<string>,
 ): string[] {
+  // Deletion is ownership-scoped. Only points written by the workspace
+  // reconciler may be removed here; agent memories from qdrant-store and any
+  // other writers in the shared collection must survive reconcile runs.
   return existingPoints
     .filter(
       (point) => point.payload?.managed_by === WORKSPACE_RECONCILER_ID && !nextIds.has(point.id),

@@ -358,6 +358,81 @@ describe("runQdrantWorkspaceReconcileCommand", () => {
     ).toBe(false);
   });
 
+  it("preserves stale points owned by other writers during apply", async () => {
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/collections/agent-memory")) {
+        return createJsonResponse({ result: { status: "green", points_count: 7 } });
+      }
+      if (url.endsWith("/collections/agent-memory/points/scroll")) {
+        return createJsonResponse({
+          result: {
+            points: [
+              {
+                id: "workspace:projects/stale.md#0",
+                payload: {
+                  managed_by: "workspace-reconciler",
+                  content_hash: "stale-hash",
+                  payload_schema_version: 2,
+                },
+              },
+              {
+                id: "external-memory",
+                payload: {
+                  managed_by: "mcp-store",
+                  content_hash: "external-hash",
+                },
+              },
+            ],
+            next_page_offset: null,
+          },
+        });
+      }
+      if (url.endsWith("/collections/agent-memory/points?wait=true")) {
+        return createJsonResponse({ status: "ok" });
+      }
+      if (url.endsWith("/collections/agent-memory/points/delete?wait=true")) {
+        return createJsonResponse({ status: "ok" });
+      }
+      throw new Error(`unexpected fetch ${init?.method ?? "GET"} ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    spawnSyncMock.mockImplementation((_pythonPath, _args, options) => {
+      const input = options?.input;
+      if (typeof input !== "string") {
+        throw new TypeError("expected embedding bridge input to be a string");
+      }
+      const parsed = JSON.parse(input) as { texts: string[] };
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          vectors: parsed.texts.map(() => [0.1, 0.2]),
+        }),
+        stderr: "",
+      };
+    });
+    const runtime = createRuntime();
+
+    const { runQdrantWorkspaceReconcileCommand } = await import("./qdrant-workspace-reconcile.js");
+
+    await runQdrantWorkspaceReconcileCommand(
+      { apply: true, workspaceDir },
+      runtime as unknown as RuntimeEnv,
+    );
+
+    const deleteCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).endsWith("/collections/agent-memory/points/delete?wait=true"),
+    );
+    expect(deleteCall).toBeTruthy();
+    const deleteBodyRaw = deleteCall?.[1]?.body;
+    if (typeof deleteBodyRaw !== "string") {
+      throw new TypeError("expected delete body to be a string");
+    }
+    expect(JSON.parse(deleteBodyRaw)).toEqual({
+      points: ["workspace:projects/stale.md#0"],
+    });
+  });
+
   it("retries upsert once when the first PUT fails with EPIPE on a stale keep-alive socket", async () => {
     let upsertAttempts = 0;
     const fetchMock = vi.fn(async (input: string | URL) => {
@@ -408,5 +483,83 @@ describe("runQdrantWorkspaceReconcileCommand", () => {
 
     expect(result.ok).toBe(true);
     expect(upsertAttempts).toBe(2);
+  });
+});
+
+describe("embedWorkspaceTexts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("spawns the embedder once even when more than 50 texts are embedded", async () => {
+    spawnSyncMock.mockImplementation((pythonPath, args, options) => {
+      expect(pythonPath).toBe("/tmp/python");
+      expect(args).toEqual(["-c", expect.any(String)]);
+      const input = options?.input;
+      if (typeof input !== "string") {
+        throw new TypeError("expected embedding bridge input to be a string");
+      }
+      const parsed = JSON.parse(input) as { texts: string[] };
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          vectors: parsed.texts.map((_, index) => [index, index + 0.5]),
+        }),
+        stderr: "",
+      };
+    });
+
+    const { embedWorkspaceTexts } = await import("./qdrant-workspace-reconcile.js");
+
+    const vectors = embedWorkspaceTexts(
+      Array.from({ length: 51 }, (_, index) => `chunk ${index}`),
+      "/tmp/python",
+    );
+
+    expect(vectors).toHaveLength(51);
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("classifyWorkspacePoints", () => {
+  it("re-upserts points when the payload schema version is older even if the content hash matches", async () => {
+    const { classifyWorkspacePoints } = await import("./qdrant-workspace-reconcile.js");
+    const { buildWorkspaceReconcilePlan } =
+      await import("../memory-host-sdk/host/workspace-reconcile.js");
+
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qdrant-classify-"));
+    try {
+      await fs.mkdir(path.join(workspaceDir, "projects"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "projects", "demo.md"),
+        "# Demo\n\nAlpha section.\n",
+        "utf8",
+      );
+      const plan = await buildWorkspaceReconcilePlan(workspaceDir, "2026-05-17T00:00:00.000Z");
+      const point = plan.points[0];
+      if (!point) {
+        throw new Error("expected workspace reconcile point");
+      }
+
+      const result = classifyWorkspacePoints(
+        [point],
+        [
+          {
+            id: point.id,
+            qdrantId: point.id,
+            payload: {
+              ...point.payload,
+              payload_schema_version: 1,
+            },
+          },
+        ],
+      );
+
+      expect(result.unchanged).toEqual([]);
+      expect(result.toUpsert).toEqual([point]);
+      expect(result.toDelete).toEqual([]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 });

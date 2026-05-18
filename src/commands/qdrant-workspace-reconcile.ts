@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import {
+  WORKSPACE_RECONCILE_PAYLOAD_SCHEMA_VERSION,
   WORKSPACE_RECONCILER_ID,
   buildWorkspaceReconcilePlan,
   type WorkspaceReconcilePayload,
@@ -362,7 +363,11 @@ export function classifyWorkspacePoints(
 
   for (const point of expectedPoints) {
     const existing = existingById.get(point.id);
-    if (existing?.payload?.content_hash === point.payload.content_hash) {
+    const sameHash = existing?.payload?.content_hash === point.payload.content_hash;
+    const sameSchema =
+      existing?.payload?.payload_schema_version ===
+      (point.payload.payload_schema_version ?? WORKSPACE_RECONCILE_PAYLOAD_SCHEMA_VERSION);
+    if (sameHash && sameSchema) {
       unchanged.push(point);
       continue;
     }
@@ -370,6 +375,9 @@ export function classifyWorkspacePoints(
   }
 
   const nextIds = new Set(expectedPoints.map((point) => point.id));
+  // Deletion is ownership-scoped. Only points written by the workspace
+  // reconciler may be removed here; agent memories from qdrant-store and any
+  // other writers in the shared collection must survive reconcile runs.
   const toDelete = existingPoints
     .filter(
       (point) => point.payload?.managed_by === WORKSPACE_RECONCILER_ID && !nextIds.has(point.id),
@@ -383,36 +391,33 @@ export function embedWorkspaceTexts(texts: string[], pythonPath: string): number
   if (texts.length === 0) {
     return [];
   }
-  const EMBED_BATCH_SIZE = 50;
-  const allVectors: number[][] = [];
-  for (let offset = 0; offset < texts.length; offset += EMBED_BATCH_SIZE) {
-    const batch = texts.slice(offset, offset + EMBED_BATCH_SIZE);
-    const result = spawnSync(pythonPath, ["-c", FASTEMBED_BRIDGE_SCRIPT], {
-      encoding: "utf8",
-      input: JSON.stringify({ texts: batch }),
-      stdio: ["pipe", "pipe", "pipe"],
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    if (result.error) {
-      throw result.error;
-    }
-    if (result.status !== 0) {
-      throw new Error(
-        typeof result.stderr === "string" && result.stderr.trim() !== ""
-          ? result.stderr.trim()
-          : `embedding bridge failed with status ${result.status ?? "unknown"}`,
-      );
-    }
-    const parsed = JSON.parse(result.stdout || "{}") as { vectors?: number[][] };
-    const vectors = parsed.vectors ?? [];
-    if (vectors.length !== batch.length) {
-      throw new Error(
-        `embedding bridge returned ${vectors.length} vectors for ${batch.length} texts`,
-      );
-    }
-    allVectors.push(...vectors);
+  // Loading the ONNX model dominates runtime at current workspace sizes, so keep
+  // a single bridge process until the corpus grows enough to justify a persistent
+  // NDJSON-based embedder service.
+  const result = spawnSync(pythonPath, ["-c", FASTEMBED_BRIDGE_SCRIPT], {
+    encoding: "utf8",
+    input: JSON.stringify({ texts }),
+    stdio: ["pipe", "pipe", "pipe"],
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  if (result.error) {
+    throw result.error;
   }
-  return allVectors;
+  if (result.status !== 0) {
+    throw new Error(
+      typeof result.stderr === "string" && result.stderr.trim() !== ""
+        ? result.stderr.trim()
+        : `embedding bridge failed with status ${result.status ?? "unknown"}`,
+    );
+  }
+  const parsed = JSON.parse(result.stdout || "{}") as { vectors?: number[][] };
+  const vectors = parsed.vectors ?? [];
+  if (vectors.length !== texts.length) {
+    throw new Error(
+      `embedding bridge returned ${vectors.length} vectors for ${texts.length} texts`,
+    );
+  }
+  return vectors;
 }
 
 function renderSummary(runtime: RuntimeEnv, summary: QdrantWorkspaceReconcileSummary): void {
