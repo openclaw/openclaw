@@ -142,19 +142,30 @@ export async function resolveExistingUploadPaths({
   if (!managedMediaPathsResult.ok) {
     return managedMediaPathsResult;
   }
-  const uploadPathsResult = await resolveExistingPathsWithinRoot({
-    rootDir: uploadDir,
-    requestedPaths: managedMediaPathsResult.paths,
-    scopeLabel: `uploads directory (${uploadDir})`,
-  });
-  if (uploadPathsResult.ok) {
-    return uploadPathsResult;
+
+  const paths: string[] = [];
+  for (const requestedPath of managedMediaPathsResult.paths) {
+    const uploadPathsResult = await resolveExistingPathsWithinRoot({
+      rootDir: uploadDir,
+      requestedPaths: [requestedPath],
+      scopeLabel: `uploads directory (${uploadDir})`,
+    });
+    if (uploadPathsResult.ok) {
+      paths.push(uploadPathsResult.paths[0] ?? requestedPath);
+      continue;
+    }
+
+    const inboundPathsResult = await resolveExistingPathsWithinRoot({
+      rootDir: inboundMediaDir,
+      requestedPaths: [requestedPath],
+      scopeLabel: `inbound media directory (${inboundMediaDir})`,
+    });
+    if (!inboundPathsResult.ok) {
+      return inboundPathsResult;
+    }
+    paths.push(inboundPathsResult.paths[0] ?? requestedPath);
   }
-  return await resolveExistingPathsWithinRoot({
-    rootDir: inboundMediaDir,
-    requestedPaths: managedMediaPathsResult.paths,
-    scopeLabel: `inbound media directory (${inboundMediaDir})`,
-  });
+  return { ok: true, paths };
 }
 
 export async function resolveStrictExistingUploadPaths({
@@ -169,17 +180,28 @@ export async function resolveStrictExistingUploadPaths({
   if (!managedMediaPathsResult.ok) {
     return managedMediaPathsResult;
   }
-  const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
-    rootDir: uploadDir,
-    requestedPaths: managedMediaPathsResult.paths,
-    scopeLabel: `uploads directory (${uploadDir})`,
-  });
-  if (uploadPathsResult.ok) {
-    return uploadPathsResult;
+
+  const paths: string[] = [];
+  for (const requestedPath of managedMediaPathsResult.paths) {
+    const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
+      rootDir: uploadDir,
+      requestedPaths: [requestedPath],
+      scopeLabel: `uploads directory (${uploadDir})`,
+    });
+    if (uploadPathsResult.ok) {
+      paths.push(uploadPathsResult.paths[0] ?? requestedPath);
+      continue;
+    }
+
+    const inboundPathsResult = await resolveStrictExistingPathsWithinRoot({
+      rootDir: inboundMediaDir,
+      requestedPaths: [requestedPath],
+      scopeLabel: `inbound media directory (${inboundMediaDir})`,
+    });
+    if (!inboundPathsResult.ok) {
+      return inboundPathsResult;
+    }
+    paths.push(inboundPathsResult.paths[0] ?? requestedPath);
   }
-  return await resolveStrictExistingPathsWithinRoot({
-    rootDir: inboundMediaDir,
-    requestedPaths: managedMediaPathsResult.paths,
-    scopeLabel: `inbound media directory (${inboundMediaDir})`,
-  });
+  return { ok: true, paths };
 }

@@ -286,6 +286,29 @@ describe("resolveExistingUploadPaths", () => {
     });
   });
 
+  it("accepts mixed upload-root and inbound-media files in one request", async () => {
+    await withFixtureRoot(async ({ inboundMediaDir, uploadsDir }) => {
+      const uploadFile = path.join(uploadsDir, "from-upload.txt");
+      const inboundFile = path.join(inboundMediaDir, "from-inbound.txt");
+      await fs.writeFile(uploadFile, "upload", "utf8");
+      await fs.writeFile(inboundFile, "inbound", "utf8");
+
+      const result = await resolveExistingUploadPaths({
+        uploadDir: uploadsDir,
+        inboundMediaDir,
+        requestedPaths: [uploadFile, "media://inbound/from-inbound.txt"],
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.paths).toEqual([
+          await fs.realpath(uploadFile),
+          await fs.realpath(inboundFile),
+        ]);
+      }
+    });
+  });
+
   it("rejects nested inbound media URI references", async () => {
     await withFixtureRoot(async ({ inboundMediaDir, uploadsDir }) => {
       const result = await resolveExistingUploadPaths({
@@ -394,6 +417,29 @@ describe("resolveStrictExistingUploadPaths", () => {
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.paths).toEqual([await fs.realpath(inboundFile)]);
+      }
+    });
+  });
+
+  it("accepts mixed upload-root and inbound-media files at use time", async () => {
+    await withFixtureRoot(async ({ inboundMediaDir, uploadsDir }) => {
+      const uploadFile = path.join(uploadsDir, "from-upload.txt");
+      const inboundFile = path.join(inboundMediaDir, "from-inbound.txt");
+      await fs.writeFile(uploadFile, "upload", "utf8");
+      await fs.writeFile(inboundFile, "inbound", "utf8");
+
+      const result = await resolveStrictExistingUploadPaths({
+        uploadDir: uploadsDir,
+        inboundMediaDir,
+        requestedPaths: [uploadFile, "media/inbound/from-inbound.txt"],
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.paths).toEqual([
+          await fs.realpath(uploadFile),
+          await fs.realpath(inboundFile),
+        ]);
       }
     });
   });
