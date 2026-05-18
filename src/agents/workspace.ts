@@ -530,8 +530,12 @@ export async function ensureAgentWorkspace(params?: {
   // In existing workspaces they may have been intentionally removed or relocated; recreating them
   // from templates on every subagent spawn is the bug reported in #83593.
   const shouldWriteBootstrapFile = (fileName: string): boolean => {
-    if (!OPTIONAL_BOOTSTRAP_FILENAMES.has(fileName)) return true;
-    if (!isBrandNewWorkspace) return false;
+    if (!OPTIONAL_BOOTSTRAP_FILENAMES.has(fileName)) {
+      return true;
+    }
+    if (!isBrandNewWorkspace) {
+      return false;
+    }
     return !skipOptionalBootstrapFiles.has(fileName);
   };
 
