@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 - QA-Lab: add runtime tool fixture scenarios and coverage reporting for Codex-native workspace tools, OpenClaw dynamic tools, and optional plugin-backed tools. Fixes #80173. Thanks @100yenadmin.
 - QA-Lab: expose runtime tool fixture coverage through `openclaw qa coverage --tools`, with optional suite-summary evaluation for parity gate artifacts. Thanks @100yenadmin.
 - QA-Lab: add the personal-agent approval-denial scenario so the benchmark pack verifies denied local reads stop cleanly without tool progress or fixture leaks. (#83150) Thanks @iFiras-Max1.
+- Control UI/WebChat: add open, download, and copy actions for generated chat images, with stable rounded thumbnail frames while managed image previews load.
 
 ### Fixes
 
@@ -1492,7 +1493,6 @@ Docs: https://docs.openclaw.ai
 - Slack/performance: reduce message preparation, stream recipient lookup, and thread-context allocation overhead on Slack reply hot paths. Thanks @vincentkoc.
 - Channels/streaming: cap progress-draft tool lines by default so edited progress boxes avoid jumpy reflow from long wrapped lines.
 - Control UI/chat: add an agent-first filter to the chat session picker, keep chat controls/composer responsive across phone/tablet/desktop widths, keep desktop chat controls on one row, avoid duplicate avatar refreshes during initial chat load, and hide that row while scrolling down the transcript. Thanks @BunsDev.
-- Control UI/WebChat: add open, download, and copy actions for generated chat images, with stable rounded thumbnail frames while managed image previews load.
 - Control UI/chat: strip untrusted sender metadata from live streams and transcript display, preserve canvas preview anchors, and stop operator UI clients from injecting their internal client id as sender identity. Fixes #78739. Thanks @tmimmanuel, @guguangxin-eng, @hclsys, and @BunsDev.
 - Control UI/chat: collapse consecutive duplicate text messages into one bubble with a count so repeated text-only messages stay compact without hiding nearby context.
 - Control UI/chat and Sessions: label inherited thinking defaults separately from explicit overrides while preserving provider-supplied option labels. Fixes #77581. Thanks @BunsDev and @Beandon13.

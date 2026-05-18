@@ -181,10 +181,6 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return false;
 }
 
-function stripVisibleTextFromMediaSupplement(payload: ReplyPayload): ReplyPayload {
-  return isMediaBearingPayload(payload) ? { ...payload, text: undefined } : payload;
-}
-
 function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyPayload {
   return isReplyPayloadTtsSupplement(payload) ? buildTtsSupplementMediaPayload(payload) : payload;
 }
@@ -1570,8 +1566,11 @@ async function replaceLatestAssistantMediaDirectiveTranscriptMessage(params: {
     const index = await readSessionTranscriptIndex(params.transcriptPath);
     const latest = index?.entries
       .toReversed()
-      .find((entry) => isAssistantMediaDirectiveMessage(entry.record.message, params.payload));
+      .find((entry) => (entry.record.message as { role?: unknown } | undefined)?.role === "assistant");
     if (!latest?.id) {
+      return { replaced: false };
+    }
+    if (!isAssistantMediaDirectiveMessage(latest.record.message, params.payload)) {
       return { replaced: false };
     }
     const latestMessage = latest.record.message as Record<string, unknown>;
@@ -2685,9 +2684,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           return;
         }
         const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
-        const transcriptSourcePayload = stripVisibleTextFromMediaSupplement(
-          stripVisibleTextFromTtsSupplement(payload),
-        );
+        const transcriptSourcePayload = stripVisibleTextFromTtsSupplement(payload);
         const [transcriptPayload] = await normalizeWebchatReplyMediaPathsForDisplay({
           cfg,
           sessionKey,
