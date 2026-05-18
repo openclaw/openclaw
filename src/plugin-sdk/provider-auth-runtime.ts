@@ -27,7 +27,8 @@ export type OAuthCallbackResult = { code: string; state: string };
 // pass the hosts that may legitimately issue preflights against the redirect
 // URI; everything else gets a 204 with no `Access-Control-Allow-*` headers,
 // which is safe for normal browser navigation but blocks cross-origin script
-// reads. The empty allowlist (default) suppresses CORS echo entirely.
+// reads. The empty allowlist (default) leaves the legacy permissive SDK
+// behavior in place for existing callers.
 export function buildOAuthCallbackOriginResolver(
   allowedHosts: readonly string[] | undefined,
 ): (originHeader: string | string[] | undefined) => string | undefined {
@@ -101,28 +102,27 @@ export async function waitForLocalOAuthCallback(params: {
   onProgress?: (message: string) => void;
   // IdP host allowlist for CORS preflight echo. Pass the canonical authority
   // host(s) (e.g. `["auth.example.com"]`) that may issue an `OPTIONS` against
-  // the redirect URI. When omitted, no `Access-Control-Allow-*` headers are
-  // echoed.
+  // the redirect URI. When omitted, legacy permissive SDK behavior is
+  // preserved for existing provider login flows.
   corsOriginAllowlist?: readonly string[];
 }): Promise<OAuthCallbackResult> {
   const hostname = params.hostname ?? "localhost";
   const escapedSuccessTitle = escapeHtmlText(params.successTitle);
   const resolveOAuthCallbackOrigin = buildOAuthCallbackOriginResolver(params.corsOriginAllowlist);
+  const hasCorsOriginAllowlist =
+    params.corsOriginAllowlist?.some((host) => host.trim().length > 0) ?? false;
 
   return new Promise<OAuthCallbackResult>((resolve, reject) => {
     let settled = false;
     let timeout: NodeJS.Timeout | null = null;
     const server = createServer((req, res) => {
       try {
-        applyOAuthCallbackCorsHeaders(req, res);
+        applyOAuthCallbackCorsHeaders(
+          req,
+          res,
+          hasCorsOriginAllowlist ? resolveOAuthCallbackOrigin : undefined,
+        );
         const requestUrl = new URL(req.url ?? "/", `http://${hostname}:${params.port}`);
-        const requestOrigin = resolveOAuthCallbackOrigin(req.headers.origin);
-        if (requestOrigin) {
-          res.setHeader("Access-Control-Allow-Origin", requestOrigin);
-          res.setHeader("Vary", "Origin");
-          res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-          res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-        }
         if (req.method === "OPTIONS") {
           res.statusCode = 204;
           res.end();
@@ -223,11 +223,20 @@ export async function waitForLocalOAuthCallback(params: {
 function applyOAuthCallbackCorsHeaders(
   req: import("node:http").IncomingMessage,
   res: import("node:http").ServerResponse,
+  resolveOrigin?: (originHeader: string | string[] | undefined) => string | undefined,
 ): void {
-  const origin = req.headers.origin;
-  if (typeof origin === "string" && isHttpOrigin(origin)) {
+  const origin =
+    resolveOrigin === undefined
+      ? typeof req.headers.origin === "string" && isHttpOrigin(req.headers.origin)
+        ? req.headers.origin
+        : undefined
+      : resolveOrigin(req.headers.origin);
+  if (origin) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers");
+  }
+  if (resolveOrigin !== undefined && !origin) {
+    return;
   }
 
   const requestedHeaders = req.headers["access-control-request-headers"];
