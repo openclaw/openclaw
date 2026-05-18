@@ -13,6 +13,7 @@ successCriteria:
   - Effective tools expose web_search.
   - The mock provider plans exactly one happy-path web_search call.
   - The mock provider plans one denied-input failure-path web_search call.
+  - Runtime parity coverage hard-fails call/result drift in the standard direct-loading gate.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -28,15 +29,12 @@ execution:
       actualTool: web_search
       bucket: openclaw-dynamic-integration
       expectedLayer: openclaw-dynamic
+      capabilityLayer: openclaw-dynamic-direct
       required: true
-      tracking: "#80319"
       codexDefaultImpact: P4
       qaImpact: P1
-      action: teach fixture/mock planner Codex searchable OpenClaw dynamic tool behavior
-      reason: web_search is an OpenClaw integration tool; QA mock provider does not yet model Codex searchable/deferred dynamic tool declarations for this fixture.
-    knownHarnessGap:
-      issue: "#80319"
-      reason: QA mock provider does not yet model Codex searchable/deferred OpenClaw dynamic tool declarations for this fixture.
+      action: hard gate in the standard direct-loading tier
+      reason: web_search is an OpenClaw integration tool and must stay visible and callable under Pi and Codex direct runtime parity.
     promptSnippet: "target=web_search"
     failurePromptSnippet: "failure target=web_search"
 ```

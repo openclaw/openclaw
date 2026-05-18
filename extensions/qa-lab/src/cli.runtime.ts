@@ -769,6 +769,9 @@ export async function runQaCoverageReportCommand(opts: {
       ? `${JSON.stringify(report, null, 2)}\n`
       : renderQaToolCoverageMarkdownReport(report);
     outputLabel = "QA tool coverage report";
+    if (summary && !report.pass) {
+      process.exitCode = 1;
+    }
   } else {
     if (opts.summary?.trim()) {
       throw new Error("--summary requires --tools.");

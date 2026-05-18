@@ -979,6 +979,64 @@ describe("qa cli runtime", () => {
     expectWriteContains(stdoutWrite, "codex-native-workspace");
   });
 
+  it("exits nonzero when tool coverage summary has required drift", async () => {
+    const priorExitCode = process.exitCode;
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-tool-coverage-"));
+    try {
+      await fs.writeFile(
+        path.join(repoRoot, "runtime-summary.json"),
+        JSON.stringify({
+          scenarios: [
+            {
+              name: "runtime-tool-web-search",
+              status: "fail",
+              runtimeParity: {
+                scenarioId: "runtime-tool-web-search",
+                drift: "tool-call-shape",
+                driftDetails: "Codex emitted no web_search call",
+                cells: {
+                  pi: {
+                    runtime: "pi",
+                    transcriptBytes: "",
+                    toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
+                    finalText: "",
+                    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                    wallClockMs: 1,
+                    bootStateLines: [],
+                  },
+                  codex: {
+                    runtime: "codex",
+                    transcriptBytes: "",
+                    toolCalls: [],
+                    finalText: "",
+                    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                    wallClockMs: 1,
+                    bootStateLines: [],
+                  },
+                },
+              },
+            },
+          ],
+          run: { runtimePair: ["pi", "codex"] },
+        }),
+        "utf8",
+      );
+
+      await runQaCoverageReportCommand({
+        repoRoot,
+        tools: true,
+        summary: "runtime-summary.json",
+      });
+
+      expect(process.exitCode).toBe(1);
+      expectWriteContains(stdoutWrite, "- Verdict: fail");
+      expectWriteContains(stdoutWrite, "web-search drift=tool-call-shape");
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("resolves character eval paths and passes model refs through", async () => {
     await runQaCharacterEvalCommand({
       repoRoot: "/tmp/openclaw-repo",

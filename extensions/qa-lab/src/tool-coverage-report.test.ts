@@ -223,6 +223,83 @@ describe("qa tool coverage report", () => {
     );
   });
 
+  it("fails untracked required OpenClaw dynamic tool drift", () => {
+    const report = buildQaToolCoverageReport({
+      scenarios: [
+        makeScenario("tool-web-search", "web-search", {
+          toolName: "web_search",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+            capabilityLayer: "openclaw-dynamic-direct",
+            required: true,
+          },
+        }),
+      ],
+      summary: {
+        scenarios: [
+          {
+            name: "tool web_search",
+            status: "fail",
+            runtimeParity: {
+              scenarioId: "tool-web-search",
+              drift: "tool-call-shape",
+              driftDetails: "Codex emitted no web_search call",
+              cells: {
+                pi: {
+                  runtime: "pi",
+                  transcriptBytes: "",
+                  toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
+                  finalText: "",
+                  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                  wallClockMs: 1,
+                  bootStateLines: [],
+                },
+                codex: {
+                  runtime: "codex",
+                  transcriptBytes: "",
+                  toolCalls: [],
+                  finalText: "",
+                  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                  wallClockMs: 1,
+                  bootStateLines: [],
+                },
+              },
+            },
+          },
+        ],
+      },
+      generatedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.failures).toEqual([
+      "web-search drift=tool-call-shape (Codex emitted no web_search call)",
+    ]);
+  });
+
+  it("fails untracked required tools missing from an evaluated summary", () => {
+    const report = buildQaToolCoverageReport({
+      scenarios: [
+        makeScenario("tool-web-search", "web-search", {
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+            capabilityLayer: "openclaw-dynamic-direct",
+            required: true,
+          },
+        }),
+      ],
+      summary: {
+        scenarios: [],
+      },
+      generatedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.failures).toEqual(["web-search drift=not-run"]);
+  });
+
   it("rejects unknown runtime tool coverage buckets", () => {
     expect(() =>
       buildQaToolCoverageReport({
@@ -301,5 +378,13 @@ describe("qa tool coverage report", () => {
           "#80173 Tavily tools are listed in the phase matrix but are not exposed by the current default tool surface.",
       }),
     );
+    expect(report.rows.find((row) => row.tool === "web-search")).toEqual(
+      expect.objectContaining({
+        bucket: "openclaw-dynamic-integration",
+        capabilityLayer: "openclaw-dynamic-direct",
+        required: true,
+      }),
+    );
+    expect(report.rows.find((row) => row.tool === "web-search")?.tracking).toBeUndefined();
   });
 });

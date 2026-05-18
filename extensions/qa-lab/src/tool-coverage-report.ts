@@ -71,7 +71,7 @@ type ToolFixtureGroup = {
   scenarios: QaSeedScenarioWithSource[];
 };
 
-const PASSING_DRIFTS: ReadonlySet<QaToolCoverageDrift> = new Set(["none", "text-only", "not-run"]);
+const PASSING_DRIFTS: ReadonlySet<QaToolCoverageDrift> = new Set(["none", "text-only"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -173,6 +173,10 @@ function mergeScenarioResults(
   return failingResult;
 }
 
+function isPassingToolCoverageDrift(drift: QaToolCoverageDrift, evaluated: boolean) {
+  return PASSING_DRIFTS.has(drift) || (!evaluated && drift === "not-run");
+}
+
 function buildRow(params: {
   group: ToolFixtureGroup;
   results: ReadonlyMap<string, RuntimeParityResult>;
@@ -222,7 +226,9 @@ export function buildQaToolCoverageReport(params: {
   const evaluated = Boolean(params.summary);
   const failures = evaluated
     ? rows
-        .filter((row) => row.required && !row.tracking && !PASSING_DRIFTS.has(row.drift))
+        .filter(
+          (row) => row.required && !row.tracking && !isPassingToolCoverageDrift(row.drift, true),
+        )
         .map((row) => `${row.tool} drift=${row.drift}${row.details ? ` (${row.details})` : ""}`)
     : [];
   return {
@@ -237,7 +243,9 @@ export function buildQaToolCoverageReport(params: {
     dynamicIntegrationTools: rows.filter((row) => row.bucket === "openclaw-dynamic-integration")
       .length,
     optionalTools: rows.filter((row) => row.bucket === "optional-profile-or-plugin").length,
-    passingTools: evaluated ? rows.filter((row) => PASSING_DRIFTS.has(row.drift)).length : 0,
+    passingTools: evaluated
+      ? rows.filter((row) => isPassingToolCoverageDrift(row.drift, true)).length
+      : 0,
     failingTools: failures.length,
     rows,
     pass: failures.length === 0,

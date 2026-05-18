@@ -166,9 +166,10 @@ summaries include per-phase timings for packaged upgrade lanes, and long-running
 commands print heartbeat lines so a stuck Windows update is visible before the
 job timeout.
 
-QA release-check lanes are advisory. A QA-only failure is reported as a warning
-and does not block the release-check verifier; rerun `rerun_group=qa`,
-`qa-parity`, or `qa-live` when you need fresh QA evidence.
+QA release-check lanes are advisory except the standard runtime tool coverage
+gate. Required OpenClaw dynamic tool drift in the standard tier blocks the
+release-check verifier; other QA-only failures are reported as warnings. Rerun
+`rerun_group=qa`, `qa-parity`, or `qa-live` when you need fresh QA evidence.
 
 ## Evidence to keep
 
