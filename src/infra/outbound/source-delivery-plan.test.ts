@@ -179,6 +179,33 @@ describe("source delivery plan", () => {
     ).toBe(false);
   });
 
+  it("matches same-kind delivery target prefixes without normalizing provider-owned IDs", () => {
+    expect(
+      sourceDeliveryTargetsMatch(
+        { provider: "slack", to: "Channel: C1" },
+        { channel: "slack", to: "channel:C1" },
+      ),
+    ).toBe(true);
+    expect(
+      sourceDeliveryTargetsMatch(
+        { provider: "slack", to: "channel:C2" },
+        { channel: "slack", to: "channel:C1" },
+      ),
+    ).toBe(false);
+    expect(
+      sourceDeliveryTargetsMatch(
+        { provider: "slack", to: "channel:c1" },
+        { channel: "slack", to: "channel:C1" },
+      ),
+    ).toBe(true);
+    expect(
+      sourceDeliveryTargetsMatch(
+        { provider: "mattermost", to: "channel: abc" },
+        { channel: "mattermost", to: "channel:ABC" },
+      ),
+    ).toBe(false);
+  });
+
   it("matches threaded delivery only with explicit or supported implicit thread evidence", () => {
     expect(
       sourceDeliveryTargetsMatch(

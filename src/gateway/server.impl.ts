@@ -833,6 +833,7 @@ export async function startGatewayServer(
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
     resolveStartupChannelRuntime: getStartupChannelRuntime,
+    getPluginHttpRouteRegistry: () => pluginRegistry,
     startupTrace,
   });
   const getReadiness = createReadinessChecker({
