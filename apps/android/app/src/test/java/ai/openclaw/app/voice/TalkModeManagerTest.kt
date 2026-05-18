@@ -4,6 +4,7 @@ import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthTokenStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
+import android.os.SystemClock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -181,6 +182,25 @@ class TalkModeManagerTest {
       job.join()
     }
 
+  @Test
+  fun realtimeAudioFramesAreMutedDuringPlaybackAndSilence() {
+    val manager = createManager()
+
+    assertFalse(shouldAppendRealtimeCapturedFrame(manager, pcm16Frame(0)))
+    assertFalse(shouldAppendRealtimeCapturedFrame(manager, pcm16Frame(1_200)))
+    assertFalse(shouldAppendRealtimeCapturedFrame(manager, pcm16Frame(1_200)))
+    assertTrue(shouldAppendRealtimeCapturedFrame(manager, pcm16Frame(1_200)))
+    assertTrue(shouldAppendRealtimeCapturedFrame(manager, pcm16Frame(0)))
+
+    setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() + 1_000)
+
+    assertFalse(shouldAppendRealtimeCapturedFrame(manager, pcm16Frame(1_200)))
+
+    setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() - 1)
+
+    assertFalse(shouldAppendRealtimeCapturedFrame(manager, pcm16Frame(0)))
+  }
+
   private fun createManager(
     talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(),
     talkAudioPlayer: TalkAudioPlaying? = null,
@@ -235,6 +255,35 @@ class TalkModeManagerTest {
     val field = target.javaClass.getDeclaredField(name)
     field.isAccessible = true
     return field.get(target)
+  }
+
+  private fun shouldAppendRealtimeCapturedFrame(
+    manager: TalkModeManager,
+    frame: ByteArray,
+  ): Boolean {
+    val method =
+      manager.javaClass.getDeclaredMethod(
+        "shouldAppendRealtimeCapturedFrame",
+        ByteArray::class.java,
+        Int::class.javaPrimitiveType,
+      )
+    method.isAccessible = true
+    return method.invoke(manager, frame, frame.size) as Boolean
+  }
+
+  private fun pcm16Frame(amplitude: Short): ByteArray {
+    val frame = ByteArray(16)
+    var index = 0
+    while (index < frame.size) {
+      frame[index] = (amplitude.toInt() and 0xff).toByte()
+      frame[index + 1] = ((amplitude.toInt() shr 8) and 0xff).toByte()
+      index += 2
+    }
+    return frame
+  }
+
+  private fun pcm16Frame(amplitude: Int): ByteArray {
+    return pcm16Frame(amplitude.toShort())
   }
 
   private fun chatFinalPayload(

@@ -98,6 +98,10 @@ class TalkModeManager internal constructor(
     private const val tag = "TalkMode"
     private const val realtimeSampleRateHz = 24_000
     private const val realtimeAudioFrameMs = 100
+    private const val realtimeSpeechStartAverageAmplitude = 800
+    private const val realtimeSpeechContinueAverageAmplitude = 800
+    private const val realtimeSpeechStartFrameCount = 3
+    private const val realtimeSpeechHangoverMs = 700L
     private const val listenWatchdogMs = 12_000L
     private const val chatFinalWaitWithSubscribeMs = 45_000L
     private const val chatFinalWaitWithoutSubscribeMs = 6_000L
@@ -161,7 +165,9 @@ class TalkModeManager internal constructor(
   private val realtimePlaybackLock = Any()
   private var realtimeAudioTrack: AudioTrack? = null
   private var realtimePlaybackIdleJob: Job? = null
-  private var realtimePlaybackEndsAtMs = 0L
+  @Volatile private var realtimePlaybackEndsAtMs = 0L
+  @Volatile private var realtimeSpeechActiveUntilMs = 0L
+  private var realtimeSpeechCandidateFrames = 0
 
   @Volatile private var realtimeOutputSuppressed = false
 
@@ -635,6 +641,7 @@ class TalkModeManager internal constructor(
 
     realtimeSessionId = sessionId
     realtimeOutputSuppressed = false
+    resetRealtimeSpeechGate()
     _isListening.value = true
     _statusText.value = "Listening"
     startRealtimeCapture(sessionId)
@@ -671,6 +678,7 @@ class TalkModeManager internal constructor(
       scope.launch(Dispatchers.IO) {
         for (frame in audioFrames) {
           if (realtimeSessionId != sessionId) continue
+          if (isRealtimePlaybackActive()) continue
           val audioBase64 = Base64.encodeToString(frame, Base64.NO_WRAP)
           val params =
             buildJsonObject {
@@ -726,6 +734,7 @@ class TalkModeManager internal constructor(
           while (coroutineContext.isActive && _isEnabled.value && realtimeSessionId == sessionId) {
             val read = audioRecord.read(buffer, 0, buffer.size)
             if (read <= 0) continue
+            if (!shouldAppendRealtimeCapturedFrame(buffer, read)) continue
             audioFrames.trySend(buffer.copyOf(read))
           }
         } catch (err: Throwable) {
@@ -743,6 +752,62 @@ class TalkModeManager internal constructor(
           }
         }
       }
+  }
+
+  private fun shouldAppendRealtimeCapturedFrame(
+    frame: ByteArray,
+    length: Int = frame.size,
+  ): Boolean {
+    if (isRealtimePlaybackActive()) {
+      resetRealtimeSpeechGate()
+      return false
+    }
+    val now = SystemClock.elapsedRealtime()
+    val average = pcm16AverageAmplitude(frame, length)
+    if (now < realtimeSpeechActiveUntilMs) {
+      if (average >= realtimeSpeechContinueAverageAmplitude) {
+        realtimeSpeechActiveUntilMs = now + realtimeSpeechHangoverMs
+      }
+      return true
+    }
+    if (average >= realtimeSpeechStartAverageAmplitude) {
+      realtimeSpeechCandidateFrames += 1
+      if (realtimeSpeechCandidateFrames >= realtimeSpeechStartFrameCount) {
+        realtimeSpeechActiveUntilMs = now + realtimeSpeechHangoverMs
+        return true
+      }
+      return false
+    }
+    realtimeSpeechCandidateFrames = 0
+    return false
+  }
+
+  private fun isRealtimePlaybackActive(): Boolean =
+    _isSpeaking.value || SystemClock.elapsedRealtime() < realtimePlaybackEndsAtMs
+
+  private fun resetRealtimeSpeechGate() {
+    realtimeSpeechActiveUntilMs = 0L
+    realtimeSpeechCandidateFrames = 0
+  }
+
+  private fun pcm16AverageAmplitude(
+    frame: ByteArray,
+    length: Int,
+  ): Int {
+    var total = 0L
+    var count = 0
+    var index = 0
+    val limit = length - (length % 2)
+    while (index < limit) {
+      val sample =
+        (frame[index].toInt() and 0xff) or
+          (frame[index + 1].toInt() shl 8)
+      val amplitude = kotlin.math.abs(sample.toShort().toInt())
+      total += amplitude
+      count += 1
+      index += 2
+    }
+    return if (count == 0) 0 else (total / count).toInt()
   }
 
   private fun handleRealtimeTalkEvent(payloadJson: String?) {
