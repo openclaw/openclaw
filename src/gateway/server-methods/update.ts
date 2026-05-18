@@ -1,5 +1,5 @@
+import { commitPluginInstallRecordsWithConfig } from "../../cli/plugins-install-record-commit.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
-import { writeConfigFile } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
@@ -18,6 +18,11 @@ import {
   runGatewayUpdate,
   type UpdateRunResult,
 } from "../../infra/update-runner.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  withoutPluginInstallRecords,
+  withPluginInstallRecords,
+} from "../../plugins/installed-plugin-index-records.js";
 import {
   syncPluginsForUpdateChannel,
   updateNpmInstalledPlugins,
@@ -42,8 +47,13 @@ async function runPostCorePluginSync(params: {
 }): Promise<PostUpdatePlugins> {
   const integrityDrifts: PostUpdatePlugins["integrityDrifts"] = [];
 
+  // Load the persisted install index so externalized plugins (whose specs live
+  // in the index, not in openclaw.json) are visible to sync and npm update.
+  const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+  const syncConfig = withPluginInstallRecords(params.config, pluginInstallRecords);
+
   const syncResult = await syncPluginsForUpdateChannel({
-    config: params.config,
+    config: syncConfig,
     channel: params.channel,
     workspaceDir: params.workspaceDir,
   });
@@ -67,7 +77,14 @@ async function runPostCorePluginSync(params: {
   });
 
   if (syncResult.changed || npmResult.changed) {
-    await writeConfigFile(npmResult.config, { skipPluginValidation: true });
+    // Persist install records through the index (not directly into openclaw.json)
+    // so the install-record registry stays consistent with the config file.
+    const nextInstallRecords = npmResult.config.plugins?.installs ?? {};
+    await commitPluginInstallRecordsWithConfig({
+      previousInstallRecords: pluginInstallRecords,
+      nextInstallRecords,
+      nextConfig: withoutPluginInstallRecords(npmResult.config),
+    });
   }
 
   const hasErrors =
@@ -171,7 +188,16 @@ export const updateHandlers: GatewayRequestHandlers = {
             return null;
           });
           if (pluginSync) {
-            result = { ...result, postUpdate: { plugins: pluginSync } };
+            // Mirror the CLI fail-closed contract: a plugin sync error escalates
+            // the overall update status to "error" so the gateway does not restart
+            // with a new core paired against stale or incompatible plugins.
+            result = {
+              ...result,
+              ...(pluginSync.status === "error"
+                ? { status: "error", reason: "post-update-plugins" }
+                : {}),
+              postUpdate: { plugins: pluginSync },
+            };
           }
         }
       }

@@ -22,10 +22,6 @@ const detectRespawnSupervisorMock = vi.fn(() => null);
 
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
 
-vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: () => ({ update: {} }),
-}));
-
 vi.mock("../../config/commands.flags.js", () => ({
   isRestartEnabled: isRestartEnabledMock,
 }));
@@ -92,30 +88,50 @@ vi.mock("../../infra/update-runner.js", () => ({
 }));
 
 const syncPluginsForUpdateChannelMock = vi.fn(async () => ({
-  config: {},
+  config: {} as Record<string, unknown>,
   changed: false,
   summary: {
-    switchedToBundled: [],
-    switchedToClawHub: [],
-    switchedToNpm: [],
-    warnings: [],
-    errors: [],
+    switchedToBundled: [] as string[],
+    switchedToClawHub: [] as string[],
+    switchedToNpm: [] as string[],
+    warnings: [] as string[],
+    errors: [] as string[],
   },
 }));
 const updateNpmInstalledPluginsMock = vi.fn(async () => ({
-  config: {},
+  config: {} as Record<string, unknown>,
   changed: false,
-  outcomes: [],
+  outcomes: [] as { pluginId: string; status: string; message?: string; nextVersion?: string }[],
 }));
-const writeConfigFileMock = vi.fn(async () => {});
+const commitPluginInstallRecordsWithConfigMock = vi.fn(async () => {});
+const loadInstalledPluginIndexInstallRecordsMock = vi.fn(async () => ({}));
 
 vi.mock("../../plugins/update.js", () => ({
   syncPluginsForUpdateChannel: syncPluginsForUpdateChannelMock,
   updateNpmInstalledPlugins: updateNpmInstalledPluginsMock,
 }));
 
-vi.mock("../../config/config.js", () => ({
-  writeConfigFile: writeConfigFileMock,
+vi.mock("../../cli/plugins-install-record-commit.js", () => ({
+  commitPluginInstallRecordsWithConfig: commitPluginInstallRecordsWithConfigMock,
+}));
+
+vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecords: loadInstalledPluginIndexInstallRecordsMock,
+  withPluginInstallRecords: (config: object, records: object) => ({
+    ...config,
+    plugins: { installs: records },
+  }),
+  withoutPluginInstallRecords: (config: {
+    plugins?: { installs?: unknown; [k: string]: unknown };
+    [k: string]: unknown;
+  }) => {
+    const { plugins, ...rest } = config;
+    if (!plugins) {
+      return config;
+    }
+    const { installs: _installs, ...pluginsRest } = plugins;
+    return Object.keys(pluginsRest).length > 0 ? { ...rest, plugins: pluginsRest } : rest;
+  },
 }));
 
 vi.mock("../protocol/index.js", () => ({
@@ -169,23 +185,25 @@ beforeEach(() => {
   scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true });
   syncPluginsForUpdateChannelMock.mockClear();
   syncPluginsForUpdateChannelMock.mockResolvedValue({
-    config: {},
+    config: {} as Record<string, unknown>,
     changed: false,
     summary: {
-      switchedToBundled: [],
-      switchedToClawHub: [],
-      switchedToNpm: [],
-      warnings: [],
-      errors: [],
+      switchedToBundled: [] as string[],
+      switchedToClawHub: [] as string[],
+      switchedToNpm: [] as string[],
+      warnings: [] as string[],
+      errors: [] as string[],
     },
   });
   updateNpmInstalledPluginsMock.mockClear();
   updateNpmInstalledPluginsMock.mockResolvedValue({
-    config: {},
+    config: {} as Record<string, unknown>,
     changed: false,
     outcomes: [],
   });
-  writeConfigFileMock.mockClear();
+  commitPluginInstallRecordsWithConfigMock.mockClear();
+  loadInstalledPluginIndexInstallRecordsMock.mockClear();
+  loadInstalledPluginIndexInstallRecordsMock.mockResolvedValue({});
 });
 
 async function invokeUpdateRun(
@@ -494,7 +512,7 @@ describe("update.run post-core plugin sync", () => {
     expect(response?.result?.postUpdate?.plugins?.changed).toBe(true);
   });
 
-  it("writes config when plugin sync produces changes", async () => {
+  it("persists plugin changes through the install index when sync produces changes", async () => {
     syncPluginsForUpdateChannelMock.mockResolvedValueOnce({
       config: { agents: {} },
       changed: true,
@@ -509,16 +527,40 @@ describe("update.run post-core plugin sync", () => {
 
     await invokeUpdateRun({});
 
-    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    expect(commitPluginInstallRecordsWithConfigMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not write config when nothing changed", async () => {
+  it("does not write plugin index when nothing changed", async () => {
     await invokeUpdateRun({});
 
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(commitPluginInstallRecordsWithConfigMock).not.toHaveBeenCalled();
   });
 
-  it("proceeds with restart even when plugin sync throws", async () => {
+  it("fails closed when plugin sync reports an error status", async () => {
+    syncPluginsForUpdateChannelMock.mockResolvedValueOnce({
+      config: {},
+      changed: false,
+      summary: {
+        switchedToBundled: [],
+        switchedToClawHub: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: ["failed to resolve codex@latest"],
+      },
+    });
+
+    let payload: { ok: boolean; result?: { status?: string; reason?: string } } | undefined;
+    await invokeUpdateRun({}, (_ok, res) => {
+      payload = res as typeof payload;
+    });
+
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(payload?.ok).toBe(false);
+    expect(payload?.result?.status).toBe("error");
+    expect(payload?.result?.reason).toBe("post-update-plugins");
+  });
+
+  it("proceeds with restart even when plugin sync throws an exception", async () => {
     syncPluginsForUpdateChannelMock.mockRejectedValueOnce(new Error("npm failure"));
 
     await invokeUpdateRun({});
