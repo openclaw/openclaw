@@ -1964,6 +1964,7 @@ function summarizeServiceCommand(command: string, args: readonly string[]): Comm
 
 function summarizeRemoteCommand(args: readonly string[], targetText: string): CommandActionSummary {
   const sshOptionNames = getSshOptionNames(args);
+  const sshConfigFiles = getSshConfigFiles(args);
   const localCommandOption = sshOptionNames.find((name) =>
     SSH_LOCAL_COMMAND_OPTION_NAMES.has(name),
   );
@@ -1974,6 +1975,16 @@ function summarizeRemoteCommand(args: readonly string[], targetText: string): Co
       risk: "high",
       kind: "remote",
       reason: "SSH options such as ProxyCommand or LocalCommand can execute local shell commands.",
+      showCommandPreview: true,
+    };
+  }
+  if (sshConfigFiles.length > 0) {
+    return {
+      text: `connect to another machine using SSH config files${formatTargets(sshConfigFiles)}`,
+      risk: "high",
+      kind: "remote",
+      reason:
+        "SSH config files can define ProxyCommand or LocalCommand, which can execute local shell commands.",
       showCommandPreview: true,
     };
   }
@@ -2672,6 +2683,36 @@ function getSshOptionNames(args: readonly string[]): string[] {
     }
   }
   return names;
+}
+
+function getSshConfigFiles(args: readonly string[]): string[] {
+  const files: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (arg === "-F") {
+      const value = args[index + 1];
+      if (value) {
+        index += 1;
+        if (!isDisabledSshConfigValue(value)) {
+          files.push(value);
+        }
+      } else {
+        files.push("<missing>");
+      }
+      continue;
+    }
+    if (arg.startsWith("-F") && arg.length > 2) {
+      const value = arg.slice(2).replace(/^=/, "");
+      if (!isDisabledSshConfigValue(value)) {
+        files.push(value || "<missing>");
+      }
+    }
+  }
+  return files;
+}
+
+function isDisabledSshConfigValue(value: string): boolean {
+  return stripShellWordQuotes(value).trim().toLowerCase() === "none";
 }
 
 function getSshOptionName(value: string | undefined): string | null {

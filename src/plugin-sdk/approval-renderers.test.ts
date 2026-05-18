@@ -2453,6 +2453,20 @@ describe("plugin-sdk/approval-renderers", () => {
       action: "- connect to another machine and run a remote command",
       reason: "SSH can run commands on another host, including destructive commands.",
     },
+    {
+      command: "ssh -F ssh.conf host",
+      id: "plugin-command-ssh-config-file",
+      action: "- connect to another machine using SSH config files: ssh.conf",
+      reason:
+        "SSH config files can define ProxyCommand or LocalCommand, which can execute local shell commands.",
+    },
+    {
+      command: "ssh -F.ssh/config host",
+      id: "plugin-command-ssh-attached-config-file",
+      action: "- connect to another machine using SSH config files: .ssh/config",
+      reason:
+        "SSH config files can define ProxyCommand or LocalCommand, which can execute local shell commands.",
+    },
   ])("fails closed on SSH command options: $command", ({ command, id, action, reason }) => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
@@ -2474,6 +2488,28 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).toContain("Risk: High");
     expect(payload.text).toContain(reason);
     expect(payload.text).not.toContain("Risk: Medium");
+  });
+
+  it("allows explicit SSH config disabling without forcing a high-risk preview", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-ssh-config-none",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: ssh -F none host",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- connect to another machine");
+    expect(payload.text).toContain("Risk: Medium");
+    expect(payload.text).not.toContain("SSH config files can define ProxyCommand");
+    expect(payload.text).not.toContain("Command preview");
   });
 
   it("shows wget upload file operands before hiding technical details", () => {
