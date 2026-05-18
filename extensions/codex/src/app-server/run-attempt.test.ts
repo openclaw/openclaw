@@ -8068,7 +8068,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.model).toBe("gpt-5.4-codex");
   });
 
-  it("clamps Codex danger-full-access when OpenClaw sandboxing is active", () => {
+  it("maps active OpenClaw sandbox egress into Codex workspace-write turns", () => {
     const appServer = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {
         appServer: {
@@ -8078,22 +8078,91 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    const sandboxed = __testing.restrictCodexAppServerSandboxForOpenClawSandbox(appServer, {
-      enabled: true,
-    } as never);
-    expect(sandboxed).not.toBe(appServer);
-    expect(sandboxed.approvalPolicy).toBe("never");
-    expect(sandboxed.sandbox).toBe("workspace-write");
-
-    expect(__testing.restrictCodexAppServerSandboxForOpenClawSandbox(appServer, null)).toBe(
-      appServer,
-    );
     expect(
-      __testing.restrictCodexAppServerSandboxForOpenClawSandbox(
+      __testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        appServer,
+        {
+          enabled: true,
+          backendId: "docker",
+          docker: { network: "none" },
+        } as never,
+        "/tmp/workspace",
+      ),
+    ).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/workspace"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+
+    expect(
+      __testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        { ...appServer, sandbox: "workspace-write" },
+        {
+          enabled: true,
+          backendId: "docker",
+          docker: { network: "bridge" },
+        } as never,
+        "/tmp/workspace",
+      ),
+    ).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/workspace"],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+
+    expect(
+      __testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        appServer,
+        {
+          enabled: true,
+          backendId: "docker",
+          docker: { network: "bridge" },
+        } as never,
+        "/tmp/workspace",
+      ),
+    ).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/workspace"],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+
+    expect(
+      __testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        appServer,
+        {
+          enabled: true,
+          backendId: "ssh",
+        } as never,
+        "/tmp/workspace",
+      ),
+    ).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/workspace"],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+
+    expect(
+      __testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        appServer,
+        null,
+        "/tmp/workspace",
+      ),
+    ).toBeUndefined();
+    expect(
+      __testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
         { ...appServer, sandbox: "read-only" },
         { enabled: true } as never,
-      ).sandbox,
-    ).toBe("read-only");
+        "/tmp/workspace",
+      ),
+    ).toBeUndefined();
   });
 
   it("passes current Codex service tier request values through app-server resume and turn requests", async () => {

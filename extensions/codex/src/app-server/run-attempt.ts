@@ -112,6 +112,7 @@ import {
 import {
   type CodexUserInput,
   isJsonObject,
+  type CodexSandboxPolicy,
   type CodexServerNotification,
   type CodexDynamicToolSpec,
   type CodexDynamicToolCallParams,
@@ -430,17 +431,33 @@ function toCodexTextInput(text: string): CodexUserInput {
   return { type: "text", text, text_elements: [] };
 }
 
-function restrictCodexAppServerSandboxForOpenClawSandbox(
+type OpenClawSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
+
+function resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
   appServer: CodexAppServerRuntimeOptions,
-  sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>,
-): CodexAppServerRuntimeOptions {
-  if (!sandbox?.enabled || appServer.sandbox !== "danger-full-access") {
-    return appServer;
+  sandbox: OpenClawSandboxContext,
+  cwd: string,
+): CodexSandboxPolicy | undefined {
+  if (!sandbox?.enabled || appServer.sandbox === "read-only") {
+    return undefined;
   }
+  const networkAccess = codexNetworkAccessForOpenClawSandbox(sandbox);
+  // Codex app-server still runs on the Gateway host, so keep Codex's
+  // filesystem sandbox while mirroring the OpenClaw sandbox egress policy.
   return {
-    ...appServer,
-    sandbox: "workspace-write",
+    type: "workspaceWrite",
+    writableRoots: [cwd],
+    networkAccess,
+    excludeTmpdirEnvVar: false,
+    excludeSlashTmp: false,
   };
+}
+
+function codexNetworkAccessForOpenClawSandbox(sandbox: OpenClawSandboxContext): boolean {
+  if (!sandbox?.enabled || sandbox.backendId !== "docker") {
+    return true;
+  }
+  return sandbox.docker.network.trim().toLowerCase() !== "none";
 }
 
 function resolveCodexAppServerForOpenClawToolPolicy(params: {
@@ -763,8 +780,13 @@ export async function runCodexAppServerAttempt(
       : sandbox.workspaceDir
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
+  const codexSandboxPolicy = resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+    configuredAppServer,
+    sandbox,
+    effectiveWorkspace,
+  );
   const appServer = resolveCodexAppServerForOpenClawToolPolicy({
-    appServer: restrictCodexAppServerSandboxForOpenClawSandbox(configuredAppServer, sandbox),
+    appServer: configuredAppServer,
     pluginConfig,
     env: process.env,
     shouldPromote: hasBeforeToolCallPolicy(),
@@ -2192,6 +2214,7 @@ export async function runCodexAppServerAttempt(
           cwd: effectiveWorkspace,
           appServer: pluginAppServer,
           promptText: promptBuild.prompt,
+          sandboxPolicy: codexSandboxPolicy,
         }),
         { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
       ),
@@ -4271,7 +4294,7 @@ export const __testing = {
   resolveDynamicToolCallTimeoutMs,
   resolveCodexDynamicToolsLoading,
   rotateOversizedCodexAppServerStartupBinding,
-  restrictCodexAppServerSandboxForOpenClawSandbox,
+  resolveCodexAppServerSandboxPolicyForOpenClawSandbox,
   resolveCodexAppServerForOpenClawToolPolicy,
   resolveOpenClawCodingToolsSessionKeys,
   shouldEnableCodexAppServerNativeToolSurface,

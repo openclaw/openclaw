@@ -28,6 +28,7 @@ import {
 import {
   isJsonObject,
   type CodexDynamicToolSpec,
+  type CodexSandboxPolicy,
   type CodexThreadResumeParams,
   type CodexThreadStartParams,
   type CodexTurnStartParams,
@@ -660,6 +661,7 @@ export function buildTurnStartParams(
     cwd: string;
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
+    sandboxPolicy?: CodexSandboxPolicy;
   },
 ): CodexTurnStartParams {
   return {
@@ -668,7 +670,8 @@ export function buildTurnStartParams(
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
-    sandboxPolicy: codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
+    sandboxPolicy:
+      options.sandboxPolicy ?? codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
