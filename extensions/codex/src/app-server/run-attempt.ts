@@ -114,6 +114,7 @@ import {
   buildCodexNativeHookRelayConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
 } from "./native-hook-relay.js";
+import { registerCodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
 import {
   describeCodexNotificationCorrelation,
   isCodexNotificationForTurn,
@@ -2163,6 +2164,14 @@ export async function runCodexAppServerAttempt(
     return notificationQueue;
   };
 
+  registerCodexNativeSubagentMonitor({
+    client,
+    parentThreadId: thread.threadId,
+    requesterSessionKey: params.sessionKey,
+    taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
+    agentId: params.agentId,
+    codexHome: appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir),
+  });
   const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
     let armCompletionWatchOnResponse = false;
