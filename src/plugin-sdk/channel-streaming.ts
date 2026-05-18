@@ -652,14 +652,16 @@ export function resolveChannelStreamingPreviewNativeToolProgress(
   defaultValue = false,
 ): boolean {
   const config = getChannelStreamingConfigObject(entry);
-  return asBoolean(config?.preview?.nativeToolProgress) ?? defaultValue;
+  const preview = asObjectRecord(config?.preview);
+  return asBoolean(preview?.nativeToolProgress) ?? defaultValue;
 }
 
 export function resolveChannelStreamingPreviewNativeToolProgressAllowFrom(
   entry: StreamingCompatEntry | null | undefined,
 ): Array<string | number> | undefined {
   const config = getChannelStreamingConfigObject(entry);
-  return asStringNumberArray(config?.preview?.nativeToolProgressAllowFrom);
+  const preview = asObjectRecord(config?.preview);
+  return asStringNumberArray(preview?.nativeToolProgressAllowFrom);
 }
 
 export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
