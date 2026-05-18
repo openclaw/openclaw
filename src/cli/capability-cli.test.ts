@@ -514,6 +514,7 @@ describe("capability cli", () => {
   type ImageDescribeParams = {
     filePath?: string;
     mediaUrl?: string;
+    mime?: unknown;
     model?: unknown;
     prompt?: unknown;
     provider?: unknown;
