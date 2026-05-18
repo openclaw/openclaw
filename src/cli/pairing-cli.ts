@@ -78,7 +78,13 @@ async function maybeBootstrapCommandOwnerFromPairing(params: {
   await replaceConfigFile({
     nextConfig,
     snapshot,
-    writeOptions,
+    writeOptions: {
+      ...writeOptions,
+      explicitSetPaths: [
+        ...(writeOptions.explicitSetPaths ?? []),
+        ["commands", "ownerAllowFrom"],
+      ],
+    },
     afterWrite: { mode: "auto" },
   });
   return { ownerEntry, bootstrapped: true };

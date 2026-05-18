@@ -141,6 +141,20 @@ function replaceTelegramDefaultToTargets(params: {
   return changed;
 }
 
+function listTelegramTargetWritebackPaths(cfg: OpenClawConfig): string[][] {
+  const accounts = asObjectRecord(asObjectRecord(cfg.channels?.telegram)?.accounts);
+  return [
+    ["channels", "telegram", "defaultTo"],
+    ...Object.keys(accounts ?? {}).map((accountId) => [
+      "channels",
+      "telegram",
+      "accounts",
+      accountId,
+      "defaultTo",
+    ]),
+  ];
+}
+
 export async function maybePersistResolvedTelegramTarget(params: {
   cfg: OpenClawConfig;
   rawTarget: string;
@@ -182,7 +196,13 @@ export async function maybePersistResolvedTelegramTarget(params: {
       await replaceConfigFile({
         nextConfig,
         snapshot,
-        writeOptions,
+        writeOptions: {
+          ...writeOptions,
+          explicitSetPaths: [
+            ...(writeOptions.explicitSetPaths ?? []),
+            ...listTelegramTargetWritebackPaths(nextConfig),
+          ],
+        },
         afterWrite: { mode: "auto" },
       });
       if (params.verbose) {

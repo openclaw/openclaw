@@ -1,4 +1,5 @@
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getActivePluginChannelRegistryVersion,
   getActivePluginRegistry,
@@ -376,4 +377,199 @@ export function buildGatewayReloadPlan(
   }
 
   return plan;
+}
+
+function readChannelEnabled(config: OpenClawConfig, channelId: string): unknown {
+  const channels = isPlainObject(config.channels) ? config.channels : null;
+  const channelCfg = channels && isPlainObject(channels[channelId]) ? channels[channelId] : null;
+  return channelCfg?.enabled;
+}
+
+function readChannelAccountEnabled(
+  config: OpenClawConfig,
+  channelId: string,
+  accountId: string,
+): unknown {
+  const channels = isPlainObject(config.channels) ? config.channels : null;
+  const channelCfg = channels && isPlainObject(channels[channelId]) ? channels[channelId] : null;
+  const accounts = channelCfg && isPlainObject(channelCfg.accounts) ? channelCfg.accounts : null;
+  const accountCfg = accounts && isPlainObject(accounts[accountId]) ? accounts[accountId] : null;
+  return accountCfg?.enabled;
+}
+
+function hasChannelConfig(config: OpenClawConfig, channelId: string): boolean {
+  const channels = isPlainObject(config.channels) ? config.channels : null;
+  return Boolean(channels && isPlainObject(channels[channelId]));
+}
+
+function hasChannelAccountConfig(
+  config: OpenClawConfig,
+  channelId: string,
+  accountId: string,
+): boolean {
+  const channels = isPlainObject(config.channels) ? config.channels : null;
+  const channelCfg = channels && isPlainObject(channels[channelId]) ? channels[channelId] : null;
+  const accounts = channelCfg && isPlainObject(channelCfg.accounts) ? channelCfg.accounts : null;
+  return Boolean(accounts && isPlainObject(accounts[accountId]));
+}
+
+function hasEnabledChannelAccountActivation(params: {
+  previousConfig: OpenClawConfig;
+  nextConfig: OpenClawConfig;
+  channelId: string;
+}): boolean {
+  if (readChannelEnabled(params.nextConfig, params.channelId) === false) {
+    return false;
+  }
+  const channels = isPlainObject(params.nextConfig.channels) ? params.nextConfig.channels : null;
+  const channelCfg =
+    channels && isPlainObject(channels[params.channelId]) ? channels[params.channelId] : null;
+  const accounts = channelCfg && isPlainObject(channelCfg.accounts) ? channelCfg.accounts : null;
+  if (!accounts) {
+    return false;
+  }
+  return Object.entries(accounts).some(([accountId, accountCfg]) => {
+    if (!isPlainObject(accountCfg) || accountCfg.enabled === false) {
+      return false;
+    }
+    return (
+      !hasChannelAccountConfig(params.previousConfig, params.channelId, accountId) ||
+      readChannelAccountEnabled(params.previousConfig, params.channelId, accountId) === false
+    );
+  });
+}
+
+function hasEnabledChannelAccountDeactivation(params: {
+  previousConfig: OpenClawConfig;
+  nextConfig: OpenClawConfig;
+  channelId: string;
+}): boolean {
+  if (readChannelEnabled(params.previousConfig, params.channelId) === false) {
+    return false;
+  }
+  const channels = isPlainObject(params.previousConfig.channels)
+    ? params.previousConfig.channels
+    : null;
+  const channelCfg =
+    channels && isPlainObject(channels[params.channelId]) ? channels[params.channelId] : null;
+  const accounts = channelCfg && isPlainObject(channelCfg.accounts) ? channelCfg.accounts : null;
+  if (!accounts) {
+    return false;
+  }
+  const channelEnabled = readChannelEnabled(params.nextConfig, params.channelId) !== false;
+  return Object.entries(accounts).some(([accountId, accountCfg]) => {
+    if (!isPlainObject(accountCfg) || accountCfg.enabled === false) {
+      return false;
+    }
+    return (
+      !channelEnabled ||
+      !hasChannelAccountConfig(params.nextConfig, params.channelId, accountId) ||
+      readChannelAccountEnabled(params.nextConfig, params.channelId, accountId) === false
+    );
+  });
+}
+
+function listNoopEnabledChannelLifecycleReasons(params: {
+  previousConfig: OpenClawConfig;
+  nextConfig: OpenClawConfig;
+  changedPaths: string[];
+  plan: GatewayReloadPlan;
+}): string[] {
+  const noopPaths = new Set(params.plan.noopPaths);
+  const reasons: string[] = [];
+  for (const changedPath of params.changedPaths) {
+    if (!noopPaths.has(changedPath)) {
+      continue;
+    }
+    const channelMatch = /^channels\.([^.]+)(?:\.enabled)?$/.exec(changedPath);
+    const accountMatch = /^channels\.([^.]+)\.accounts\.([^.]+)(?:\.enabled)?$/.exec(changedPath);
+    const accountMapMatch = /^channels\.([^.]+)\.accounts$/.exec(changedPath);
+    const channelId = (channelMatch?.[1] ?? accountMatch?.[1] ?? accountMapMatch?.[1])
+      ?.trim()
+      .toLowerCase();
+    if (!channelId) {
+      continue;
+    }
+    if (accountMapMatch) {
+      if (
+        hasEnabledChannelAccountActivation({
+          previousConfig: params.previousConfig,
+          nextConfig: params.nextConfig,
+          channelId,
+        })
+      ) {
+        reasons.push(`${changedPath}: enabled channel account activation requires gateway restart`);
+      }
+      if (
+        hasEnabledChannelAccountDeactivation({
+          previousConfig: params.previousConfig,
+          nextConfig: params.nextConfig,
+          channelId,
+        })
+      ) {
+        reasons.push(
+          `${changedPath}: enabled channel account deactivation requires gateway restart`,
+        );
+      }
+      continue;
+    }
+    if (accountMatch) {
+      const accountId = accountMatch[2]?.trim();
+      if (!accountId) {
+        continue;
+      }
+      const channelEnabled = readChannelEnabled(params.nextConfig, channelId) !== false;
+      const hadAccountConfig = hasChannelAccountConfig(params.previousConfig, channelId, accountId);
+      const wasEnabled =
+        hadAccountConfig &&
+        readChannelAccountEnabled(params.previousConfig, channelId, accountId) !== false;
+      const isEnabled =
+        channelEnabled &&
+        hasChannelAccountConfig(params.nextConfig, channelId, accountId) &&
+        readChannelAccountEnabled(params.nextConfig, channelId, accountId) !== false;
+      if (!wasEnabled && isEnabled) {
+        reasons.push(`${changedPath}: enabled channel account activation requires gateway restart`);
+      }
+      if (wasEnabled && !isEnabled) {
+        reasons.push(
+          `${changedPath}: enabled channel account deactivation requires gateway restart`,
+        );
+      }
+      continue;
+    }
+    const hadChannelConfig = hasChannelConfig(params.previousConfig, channelId);
+    const wasEnabled =
+      hadChannelConfig && readChannelEnabled(params.previousConfig, channelId) !== false;
+    const isEnabled =
+      hasChannelConfig(params.nextConfig, channelId) &&
+      readChannelEnabled(params.nextConfig, channelId) !== false;
+    if (!wasEnabled && isEnabled) {
+      reasons.push(`${changedPath}: enabled channel activation requires gateway restart`);
+    }
+    if (wasEnabled && !isEnabled) {
+      reasons.push(`${changedPath}: enabled channel deactivation requires gateway restart`);
+    }
+  }
+  return reasons;
+}
+
+export function applyNoopEnabledChannelActivationRestarts(params: {
+  plan: GatewayReloadPlan;
+  previousConfig: OpenClawConfig;
+  nextConfig: OpenClawConfig;
+  changedPaths: string[];
+}): GatewayReloadPlan {
+  const restartReasons = listNoopEnabledChannelLifecycleReasons(params);
+  if (restartReasons.length === 0) {
+    return params.plan;
+  }
+  const restartReasonPaths = new Set(
+    restartReasons.flatMap((reason) => reason.match(/^([^:]+):/)?.[1] ?? []),
+  );
+  return {
+    ...params.plan,
+    restartGateway: true,
+    restartReasons: [...params.plan.restartReasons, ...restartReasons],
+    noopPaths: params.plan.noopPaths.filter((path) => !restartReasonPaths.has(path)),
+  };
 }

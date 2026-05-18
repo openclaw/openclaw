@@ -175,6 +175,9 @@ describe("registerDirectoryCli", () => {
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: autoEnabledConfig,
       baseHash: "config-1",
+      writeOptions: {
+        explicitSetPaths: [["channels", "whatsapp", "enabled"]],
+      },
     });
   });
 

@@ -103,6 +103,9 @@ dump_debug_logs() {
     /tmp/openclaw-install.log \
     /tmp/openclaw-onboard.json \
     /tmp/openclaw-channel-add.log \
+    /tmp/openclaw-config-before-missing-whatsapp-login.json \
+    /tmp/openclaw-config-after-missing-whatsapp-login.json \
+    /tmp/openclaw-missing-whatsapp-login.log \
     /tmp/openclaw-channels-status.json \
     /tmp/openclaw-channels-status.err \
     /tmp/openclaw-status.txt \
@@ -151,6 +154,30 @@ openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 echo "Configuring $CHANNEL..."
 openclaw channels add --channel "$CHANNEL" "${CHANNEL_ADD_ARGS[@]}" >/tmp/openclaw-channel-add.log 2>&1
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-channel-config "$CHANNEL" "${CHANNEL_CONFIG_TOKENS[@]}"
+
+echo "Checking missing WhatsApp login preflight..."
+node <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+if (config.channels && Object.hasOwn(config.channels, "whatsapp")) {
+  delete config.channels.whatsapp;
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+}
+NODE
+cp "$HOME/.openclaw/openclaw.json" /tmp/openclaw-config-before-missing-whatsapp-login.json
+if openclaw channels login --channel whatsapp >/tmp/openclaw-missing-whatsapp-login.log 2>&1; then
+  echo "expected missing WhatsApp config login to fail" >&2
+  cat /tmp/openclaw-missing-whatsapp-login.log >&2 || true
+  exit 1
+fi
+grep -F "Channel whatsapp is not configured. Add channels.whatsapp to your config before logging in." /tmp/openclaw-missing-whatsapp-login.log >/dev/null
+cp "$HOME/.openclaw/openclaw.json" /tmp/openclaw-config-after-missing-whatsapp-login.json
+if ! cmp -s /tmp/openclaw-config-before-missing-whatsapp-login.json /tmp/openclaw-config-after-missing-whatsapp-login.json; then
+  echo "missing-config login unexpectedly mutated openclaw.json" >&2
+  exit 1
+fi
 
 echo "Checking status surfaces for $CHANNEL..."
 openclaw channels status --json >/tmp/openclaw-channels-status.json 2>/tmp/openclaw-channels-status.err

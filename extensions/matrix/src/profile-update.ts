@@ -52,6 +52,14 @@ export async function applyMatrixProfileUpdate(params: {
   });
   await runtime.config.replaceConfigFile({
     nextConfig: updated as never,
+    writeOptions: {
+      explicitSetPaths: [
+        ["channels", "matrix", "name"],
+        ["channels", "matrix", "avatarUrl"],
+        ["channels", "matrix", "accounts", accountId, "name"],
+        ["channels", "matrix", "accounts", accountId, "avatarUrl"],
+      ],
+    },
     afterWrite: { mode: "auto" },
   });
 

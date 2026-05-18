@@ -17,6 +17,31 @@ import { theme } from "../terminal/theme.js";
 import { formatHelpExamples } from "./help-format.js";
 import { commitConfigWithPendingPluginInstalls } from "./plugins-install-record-commit.js";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function resolveAutoEnabledChannelWriteOptions(params: {
+  previousConfig: Record<string, unknown>;
+  nextConfig: Record<string, unknown>;
+}): { explicitSetPaths: string[][] } | undefined {
+  const previousChannels = isRecord(params.previousConfig.channels)
+    ? params.previousConfig.channels
+    : {};
+  const nextChannels = isRecord(params.nextConfig.channels) ? params.nextConfig.channels : {};
+  const explicitSetPaths = Object.entries(nextChannels).flatMap(([channelId, nextChannel]) => {
+    if (!isRecord(nextChannel) || nextChannel.enabled === false) {
+      return [];
+    }
+    const previousChannel = previousChannels[channelId];
+    if (!isRecord(previousChannel) || previousChannel.enabled === false) {
+      return [["channels", channelId, "enabled"]];
+    }
+    return [];
+  });
+  return explicitSetPaths.length > 0 ? { explicitSetPaths } : undefined;
+}
+
 function parseLimit(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     if (value <= 0) {
@@ -104,11 +129,16 @@ export function registerDirectoryCli(program: Command) {
 
   const resolve = async (opts: { channel?: string; account?: string }) => {
     const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
+    const authoredCfg = getRuntimeConfig();
     const autoEnabled = applyPluginAutoEnable({
-      config: getRuntimeConfig(),
+      config: authoredCfg,
       env: process.env,
     });
     let cfg = autoEnabled.config;
+    const autoEnabledWriteOptions = resolveAutoEnabledChannelWriteOptions({
+      previousConfig: authoredCfg,
+      nextConfig: cfg,
+    });
     const explicitChannel = opts.channel?.trim();
     const resolvedExplicit = explicitChannel
       ? await resolveInstallableChannelPlugin({
@@ -124,12 +154,14 @@ export function registerDirectoryCli(program: Command) {
       const committed = await commitConfigWithPendingPluginInstalls({
         nextConfig: cfg,
         baseHash: (await sourceSnapshotPromise)?.hash,
+        ...(autoEnabledWriteOptions ? { writeOptions: autoEnabledWriteOptions } : {}),
       });
       cfg = committed.config;
     } else if (autoEnabled.changes.length > 0) {
       await replaceConfigFile({
         nextConfig: cfg,
         baseHash: (await sourceSnapshotPromise)?.hash,
+        ...(autoEnabledWriteOptions ? { writeOptions: autoEnabledWriteOptions } : {}),
       });
     }
     const selection = explicitChannel

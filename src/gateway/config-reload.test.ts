@@ -20,6 +20,7 @@ import {
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,
+  diffConfigPathSegments,
   diffConfigPaths,
   type GatewayReloadPlan,
   listPluginInstallTimestampMetadataPaths,
@@ -122,6 +123,32 @@ describe("diffConfigPaths", () => {
       "plugins.installs.lossless.resolvedAt",
       "plugins.installs.lossless.resolvedAt",
     ]);
+  });
+
+  it("preserves path segment boundaries for dotted keys", () => {
+    const prev = {
+      channels: {
+        matrix: {
+          groups: {
+            "!room:example.org": { users: ["@old:example.org"] },
+          },
+        },
+      },
+    };
+    const next = {
+      channels: {
+        matrix: {
+          groups: {
+            "!room:example.org": { users: ["@new:example.org"] },
+          },
+        },
+      },
+    };
+
+    expect(diffConfigPathSegments(prev, next)).toEqual([
+      ["channels", "matrix", "groups", "!room:example.org", "users"],
+    ]);
+    expect(diffConfigPaths(prev, next)).toEqual(["channels.matrix.groups.!room:example.org.users"]);
   });
 });
 
@@ -1325,6 +1352,496 @@ describe("startGatewayConfigReloader", () => {
     expect(hotConfig).toBe(nextConfig);
 
     await harness.reloader.stop();
+  });
+
+  it("queues restart when enabling a no-op channel config from disabled", async () => {
+    const whatsappPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "test",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      reload: { configPrefixes: [], noopPrefixes: ["channels.whatsapp"] },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" }]),
+    );
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { whatsapp: { enabled: false } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { whatsapp: { enabled: true } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "whatsapp-enable-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialCompareConfig: previousConfig });
+
+    try {
+      harness.watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      const [plan, restartedConfig] = getOnlyRestartCall(harness);
+      expect(plan.restartGateway).toBe(true);
+      expect(plan.restartReasons).toEqual([
+        "channels.whatsapp.enabled: enabled channel activation requires gateway restart",
+      ]);
+      expect(plan.noopPaths).toEqual([]);
+      expect(restartedConfig).toBe(nextConfig);
+    } finally {
+      resetPluginRuntimeStateForTest();
+      await harness.reloader.stop();
+    }
+  });
+
+  it("queues restart when disabling a no-op channel config", async () => {
+    const whatsappPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "test",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      reload: { configPrefixes: [], noopPrefixes: ["channels.whatsapp"] },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" }]),
+    );
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { whatsapp: { enabled: true } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { whatsapp: { enabled: false } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "whatsapp-disable-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialCompareConfig: previousConfig });
+
+    try {
+      harness.watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      const [plan, restartedConfig] = getOnlyRestartCall(harness);
+      expect(plan.restartReasons).toEqual([
+        "channels.whatsapp.enabled: enabled channel deactivation requires gateway restart",
+      ]);
+      expect(plan.noopPaths).toEqual([]);
+      expect(restartedConfig).toBe(nextConfig);
+    } finally {
+      resetPluginRuntimeStateForTest();
+      await harness.reloader.stop();
+    }
+  });
+
+  it("queues restart when enabling a no-op channel account config from disabled", async () => {
+    const whatsappPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "test",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      reload: { configPrefixes: [], noopPrefixes: ["channels.whatsapp"] },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" }]),
+    );
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { whatsapp: { accounts: { work: { enabled: false } } } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { whatsapp: { accounts: { work: { enabled: true } } } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "whatsapp-account-enable-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialCompareConfig: previousConfig });
+
+    try {
+      harness.watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      const [plan, restartedConfig] = getOnlyRestartCall(harness);
+      expect(plan.restartReasons).toEqual([
+        "channels.whatsapp.accounts.work.enabled: enabled channel account activation requires gateway restart",
+      ]);
+      expect(plan.noopPaths).toEqual([]);
+      expect(restartedConfig).toBe(nextConfig);
+    } finally {
+      resetPluginRuntimeStateForTest();
+      await harness.reloader.stop();
+    }
+  });
+
+  it("queues restart when removing an enabled no-op channel account config", async () => {
+    const whatsappPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "test",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      reload: { configPrefixes: [], noopPrefixes: ["channels.whatsapp"] },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" }]),
+    );
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { whatsapp: { accounts: { work: { enabled: true } } } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { whatsapp: { accounts: {} } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "whatsapp-account-remove-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialCompareConfig: previousConfig });
+
+    try {
+      harness.watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      const [plan, restartedConfig] = getOnlyRestartCall(harness);
+      expect(plan.restartReasons).toEqual([
+        "channels.whatsapp.accounts.work: enabled channel account deactivation requires gateway restart",
+      ]);
+      expect(plan.noopPaths).toEqual([]);
+      expect(restartedConfig).toBe(nextConfig);
+    } finally {
+      resetPluginRuntimeStateForTest();
+      await harness.reloader.stop();
+    }
+  });
+
+  it("queues restart when adding the first enabled no-op channel accounts map", async () => {
+    const whatsappPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "test",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      reload: { configPrefixes: [], noopPrefixes: ["channels.whatsapp"] },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" }]),
+    );
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { whatsapp: {} },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { whatsapp: { accounts: { work: {} } } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "whatsapp-accounts-add-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialCompareConfig: previousConfig });
+
+    try {
+      harness.watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      const [plan, restartedConfig] = getOnlyRestartCall(harness);
+      expect(plan.restartReasons).toEqual([
+        "channels.whatsapp.accounts: enabled channel account activation requires gateway restart",
+      ]);
+      expect(plan.noopPaths).toEqual([]);
+      expect(restartedConfig).toBe(nextConfig);
+    } finally {
+      resetPluginRuntimeStateForTest();
+      await harness.reloader.stop();
+    }
+  });
+
+  it("queues restart when adding an enabled no-op channel config block", async () => {
+    const whatsappPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "test",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      reload: { configPrefixes: [], noopPrefixes: ["channels.whatsapp"] },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" }]),
+    );
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: {},
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { whatsapp: {} },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "whatsapp-add-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialCompareConfig: previousConfig });
+
+    try {
+      harness.watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      const [plan, restartedConfig] = getOnlyRestartCall(harness);
+      expect(plan.restartReasons).toEqual([
+        "channels.whatsapp: enabled channel activation requires gateway restart",
+      ]);
+      expect(restartedConfig).toBe(nextConfig);
+    } finally {
+      resetPluginRuntimeStateForTest();
+      await harness.reloader.stop();
+    }
+  });
+
+  it("queues restart when adding an enabled external no-op channel config block", async () => {
+    const externalPlugin: ChannelPlugin = {
+      id: "line",
+      meta: {
+        id: "line",
+        label: "LINE",
+        selectionLabel: "LINE",
+        docsPath: "/channels/line",
+        blurb: "test",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      reload: { configPrefixes: [], noopPrefixes: ["channels.line"] },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "line", plugin: externalPlugin, source: "test" }]),
+    );
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: {},
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      channels: { line: {} },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "line-add-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialCompareConfig: previousConfig });
+
+    try {
+      harness.watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      const [plan, restartedConfig] = getOnlyRestartCall(harness);
+      expect(plan.restartReasons).toEqual([
+        "channels.line: enabled channel activation requires gateway restart",
+      ]);
+      expect(restartedConfig).toBe(nextConfig);
+    } finally {
+      resetPluginRuntimeStateForTest();
+      await harness.reloader.stop();
+    }
+  });
+
+  it("warns instead of restarting enabled no-op channels when reload mode is hot", async () => {
+    const whatsappPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "test",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      reload: { configPrefixes: [], noopPrefixes: ["channels.whatsapp"] },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" }]),
+    );
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: { whatsapp: { enabled: false } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "hot" } },
+      channels: { whatsapp: { enabled: true } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "whatsapp-enable-hot-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialCompareConfig: previousConfig });
+
+    try {
+      harness.watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      expect(harness.onRestart).not.toHaveBeenCalled();
+      expect(harness.log.warn).toHaveBeenCalledWith(
+        "config reload requires gateway restart; hot mode ignoring (channels.whatsapp.enabled: enabled channel activation requires gateway restart)",
+      );
+    } finally {
+      resetPluginRuntimeStateForTest();
+      await harness.reloader.stop();
+    }
+  });
+
+  it("keeps enabled no-op channels parked when reload mode is off", async () => {
+    const whatsappPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "test",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      reload: { configPrefixes: [], noopPrefixes: ["channels.whatsapp"] },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" }]),
+    );
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "off" } },
+      channels: { whatsapp: { enabled: false } },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0, mode: "off" } },
+      channels: { whatsapp: { enabled: true } },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        config: nextConfig,
+        hash: "whatsapp-enable-off-1",
+      }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialCompareConfig: previousConfig });
+
+    try {
+      harness.watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      expect(harness.onRestart).not.toHaveBeenCalled();
+      expect(harness.log.info).toHaveBeenCalledWith(
+        "config reload disabled (gateway.reload.mode=off)",
+      );
+    } finally {
+      resetPluginRuntimeStateForTest();
+      await harness.reloader.stop();
+    }
   });
 
   it("queues restart when an external plugin source write also changes plugin config", async () => {

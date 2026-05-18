@@ -1,21 +1,30 @@
 import { isDeepStrictEqual } from "node:util";
 import { isPlainObject } from "../utils.js";
 
-export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
+export type ConfigPathSegments = string[];
+
+function formatConfigPath(segments: readonly string[]): string {
+  return segments.length > 0 ? segments.join(".") : "<root>";
+}
+
+export function diffConfigPathSegments(
+  prev: unknown,
+  next: unknown,
+  prefix: readonly string[] = [],
+): ConfigPathSegments[] {
   if (prev === next) {
     return [];
   }
   if (isPlainObject(prev) && isPlainObject(next)) {
     const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
-    const paths: string[] = [];
+    const paths: ConfigPathSegments[] = [];
     for (const key of keys) {
       const prevValue = prev[key];
       const nextValue = next[key];
       if (prevValue === undefined && nextValue === undefined) {
         continue;
       }
-      const childPrefix = prefix ? `${prefix}.${key}` : key;
-      const childPaths = diffConfigPaths(prevValue, nextValue, childPrefix);
+      const childPaths = diffConfigPathSegments(prevValue, nextValue, [...prefix, key]);
       if (childPaths.length > 0) {
         paths.push(...childPaths);
       }
@@ -29,5 +38,9 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
       return [];
     }
   }
-  return [prefix || "<root>"];
+  return [[...prefix]];
+}
+
+export function diffConfigPaths(prev: unknown, next: unknown): string[] {
+  return diffConfigPathSegments(prev, next).map(formatConfigPath);
 }

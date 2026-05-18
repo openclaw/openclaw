@@ -14,7 +14,10 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime-state.js";
 import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
-import { buildGatewayReloadPlan } from "../config-reload-plan.js";
+import {
+  applyNoopEnabledChannelActivationRestarts,
+  buildGatewayReloadPlan,
+} from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";
 import { parseRestartRequestParams } from "./restart-request.js";
@@ -129,13 +132,19 @@ function queueSharedGatewayAuthGenerationRefresh(
 
 function shouldScheduleDirectConfigRestart(params: {
   changedPaths: string[];
+  previousConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
 }): boolean {
   const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
   if (reloadSettings.mode === "off") {
     return true;
   }
-  const plan = buildGatewayReloadPlan(params.changedPaths);
+  const plan = applyNoopEnabledChannelActivationRestarts({
+    plan: buildGatewayReloadPlan(params.changedPaths),
+    previousConfig: params.previousConfig,
+    nextConfig: params.nextConfig,
+    changedPaths: params.changedPaths,
+  });
   if (reloadSettings.mode === "hot" && plan.restartGateway) {
     return true;
   }
@@ -234,6 +243,7 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
   mode: "config.patch" | "config.apply";
   configPath: string;
   changedPaths: string[];
+  previousConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
   actor: ControlPlaneActor;
   context?: GatewayRequestContext;
@@ -256,6 +266,7 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
   const sentinelPath = await tryWriteRestartSentinelPayload(payload);
   const restart = shouldScheduleDirectConfigRestart({
     changedPaths: params.changedPaths,
+    previousConfig: params.previousConfig,
     nextConfig: params.nextConfig,
   })
     ? scheduleGatewaySigusr1Restart({

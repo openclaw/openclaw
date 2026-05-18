@@ -354,7 +354,21 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       );
 
       if (changed) {
-        await writeOpenClawConfigThroughRuntime(getQQBotRuntime(), nextCfg as OpenClawConfig);
+        const qqbot = (nextCfg as OpenClawConfig).channels?.qqbot as
+          | { accounts?: Record<string, unknown> }
+          | undefined;
+        const explicitSetPaths = [
+          ["channels", "qqbot", "clientSecret"],
+          ["channels", "qqbot", "clientSecretFile"],
+          ["channels", "qqbot", "accounts", accountId, "clientSecret"],
+          ["channels", "qqbot", "accounts", accountId, "clientSecretFile"],
+        ];
+        if (!qqbot?.accounts?.[accountId]) {
+          explicitSetPaths.push(["channels", "qqbot", "accounts", accountId]);
+        }
+        await writeOpenClawConfigThroughRuntime(getQQBotRuntime(), nextCfg as OpenClawConfig, {
+          explicitSetPaths,
+        });
       }
 
       const resolved = resolveQQBotAccount((changed ? nextCfg : cfg) as OpenClawConfig, accountId);

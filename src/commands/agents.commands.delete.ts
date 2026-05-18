@@ -82,7 +82,8 @@ export async function agentsDeleteCommand(
     return;
   }
 
-  if (findAgentEntryIndex(listAgentEntries(cfg), agentId) < 0) {
+  const agentIndex = findAgentEntryIndex(listAgentEntries(cfg), agentId);
+  if (agentIndex < 0) {
     runtime.error(
       `Agent "${agentId}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
     );
@@ -141,7 +142,10 @@ export async function agentsDeleteCommand(
   await replaceConfigFile({
     nextConfig: result.config,
     ...(baseHash !== undefined ? { baseHash } : {}),
-    writeOptions: opts.json ? { skipOutputLogs: true } : undefined,
+    writeOptions: {
+      ...(opts.json ? { skipOutputLogs: true } : {}),
+      explicitSetPaths: [["agents", "list", String(agentIndex)]],
+    },
   });
   if (!opts.json) {
     logConfigUpdated(runtime);

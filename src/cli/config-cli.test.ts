@@ -428,6 +428,43 @@ describe("config cli", () => {
       ]);
     });
 
+    it("marks channel leaf writes as explicit channel activation when creating a channel", async () => {
+      setSnapshot({}, withRuntimeDefaults({}));
+
+      await runConfigCommand(["config", "set", "channels.telegram.botToken", "tok-abc"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      expect(requireWriteOptions().explicitSetPaths).toEqual([
+        ["channels", "telegram", "botToken"],
+        ["channels", "telegram"],
+      ]);
+    });
+
+    it("marks account leaf writes as explicit account activation when creating an account", async () => {
+      const config: OpenClawConfig = {
+        channels: {
+          telegram: {
+            enabled: true,
+            accounts: {},
+          },
+        },
+      };
+      setSnapshot(config, withRuntimeDefaults(config));
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "channels.telegram.accounts.work.botToken",
+        "tok-abc",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      expect(requireWriteOptions().explicitSetPaths).toEqual([
+        ["channels", "telegram", "accounts", "work", "botToken"],
+        ["channels", "telegram", "accounts", "work"],
+      ]);
+    });
+
     it("marks object set paths explicit so nested default-equal writes persist", async () => {
       const resolved: OpenClawConfig = {
         channels: {
@@ -2685,7 +2722,27 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = firstWrittenConfig();
       expect(written.agents?.list).toEqual([{ id: "agent-a" }, { id: "agent-c" }]);
-      expect(firstWriteConfigOptions()).toBeUndefined();
+      expect(firstWriteConfigOptions()).toEqual({
+        explicitSetPaths: [["agents", "list", "1"]],
+      });
+    });
+
+    it("marks indexed protected allowlist unsets as explicit writes", async () => {
+      const resolved: OpenClawConfig = {
+        commands: {
+          ownerAllowFrom: ["webchat:owner", "telegram:111"],
+        },
+      };
+      setSnapshot(resolved, withRuntimeDefaults(resolved));
+
+      await runConfigCommand(["config", "unset", "commands.ownerAllowFrom[0]"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig();
+      expect(written.commands?.ownerAllowFrom).toEqual(["telegram:111"]);
+      expect(firstWriteConfigOptions()).toEqual({
+        explicitSetPaths: [["commands", "ownerAllowFrom", "0"]],
+      });
     });
 
     it("preserves write-level unset handling for numeric object keys", async () => {

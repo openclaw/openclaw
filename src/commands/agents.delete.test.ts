@@ -167,11 +167,14 @@ describe("agents delete command", () => {
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
       const replaceConfigFileCalls = configMocks.replaceConfigFile.mock.calls as unknown as Array<
-        [{ nextConfig: OpenClawConfig }]
+        [{ nextConfig: OpenClawConfig; writeOptions?: { explicitSetPaths?: string[][] } }]
       >;
       expect(replaceConfigFileCalls[0]?.[0].nextConfig).toEqual({
         agents: { list: [{ id: "main", workspace: path.join(stateDir, "workspace-main") }] },
       });
+      expect(replaceConfigFileCalls[0]?.[0].writeOptions?.explicitSetPaths).toEqual([
+        ["agents", "list", "1"],
+      ]);
       expectSessionStore(storePath, {
         "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
       });

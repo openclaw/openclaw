@@ -101,7 +101,16 @@ async function applyConfigUpdate(
   }
 
   if (changed) {
-    await configApi.replaceConfigFile({ nextConfig: currentCfg, afterWrite: { mode: "auto" } });
+    await configApi.replaceConfigFile({
+      nextConfig: currentCfg,
+      writeOptions: {
+        explicitSetPaths: [
+          ["channels", "qqbot", "groups", groupOpenid, "requireMention"],
+          ["channels", "qqbot", "accounts", accountId, "groups", groupOpenid, "requireMention"],
+        ],
+      },
+      afterWrite: { mode: "auto" },
+    });
     log?.info(
       `Config updated via interaction ${event.id}: require_mention=${String(clawCfgUpdate?.require_mention)}, group=${groupOpenid}`,
     );

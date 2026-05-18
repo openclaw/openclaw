@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
@@ -105,6 +106,59 @@ function hasLegacyFeishuCardCommandValue(actionValue: unknown): boolean {
     (Boolean(typeof actionValue.command === "string" && actionValue.command.trim()) ||
       Boolean(typeof actionValue.text === "string" && actionValue.text.trim()))
   );
+}
+
+const FEISHU_LOGIN_CONFIG_FIELDS = [
+  "enabled",
+  "appId",
+  "appSecret",
+  "connectionMode",
+  "domain",
+  "dmPolicy",
+  "allowFrom",
+  "groupPolicy",
+  "requireMention",
+] as const;
+
+export function resolveFeishuLoginExplicitSetPaths(params: {
+  previousConfig: ClawdbotConfig;
+  nextConfig: ClawdbotConfig;
+}): string[][] {
+  const previousFeishu = params.previousConfig.channels?.feishu;
+  const nextFeishu = params.nextConfig.channels?.feishu;
+  if (!isRecord(nextFeishu)) {
+    return [];
+  }
+
+  const previousFeishuRecord = isRecord(previousFeishu) ? previousFeishu : {};
+  const paths: string[][] = [];
+  for (const field of FEISHU_LOGIN_CONFIG_FIELDS) {
+    if (!isDeepStrictEqual(previousFeishuRecord[field], nextFeishu[field])) {
+      paths.push(["channels", "feishu", field]);
+    }
+  }
+
+  const previousAccounts = isRecord(previousFeishuRecord.accounts)
+    ? previousFeishuRecord.accounts
+    : {};
+  const nextAccounts = isRecord(nextFeishu.accounts) ? nextFeishu.accounts : {};
+  const accountIds = new Set([...Object.keys(previousAccounts), ...Object.keys(nextAccounts)]);
+  for (const accountId of accountIds) {
+    const nextAccount = nextAccounts[accountId];
+    if (!isRecord(nextAccount)) {
+      continue;
+    }
+    const previousAccount = isRecord(previousAccounts[accountId])
+      ? previousAccounts[accountId]
+      : {};
+    for (const field of FEISHU_LOGIN_CONFIG_FIELDS) {
+      if (!isDeepStrictEqual(previousAccount[field], nextAccount[field])) {
+        paths.push(["channels", "feishu", "accounts", accountId, field]);
+      }
+    }
+  }
+
+  return paths;
 }
 
 function containsLegacyFeishuCardCommandValue(node: unknown): boolean {
@@ -1240,8 +1294,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           const prompter = createClackPrompter();
           const nextCfg = await runFeishuLogin({ cfg, prompter });
           if (nextCfg !== cfg) {
+            const explicitSetPaths = resolveFeishuLoginExplicitSetPaths({
+              previousConfig: cfg,
+              nextConfig: nextCfg,
+            });
             await replaceConfigFile({
               nextConfig: nextCfg,
+              writeOptions: { explicitSetPaths },
               afterWrite: { mode: "auto" },
             });
           }

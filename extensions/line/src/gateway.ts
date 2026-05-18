@@ -65,6 +65,8 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
     const nextLine = { ...lineConfig };
     let cleared = false;
     let changed = false;
+    let removedChannelBlock = false;
+    let removedAccountBlock = false;
 
     if (accountId === DEFAULT_ACCOUNT_ID) {
       if (
@@ -93,6 +95,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
       if (accountCleanup.cleared) {
         cleared = true;
       }
+      removedAccountBlock = !accountCleanup.nextAccounts?.[accountId];
       if (accountCleanup.nextAccounts) {
         nextLine.accounts = accountCleanup.nextAccounts;
       } else {
@@ -106,14 +109,32 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
       } else {
         const nextChannels = { ...nextCfg.channels };
         delete (nextChannels as Record<string, unknown>).line;
+        removedChannelBlock = true;
         if (Object.keys(nextChannels).length > 0) {
           nextCfg.channels = nextChannels;
         } else {
           delete nextCfg.channels;
         }
       }
+      const explicitSetPaths = [
+        ["channels", "line", "channelAccessToken"],
+        ["channels", "line", "channelSecret"],
+        ["channels", "line", "tokenFile"],
+        ["channels", "line", "secretFile"],
+        ["channels", "line", "accounts", accountId, "channelAccessToken"],
+        ["channels", "line", "accounts", accountId, "channelSecret"],
+        ["channels", "line", "accounts", accountId, "tokenFile"],
+        ["channels", "line", "accounts", accountId, "secretFile"],
+      ];
+      if (removedChannelBlock) {
+        explicitSetPaths.push(["channels", "line"]);
+      }
+      if (removedAccountBlock) {
+        explicitSetPaths.push(["channels", "line", "accounts", accountId]);
+      }
       await getLineRuntime().config.replaceConfigFile({
         nextConfig: nextCfg,
+        writeOptions: { explicitSetPaths },
         afterWrite: { mode: "auto" },
       });
     }

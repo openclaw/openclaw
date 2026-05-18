@@ -1,8 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
@@ -26,6 +27,10 @@ const registryRefreshMocks = vi.hoisted(() => ({
 
 const gatewayMocks = vi.hoisted(() => ({
   callGateway: vi.fn(async () => ({ stopped: true })),
+}));
+
+const prompterMocks = vi.hoisted(() => ({
+  confirm: vi.fn(async () => true),
 }));
 
 vi.mock("../channels/plugins/catalog.js", async () => {
@@ -61,6 +66,12 @@ vi.mock("../cli/plugins-registry-refresh.js", () => registryRefreshMocks);
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: gatewayMocks.callGateway,
+}));
+
+vi.mock("../wizard/clack-prompter.js", () => ({
+  createClackPrompter: () => ({
+    confirm: prompterMocks.confirm,
+  }),
 }));
 
 const runtime = createTestRuntime();
@@ -103,6 +114,8 @@ describe("channelsRemoveCommand", () => {
     registryRefreshMocks.refreshPluginRegistryAfterConfigMutation.mockClear();
     gatewayMocks.callGateway.mockClear();
     gatewayMocks.callGateway.mockResolvedValue({ stopped: true });
+    prompterMocks.confirm.mockClear();
+    prompterMocks.confirm.mockResolvedValue(true);
     setActivePluginRegistry(createTestRegistry());
   });
 
@@ -179,6 +192,84 @@ describe("channelsRemoveCommand", () => {
     expect(registryRefreshMocks.refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
     const writtenConfig = firstWrittenChannelsConfig();
     expect(writtenConfig?.channels?.["external-chat"]).toBeUndefined();
+    expect(configMocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        writeOptions: {
+          explicitSetPaths: [["channels", "external-chat"]],
+        },
+      }),
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("marks channel disable writes as explicit protected edits", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          "external-chat": {
+            enabled: true,
+            token: "token-1",
+          },
+        },
+      },
+    });
+    const catalogEntry: ChannelPluginCatalogEntry = createExternalChatCatalogEntry();
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
+    const scopedPlugin = {
+      ...createChannelTestPluginBase({
+        id: "external-chat",
+        label: "External Chat",
+        docsPath: "/channels/external-chat",
+      }),
+      config: {
+        ...createChannelTestPluginBase({
+          id: "external-chat",
+          label: "External Chat",
+          docsPath: "/channels/external-chat",
+        }).config,
+        setAccountEnabled: vi.fn(({ cfg, enabled }: { cfg: OpenClawConfig; enabled: boolean }) => ({
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            "external-chat": {
+              ...(cfg.channels?.["external-chat"] as Record<string, unknown> | undefined),
+              enabled,
+            },
+          },
+        })),
+      },
+    } as ChannelPlugin;
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "@vendor/external-chat-plugin",
+          plugin: scopedPlugin,
+          source: "test",
+        },
+      ]),
+    );
+
+    await channelsRemoveCommand(
+      {
+        channel: "external-chat",
+        account: "default",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(configMocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        writeOptions: {
+          explicitSetPaths: [
+            ["channels", "external-chat", "enabled"],
+            ["channels", "external-chat", "accounts", "default", "enabled"],
+          ],
+        },
+      }),
+    );
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });

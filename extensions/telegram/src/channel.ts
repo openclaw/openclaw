@@ -1049,6 +1049,8 @@ export const telegramPlugin = createChatChannelPlugin({
         const nextTelegram = cfg.channels?.telegram ? { ...cfg.channels.telegram } : undefined;
         let cleared = false;
         let changed = false;
+        let removedChannelBlock = false;
+        let removedAccountBlock = false;
         if (nextTelegram) {
           if (accountId === DEFAULT_ACCOUNT_ID && nextTelegram.botToken) {
             delete nextTelegram.botToken;
@@ -1065,6 +1067,7 @@ export const telegramPlugin = createChatChannelPlugin({
             if (accountCleanup.cleared) {
               cleared = true;
             }
+            removedAccountBlock = !accountCleanup.nextAccounts?.[accountId];
             if (accountCleanup.nextAccounts) {
               nextTelegram.accounts = accountCleanup.nextAccounts;
             } else {
@@ -1078,6 +1081,7 @@ export const telegramPlugin = createChatChannelPlugin({
           } else {
             const nextChannels = { ...nextCfg.channels };
             delete nextChannels.telegram;
+            removedChannelBlock = true;
             if (Object.keys(nextChannels).length > 0) {
               nextCfg.channels = nextChannels;
             } else {
@@ -1091,8 +1095,19 @@ export const telegramPlugin = createChatChannelPlugin({
         });
         const loggedOut = resolved.tokenSource === "none";
         if (changed) {
+          const explicitSetPaths = [
+            ["channels", "telegram", "botToken"],
+            ["channels", "telegram", "accounts", accountId, "botToken"],
+          ];
+          if (removedChannelBlock) {
+            explicitSetPaths.push(["channels", "telegram"]);
+          }
+          if (removedAccountBlock) {
+            explicitSetPaths.push(["channels", "telegram", "accounts", accountId]);
+          }
           await getTelegramRuntime().config.replaceConfigFile({
             nextConfig: nextCfg,
+            writeOptions: { explicitSetPaths },
             afterWrite: { mode: "auto" },
           });
         }

@@ -105,6 +105,7 @@ openclaw channels logout --channel whatsapp
 
 - `channels login` supports `--verbose`.
 - `channels login` and `logout` can infer the channel when only one supported login target is configured.
+- `channels login --channel <id>` requires `channels.<id>` to exist and be enabled. Use `openclaw channels add --channel <id>` or edit config first; login stores channel auth but does not create the channel config block.
 - `channels logout` prefers the live Gateway path when reachable, so logout stops any active listener before clearing channel auth state. If a local Gateway is not reachable, it falls back to local auth cleanup.
 - Run `channels login` from a terminal on the gateway host. Agent `exec` blocks this interactive login flow; channel-native agent login tools, such as `whatsapp_login`, should be used from chat when available.
 

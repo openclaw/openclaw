@@ -25,6 +25,7 @@ type RuntimeWriteConfigOptions = {
   envSnapshotForRestore?: Record<string, string | undefined>;
   expectedConfigPath?: string;
   unsetPaths?: string[][];
+  explicitSetPaths?: readonly (readonly string[])[];
 };
 
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown

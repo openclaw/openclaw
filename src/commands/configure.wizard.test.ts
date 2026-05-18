@@ -452,6 +452,12 @@ describe("runConfigureWizard", () => {
 
   it("defers channel status checks until a channel is selected", async () => {
     setupBaseWizardState();
+    mocks.setupChannels.mockImplementation(async (cfg: OpenClawConfig) => ({
+      ...cfg,
+      channels: {
+        telegram: { enabled: true },
+      },
+    }));
     queueWizardPrompts({
       select: ["configure"],
       confirm: [],
@@ -465,6 +471,10 @@ describe("runConfigureWizard", () => {
     const setupChannelsOptions = requireRecord(setupChannelsCall?.[3], "setupChannels options");
     expect(setupChannelsOptions.deferStatusUntilSelection).toBe(true);
     expect(setupChannelsOptions.skipStatusNote).toBe(true);
+    const replaceCall = mockCallArg(mocks.replaceConfigFile, "replaceConfigFile") as {
+      writeOptions?: { explicitSetPaths?: string[][] };
+    };
+    expect(replaceCall.writeOptions?.explicitSetPaths).toEqual([["channels", "telegram"]]);
   });
 
   it("still supports keyless web search providers through the shared setup flow", async () => {

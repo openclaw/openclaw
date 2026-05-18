@@ -9,8 +9,9 @@ import {
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
-import { diffConfigPaths } from "./config-diff.js";
+import { diffConfigPathSegments, diffConfigPaths } from "./config-diff.js";
 import {
+  applyNoopEnabledChannelActivationRestarts,
   buildGatewayReloadPlan,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
@@ -20,6 +21,7 @@ import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 
 export {
   buildGatewayReloadPlan,
+  diffConfigPathSegments,
   diffConfigPaths,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
@@ -182,13 +184,14 @@ export function startGatewayConfigReloader(opts: {
     nextCompareConfig: OpenClawConfig,
     afterWrite?: ConfigWriteNotification["afterWrite"],
   ) => {
-    const configChangedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
+    const previousCompareConfig = currentCompareConfig;
+    const configChangedPaths = diffConfigPaths(previousCompareConfig, nextCompareConfig);
     const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
-      currentCompareConfig,
+      previousCompareConfig,
       nextCompareConfig,
     );
     const configPluginInstallWholeRecordPaths = listPluginInstallWholeRecordPaths(
-      currentCompareConfig,
+      previousCompareConfig,
       nextCompareConfig,
     );
     let nextPluginInstallRecords = currentPluginInstallRecords;
@@ -244,9 +247,14 @@ export function startGatewayConfigReloader(opts: {
       opts.log.info(`config reload skipped by writer intent (${followUp.reason})`);
       return;
     }
-    const plan = buildGatewayReloadPlan(changedPaths, {
-      noopPaths: pluginInstallTimestampNoopPaths,
-      forceChangedPaths: pluginInstallWholeRecordPaths,
+    const plan = applyNoopEnabledChannelActivationRestarts({
+      plan: buildGatewayReloadPlan(changedPaths, {
+        noopPaths: pluginInstallTimestampNoopPaths,
+        forceChangedPaths: pluginInstallWholeRecordPaths,
+      }),
+      previousConfig: previousCompareConfig,
+      nextConfig: nextCompareConfig,
+      changedPaths,
     });
     if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
       return;

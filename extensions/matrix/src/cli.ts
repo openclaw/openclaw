@@ -327,6 +327,36 @@ async function addMatrixAccount(params: {
   }
   await runtime.config.replaceConfigFile({
     nextConfig: updated as never,
+    writeOptions: {
+      explicitSetPaths: [
+        ["channels", "matrix", "enabled"],
+        ["channels", "matrix", "name"],
+        ["channels", "matrix", "homeserver"],
+        ["channels", "matrix", "network", "dangerouslyAllowPrivateNetwork"],
+        ["channels", "matrix", "proxy"],
+        ["channels", "matrix", "userId"],
+        ["channels", "matrix", "accessToken"],
+        ["channels", "matrix", "password"],
+        ["channels", "matrix", "deviceId"],
+        ["channels", "matrix", "deviceName"],
+        ["channels", "matrix", "avatarUrl"],
+        ["channels", "matrix", "initialSyncLimit"],
+        ["channels", "matrix", "encryption"],
+        ["channels", "matrix", "accounts", accountId, "enabled"],
+        ["channels", "matrix", "accounts", accountId, "name"],
+        ["channels", "matrix", "accounts", accountId, "homeserver"],
+        ["channels", "matrix", "accounts", accountId, "network", "dangerouslyAllowPrivateNetwork"],
+        ["channels", "matrix", "accounts", accountId, "proxy"],
+        ["channels", "matrix", "accounts", accountId, "userId"],
+        ["channels", "matrix", "accounts", accountId, "accessToken"],
+        ["channels", "matrix", "accounts", accountId, "password"],
+        ["channels", "matrix", "accounts", accountId, "deviceId"],
+        ["channels", "matrix", "accounts", accountId, "deviceName"],
+        ["channels", "matrix", "accounts", accountId, "avatarUrl"],
+        ["channels", "matrix", "accounts", accountId, "initialSyncLimit"],
+        ["channels", "matrix", "accounts", accountId, "encryption"],
+      ],
+    },
     afterWrite: { mode: "auto" },
   });
   const accountConfig = resolveMatrixAccountConfig({ cfg: updated, accountId });
@@ -371,6 +401,12 @@ async function addMatrixAccount(params: {
         });
         await runtime.config.replaceConfigFile({
           nextConfig: withAvatar as never,
+          writeOptions: {
+            explicitSetPaths: [
+              ["channels", "matrix", "avatarUrl"],
+              ["channels", "matrix", "accounts", accountId, "avatarUrl"],
+            ],
+          },
           afterWrite: { mode: "auto" },
         });
         resolvedAvatarUrl = synced.resolvedAvatarUrl;
@@ -742,6 +778,12 @@ async function setupMatrixEncryption(params: {
   if (encryptionChanged) {
     await runtime.config.replaceConfigFile({
       nextConfig: updated as never,
+      writeOptions: {
+        explicitSetPaths: [
+          ["channels", "matrix", "encryption"],
+          ["channels", "matrix", "accounts", accountId, "encryption"],
+        ],
+      },
       afterWrite: { mode: "auto" },
     });
   }

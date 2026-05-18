@@ -39,6 +39,7 @@ export async function repairLegacyConfigForUpdateChannel(params: {
     baseHash: params.configSnapshot.hash,
     writeOptions: {
       allowConfigSizeDrop: true,
+      allowProtectedConfigPolicyDrop: true,
       skipOutputLogs: params.jsonMode,
     },
   });

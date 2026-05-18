@@ -471,9 +471,14 @@ export async function agentsAddCommand(
       }
     }
 
+    const writeOptions =
+      selection.length > 0
+        ? { explicitSetPaths: selection.map((channel) => ["channels", channel]) }
+        : undefined;
     const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig,
       ...(baseHash !== undefined ? { baseHash } : {}),
+      ...(writeOptions ? { writeOptions } : {}),
     });
     nextConfig = committed.config;
     logConfigUpdated(runtime);

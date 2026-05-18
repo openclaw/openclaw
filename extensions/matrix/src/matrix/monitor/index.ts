@@ -506,6 +506,14 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       replaceConfigFile: async (nextCfg) => {
         await core.config.replaceConfigFile({
           nextConfig: nextCfg,
+          writeOptions: {
+            explicitSetPaths: [
+              ["channels", "matrix", "name"],
+              ["channels", "matrix", "avatarUrl"],
+              ["channels", "matrix", "accounts", effectiveAccountId, "name"],
+              ["channels", "matrix", "accounts", effectiveAccountId, "avatarUrl"],
+            ],
+          },
           afterWrite: { mode: "auto" },
         });
       },

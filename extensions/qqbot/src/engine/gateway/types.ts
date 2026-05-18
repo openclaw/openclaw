@@ -64,6 +64,9 @@ export interface GatewayPluginRuntime {
     current: () => Record<string, unknown>;
     replaceConfigFile: (params: {
       nextConfig: unknown;
+      writeOptions?: {
+        explicitSetPaths?: readonly (readonly string[])[];
+      };
       afterWrite: { mode: "auto" };
     }) => Promise<unknown>;
   };

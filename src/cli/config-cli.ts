@@ -10,6 +10,7 @@ import {
   normalizeAgentModelRefForConfig,
 } from "../config/model-input.js";
 import { CONFIG_PATH } from "../config/paths.js";
+import { isChannelConfigMetaKey } from "../config/protected-policy.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
@@ -264,6 +265,63 @@ function normalizeConfigMutationExplicitSetPath(path: PathSegment[]): PathSegmen
       : [...path.slice(0, 3), normalizedModelId, ...path.slice(4)];
   }
   return path;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function addUniqueExplicitSetPath(paths: PathSegment[][], seen: Set<string>, path: PathSegment[]) {
+  const key = path.join("\u0000");
+  if (seen.has(key)) {
+    return;
+  }
+  seen.add(key);
+  paths.push(path);
+}
+
+function normalizeConfigMutationExplicitSetPaths(params: {
+  previousConfig: unknown;
+  nextConfig: unknown;
+  paths: PathSegment[][];
+}): PathSegment[][] {
+  const normalizedPaths = params.paths.map(normalizeConfigMutationExplicitSetPath);
+  const result: PathSegment[][] = [];
+  const seen = new Set<string>();
+  for (const path of normalizedPaths) {
+    addUniqueExplicitSetPath(result, seen, path);
+    if (path.length < 3 || path[0] !== "channels") {
+      continue;
+    }
+    const channelId = path[1];
+    if (!channelId || isChannelConfigMetaKey(channelId)) {
+      continue;
+    }
+    const previousChannels = isRecord(params.previousConfig)
+      ? params.previousConfig.channels
+      : undefined;
+    const nextChannels = isRecord(params.nextConfig) ? params.nextConfig.channels : undefined;
+    const previousChannel = isRecord(previousChannels) ? previousChannels[channelId] : undefined;
+    const nextChannel = isRecord(nextChannels) ? nextChannels[channelId] : undefined;
+    if (!isRecord(previousChannel) && isRecord(nextChannel) && nextChannel.enabled !== false) {
+      addUniqueExplicitSetPath(result, seen, ["channels", channelId]);
+    }
+    if (path.length < 5 || path[2] !== "accounts") {
+      continue;
+    }
+    const accountId = path[3];
+    if (!accountId || !isRecord(nextChannel)) {
+      continue;
+    }
+    const previousAccounts = isRecord(previousChannel) ? previousChannel.accounts : undefined;
+    const nextAccounts = nextChannel.accounts;
+    const previousAccount = isRecord(previousAccounts) ? previousAccounts[accountId] : undefined;
+    const nextAccount = isRecord(nextAccounts) ? nextAccounts[accountId] : undefined;
+    if (!isRecord(previousAccount) && isRecord(nextAccount) && nextAccount.enabled !== false) {
+      addUniqueExplicitSetPath(result, seen, ["channels", channelId, "accounts", accountId]);
+    }
+  }
+  return result;
 }
 
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
@@ -1749,7 +1807,11 @@ async function runConfigOperations(params: {
     operations,
   });
   const nextConfig = normalizeConfigMutationModelRefs(next as OpenClawConfig);
-  const normalizedExplicitSetPaths = explicitSetPaths.map(normalizeConfigMutationExplicitSetPath);
+  const normalizedExplicitSetPaths = normalizeConfigMutationExplicitSetPaths({
+    previousConfig: snapshot.resolved,
+    nextConfig,
+    paths: explicitSetPaths,
+  });
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(nextConfig);
   const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
     (line) => line.trim(),
@@ -2100,7 +2162,7 @@ export async function runConfigUnset(opts: {
       nextConfig: next,
       ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
       ...(unsetResult.leafContainer === "array"
-        ? {}
+        ? { writeOptions: { explicitSetPaths: [parsedPath] } }
         : { writeOptions: { unsetPaths: [parsedPath] } }),
     });
     runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));

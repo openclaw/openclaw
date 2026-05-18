@@ -18,6 +18,9 @@ type MockValidationResult =
 
 const ioMocks = vi.hoisted(() => ({
   readConfigFileSnapshotForWrite: vi.fn(),
+  resolveProtectedConfigPolicyWriteBlockingReasons: vi.fn(
+    (_params: { explicitSetPaths?: readonly (readonly string[])[] }): string[] => [],
+  ),
   resolveConfigSnapshotHash: vi.fn(),
   writeConfigFile: vi.fn(),
 }));
@@ -91,6 +94,8 @@ describe("config mutate helpers", () => {
     ioMocks.resolveConfigSnapshotHash.mockImplementation(
       (snapshot: { hash?: string }) => snapshot.hash ?? null,
     );
+    ioMocks.resolveProtectedConfigPolicyWriteBlockingReasons.mockReset();
+    ioMocks.resolveProtectedConfigPolicyWriteBlockingReasons.mockReturnValue([]);
     delete process.env.OPENCLAW_NIX_MODE;
   });
 
@@ -131,6 +136,80 @@ describe("config mutate helpers", () => {
         },
       },
       { baseSnapshot: snapshot, expectedConfigPath: snapshot.path, afterWrite: { mode: "auto" } },
+    );
+  });
+
+  it("marks protected policy paths touched by transform mutations as explicit", async () => {
+    const snapshot = createSnapshot({
+      hash: "source-hash",
+      sourceConfig: {
+        channels: { telegram: { enabled: true, allowFrom: ["123"] } },
+        tools: { elevated: { allowFrom: { telegram: ["123"] } } },
+      },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    await transformConfigFileWithRetry({
+      baseHash: snapshot.hash,
+      base: "source",
+      transform(currentConfig) {
+        return {
+          nextConfig: {
+            ...currentConfig,
+            channels: { telegram: { enabled: true, allowFrom: ["456"] } },
+            tools: { elevated: { allowFrom: { telegram: ["456"] } } },
+          },
+        };
+      },
+    });
+
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(
+      {
+        channels: { telegram: { enabled: true, allowFrom: ["456"] } },
+        tools: { elevated: { allowFrom: { telegram: ["456"] } } },
+      },
+      expect.objectContaining({
+        explicitSetPaths: expect.arrayContaining([
+          ["channels", "telegram", "allowFrom"],
+          ["tools", "elevated", "allowFrom", "telegram"],
+        ]),
+      }),
+    );
+  });
+
+  it("marks newly-created channel configs from transform mutations as explicit", async () => {
+    const snapshot = createSnapshot({
+      hash: "source-hash",
+      sourceConfig: {},
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    await transformConfigFileWithRetry({
+      baseHash: snapshot.hash,
+      base: "source",
+      transform(currentConfig) {
+        return {
+          nextConfig: {
+            ...currentConfig,
+            channels: { whatsapp: { enabled: true } },
+          },
+        };
+      },
+    });
+
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(
+      {
+        channels: { whatsapp: { enabled: true } },
+      },
+      expect.objectContaining({
+        explicitSetPaths: expect.arrayContaining([["channels", "whatsapp"]]),
+      }),
     );
   });
 
@@ -605,6 +684,197 @@ describe("config mutate helpers", () => {
       entries?: Record<string, unknown>;
     };
     expect(persistedPlugins.entries?.["strict-plugin"]).toEqual({ enabled: true });
+  });
+
+  it("rejects protected policy drops before writing top-level includes", async () => {
+    const home = await suiteRootTracker.make("include-protected-policy");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const channelsPath = path.join(home, ".openclaw", "config", "channels.json5");
+    await fs.mkdir(path.dirname(channelsPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ channels: { $include: "./config/channels.json5" } }, null, 2)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      channelsPath,
+      `${JSON.stringify({ whatsapp: { allowFrom: ["+15550001111"] } }, null, 2)}\n`,
+      "utf-8",
+    );
+    const snapshot = createSnapshot({
+      hash: "hash-include-protected",
+      path: configPath,
+      parsed: { channels: { $include: "./config/channels.json5" } },
+      sourceConfig: {
+        channels: {
+          whatsapp: { allowFrom: ["+15550001111"] },
+        },
+      },
+    });
+    ioMocks.resolveProtectedConfigPolicyWriteBlockingReasons.mockReturnValueOnce([
+      "protected-channel-config-changed:channels.whatsapp",
+    ]);
+
+    await expect(
+      replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions: {},
+        nextConfig: { channels: { whatsapp: {} } },
+      }),
+    ).rejects.toMatchObject({
+      code: "CONFIG_WRITE_REJECTED",
+      reasons: ["protected-channel-config-changed:channels.whatsapp"],
+    });
+    await expect(fs.readFile(channelsPath, "utf-8")).resolves.toContain("+15550001111");
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("treats include-path unsets as explicit protected policy edits", async () => {
+    const home = await suiteRootTracker.make("include-explicit-unset");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const channelsPath = path.join(home, ".openclaw", "config", "channels.json5");
+    await fs.mkdir(path.dirname(channelsPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ channels: { $include: "./config/channels.json5" } }, null, 2)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      channelsPath,
+      `${JSON.stringify({ whatsapp: { allowFrom: ["+15550001111"] } }, null, 2)}\n`,
+      "utf-8",
+    );
+    const snapshot = createSnapshot({
+      hash: "hash-include-unset",
+      path: configPath,
+      parsed: { channels: { $include: "./config/channels.json5" } },
+      sourceConfig: {
+        channels: {
+          whatsapp: { allowFrom: ["+15550001111"] },
+        },
+      },
+    });
+    ioMocks.resolveProtectedConfigPolicyWriteBlockingReasons.mockImplementationOnce((params) => {
+      expect(params.explicitSetPaths).toEqual(
+        expect.arrayContaining([["channels", "whatsapp", "allowFrom"]]),
+      );
+      return [];
+    });
+
+    await replaceConfigFile({
+      baseHash: snapshot.hash,
+      snapshot,
+      writeOptions: {
+        unsetPaths: [["channels", "whatsapp", "allowFrom"]],
+      },
+      nextConfig: {
+        channels: {
+          whatsapp: { allowFrom: ["+15550001111"] },
+        },
+      },
+    });
+
+    const persistedChannels = JSON.parse(await fs.readFile(channelsPath, "utf-8")) as {
+      whatsapp?: Record<string, unknown>;
+    };
+    expect(persistedChannels.whatsapp?.allowFrom).toBeUndefined();
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("falls back to root writes for unsets that remove a top-level include", async () => {
+    const home = await suiteRootTracker.make("include-root-unset");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const channelsPath = path.join(home, ".openclaw", "config", "channels.json5");
+    await fs.mkdir(path.dirname(channelsPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ channels: { $include: "./config/channels.json5" } }, null, 2)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      channelsPath,
+      `${JSON.stringify({ whatsapp: { enabled: true } }, null, 2)}\n`,
+      "utf-8",
+    );
+    const snapshot = createSnapshot({
+      hash: "hash-include-root-unset",
+      path: configPath,
+      parsed: { channels: { $include: "./config/channels.json5" } },
+      sourceConfig: {
+        channels: {
+          whatsapp: { enabled: true },
+        },
+      },
+    });
+
+    await replaceConfigFile({
+      baseHash: snapshot.hash,
+      snapshot,
+      writeOptions: {
+        unsetPaths: [["channels"]],
+      },
+      nextConfig: {
+        channels: {
+          whatsapp: { enabled: true },
+        },
+      },
+    });
+
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(
+      {
+        channels: {
+          whatsapp: { enabled: true },
+        },
+      },
+      expect.objectContaining({
+        baseSnapshot: snapshot,
+        unsetPaths: [["channels"]],
+      }),
+    );
+    await expect(fs.readFile(channelsPath, "utf-8")).resolves.toContain("whatsapp");
+  });
+
+  it("falls back to root writes when a top-level include key is absent from the next config", async () => {
+    const home = await suiteRootTracker.make("include-root-absent");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const channelsPath = path.join(home, ".openclaw", "config", "channels.json5");
+    await fs.mkdir(path.dirname(channelsPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ channels: { $include: "./config/channels.json5" } }, null, 2)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      channelsPath,
+      `${JSON.stringify({ whatsapp: { enabled: true } }, null, 2)}\n`,
+      "utf-8",
+    );
+    const snapshot = createSnapshot({
+      hash: "hash-include-root-absent",
+      path: configPath,
+      parsed: { channels: { $include: "./config/channels.json5" } },
+      sourceConfig: {
+        channels: {
+          whatsapp: { enabled: true },
+        },
+      },
+    });
+
+    await replaceConfigFile({
+      baseHash: snapshot.hash,
+      snapshot,
+      writeOptions: {},
+      nextConfig: {},
+    });
+
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        baseSnapshot: snapshot,
+      }),
+    );
+    await expect(fs.readFile(channelsPath, "utf-8")).resolves.toContain("whatsapp");
   });
 
   it("rejects invalid base config before skipped-plugin include writes", async () => {

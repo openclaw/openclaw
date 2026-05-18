@@ -209,6 +209,46 @@ describe("security fix", () => {
     expect(accounts.a1.groupAllowFrom).toEqual(["+15550001111"]);
   });
 
+  it("persists WhatsApp allowlist repairs through the protected config guard", async () => {
+    const stateDir = await createStateDir("protected-policy-repair");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          meta: { lastTouchedVersion: "2026.5.17" },
+          gateway: { mode: "local" },
+          channels: {
+            whatsapp: {
+              groupPolicy: "allowlist",
+              accounts: {
+                work: { groupPolicy: "allowlist" },
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    const res = await fixSecurityFootguns({
+      env: createFixEnv(stateDir, configPath),
+      stateDir,
+      configPath,
+      channelPlugins: [createWhatsAppConfigFixTestPlugin(["+15550001111"])],
+    });
+
+    expect(res.ok).toBe(true);
+    const written = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+    const whatsapp = written.channels?.whatsapp as
+      | { groupAllowFrom?: unknown; accounts?: Record<string, { groupAllowFrom?: unknown }> }
+      | undefined;
+    expect(whatsapp?.groupAllowFrom).toEqual(["+15550001111"]);
+    expect(whatsapp?.accounts?.work?.groupAllowFrom).toEqual(["+15550001111"]);
+  });
+
   it("does not seed WhatsApp groupAllowFrom if allowFrom is set", async () => {
     const { res, channels } = await fixWhatsAppConfigScenario({
       whatsapp: {

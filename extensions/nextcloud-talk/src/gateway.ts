@@ -48,6 +48,8 @@ export const nextcloudTalkGatewayAdapter: NonNullable<
       : undefined;
     let cleared = false;
     let changed = false;
+    let removedChannelBlock = false;
+    let removedAccountBlock = false;
 
     if (nextSection) {
       if (accountId === DEFAULT_ACCOUNT_ID && nextSection.botSecret) {
@@ -65,6 +67,7 @@ export const nextcloudTalkGatewayAdapter: NonNullable<
         if (accountCleanup.cleared) {
           cleared = true;
         }
+        removedAccountBlock = !accountCleanup.nextAccounts?.[accountId];
         if (accountCleanup.nextAccounts) {
           nextSection.accounts = accountCleanup.nextAccounts as Record<string, unknown>;
         } else {
@@ -79,6 +82,7 @@ export const nextcloudTalkGatewayAdapter: NonNullable<
       } else {
         const nextChannels = { ...nextCfg.channels } as Record<string, unknown>;
         delete nextChannels["nextcloud-talk"];
+        removedChannelBlock = true;
         if (Object.keys(nextChannels).length > 0) {
           nextCfg.channels = nextChannels as OpenClawConfig["channels"];
         } else {
@@ -94,8 +98,19 @@ export const nextcloudTalkGatewayAdapter: NonNullable<
     const loggedOut = resolved.secretSource === "none";
 
     if (changed) {
+      const explicitSetPaths = [
+        ["channels", "nextcloud-talk", "botSecret"],
+        ["channels", "nextcloud-talk", "accounts", accountId, "botSecret"],
+      ];
+      if (removedChannelBlock) {
+        explicitSetPaths.push(["channels", "nextcloud-talk"]);
+      }
+      if (removedAccountBlock) {
+        explicitSetPaths.push(["channels", "nextcloud-talk", "accounts", accountId]);
+      }
       await getNextcloudTalkRuntime().config.replaceConfigFile({
         nextConfig: nextCfg,
+        writeOptions: { explicitSetPaths },
         afterWrite: { mode: "auto" },
       });
     }

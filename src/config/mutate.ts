@@ -12,6 +12,7 @@ import { INCLUDE_KEY } from "./includes.js";
 import { createInvalidConfigError, formatInvalidConfigDetails } from "./io.invalid-config.js";
 import {
   readConfigFileSnapshotForWrite,
+  resolveProtectedConfigPolicyWriteBlockingReasons,
   resolveConfigSnapshotHash,
   writeConfigFile,
   type ConfigWriteOptions,
@@ -208,6 +209,141 @@ function getChangedTopLevelKeys(base: unknown, next: unknown): string[] {
   return [...keys].filter((key) => !isDeepStrictEqual(base[key], next[key]));
 }
 
+function isPathPrefix(pathSegments: readonly string[], prefix: readonly string[]): boolean {
+  return prefix.every((segment, index) => pathSegments[index] === segment);
+}
+
+function isPolicyConfigMutationPath(pathSegments: readonly string[]): boolean {
+  if (pathSegments.length === 0) {
+    return false;
+  }
+  if (pathSegments[0] === "channels" && pathSegments[1]) {
+    return pathSegments[1] !== "defaults" && pathSegments[1] !== "modelByChannel";
+  }
+  if (isPathPrefix(pathSegments, ["commands", "ownerAllowFrom"])) {
+    return true;
+  }
+  if (isPathPrefix(pathSegments, ["commands", "allowFrom"])) {
+    return true;
+  }
+  if (isPathPrefix(pathSegments, ["tools", "elevated", "allowFrom"])) {
+    return true;
+  }
+  if (
+    pathSegments.length >= 6 &&
+    pathSegments[0] === "agents" &&
+    pathSegments[1] === "list" &&
+    pathSegments[3] === "tools" &&
+    pathSegments[4] === "elevated" &&
+    pathSegments[5] === "allowFrom"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function hasAgentProtectedPolicy(value: unknown): boolean {
+  return isRecord(value) && isRecord(value.tools) && isRecord(value.tools.elevated)
+    ? isRecord(value.tools.elevated.allowFrom)
+    : false;
+}
+
+function resolveAgentMutationPath(value: unknown, fallbackIndex: number): string[] {
+  return [
+    "agents",
+    "list",
+    isRecord(value) && typeof value.id === "string" ? value.id : String(fallbackIndex),
+  ];
+}
+
+function collectConfigMutationChangedPaths(
+  previous: unknown,
+  next: unknown,
+  pathSegments: string[] = [],
+  paths: string[][] = [],
+): string[][] {
+  if (isDeepStrictEqual(previous, next)) {
+    return paths;
+  }
+  if (
+    pathSegments[0] === "agents" &&
+    pathSegments[1] === "list" &&
+    pathSegments.length === 2 &&
+    Array.isArray(previous) &&
+    Array.isArray(next)
+  ) {
+    const maxLength = Math.max(previous.length, next.length);
+    for (let index = 0; index < maxLength; index += 1) {
+      const previousAgent = previous[index];
+      const nextAgent = next[index];
+      if (isRecord(previousAgent) && isRecord(nextAgent)) {
+        collectConfigMutationChangedPaths(
+          previousAgent,
+          nextAgent,
+          resolveAgentMutationPath(nextAgent, index),
+          paths,
+        );
+        continue;
+      }
+      if (
+        !isDeepStrictEqual(previousAgent, nextAgent) &&
+        (hasAgentProtectedPolicy(previousAgent) || hasAgentProtectedPolicy(nextAgent))
+      ) {
+        paths.push(resolveAgentMutationPath(nextAgent ?? previousAgent, index));
+      }
+    }
+    return paths;
+  }
+  const previousIsObject = isRecord(previous) && !Array.isArray(previous);
+  const nextIsObject = isRecord(next) && !Array.isArray(next);
+  if (!previousIsObject || !nextIsObject) {
+    if (isPolicyConfigMutationPath(pathSegments)) {
+      paths.push(pathSegments);
+      return paths;
+    }
+    const childRecord = previousIsObject ? previous : nextIsObject ? next : null;
+    if (childRecord) {
+      for (const key of Object.keys(childRecord)) {
+        collectConfigMutationChangedPaths(
+          previousIsObject ? childRecord[key] : undefined,
+          nextIsObject ? childRecord[key] : undefined,
+          [...pathSegments, key],
+          paths,
+        );
+      }
+    }
+    return paths;
+  }
+
+  const previousRecord = previous;
+  const nextRecord = next;
+  const keys = new Set([...Object.keys(previousRecord), ...Object.keys(nextRecord)]);
+  for (const key of keys) {
+    collectConfigMutationChangedPaths(
+      previousRecord[key],
+      nextRecord[key],
+      [...pathSegments, key],
+      paths,
+    );
+  }
+  return paths;
+}
+
+export function withConfigMutationExplicitSetPaths(
+  writeOptions: ConfigWriteOptions,
+  previousConfig: OpenClawConfig,
+  nextConfig: OpenClawConfig,
+): ConfigWriteOptions {
+  const explicitMutationPaths = collectConfigMutationChangedPaths(previousConfig, nextConfig);
+  if (explicitMutationPaths.length === 0) {
+    return writeOptions;
+  }
+  return {
+    ...writeOptions,
+    explicitSetPaths: [...(writeOptions.explicitSetPaths ?? []), ...explicitMutationPaths],
+  };
+}
+
 function getSingleTopLevelIncludeTarget(params: {
   snapshot: ConfigFileSnapshot;
   key: string;
@@ -258,10 +394,8 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   writeOptions?: ConfigWriteOptions;
   io?: ConfigMutationIO;
 }): Promise<{ persistedHash: string | null; persistedConfig: OpenClawConfig } | null> {
-  const nextConfig = applyUnsetPathsForWrite(
-    params.nextConfig,
-    resolveManagedUnsetPathsForWrite(params.writeOptions?.unsetPaths),
-  );
+  const unsetPaths = resolveManagedUnsetPathsForWrite(params.writeOptions?.unsetPaths);
+  const nextConfig = applyUnsetPathsForWrite(params.nextConfig, unsetPaths);
   const changedKeys = getChangedTopLevelKeys(params.snapshot.sourceConfig, nextConfig);
   if (changedKeys.length !== 1 || changedKeys[0] === "<root>") {
     return null;
@@ -269,10 +403,34 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
 
   const key = changedKeys[0];
   const includePath = getSingleTopLevelIncludeTarget({ snapshot: params.snapshot, key });
-  if (!includePath || !isRecord(nextConfig) || !(key in nextConfig)) {
+  if (!includePath || !isRecord(nextConfig)) {
     return null;
   }
   const nextConfigRecord = nextConfig as Record<string, unknown>;
+  if (unsetPaths.some((unsetPath) => unsetPath.length === 1 && unsetPath[0] === key)) {
+    return null;
+  }
+  const hasNestedUnsetUnderKey = unsetPaths.some(
+    (unsetPath) => unsetPath.length > 1 && unsetPath[0] === key,
+  );
+  if (!(key in nextConfigRecord) && !hasNestedUnsetUnderKey) {
+    return null;
+  }
+  const nextIncludeValue = key in nextConfigRecord ? nextConfigRecord[key] : {};
+  const blockingReasons = resolveProtectedConfigPolicyWriteBlockingReasons({
+    previousConfig: params.snapshot.sourceConfig,
+    nextConfig,
+    explicitSetPaths: [...(params.writeOptions?.explicitSetPaths ?? []), ...unsetPaths],
+    explicitProtectedConfigPolicyPaths: params.writeOptions?.explicitProtectedConfigPolicyPaths,
+    allowProtectedConfigPolicyDrop: params.writeOptions?.allowProtectedConfigPolicyDrop,
+  });
+  if (blockingReasons.length > 0 && params.writeOptions?.allowDestructiveWrite !== true) {
+    const message = `Config include write rejected: ${includePath} (${blockingReasons.join(", ")}).`;
+    throw Object.assign(new Error(message), {
+      code: "CONFIG_WRITE_REJECTED",
+      reasons: blockingReasons,
+    });
+  }
 
   const validated = validateConfigObjectWithPlugins(
     nextConfig,
@@ -289,7 +447,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();
   const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
   const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
-  await writeJsonFileAtomic(includePath, nextConfigRecord[key]);
+  await writeJsonFileAtomic(includePath, nextIncludeValue);
   if (
     params.writeOptions?.skipRuntimeSnapshotRefresh &&
     !hadRuntimeSnapshot &&
@@ -468,7 +626,11 @@ async function transformConfigFileAttempt<T>(
     nextConfig: transformed.nextConfig,
     snapshot,
     ...(previousHash !== null ? { baseHash: previousHash } : {}),
-    writeOptions: mergedWriteOptions,
+    writeOptions: withConfigMutationExplicitSetPaths(
+      mergedWriteOptions,
+      baseConfig,
+      transformed.nextConfig,
+    ),
     afterWrite,
     io: params.io,
   });

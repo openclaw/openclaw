@@ -95,6 +95,27 @@ function mergeWizardConfigOntoLatest(current: unknown, base: unknown, next: unkn
   return structuredClone(next);
 }
 
+const RESERVED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+
+function resolveChannelConfigWriteOptions(params: {
+  previousConfig: OpenClawConfig;
+  nextConfig: OpenClawConfig;
+}): { explicitSetPaths: string[][] } | undefined {
+  const previousChannels = isPlainObject(params.previousConfig.channels)
+    ? params.previousConfig.channels
+    : {};
+  const nextChannels = isPlainObject(params.nextConfig.channels) ? params.nextConfig.channels : {};
+  const changedChannelKeys = new Set([
+    ...Object.keys(previousChannels),
+    ...Object.keys(nextChannels),
+  ]);
+  const explicitSetPaths = [...changedChannelKeys]
+    .filter((key) => !RESERVED_CHANNEL_CONFIG_KEYS.has(key))
+    .filter((key) => !isDeepStrictEqual(previousChannels[key], nextChannels[key]))
+    .map((key) => ["channels", key]);
+  return explicitSetPaths.length > 0 ? { explicitSetPaths } : undefined;
+}
+
 async function resolveGatewaySecretInputForWizard(params: {
   cfg: OpenClawConfig;
   value: unknown;
@@ -528,9 +549,14 @@ export async function runConfigureWizard(
       const maxRetries = 3;
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
+          const writeOptions = resolveChannelConfigWriteOptions({
+            previousConfig: mergeBaseConfig,
+            nextConfig,
+          });
           const committed = await commitConfigWithPendingPluginInstalls({
             nextConfig,
             ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
+            ...(writeOptions ? { writeOptions } : {}),
           });
           nextConfig = committed.config;
 

@@ -93,6 +93,9 @@ export async function deleteAgentConfigEntry(params: { agentId: string }): Promi
 }> {
   const committed = await mutateConfigFileWithRetry<AgentDeleteMutationResult>({
     afterWrite: { mode: "auto" },
+    writeOptions: {
+      explicitSetPaths: [["agents", "list", params.agentId]],
+    },
     mutate: (draft) => {
       if (!isConfiguredAgent(draft, params.agentId)) {
         throw new AgentConfigPreconditionError("not-found", params.agentId);

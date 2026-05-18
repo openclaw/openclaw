@@ -207,7 +207,7 @@ export async function runNonInteractiveLocalSetup(params: {
   await replaceConfigFile({
     nextConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
-    writeOptions: { allowConfigSizeDrop: true },
+    writeOptions: { allowConfigSizeDrop: true, allowProtectedConfigPolicyDrop: true },
   });
   logConfigUpdated(runtime);
 

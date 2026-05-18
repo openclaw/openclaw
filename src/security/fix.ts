@@ -424,7 +424,10 @@ export async function fixSecurityFootguns(opts?: {
         await replaceConfigFile({
           nextConfig: fixed.cfg,
           snapshot: snap,
-          writeOptions,
+          writeOptions: {
+            ...writeOptions,
+            allowProtectedConfigPolicyDrop: true,
+          },
           io,
           afterWrite: { mode: "auto" },
         });

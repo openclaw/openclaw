@@ -91,6 +91,15 @@ describe("linePlugin gateway.logoutAccount", () => {
     expect(result.loggedOut).toBe(true);
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: {},
+      writeOptions: {
+        explicitSetPaths: expect.arrayContaining([
+          ["channels", "line"],
+          ["channels", "line", "tokenFile"],
+          ["channels", "line", "secretFile"],
+          ["channels", "line", "accounts", DEFAULT_ACCOUNT_ID, "tokenFile"],
+          ["channels", "line", "accounts", DEFAULT_ACCOUNT_ID, "secretFile"],
+        ]),
+      },
       afterWrite: { mode: "auto" },
     });
   });
@@ -117,6 +126,60 @@ describe("linePlugin gateway.logoutAccount", () => {
     expect(result.loggedOut).toBe(true);
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: {},
+      writeOptions: {
+        explicitSetPaths: expect.arrayContaining([
+          ["channels", "line"],
+          ["channels", "line", "accounts", "primary"],
+          ["channels", "line", "accounts", "primary", "tokenFile"],
+          ["channels", "line", "accounts", "primary", "secretFile"],
+        ]),
+      },
+      afterWrite: { mode: "auto" },
+    });
+  });
+
+  it("marks removed account path when other accounts remain", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        line: {
+          accounts: {
+            primary: {
+              tokenFile: "/tmp/token",
+              secretFile: "/tmp/secret",
+            },
+            standby: {
+              name: "Standby",
+            },
+          },
+        },
+      },
+    };
+    const { result, mocks } = await runLogoutScenario({
+      cfg,
+      accountId: "primary",
+    });
+
+    expect(result.cleared).toBe(true);
+    expect(result.loggedOut).toBe(true);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {
+        channels: {
+          line: {
+            accounts: {
+              standby: {
+                name: "Standby",
+              },
+            },
+          },
+        },
+      },
+      writeOptions: {
+        explicitSetPaths: expect.arrayContaining([
+          ["channels", "line", "accounts", "primary"],
+          ["channels", "line", "accounts", "primary", "tokenFile"],
+          ["channels", "line", "accounts", "primary", "secretFile"],
+        ]),
+      },
       afterWrite: { mode: "auto" },
     });
   });

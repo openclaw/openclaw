@@ -11,13 +11,21 @@ Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session
 
 - Onboarding (`openclaw onboard`) and `openclaw channels add --channel whatsapp`
   prompt to install the WhatsApp plugin the first time you select it.
-- `openclaw channels login --channel whatsapp` also offers the install flow when
-  the plugin is not present yet.
+- `openclaw channels login --channel whatsapp` can offer the plugin install
+  flow when the plugin is not present yet, but it does not create or enable the
+  `channels.whatsapp` config block.
 - Dev channel + git checkout: defaults to the local plugin path.
 - Stable/Beta: installs the official `@openclaw/whatsapp` plugin from ClawHub
   first, with npm as the fallback.
 - The WhatsApp runtime is distributed outside the core OpenClaw npm package so
   WhatsApp-specific runtime dependencies stay with the external plugin.
+- `openclaw channels login --channel whatsapp` requires an existing enabled
+  `channels.whatsapp` config block. Use `openclaw channels add --channel whatsapp`
+  first when starting from an empty config.
+- If you flip `channels.whatsapp.enabled` from `false` to `true` while the
+  Gateway is already running, let hybrid/default reload restart the Gateway or
+  restart it manually. Pure hot-reload mode logs the required restart but does
+  not load the newly enabled WhatsApp runtime.
 
 Manual install stays available:
 

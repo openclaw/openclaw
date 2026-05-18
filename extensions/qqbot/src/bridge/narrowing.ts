@@ -3,6 +3,10 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { GatewayAccount } from "../engine/types.js";
 import type { ResolvedQQBotAccount } from "../types.js";
 
+type RuntimeWriteOptions = NonNullable<
+  Parameters<PluginRuntime["config"]["replaceConfigFile"]>[0]["writeOptions"]
+>;
+
 /**
  * Map resolved plugin account to the engine gateway account shape (single assertion on nested config).
  */
@@ -23,9 +27,11 @@ export function toGatewayAccount(account: ResolvedQQBotAccount): GatewayAccount 
 export async function writeOpenClawConfigThroughRuntime(
   runtime: PluginRuntime,
   cfg: OpenClawConfig,
+  writeOptions?: RuntimeWriteOptions,
 ): Promise<void> {
   await runtime.config.replaceConfigFile({
     nextConfig: cfg,
+    ...(writeOptions ? { writeOptions } : {}),
     afterWrite: { mode: "auto" },
   });
 }

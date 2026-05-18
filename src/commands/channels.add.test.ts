@@ -652,6 +652,9 @@ describe("channelsAddCommand", () => {
         },
       },
     });
+    expect(commitInstallCall().writeOptions).toEqual({
+      explicitSetPaths: [["channels", "whatsapp"]],
+    });
   });
 
   it("loads external channel setup snapshots for newly installed and existing plugins", async () => {

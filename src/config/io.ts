@@ -82,6 +82,7 @@ import {
   extractShippedPluginInstallConfigRecords,
   stripShippedPluginInstallConfigRecords,
 } from "./plugin-install-config-migration.js";
+import { listProtectedConfigPolicyChangeReasons } from "./protected-policy.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import {
   clearRuntimeConfigSnapshot as clearRuntimeConfigSnapshotState,
@@ -205,6 +206,11 @@ export type ConfigWriteOptions = {
    */
   explicitSetPaths?: readonly (readonly string[])[];
   /**
+   * Paths that were explicitly changed by the caller for protected-policy
+   * checks only. Unlike explicitSetPaths, these do not force persistence.
+   */
+  explicitProtectedConfigPolicyPaths?: readonly (readonly string[])[];
+  /**
    * Internal companion for explicitSetPaths after a wrapper has projected a
    * runtime-shaped config back onto the authored source shape.
    */
@@ -229,6 +235,11 @@ export type ConfigWriteOptions = {
    * guards active. Used by repair flows that remove stale or legacy config.
    */
   allowConfigSizeDrop?: boolean;
+  /**
+   * Allow intentional removal or broadening of channel/command/elevated
+   * allowlists. Normal runtime writers must keep this false.
+   */
+  allowProtectedConfigPolicyDrop?: boolean;
   /**
    * Suppress human-readable output logs (overwrite/anomaly messages).
    * Useful when the caller wants machine-readable output only (--json mode).
@@ -408,6 +419,10 @@ function resolveConfigWriteSuspiciousReasons(params: {
   hasMetaBefore: boolean;
   gatewayModeBefore: string | null;
   gatewayModeAfter: string | null;
+  previousConfig: unknown;
+  nextConfig: unknown;
+  explicitSetPaths?: readonly (readonly string[])[];
+  explicitProtectedConfigPolicyPaths?: readonly (readonly string[])[];
 }): string[] {
   const reasons: string[] = [];
   if (!params.existsBefore) {
@@ -427,17 +442,48 @@ function resolveConfigWriteSuspiciousReasons(params: {
   if (params.gatewayModeBefore && !params.gatewayModeAfter) {
     reasons.push("gateway-mode-removed");
   }
+  reasons.push(
+    ...listProtectedConfigPolicyChangeReasons({
+      previousConfig: params.previousConfig,
+      nextConfig: params.nextConfig,
+      explicitSetPaths: [
+        ...(params.explicitSetPaths ?? []),
+        ...(params.explicitProtectedConfigPolicyPaths ?? []),
+      ],
+    }),
+  );
   return reasons;
 }
 
 function resolveConfigWriteBlockingReasons(
   suspicious: string[],
-  options: Pick<ConfigWriteOptions, "allowConfigSizeDrop"> = {},
+  options: Pick<ConfigWriteOptions, "allowConfigSizeDrop" | "allowProtectedConfigPolicyDrop"> = {},
 ): string[] {
   return suspicious.filter(
     (reason) =>
       (reason.startsWith("size-drop:") && options.allowConfigSizeDrop !== true) ||
-      reason === "gateway-mode-removed",
+      reason === "gateway-mode-removed" ||
+      (reason.startsWith("protected-") && options.allowProtectedConfigPolicyDrop !== true),
+  );
+}
+
+export function resolveProtectedConfigPolicyWriteBlockingReasons(params: {
+  previousConfig: unknown;
+  nextConfig: unknown;
+  explicitSetPaths?: readonly (readonly string[])[];
+  explicitProtectedConfigPolicyPaths?: readonly (readonly string[])[];
+  allowProtectedConfigPolicyDrop?: boolean;
+}): string[] {
+  return resolveConfigWriteBlockingReasons(
+    listProtectedConfigPolicyChangeReasons({
+      previousConfig: params.previousConfig,
+      nextConfig: params.nextConfig,
+      explicitSetPaths: [
+        ...(params.explicitSetPaths ?? []),
+        ...(params.explicitProtectedConfigPolicyPaths ?? []),
+      ],
+    }),
+    { allowProtectedConfigPolicyDrop: params.allowProtectedConfigPolicyDrop },
   );
 }
 
@@ -2158,6 +2204,7 @@ export function createConfigIO(
     const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
     const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
     const gatewayModeAfter = resolveGatewayMode(stampedOutputConfig);
+    const protectedPolicyNextConfig = applyUnsetPathsForWrite(cfg, unsetPaths);
     const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
       existsBefore: snapshot.exists,
       previousBytes,
@@ -2165,6 +2212,10 @@ export function createConfigIO(
       hasMetaBefore,
       gatewayModeBefore,
       gatewayModeAfter,
+      previousConfig: snapshot.resolved,
+      nextConfig: protectedPolicyNextConfig,
+      explicitSetPaths: [...(options.explicitSetPaths ?? []), ...unsetPaths],
+      explicitProtectedConfigPolicyPaths: options.explicitProtectedConfigPolicyPaths,
     });
     const logConfigOverwrite = () => {
       if (!snapshot.exists) {
@@ -2486,12 +2537,14 @@ export async function writeConfigFile(
     }),
     unsetPaths: resolveManagedUnsetPathsForWrite(options.unsetPaths),
     explicitSetPaths: options.explicitSetPaths,
+    explicitProtectedConfigPolicyPaths: options.explicitProtectedConfigPolicyPaths,
     explicitSetValueSource: options.explicitSetPaths
       ? (options.explicitSetValueSource ?? cfg)
       : undefined,
     afterWrite: options.afterWrite,
     allowDestructiveWrite: options.allowDestructiveWrite,
     allowConfigSizeDrop: options.allowConfigSizeDrop,
+    allowProtectedConfigPolicyDrop: options.allowProtectedConfigPolicyDrop,
     skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
     skipOutputLogs: options.skipOutputLogs,
     skipPluginValidation: options.skipPluginValidation,

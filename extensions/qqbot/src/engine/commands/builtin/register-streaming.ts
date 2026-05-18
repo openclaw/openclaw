@@ -123,7 +123,17 @@ export function registerStreamingCommands(registry: SlashCommandRegistry): void 
           }
         }
 
-        await configApi.replaceConfigFile({ nextConfig: currentCfg, afterWrite: { mode: "auto" } });
+        await configApi.replaceConfigFile({
+          nextConfig: currentCfg,
+          writeOptions: {
+            explicitSetPaths: [
+              ["channels", "qqbot", "streaming"],
+              ["channels", "qqbot", "accounts", accountId, "streaming"],
+              ["channels", "qqbot", "accounts", "default", "streaming"],
+            ],
+          },
+          afterWrite: { mode: "auto" },
+        });
 
         return [
           `✅ 流式消息已${wantOn ? "开启" : "关闭"}`,

@@ -57,6 +57,7 @@ const transformConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
 
 const wizardMocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(),
+  setupChannels: vi.fn(),
 }));
 
 vi.mock("../config/config.js", async () => ({
@@ -77,6 +78,10 @@ vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: wizardMocks.createClackPrompter,
 }));
 
+vi.mock("./onboard-channels.js", () => ({
+  setupChannels: wizardMocks.setupChannels,
+}));
+
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { __testing } from "./agents.commands.add.js";
 import { agentsAddCommand } from "./agents.js";
@@ -90,6 +95,8 @@ describe("agents add command", () => {
     replaceConfigFileMock.mockClear();
     transformConfigWithPendingPluginInstallsMock.mockClear();
     wizardMocks.createClackPrompter.mockClear();
+    wizardMocks.setupChannels.mockReset();
+    wizardMocks.setupChannels.mockImplementation(async (cfg: Record<string, unknown>) => cfg);
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
@@ -353,6 +360,41 @@ describe("agents add command", () => {
         sourceIsInheritedMain: true,
       }),
     ).toBe('OAuth profiles stay shared from "main" unless this agent signs in separately.');
+  });
+
+  it("marks interactive channel setup writes as explicit", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot, config: {}, sourceConfig: {} });
+    wizardMocks.setupChannels.mockImplementation(
+      async (
+        cfg: Record<string, unknown>,
+        _runtime: unknown,
+        _prompter: unknown,
+        options: { onSelection?: (selection: string[]) => void },
+      ) => {
+        options.onSelection?.(["telegram"]);
+        return {
+          ...cfg,
+          channels: {
+            telegram: { enabled: true },
+          },
+        };
+      },
+    );
+    wizardMocks.createClackPrompter.mockReturnValue({
+      intro: vi.fn(),
+      text: vi.fn().mockResolvedValue("/tmp/work"),
+      confirm: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(false),
+      note: vi.fn(),
+      outro: vi.fn(),
+    });
+
+    await agentsAddCommand({ name: "Work" }, runtime, { hasFlags: false });
+
+    expect(replaceConfigFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        writeOptions: { explicitSetPaths: [["channels", "telegram"]] },
+      }),
+    );
   });
 
   describe("non-interactive config mutation", () => {

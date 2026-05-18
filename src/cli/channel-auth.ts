@@ -1,3 +1,4 @@
+import { resolveChannelConfigBlockError } from "../channels/config-block.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   getChannelPlugin,
@@ -215,15 +216,52 @@ export async function runChannelLogin(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
+  const authoredCfg = getRuntimeConfig();
   const autoEnabled = applyPluginAutoEnable({
-    config: getRuntimeConfig(),
+    config: authoredCfg,
     env: process.env,
   });
   const loadedCfg = autoEnabled.config;
-  const resolvedChannel = await resolveChannelPluginForMode(opts, "login", loadedCfg, runtime);
+  const explicitChannel = opts.channel?.trim();
+  if (explicitChannel) {
+    const normalizedChannelId = normalizeChannelId(explicitChannel);
+    const preflightChannel = await resolveInstallableChannelPlugin({
+      cfg: loadedCfg,
+      runtime,
+      rawChannel: explicitChannel,
+      ...(normalizedChannelId ? { channelId: normalizedChannelId } : {}),
+      allowInstall: false,
+      supports: (candidate) => supportsChannelAuthMode(candidate, "login"),
+    });
+    if (preflightChannel.channelId) {
+      const configBlockError = resolveChannelConfigBlockError({
+        cfg: authoredCfg,
+        channelId: preflightChannel.channelId,
+        action: "logging in",
+      });
+      if (configBlockError) {
+        throw new Error(configBlockError);
+      }
+    }
+  }
+  const loginResolutionCfg = explicitChannel ? loadedCfg : authoredCfg;
+  const resolvedChannel = await resolveChannelPluginForMode(
+    opts,
+    "login",
+    loginResolutionCfg,
+    runtime,
+  );
   let cfg = resolvedChannel.cfg;
   const { configChanged, channelInput, plugin } = resolvedChannel;
-  if (autoEnabled.changes.length > 0 || configChanged) {
+  const configBlockError = resolveChannelConfigBlockError({
+    cfg: authoredCfg,
+    channelId: plugin.id,
+    action: "logging in",
+  });
+  if (configBlockError) {
+    throw new Error(configBlockError);
+  }
+  if (configChanged) {
     const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig: cfg,
       baseHash: (await sourceSnapshotPromise)?.hash,
@@ -272,7 +310,7 @@ export async function runChannelLogout(
   const resolvedChannel = await resolveChannelPluginForMode(opts, "logout", loadedCfg, runtime);
   let cfg = resolvedChannel.cfg;
   const { configChanged, channelInput, plugin } = resolvedChannel;
-  if (autoEnabled.changes.length > 0 || configChanged) {
+  if (configChanged) {
     const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig: cfg,
       baseHash: (await sourceSnapshotPromise)?.hash,
