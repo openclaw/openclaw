@@ -1222,14 +1222,18 @@ describe("config cli", () => {
       expect(helpText).toContain("--batch-json");
       expect(helpText).toContain("--dry-run");
       expect(helpText).toContain("--allow-exec");
-      expect(helpText).toContain("openclaw config set gateway.port 19001 --strict-json");
-      expect(helpText).toContain(
-        "openclaw config set channels.discord.token --ref-provider default --ref-source",
+      // Example commands may include --profile/--container flags injected by
+      // formatCliCommand when OPENCLAW_PROFILE or OPENCLAW_CONTAINER_HINT env
+      // vars leak from a prior test in the same worker. Commander also
+      // word-wraps long description lines.
+      // We normalize all whitespace to single spaces so we can use simple
+      // string matching without worrying about flag injection or line reflowing.
+      const normalizedHelp = helpText.replace(/\s+/g, " ");
+      expect(normalizedHelp).toContain("config set gateway.port 19001 --strict-json");
+      expect(normalizedHelp).toContain(
+        "channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN",
       );
-      expect(helpText).toContain("--ref-id DISCORD_BOT_TOKEN");
-      expect(helpText).toContain(
-        "openclaw config set --batch-file ./config-set.batch.json --dry-run",
-      );
+      expect(normalizedHelp).toContain("--batch-file ./config-set.batch.json --dry-run");
     });
   });
 
