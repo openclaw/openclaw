@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - QA-Lab: extend the personal-agent benchmark pack with a local task followthrough scenario for proof-backed pending, blocked, and done status reporting. Thanks @iFiras-Max1.
 - Gateway/performance: add `pnpm test:restart:gateway` benchmark tooling for repeated restart readiness, downtime, trace, and resource-slope evidence. (#83299) Thanks @samzong.
 - Android: switch Talk Mode to realtime Gateway relay voice sessions with streaming mic input, realtime audio playback, tool-result bridging, and on-screen transcripts. (#83130) Thanks @sliekens.
+- Notifications: add a shared `notificationWake.reactions` policy so Discord and Telegram reaction system events can stay queued by default, be disabled, or wake the routed agent immediately.
 
 ### Fixes
 

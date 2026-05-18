@@ -1362,7 +1362,8 @@ describe("runHeartbeatOnce", () => {
 
   async function runHeartbeatFileScenario(params: {
     fileState: HeartbeatFileState;
-    reason?: "interval" | "wake";
+    reason?: string;
+    source?: "interval" | "hook" | "notifications-event";
     queueCronEvent?: boolean;
     replyText?: string;
   }) {
@@ -1461,11 +1462,16 @@ describe("runHeartbeatOnce", () => {
       .mockResolvedValue({ messageId: "m1", toJid: "jid" });
     const res = await runHeartbeatOnce({
       cfg,
-      ...(params.reason === "wake"
-        ? { source: "hook" as const, intent: "immediate" as const }
-        : params.reason === "interval"
-          ? { source: "interval" as const, intent: "scheduled" as const }
-          : {}),
+      ...(params.source
+        ? {
+            source: params.source,
+            intent: params.source === "interval" ? ("scheduled" as const) : ("immediate" as const),
+          }
+        : params.reason === "wake"
+          ? { source: "hook" as const, intent: "immediate" as const }
+          : params.reason === "interval"
+            ? { source: "interval" as const, intent: "scheduled" as const }
+            : {}),
       reason: params.reason,
       deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
     });
@@ -1641,7 +1647,8 @@ tasks:
     const cases: Array<{
       name: string;
       fileState: HeartbeatFileState;
-      reason?: "interval" | "wake";
+      reason?: string;
+      source?: "interval" | "hook" | "notifications-event";
       queueCronEvent?: boolean;
       expectedStatus: "ran" | "skipped";
       expectedSkipReason?: "empty-heartbeat-file";
@@ -1682,6 +1689,26 @@ tasks:
         expectedSendCalls: 1,
         expectedReplyCalls: 1,
         replyText: "wake event processed",
+      },
+      {
+        name: "empty file + notification wake runs",
+        fileState: "empty",
+        reason: "notification-wake:telegram-reaction",
+        source: "notifications-event",
+        expectedStatus: "ran",
+        expectedSendCalls: 1,
+        expectedReplyCalls: 1,
+        replyText: "reaction event processed",
+      },
+      {
+        name: "empty file + generic notification event skips",
+        fileState: "empty",
+        reason: "notifications-event",
+        source: "notifications-event",
+        expectedStatus: "skipped",
+        expectedSkipReason: "empty-heartbeat-file",
+        expectedSendCalls: 0,
+        expectedReplyCalls: 0,
       },
       {
         name: "empty file + queued cron interval runs",

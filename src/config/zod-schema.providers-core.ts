@@ -32,6 +32,7 @@ import {
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
+import { NotificationWakePolicyConfigSchema } from "./zod-schema.notifications.js";
 import {
   validateSlackSigningSecretRequirements,
   validateTelegramWebhookSecretRequirements,
@@ -363,6 +364,7 @@ export const TelegramAccountSchemaBase = z
     reactionNotifications: z.enum(["off", "own", "all"]).optional(),
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    notificationWake: NotificationWakePolicyConfigSchema,
     healthMonitor: ChannelHealthMonitorSchema,
     linkPreview: z.boolean().optional(),
     silentErrorReplies: z.boolean().optional(),
@@ -671,6 +673,7 @@ export const DiscordAccountSchema = z
     dm: DiscordDmSchema.optional(),
     guilds: z.record(z.string(), DiscordGuildSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    notificationWake: NotificationWakePolicyConfigSchema,
     healthMonitor: ChannelHealthMonitorSchema,
     execApprovals: z
       .object({

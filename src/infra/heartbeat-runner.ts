@@ -906,10 +906,13 @@ function resolveHeartbeatWakePayloadFlags(params: {
 }): HeartbeatWakePayloadFlags {
   const source = params.source ?? inferHeartbeatWakeSourceFromReason(params.reason);
   const reason = (params.reason ?? "").trim();
+  const isNotificationWake =
+    source === "notifications-event" && reason.startsWith("notification-wake:");
   return {
     isExecEventWake: source === "exec-event",
     isCronWake: source === "cron",
-    isWakePayload: source === "hook" || source === "acp-spawn" || reason === "wake",
+    isWakePayload:
+      source === "hook" || source === "acp-spawn" || isNotificationWake || reason === "wake",
   };
 }
 

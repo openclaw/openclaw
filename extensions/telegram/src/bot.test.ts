@@ -3202,9 +3202,46 @@ describe("createTelegramBot", () => {
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
     expect(firstSystemEventArg(0)).toBe(
-      `Telegram reaction added: ${THUMBS_UP_EMOJI} by Ada (@ada_bot) on msg 42`,
+      `Telegram reaction added: ${THUMBS_UP_EMOJI} by Ada (@ada_bot) on msg 42 (reaction_key=emoji:${THUMBS_UP_EMOJI})`,
     );
-    expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:1234:42:9");
+    expect(String(systemEventOptions().contextKey)).toContain(
+      `telegram:reaction:add:1234:42:9:emoji:${THUMBS_UP_EMOJI}`,
+    );
+    expect(systemEventOptions().forceSenderIsOwnerFalse).toBe(true);
+  });
+
+  it("uses stable custom emoji ids for reaction events", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 509 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "custom_emoji", custom_emoji_id: "ce-1" }],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
+    expect(firstSystemEventArg(0)).toBe(
+      "Telegram reaction added: custom emoji ce-1 by Ada on msg 42 (reaction_key=custom_emoji:ce-1)",
+    );
+    expect(String(systemEventOptions().contextKey)).toContain("custom_emoji:ce-1");
   });
 
   it.each([
@@ -3429,7 +3466,9 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(firstSystemEventArg(0)).toBe(`Telegram reaction added: ${PARTY_EMOJI} by Ada on msg 99`);
+    expect(firstSystemEventArg(0)).toBe(
+      `Telegram reaction added: ${PARTY_EMOJI} by Ada on msg 99 (reaction_key=emoji:${PARTY_EMOJI})`,
+    );
     expect(firstSystemEventArg(1)).toBeTypeOf("object");
   });
 
@@ -3589,8 +3628,8 @@ describe("createTelegramBot", () => {
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(2);
     expect(enqueueSystemEventSpy.mock.calls.map((call) => call[0])).toEqual([
-      `Telegram reaction added: ${FIRE_EMOJI} by Ada on msg 42`,
-      `Telegram reaction added: ${PARTY_EMOJI} by Ada on msg 42`,
+      `Telegram reaction added: ${FIRE_EMOJI} by Ada on msg 42 (reaction_key=emoji:${FIRE_EMOJI})`,
+      `Telegram reaction added: ${PARTY_EMOJI} by Ada on msg 42 (reaction_key=emoji:${PARTY_EMOJI})`,
     ]);
   });
 
@@ -3625,7 +3664,7 @@ describe("createTelegramBot", () => {
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
     expect(firstSystemEventArg(0)).toBe(
-      `Telegram reaction added: ${FIRE_EMOJI} by Bob (@bob_user) on msg 100`,
+      `Telegram reaction added: ${FIRE_EMOJI} by Bob (@bob_user) on msg 100 (reaction_key=emoji:${FIRE_EMOJI})`,
     );
     expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:5678:topic:1");
     expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:5678:100:10");
@@ -3660,7 +3699,9 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(firstSystemEventArg(0)).toBe(`Telegram reaction added: ${EYES_EMOJI} by Bob on msg 101`);
+    expect(firstSystemEventArg(0)).toBe(
+      `Telegram reaction added: ${EYES_EMOJI} by Bob on msg 101 (reaction_key=emoji:${EYES_EMOJI})`,
+    );
     expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:5678:topic:1");
     expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:5678:101:10");
   });
@@ -3694,7 +3735,7 @@ describe("createTelegramBot", () => {
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
     expect(firstSystemEventArg(0)).toBe(
-      `Telegram reaction added: ${HEART_EMOJI} by Charlie on msg 200`,
+      `Telegram reaction added: ${HEART_EMOJI} by Charlie on msg 200 (reaction_key=emoji:${HEART_EMOJI})`,
     );
     expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:9999");
     expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:9999:200:11");

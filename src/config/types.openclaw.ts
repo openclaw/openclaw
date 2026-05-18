@@ -23,6 +23,7 @@ import type {
 } from "./types.messages.js";
 import type { ModelsConfig } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
+import type { NotificationsConfig } from "./types.notifications.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
@@ -123,6 +124,7 @@ export type OpenClawConfig = {
   plugins?: PluginsConfig;
   surfaces?: Record<string, SurfaceConfigEntry>;
   models?: ModelsConfig;
+  notifications?: NotificationsConfig;
   nodeHost?: NodeHostConfig;
   agents?: AgentsConfig;
   tools?: ToolsConfig;

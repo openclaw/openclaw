@@ -22,6 +22,7 @@ import {
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
+import { NotificationsSchema } from "./zod-schema.notifications.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
@@ -860,6 +861,7 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     channels: ChannelsSchema,
+    notifications: NotificationsSchema,
     discovery: z
       .object({
         wideArea: z

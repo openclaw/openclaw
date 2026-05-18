@@ -12,6 +12,7 @@ import type {
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channel-health.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type { NotificationWakePolicyConfig } from "./types.notifications.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
@@ -399,6 +400,8 @@ export type DiscordAccountConfig = {
   guilds?: Record<string, DiscordGuildEntry>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Notification system-event wake policy for this Discord account/channel. */
+  notificationWake?: NotificationWakePolicyConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: ChannelHealthMonitorConfig;
   /** Exec approval forwarding configuration. */

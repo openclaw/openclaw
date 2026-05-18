@@ -17,6 +17,7 @@ import {
   ToolsMediaSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
+import { NotificationWakePolicyConfigSchema } from "./zod-schema.notifications.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 export const AgentRunRetriesConfigSchema = z
@@ -976,6 +977,7 @@ export const AgentEntrySchema = z
     contextLimits: AgentContextLimitsSchema,
     contextTokens: z.number().int().positive().optional(),
     heartbeat: HeartbeatSchema,
+    notificationWake: NotificationWakePolicyConfigSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
     subagents: z

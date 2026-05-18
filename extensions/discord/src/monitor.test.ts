@@ -971,6 +971,7 @@ function makeReactionEvent(overrides?: {
   userId?: string;
   messageId?: string;
   emojiName?: string;
+  emojiId?: string | null;
   botAsAuthor?: boolean;
   messageAuthorId?: string;
   messageFetch?: ReturnType<typeof vi.fn>;
@@ -993,7 +994,7 @@ function makeReactionEvent(overrides?: {
     guild_id: overrides?.guildId,
     channel_id: channelId,
     message_id: messageId,
-    emoji: { name: overrides?.emojiName ?? "👍", id: null },
+    emoji: { name: overrides?.emojiName ?? "👍", id: overrides?.emojiId ?? null },
     guild: overrides?.guild,
     rawMember: overrides?.memberRoleIds ? { roles: overrides.memberRoleIds } : undefined,
     user: {
@@ -1044,9 +1045,10 @@ function makeReactionListenerParams(overrides?: {
   groupPolicy?: "open" | "allowlist" | "disabled";
   allowNameMatching?: boolean;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
+  cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
 }) {
   return {
-    cfg: {} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
+    cfg: overrides?.cfg ?? ({} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig),
     accountId: "acc-1",
     runtime: {} as import("openclaw/plugin-sdk/runtime-env").RuntimeEnv,
     botUserId: overrides?.botUserId ?? "bot-1",
@@ -1103,12 +1105,30 @@ describe("discord DM reaction handling", () => {
       const [text, opts] = firstMockCall(enqueueSystemEventSpy, "enqueueSystemEvent");
       expect(text, testCase.name).toContain("Discord reaction added");
       expect(text, testCase.name).toContain("👍");
+      expect(text, testCase.name).toContain("reaction_key=emoji:👍");
       expect(text, testCase.name).toContain("dm");
       expect(text, testCase.name).not.toContain("undefined");
-      expect(requireRecord(opts, "system event options").sessionKey, testCase.name).toBe(
-        "discord:acc-1:dm:user-1",
-      );
+      const eventOptions = requireRecord(opts, "system event options");
+      expect(eventOptions.sessionKey, testCase.name).toBe("discord:acc-1:dm:user-1");
+      expect(eventOptions.contextKey, testCase.name).toContain("emoji:👍");
+      expect(eventOptions.forceSenderIsOwnerFalse, testCase.name).toBe(true);
     }
+  });
+
+  it("uses stable custom emoji ids for reaction events", async () => {
+    enqueueSystemEventSpy.mockClear();
+
+    const data = makeReactionEvent({ botAsAuthor: true, emojiName: "party", emojiId: "emoji-1" });
+    const client = makeReactionClient({ channelType: ChannelType.DM });
+    const listener = new DiscordReactionListener(makeReactionListenerParams());
+
+    await listener.handle(data, client);
+
+    const [text, opts] = firstMockCall(enqueueSystemEventSpy, "enqueueSystemEvent");
+    expect(text).toContain("reaction_key=custom_emoji:emoji-1");
+    expect(requireRecord(opts, "system event options").contextKey).toContain(
+      "custom_emoji:emoji-1",
+    );
   });
 
   it("blocks DM reactions when dmPolicy is disabled", async () => {

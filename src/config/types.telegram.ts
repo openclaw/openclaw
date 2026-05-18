@@ -13,6 +13,7 @@ import type {
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channel-health.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type { NotificationWakePolicyConfig } from "./types.notifications.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type TelegramActionConfig = {
@@ -191,6 +192,8 @@ export type TelegramAccountConfig = {
   reactionLevel?: "off" | "ack" | "minimal" | "extensive";
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Notification system-event wake policy for this Telegram account/channel. */
+  notificationWake?: NotificationWakePolicyConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: ChannelHealthMonitorConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */

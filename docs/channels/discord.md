@@ -877,7 +877,23 @@ Default slash command settings:
     - `all`
     - `allowlist` (uses `guilds.<id>.users`)
 
-    Reaction events are turned into system events and attached to the routed Discord session.
+    Reaction events are turned into system events and attached to the routed Discord session. By default they queue for the next turn without waking the agent.
+
+    Wake immediately after queueing accepted reaction events:
+
+```json5
+{
+  channels: {
+    discord: {
+      notificationWake: {
+        reactions: "wake",
+      },
+    },
+  },
+}
+```
+
+    `notificationWake.reactions` accepts `off`, `queue` (default), `wake`, or `inherit`. The same key is also available under `channels.discord.accounts.<accountId>`, `channels.defaults`, `agents.defaults`, and `agents.list[]`.
 
   </Accordion>
 

@@ -1499,6 +1499,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Additional run retry iterations granted per fallback profile candidate for this agent.",
   "agents.list[].runRetries.min": "Minimum absolute limit for run retry iterations for this agent.",
   "agents.list[].runRetries.max": "Maximum absolute limit for run retry iterations for this agent.",
+  "agents.defaults.notificationWake":
+    "Default wake policy for notification-backed system events routed to this agent. Use this to opt an agent into immediate wakes or suppress noisy notification families without changing channel ingestion.",
+  "agents.defaults.notificationWake.reactions":
+    'Default reaction notification behavior for agents: "queue" stores the event for the next turn, "wake" starts the routed session after enqueue, "off" drops reaction events, and "inherit" defers to broader defaults.',
+  "agents.list[].notificationWake":
+    "Per-agent override for notification-backed system event wake behavior. Use this when one agent should wake on routed events while other agents keep queued-only notification handling.",
+  "agents.list[].notificationWake.reactions":
+    'Per-agent reaction notification behavior: "queue" keeps the event pending, "wake" requests an immediate heartbeat after enqueue, "off" suppresses it, and "inherit" falls through to defaults.',
   "agents.defaults.embeddedPi":
     "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedPi.projectSettingsPolicy":
@@ -1832,6 +1840,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum number of queued inbound items retained before drop policy applies. Default is 20; keep caps bounded in noisy channels so memory usage remains predictable.",
   "messages.queue.drop":
     'Drop strategy when queue cap is exceeded. "summarize" drops oldest entries but preserves compact summaries; "old" drops oldest without summaries; "new" rejects the newest item. Use "summarize" for long-running chats where context matters.',
+  notifications:
+    "Global notification-backed system event defaults. Channel and agent settings can override these values for specific routed conversations.",
+  "notifications.systemEvents":
+    "Default handling for notification events converted into system events before an agent turn. Use channel, account, or agent overrides for narrower behavior.",
+  "notifications.systemEvents.reactions":
+    'Global reaction notification behavior: "queue" stores accepted events for the next turn, "wake" also requests an immediate heartbeat, "off" disables reaction system events, and "inherit" falls through to the built-in queue default.',
   "messages.inbound":
     "Direct inbound debounce settings used before queue/turn processing starts. Configure this for provider-specific rapid message bursts from the same sender.",
   "messages.inbound.byChannel":
@@ -1874,6 +1888,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Shows degraded/error heartbeat alerts when true so operator channels surface problems promptly. Keep enabled in production so broken channel states are visible.",
   "channels.defaults.heartbeat.useIndicator":
     "Enables concise indicator-style heartbeat rendering instead of verbose status text where supported. Use indicator mode for dense dashboards with many active channels.",
+  "channels.defaults.notificationWake":
+    "Default notification-backed system event wake policy for channels. Channel-specific and account-specific settings override this default.",
+  "channels.defaults.notificationWake.reactions":
+    'Default channel reaction notification behavior: "queue" keeps events pending, "wake" wakes after enqueue, "off" drops accepted reaction events, and "inherit" falls through to global notification defaults.',
   "channels.defaults.botLoopProtection":
     "Default pair loop protection settings for channel providers that support bot-to-bot loop guards. Use provider-specific overrides only when one channel needs a different budget.",
   "channels.defaults.botLoopProtection.enabled":
