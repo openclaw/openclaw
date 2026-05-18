@@ -3069,6 +3069,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
+    retainUnauthorizedOwnerOnlyTools: true,
     allowGatewaySubagentBinding:
       params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
     ...sessionKeys,

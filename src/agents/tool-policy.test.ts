@@ -131,6 +131,18 @@ describe("tool-policy", () => {
     });
   });
 
+  it("can retain unauthorized owner-only tools while keeping execution guarded", async () => {
+    const tools = createOwnerPolicyTools();
+    const filtered = applyOwnerOnlyToolPolicy(tools, false, undefined, {
+      retainUnauthorizedOwnerOnlyTools: true,
+    });
+    expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway", "nodes"]);
+
+    await expect(
+      filtered.find((tool) => tool.name === "cron")?.execute?.("call_1", {}),
+    ).rejects.toThrow("Tool restricted to owner senders.");
+  });
+
   it("honors ownerOnly metadata for custom tool names", () => {
     const tools = [
       {

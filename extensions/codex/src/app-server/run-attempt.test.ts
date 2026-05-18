@@ -864,6 +864,10 @@ describe("runCodexAppServerAttempt", () => {
     expect((factoryOptions[0] as { authProfileStore?: unknown }).authProfileStore).toBe(
       authProfileStore,
     );
+    expect(
+      (factoryOptions[0] as { retainUnauthorizedOwnerOnlyTools?: unknown })
+        .retainUnauthorizedOwnerOnlyTools,
+    ).toBe(true);
   });
 
   it("keeps canonical OpenAI Codex runs on OpenAI dynamic tool policy", async () => {

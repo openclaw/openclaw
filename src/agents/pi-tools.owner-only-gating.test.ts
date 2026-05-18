@@ -38,6 +38,18 @@ describe("owner-only tool gating", () => {
     expect(toolNames).toContain("nodes");
   });
 
+  it("can keep owner-only schemas stable for unauthorized runtime turns", () => {
+    const tools = createOpenClawCodingTools({
+      senderIsOwner: false,
+      retainUnauthorizedOwnerOnlyTools: true,
+    });
+    const toolNames = tools.map((tool) => tool.name);
+    expect(toolNames).toContain("plugin_login");
+    expect(toolNames).toContain("cron");
+    expect(toolNames).toContain("gateway");
+    expect(toolNames).toContain("nodes");
+  });
+
   it("keeps canvas available to unauthorized senders by current trust model", () => {
     const tools = createOpenClawCodingTools({ senderIsOwner: false });
     const toolNames = tools.map((tool) => tool.name);
