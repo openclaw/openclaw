@@ -51,6 +51,33 @@ type TokenResult =
   | TokenPending
   | { status: "error"; message: string };
 
+/**
+ * Convert a MiniMax OAuth `expired_in` value to an absolute millisecond timestamp.
+ *
+ * MiniMax returns `expired_in` from the token endpoint as a relative duration
+ * in seconds (standard OAuth `expires_in` semantics), but the auth profile
+ * store requires an absolute timestamp in milliseconds so
+ * `hasUsableOAuthCredential()` can correctly determine token validity.
+ *
+ * Without this conversion the token appears perpetually expired, triggering
+ * a slow OAuth refresh on every request (#83449).
+ */
+function normalizeOAuthExpires(expiredIn: number): number {
+  // If the value is small enough to be a relative duration in seconds
+  // (e.g. 86400 for 24h), convert it to an absolute ms timestamp.
+  // Threshold: 1_000_000_000 (≈ Sep 2001 in Unix epoch seconds).
+  // Any value below this is unambiguously a duration, not a timestamp.
+  if (expiredIn < 1_000_000_000) {
+    return Date.now() + expiredIn * 1000;
+  }
+  // Values between 1e9 and 1e12 are Unix timestamps in seconds.  Convert.
+  if (expiredIn < 1_000_000_000_000) {
+    return expiredIn * 1000;
+  }
+  // Values ≥ 1e12 are already absolute millisecond timestamps.
+  return expiredIn;
+}
+
 function generatePkce(): { verifier: string; challenge: string; state: string } {
   const { verifier, challenge } = generatePkceVerifierChallenge();
   const state = randomBytes(16).toString("base64url");
@@ -167,12 +194,20 @@ async function pollOAuthToken(params: {
     return { status: "error", message: "MiniMax OAuth returned incomplete token payload." };
   }
 
+  // Normalize expired_in to an absolute millisecond timestamp.
+  // MiniMax returns expired_in as a relative duration in seconds (standard
+  // OAuth expires_in semantics), but the auth profile store expects an
+  // absolute timestamp in milliseconds for hasUsableOAuthCredential().
+  // Without this conversion the token appears perpetually expired, which
+  // triggers a slow OAuth refresh on every request (#83449).
+  const expiresAbsoluteMs = normalizeOAuthExpires(tokenPayload.expired_in);
+
   return {
     status: "success",
     token: {
       access: tokenPayload.access_token,
       refresh: tokenPayload.refresh_token,
-      expires: tokenPayload.expired_in,
+      expires: expiresAbsoluteMs,
       resourceUrl: tokenPayload.resource_url,
       notification_message: tokenPayload.notification_message,
     },
