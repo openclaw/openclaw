@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   CORE_HEALTH_CHECKS,
-  TRANSITIONAL_DOCTOR_HEALTH_PLACEHOLDER_IDS,
   registerCoreHealthChecks,
   resetCoreHealthChecksForTest,
 } from "./doctor-core-checks.js";
@@ -58,23 +57,35 @@ describe("registerCoreHealthChecks", () => {
     expect(listHealthChecks()).toHaveLength(CORE_HEALTH_CHECKS.length);
   });
 
-  it("registers every core health target named by the doctor conversion inventory", () => {
+  it("registers only implemented core health targets from the doctor conversion inventory", () => {
     registerCoreHealthChecks();
 
     const registeredIds = new Set(listHealthChecks().map((check) => check.id));
-    const coreTargets = doctorHealthConversionRules.flatMap((rule) =>
-      rule.target.filter((target) => target.startsWith("core/doctor/")),
+    const coreTargets = new Set(
+      doctorHealthConversionRules.flatMap((rule) =>
+        rule.target.filter((target) => target.startsWith("core/doctor/")),
+      ),
     );
+    const plannedOnlyTargets = [
+      "core/doctor/auth-profiles/keychain",
+      "core/doctor/session-locks",
+      "core/doctor/gateway-daemon",
+    ];
 
-    expect(coreTargets.filter((target) => !registeredIds.has(target))).toEqual([]);
-  });
-
-  it("keeps transitional no-op health checks explicit", () => {
-    const placeholderIds = CORE_HEALTH_CHECKS.filter((check) =>
-      check.description.endsWith("represented in the health registry."),
-    ).map((check) => check.id);
-
-    expect(placeholderIds).toEqual([...TRANSITIONAL_DOCTOR_HEALTH_PLACEHOLDER_IDS]);
+    for (const id of CORE_HEALTH_CHECKS.map((check) => check.id)) {
+      if (id === "core/doctor/browser-clawd-profile-residue") {
+        continue;
+      }
+      expect(coreTargets.has(id)).toBe(true);
+    }
+    for (const id of plannedOnlyTargets) {
+      expect(registeredIds.has(id)).toBe(false);
+    }
+    expect(
+      CORE_HEALTH_CHECKS.some((check) =>
+        check.description.endsWith("represented in the health registry."),
+      ),
+    ).toBe(false);
   });
 
   it("shows the repair-capable health check shape with skills readiness", async () => {

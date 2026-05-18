@@ -21,37 +21,6 @@ import type { HealthCheck, HealthFinding } from "./health-checks.js";
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
 
-export const TRANSITIONAL_DOCTOR_HEALTH_PLACEHOLDER_IDS = [
-  "core/doctor/auth-profiles/flat-store",
-  "core/doctor/auth-profiles/oauth-sidecar",
-  "core/doctor/auth-profiles/oauth-ids",
-  "core/doctor/auth-profiles/keychain",
-  "core/doctor/auth-profiles/codex-provider",
-  "core/doctor/legacy-plugin-manifests",
-  "core/doctor/configured-plugin-installs",
-  "core/doctor/plugin-registry",
-  "core/doctor/state-integrity",
-  "core/doctor/codex-session-routes",
-  "core/doctor/session-locks",
-  "core/doctor/session-transcripts",
-  "core/doctor/config-audit-scrub",
-  "core/doctor/legacy-cron-store",
-  "core/doctor/sandbox/registry-files",
-  "core/doctor/sandbox/images",
-  "core/doctor/sandbox-scope",
-  "core/doctor/gateway-services/extra",
-  "core/doctor/gateway-services/config",
-  "core/doctor/startup-channel-maintenance",
-  "core/doctor/systemd-linger",
-  "core/doctor/shell-completion",
-  "core/doctor/whatsapp-responsiveness",
-  "core/doctor/memory-search",
-  "core/doctor/memory-recall",
-  "core/doctor/memory-gateway-probe",
-  "core/doctor/device-pairing",
-  "core/doctor/gateway-daemon",
-] as const;
-
 export function configValidationIssuesToHealthFindings(
   issues: readonly ConfigValidationIssue[],
 ): readonly HealthFinding[] {
@@ -740,141 +709,17 @@ const workspaceSuggestionsCheck: HealthCheck = {
   },
 };
 
-function createConvertedWorkflowCheck(id: string, description: string): HealthCheck {
-  return {
-    id,
-    kind: "core",
-    description,
-    source: "doctor",
-    async detect() {
-      return [];
-    },
-  };
-}
-
 const convertedWorkflowChecks: readonly HealthCheck[] = [
-  createConvertedWorkflowCheck(
-    "core/doctor/auth-profiles/flat-store",
-    "Legacy flat auth profile stores are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/auth-profiles/oauth-sidecar",
-    "Legacy OAuth sidecar profiles are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/auth-profiles/oauth-ids",
-    "Legacy OAuth profile ids are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/auth-profiles/keychain",
-    "Auth profile keychain readiness is represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/auth-profiles/codex-provider",
-    "Legacy Codex provider overrides are represented in the health registry.",
-  ),
   claudeCliCheck,
   gatewayAuthCheck,
   legacyStateCheck,
-  createConvertedWorkflowCheck(
-    "core/doctor/legacy-plugin-manifests",
-    "Legacy plugin manifest contract checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/configured-plugin-installs",
-    "Configured plugin install release repairs are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/plugin-registry",
-    "Plugin registry checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/state-integrity",
-    "State integrity checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/codex-session-routes",
-    "Codex session route checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/session-locks",
-    "Session lock checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/session-transcripts",
-    "Session transcript checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/config-audit-scrub",
-    "Config audit scrub checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/legacy-cron-store",
-    "Legacy cron store checks are represented in the health registry.",
-  ),
   legacyWhatsAppCrontabCheck,
-  createConvertedWorkflowCheck(
-    "core/doctor/sandbox/registry-files",
-    "Sandbox registry file checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/sandbox/images",
-    "Sandbox image checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/sandbox-scope",
-    "Sandbox scope checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/gateway-services/extra",
-    "Extra Gateway service checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/gateway-services/config",
-    "Gateway service config checks are represented in the health registry.",
-  ),
   gatewayPlatformNotesCheck,
-  createConvertedWorkflowCheck(
-    "core/doctor/startup-channel-maintenance",
-    "Startup channel maintenance is represented in the health registry.",
-  ),
   securityCheck,
   browserCheck,
   openAIOAuthTlsCheck,
   hooksModelCheck,
-  createConvertedWorkflowCheck(
-    "core/doctor/systemd-linger",
-    "systemd linger checks are represented in the health registry.",
-  ),
   bootstrapSizeCheck,
-  createConvertedWorkflowCheck(
-    "core/doctor/shell-completion",
-    "Shell completion checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/whatsapp-responsiveness",
-    "WhatsApp responsiveness checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/memory-search",
-    "Memory search checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/memory-recall",
-    "Memory recall checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/memory-gateway-probe",
-    "Memory Gateway probe checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/device-pairing",
-    "Device pairing checks are represented in the health registry.",
-  ),
-  createConvertedWorkflowCheck(
-    "core/doctor/gateway-daemon",
-    "Gateway daemon checks are represented in the health registry.",
-  ),
   workspaceSuggestionsCheck,
 ];
 

@@ -108,6 +108,39 @@ describe("runDoctorLintCli", () => {
     }
   });
 
+  it("rejects unknown --only health check ids instead of reporting a false-clean run", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        onlyIds: ["core/doctor/session-locks"],
+      });
+
+      expect(exitCode).toBe(1);
+      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      expect(payload).toMatchObject({
+        ok: false,
+        checksRun: 0,
+        findings: [
+          {
+            checkId: "core/doctor/lint-selection",
+            severity: "error",
+            path: "core/doctor/session-locks",
+          },
+        ],
+      });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it("rejects invalid severity thresholds", async () => {
     await expect(runDoctorLintCli(runtime, { severityMin: "warnng" })).rejects.toThrow(
       "Invalid --severity-min value",

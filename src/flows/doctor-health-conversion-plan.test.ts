@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import { resolveDoctorHealthContributions } from "./doctor-health-contributions.js";
 import { doctorHealthConversionRules } from "./doctor-health-conversion-plan.js";
 
@@ -19,16 +20,19 @@ describe("doctor health conversion plan", () => {
     }
   });
 
-  it("wires converted contributions to their core health check targets", () => {
+  it("wires contributions only to registered core health check targets", () => {
     const contributions = new Map(
       resolveDoctorHealthContributions().map((contribution) => [contribution.id, contribution]),
     );
+    const registeredCoreIds = new Set(CORE_HEALTH_CHECKS.map((check) => check.id));
 
     for (const rule of doctorHealthConversionRules) {
       const contribution = contributions.get(rule.contributionId);
       expect(contribution).toBeDefined();
-      const coreTargets = rule.target.filter((target) => target.startsWith("core/doctor/"));
-      expect(contribution?.healthCheckIds).toEqual(coreTargets);
+      for (const id of contribution?.healthCheckIds ?? []) {
+        expect(rule.target).toContain(id);
+        expect(registeredCoreIds.has(id)).toBe(true);
+      }
     }
   });
 });
