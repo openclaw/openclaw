@@ -151,7 +151,7 @@ describe("Codex app-server native code mode config", () => {
     });
   });
 
-  it("keeps native Codex project docs enabled for lightweight context threads", () => {
+  it("disables native Codex project docs for lightweight context threads", () => {
     const request = buildThreadStartParams(
       createAttemptParams({
         provider: "openai",
@@ -171,7 +171,7 @@ describe("Codex app-server native code mode config", () => {
     );
 
     expect(request.config).toEqual({
-      project_doc_max_bytes: 64_000,
+      project_doc_max_bytes: 0,
       "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": false,

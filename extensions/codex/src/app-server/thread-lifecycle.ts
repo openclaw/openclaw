@@ -77,6 +77,10 @@ export const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.code_mode_only": false,
 };
 
+const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
+  project_doc_max_bytes: 0,
+};
+
 export async function startOrResumeThread(params: {
   client: CodexAppServerClient;
   params: EmbeddedRunAttemptParams;
@@ -640,12 +644,20 @@ export function buildCodexRuntimeThreadConfig(
 }
 
 function buildCodexRuntimeThreadConfigForRun(
-  _params: EmbeddedRunAttemptParams,
+  params: EmbeddedRunAttemptParams,
   config: JsonObject | undefined,
   options: { nativeCodeModeEnabled?: boolean } = {},
 ): JsonObject {
   const runtimeConfig = buildCodexRuntimeThreadConfig(config, options);
-  return runtimeConfig;
+  if (params.bootstrapContextMode !== "lightweight") {
+    return runtimeConfig;
+  }
+  return (
+    mergeCodexThreadConfigs(runtimeConfig, CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG) ?? {
+      ...runtimeConfig,
+      ...CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG,
+    }
+  );
 }
 
 export function buildTurnStartParams(
