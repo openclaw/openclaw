@@ -1,9 +1,14 @@
 import crypto from "node:crypto";
-import type { SpawnAcpContext, SpawnAcpParams, SpawnAcpResult } from "../../agents/acp-spawn.js";
+import type {
+  SpawnAcpContext,
+  SpawnAcpParams,
+  SpawnAcpResult,
+} from "../../agents/acp-spawn-contract.js";
 import { spawnAcpDirect } from "../../agents/acp-spawn.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveConversationDeliveryTarget } from "../../utils/delivery-context.js";
+import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 
 export type RuntimeAcpPromptParams = {
   sessionKey: string;
@@ -11,8 +16,8 @@ export type RuntimeAcpPromptParams = {
   channel?: string;
   accountId?: string;
   /**
-   * Legacy alias for channels where the threaded destination is also the
-   * conversation id itself (for example Discord thread channels).
+   * Alias for channels where the threaded destination is also the conversation
+   * id itself (for example Discord thread channels).
    */
   threadId?: string;
   /** Channel-native conversation id to deliver back into. */
@@ -21,10 +26,23 @@ export type RuntimeAcpPromptParams = {
   parentConversationId?: string;
 };
 
+function resolveAcpRuntimePluginId(): string {
+  const pluginId = getPluginRuntimeGatewayRequestScope()?.pluginId?.trim();
+  if (!pluginId) {
+    throw new Error(
+      "api.runtime.acp helpers require a loaded plugin runtime scope with plugin identity",
+    );
+  }
+  return pluginId;
+}
+
 function assertAcpRuntimeEnabled(): void {
+  const pluginId = resolveAcpRuntimePluginId();
   const cfg = getRuntimeConfig();
-  if (!cfg?.plugins?.allowAcpSpawn) {
-    throw new Error("api.runtime.acp helpers require plugins.allowAcpSpawn: true in openclaw.json");
+  if (cfg?.plugins?.entries?.[pluginId]?.acp?.allowSpawn !== true) {
+    throw new Error(
+      `api.runtime.acp helpers require plugins.entries.${pluginId}.acp.allowSpawn: true in openclaw.json`,
+    );
   }
 }
 
@@ -63,6 +81,7 @@ export async function promptPluginAcp(params: RuntimeAcpPromptParams): Promise<{
             deliver: true,
           }
         : {}),
+      acpTurnSource: "manual_spawn",
       idempotencyKey,
     },
     timeoutMs: 10_000,

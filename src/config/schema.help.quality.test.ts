@@ -380,6 +380,8 @@ const TARGET_KEYS = [
   "plugins.entries.*.llm.allowModelOverride",
   "plugins.entries.*.llm.allowedModels",
   "plugins.entries.*.llm.allowAgentIdOverride",
+  "plugins.entries.*.acp",
+  "plugins.entries.*.acp.allowSpawn",
   "plugins.entries.*.apiKey",
   "plugins.entries.*.env",
   "plugins.entries.*.config",

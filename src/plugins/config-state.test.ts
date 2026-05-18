@@ -164,6 +164,16 @@ describe("normalizePluginsConfig", () => {
     });
   });
 
+  it("normalizes plugin ACP runtime policy settings", () => {
+    expect(
+      normalizeVoiceCallEntry({
+        acp: {
+          allowSpawn: true,
+        },
+      })?.acp,
+    ).toEqual({ allowSpawn: true });
+  });
+
   it("normalizes legacy plugin ids to their merged bundled plugin id", () => {
     const result = normalizePluginsConfig({
       allow: ["openai-codex", "google-gemini-cli", "minimax-portal-auth"],

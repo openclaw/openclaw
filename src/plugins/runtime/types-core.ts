@@ -1,4 +1,8 @@
-import type { SpawnAcpParams, SpawnAcpContext, SpawnAcpResult } from "../../agents/acp-spawn.js";
+import type {
+  SpawnAcpContext,
+  SpawnAcpParams,
+  SpawnAcpResult,
+} from "../../agents/acp-spawn-contract.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
@@ -319,7 +323,7 @@ export type PluginRuntimeCore = {
       text: string;
       channel?: string;
       accountId?: string;
-      /** Legacy alias for channels where the threaded destination is also the conversation id. */
+      /** Alias for channels where the threaded destination is also the conversation id. */
       threadId?: string;
       conversationId?: string;
       parentConversationId?: string;

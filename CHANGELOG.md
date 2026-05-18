@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins: add a trusted `api.runtime.acp` runtime namespace for per-plugin ACP spawn and channel-delivered prompt turns.
 - Agents: clarify that fixes should default to clean bounded refactors, lean internals, and explicit plugin SDK/API deprecation paths.
 - Dependencies: update `@openclaw/proxyline` to 0.3.3.
 - Dependencies: update Pi packages to 0.75.1 and raise the minimum supported Node.js 22 line to 22.19.

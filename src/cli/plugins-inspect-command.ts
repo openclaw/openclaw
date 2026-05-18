@@ -382,6 +382,9 @@ export async function runPluginsInspectCommand(
       }`,
     );
   }
+  if (typeof inspect.policy.allowAcpSpawn === "boolean") {
+    policyLines.push(`allowAcpSpawn: ${inspect.policy.allowAcpSpawn}`);
+  }
   lines.push(...formatInspectSection("Policy", policyLines));
   lines.push(
     ...formatInspectSection(

@@ -36,6 +36,9 @@ export type NormalizedPluginsConfig = {
         hasAllowedModelsConfig?: boolean;
         allowAgentIdOverride?: boolean;
       };
+      acp?: {
+        allowSpawn?: boolean;
+      };
       config?: unknown;
     }
   >;
@@ -206,6 +209,13 @@ function normalizePluginEntries(
               : {}),
           }
         : undefined;
+    const acpRaw = entry.acp;
+    const acp =
+      acpRaw && typeof acpRaw === "object" && !Array.isArray(acpRaw)
+        ? { allowSpawn: (acpRaw as { allowSpawn?: unknown }).allowSpawn }
+        : undefined;
+    const normalizedAcp =
+      acp && typeof acp.allowSpawn === "boolean" ? { allowSpawn: acp.allowSpawn } : undefined;
     normalized[normalizedKey] = {
       ...normalized[normalizedKey],
       enabled:
@@ -213,6 +223,7 @@ function normalizePluginEntries(
       hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
       subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
       llm: normalizedLlm ?? normalized[normalizedKey]?.llm,
+      acp: normalizedAcp ?? normalized[normalizedKey]?.acp,
       config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,
     };
   }

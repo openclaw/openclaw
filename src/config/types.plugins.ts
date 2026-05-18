@@ -35,6 +35,10 @@ export type PluginEntryConfig = {
     /** Explicitly allow this plugin to run completions against a non-default agent id. */
     allowAgentIdOverride?: boolean;
   };
+  acp?: {
+    /** Explicitly allow this plugin to call api.runtime.acp.spawn() and api.runtime.acp.prompt(). */
+    allowSpawn?: boolean;
+  };
   config?: Record<string, unknown>;
 };
 
@@ -62,12 +66,6 @@ export type PluginsConfig = {
   enabled?: boolean;
   /** Optional plugin allowlist (plugin ids). */
   allow?: string[];
-  /**
-   * Allow plugins to call api.runtime.acp.spawn() to dispatch ACP agents
-   * with thread-bound output. Opt-in because plugins spawning agents is a
-   * privileged operation. Set to true only for trusted plugins.
-   */
-  allowAcpSpawn?: boolean;
   /** Optional plugin denylist (plugin ids). */
   deny?: string[];
   /**

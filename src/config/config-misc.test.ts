@@ -584,6 +584,38 @@ describe("plugins.entries.*.llm", () => {
   });
 });
 
+describe("plugins.entries.*.acp", () => {
+  it("accepts trusted ACP runtime settings", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "task-dispatch": {
+            acp: {
+              allowSpawn: true,
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects invalid ACP runtime settings", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "task-dispatch": {
+            acp: {
+              allowSpawn: "yes",
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("web search provider config", () => {
   it("accepts kimi provider and config", () => {
     const res = validateConfigObject(

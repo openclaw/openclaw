@@ -27,6 +27,7 @@ const runtimeModelAuthMocks = vi.hoisted(() => ({
 
 vi.mock("./runtime-model-auth.runtime.js", () => runtimeModelAuthMocks);
 
+import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
 import {
   clearGatewaySubagentRuntime,
   createPluginRuntime,
@@ -443,13 +444,15 @@ describe("plugin runtime command execution", () => {
     expect(nodes.list).toHaveBeenCalledWith({ connected: true });
   });
 
-  it("gates ACP runtime helpers behind plugins.allowAcpSpawn", async () => {
-    vi.spyOn(configModule, "getRuntimeConfig").mockReturnValue({ plugins: {} } as never);
+  it("requires plugin identity before exposing ACP runtime helpers", async () => {
+    vi.spyOn(configModule, "getRuntimeConfig").mockReturnValue({
+      plugins: { entries: { "task-dispatch": { acp: { allowSpawn: true } } } },
+    } as never);
 
     const runtime = createPluginRuntime();
 
     await expect(runtime.acp.spawn({ task: "hello" }, {})).rejects.toThrow(
-      "api.runtime.acp helpers require plugins.allowAcpSpawn: true in openclaw.json",
+      "api.runtime.acp helpers require a loaded plugin runtime scope with plugin identity",
     );
     await expect(
       runtime.acp.prompt({
@@ -457,13 +460,39 @@ describe("plugin runtime command execution", () => {
         text: "hello",
       }),
     ).rejects.toThrow(
-      "api.runtime.acp helpers require plugins.allowAcpSpawn: true in openclaw.json",
+      "api.runtime.acp helpers require a loaded plugin runtime scope with plugin identity",
     );
   });
 
-  it("delegates ACP runtime helpers when plugins.allowAcpSpawn is enabled", async () => {
+  it("gates ACP runtime helpers behind per-plugin allowSpawn", async () => {
     vi.spyOn(configModule, "getRuntimeConfig").mockReturnValue({
-      plugins: { allowAcpSpawn: true },
+      plugins: { entries: { "other-plugin": { acp: { allowSpawn: true } } } },
+    } as never);
+
+    const runtime = createPluginRuntime();
+
+    await expect(
+      withPluginRuntimePluginIdScope("task-dispatch", () =>
+        runtime.acp.spawn({ task: "hello" }, {}),
+      ),
+    ).rejects.toThrow(
+      "api.runtime.acp helpers require plugins.entries.task-dispatch.acp.allowSpawn: true in openclaw.json",
+    );
+    await expect(
+      withPluginRuntimePluginIdScope("task-dispatch", () =>
+        runtime.acp.prompt({
+          sessionKey: "session-1",
+          text: "hello",
+        }),
+      ),
+    ).rejects.toThrow(
+      "api.runtime.acp helpers require plugins.entries.task-dispatch.acp.allowSpawn: true in openclaw.json",
+    );
+  });
+
+  it("delegates ACP runtime helpers when the calling plugin is allowed", async () => {
+    vi.spyOn(configModule, "getRuntimeConfig").mockReturnValue({
+      plugins: { entries: { "task-dispatch": { acp: { allowSpawn: true } } } },
     } as never);
     const spawnAcpDirect = vi.spyOn(acpSpawnModule, "spawnAcpDirect").mockResolvedValue({
       status: "accepted",
@@ -481,9 +510,11 @@ describe("plugin runtime command execution", () => {
     const runtime = createPluginRuntime();
 
     await expect(
-      runtime.acp.spawn(
-        { task: "hello", agentId: "opencode" },
-        { agentChannel: "discord", agentAccountId: "zeus" },
+      withPluginRuntimePluginIdScope("task-dispatch", () =>
+        runtime.acp.spawn(
+          { task: "hello", agentId: "opencode" },
+          { agentChannel: "discord", agentAccountId: "zeus" },
+        ),
       ),
     ).resolves.toMatchObject({
       status: "accepted",
@@ -496,14 +527,16 @@ describe("plugin runtime command execution", () => {
     );
 
     await expect(
-      runtime.acp.prompt({
-        sessionKey: "child-session",
-        text: "follow up",
-        channel: "telegram",
-        accountId: "zeus",
-        conversationId: "topic:77",
-        parentConversationId: "-100123",
-      }),
+      withPluginRuntimePluginIdScope("task-dispatch", () =>
+        runtime.acp.prompt({
+          sessionKey: "child-session",
+          text: "follow up",
+          channel: "telegram",
+          accountId: "zeus",
+          conversationId: "topic:77",
+          parentConversationId: "-100123",
+        }),
+      ),
     ).resolves.toEqual({ runId: "prompt-run-id" });
     expect(resolveConversationDeliveryTarget).toHaveBeenCalledWith({
       channel: "telegram",
@@ -521,6 +554,7 @@ describe("plugin runtime command execution", () => {
           threadId: "77",
           to: "-100123",
           deliver: true,
+          acpTurnSource: "manual_spawn",
           idempotencyKey: expect.any(String),
         }),
       }),
@@ -529,7 +563,7 @@ describe("plugin runtime command execution", () => {
 
   it("omits delivery fields for session-only ACP prompts", async () => {
     vi.spyOn(configModule, "getRuntimeConfig").mockReturnValue({
-      plugins: { allowAcpSpawn: true },
+      plugins: { entries: { "task-dispatch": { acp: { allowSpawn: true } } } },
     } as never);
     const callGateway = vi.spyOn(gatewayCallModule, "callGateway").mockResolvedValue({
       runId: "prompt-run-id",
@@ -538,10 +572,12 @@ describe("plugin runtime command execution", () => {
     const runtime = createPluginRuntime();
 
     await expect(
-      runtime.acp.prompt({
-        sessionKey: "child-session",
-        text: "follow up",
-      }),
+      withPluginRuntimePluginIdScope("task-dispatch", () =>
+        runtime.acp.prompt({
+          sessionKey: "child-session",
+          text: "follow up",
+        }),
+      ),
     ).resolves.toEqual({ runId: "prompt-run-id" });
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -549,6 +585,7 @@ describe("plugin runtime command execution", () => {
         params: {
           message: "follow up",
           sessionKey: "child-session",
+          acpTurnSource: "manual_spawn",
           idempotencyKey: expect.any(String),
         },
       }),
@@ -557,17 +594,19 @@ describe("plugin runtime command execution", () => {
 
   it("fails loudly when ACP prompt gateway response omits runId", async () => {
     vi.spyOn(configModule, "getRuntimeConfig").mockReturnValue({
-      plugins: { allowAcpSpawn: true },
+      plugins: { entries: { "task-dispatch": { acp: { allowSpawn: true } } } },
     } as never);
     vi.spyOn(gatewayCallModule, "callGateway").mockResolvedValue({});
 
     const runtime = createPluginRuntime();
 
     await expect(
-      runtime.acp.prompt({
-        sessionKey: "child-session",
-        text: "follow up",
-      }),
+      withPluginRuntimePluginIdScope("task-dispatch", () =>
+        runtime.acp.prompt({
+          sessionKey: "child-session",
+          text: "follow up",
+        }),
+      ),
     ).rejects.toThrow("api.runtime.acp.prompt() expected gateway to return runId");
   });
 });

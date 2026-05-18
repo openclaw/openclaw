@@ -51,7 +51,6 @@ import {
 import { buildPluginApi } from "./api-builder.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
-import { getPluginCompatRecord } from "./compat/registry.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import {
   isReservedCommandName,
@@ -63,6 +62,7 @@ import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
 } from "./compaction-provider.js";
+import { getPluginCompatRecord } from "./compat/registry.js";
 import { sendPluginSessionAttachment } from "./host-hook-attachments.js";
 import {
   clearPluginRunContext,
@@ -2446,6 +2446,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             complete: (params) =>
               withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
           } satisfies PluginRuntime["llm"];
+        }
+        if (prop === "acp") {
+          const acp = Reflect.get(target, prop, receiver);
+          return {
+            spawn: (params, ctx) =>
+              withPluginRuntimePluginIdScope(pluginId, () => acp.spawn(params, ctx)),
+            prompt: (params) => withPluginRuntimePluginIdScope(pluginId, () => acp.prompt(params)),
+          } satisfies PluginRuntime["acp"];
         }
         if (prop !== "subagent") {
           return Reflect.get(target, prop, receiver);

@@ -1361,6 +1361,10 @@ export const FIELD_HELP: Record<string, string> = {
     'Allowed override targets for trusted plugin LLM completions as canonical "provider/model" refs. Use "*" only when you intentionally allow any model.',
   "plugins.entries.*.llm.allowAgentIdOverride":
     "Explicitly allows this plugin to request api.runtime.llm.complete against a non-default agent id. Keep false unless the plugin is trusted for cross-agent model access.",
+  "plugins.entries.*.acp":
+    "Per-plugin api.runtime.acp controls for trusted ACP spawn and delivered prompt turns. Keep this unset unless a plugin must start or continue ACP-backed coding sessions.",
+  "plugins.entries.*.acp.allowSpawn":
+    "Explicitly allows this plugin to call api.runtime.acp.spawn and api.runtime.acp.prompt. Keep false unless the plugin is trusted to start host-side coding harnesses and deliver into operator channels.",
   "plugins.entries.*.apiKey":
     "Optional API key field consumed by plugins that accept direct key configuration in entry settings. Use secret/env substitution and avoid committing real credentials into config files.",
   "plugins.entries.*.env":
