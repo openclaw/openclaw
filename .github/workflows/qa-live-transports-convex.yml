@@ -720,6 +720,8 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS: "300000"
+          OPENCLAW_QA_CREDENTIAL_OWNER_ID: qa-live-whatsapp-${{ github.run_id }}-${{ github.run_attempt }}
           OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "1"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT: "1"
