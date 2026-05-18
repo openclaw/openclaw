@@ -10,6 +10,7 @@ import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
+  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -403,6 +404,18 @@ function resolveSelectedModelFallbacksOverride(
   return Array.isArray(raw.fallbacks) ? raw.fallbacks : undefined;
 }
 
+function resolveFirstModelFallbacksOverride(
+  candidates: Array<AgentModelConfig | undefined>,
+): string[] | undefined {
+  for (const candidate of candidates) {
+    const fallbackOverride = resolveSelectedModelFallbacksOverride(candidate);
+    if (fallbackOverride !== undefined) {
+      return fallbackOverride;
+    }
+  }
+  return undefined;
+}
+
 export type SubagentModelConfigSelectionSource = "subagent" | "agent" | "default-subagent";
 
 export type SubagentModelConfigSelectionResult = {
@@ -462,6 +475,19 @@ export function resolveSubagentModelFallbacksOverride(
   return undefined;
 }
 
+function resolveSubagentSpawnModelFallbacksOverride(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string[] | undefined {
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  return resolveFirstModelFallbacksOverride([
+    agentConfig?.subagents?.model,
+    cfg.agents?.defaults?.subagents?.model,
+    cfg.tools?.subagents?.model,
+    agentConfig?.model,
+  ]);
+}
+
 export function resolveFallbackAgentId(params: {
   agentId?: string | null;
   sessionKey?: string | null;
@@ -503,8 +529,11 @@ export function resolveEffectiveModelFallbacks(params: {
   hasSessionModelOverride: boolean;
   modelOverrideSource?: "auto" | "user";
   hasAutoFallbackProvenance?: boolean;
+  sessionKey?: string | null;
 }): string[] | undefined {
-  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
+  const agentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
+    ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
+    : resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
   if (!params.hasSessionModelOverride) {
     return agentFallbacksOverride;
   }

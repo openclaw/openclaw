@@ -900,6 +900,49 @@ describe("resolveAgentConfig", () => {
     expect(resolveSubagentModelFallbacksOverride(cfg, "strict")).toStrictEqual([]);
   });
 
+  it("resolves subagent model fallbacks from tools defaults before the agent primary model", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        subagents: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "research",
+            model: {
+              primary: "google/gemini-3-pro",
+              fallbacks: ["kimi/kimi-code"],
+            },
+          },
+        ],
+      },
+    };
+
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg,
+        agentId: "research",
+        sessionKey: "agent:research:subagent:child",
+        hasSessionModelOverride: true,
+        modelOverrideSource: "auto",
+      }),
+    ).toEqual(["anthropic/claude-sonnet-4-6"]);
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg,
+        agentId: "research",
+        sessionKey: "agent:research:main",
+        hasSessionModelOverride: true,
+        modelOverrideSource: "auto",
+      }),
+    ).toEqual(["kimi/kimi-code"]);
+  });
+
   it("resolves the subagent model config selected for isolated runs", () => {
     const cfg: OpenClawConfig = {
       agents: {

@@ -461,6 +461,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Sender allow rules for elevated tools, usually keyed by channel/provider identity formats. Use narrow, explicit identities so elevated commands cannot be triggered by unintended users.",
   "tools.subagents":
     "Tool policy wrapper for spawned subagents to restrict or expand tool availability compared to parent defaults. Use this to keep delegated agent capabilities scoped to task intent.",
+  "tools.subagents.model":
+    "Fallback model selection for spawned subagents when target-agent and agents.defaults subagent model settings are absent. Prefer explicit provider/model refs.",
+  "tools.subagents.model.primary":
+    "Primary provider/model ref used by spawned subagents when no more-specific subagent model override applies.",
+  "tools.subagents.model.fallbacks":
+    "Ordered provider/model refs attempted when the selected spawned-subagent model fails. Use explicit refs so fallback routing is predictable.",
+  "tools.subagents.model.timeoutMs":
+    "Shared model-config timeout metadata in milliseconds for runtimes or provider capabilities that honor model timeout fields.",
   "tools.subagents.tools":
     "Allow/deny tool policy applied to spawned subagent runtimes for per-subagent hardening. Keep this narrower than parent scope when subagents run semi-autonomous workflows.",
   "tools.sandbox":

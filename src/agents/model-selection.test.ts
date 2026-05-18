@@ -2307,6 +2307,51 @@ describe("resolveSubagentConfiguredModelSelection", () => {
     );
   });
 
+  it("uses tools.subagents.model before the agent primary model", () => {
+    const cfg = {
+      tools: {
+        subagents: {
+          model: { primary: "openai/gpt-5.4", timeoutMs: 30_000 },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+        list: [
+          {
+            id: "research",
+            model: { primary: "anthropic/claude-opus-4-6" },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
+      "openai/gpt-5.4",
+    );
+  });
+
+  it("prefers agents.defaults.subagents.model over tools.subagents.model", () => {
+    const cfg = {
+      tools: {
+        subagents: {
+          model: "openai/gpt-5.4",
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          subagents: { model: "google/gemini-2.5-pro" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
+      "google/gemini-2.5-pro",
+    );
+  });
+
   it("keeps runtime policy attached to the configured default subagent model", () => {
     const cfg = {
       agents: {

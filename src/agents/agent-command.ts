@@ -1116,6 +1116,7 @@ async function agentCommandInternal(
         const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
           cfg,
           agentId: sessionAgentId,
+          sessionKey,
           hasSessionModelOverride:
             hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
           modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,

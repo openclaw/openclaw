@@ -96,6 +96,42 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("accepts subagent model timeoutMs on defaults and agent entries", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      subagents: {
+        model: {
+          primary: "openai/gpt-5.5",
+          timeoutMs: 30_000,
+        },
+      },
+    });
+    const agent = AgentEntrySchema.parse({
+      id: "worker",
+      subagents: {
+        model: {
+          primary: "openai/gpt-5.5",
+          timeoutMs: 30_000,
+        },
+      },
+    });
+
+    expect(defaults?.subagents?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      timeoutMs: 30_000,
+    });
+    expect(agent.subagents?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      timeoutMs: 30_000,
+    });
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({
+        id: "worker",
+        subagents: { model: { primary: "openai/gpt-5.5", timeoutMs: 0 } },
+      }),
+      "subagents.model",
+    );
+  });
+
   it("accepts mediaGenerationAutoProviderFallback", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({

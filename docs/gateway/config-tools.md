@@ -381,6 +381,31 @@ Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto
 - Default: `false` unless `agents.defaults.embeddedPi.executionContract` (or a per-agent override) is set to `"strict-agentic"` for an OpenAI or OpenAI Codex GPT-5-family run. Set `true` to force the tool on outside that scope, or `false` to keep it off even for strict-agentic GPT-5 runs.
 - When enabled, the system prompt also adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
 
+### `tools.subagents`
+
+Global defaults for spawned sub-agents created through `sessions_spawn`.
+
+```json5
+{
+  tools: {
+    subagents: {
+      model: {
+        primary: "minimax/MiniMax-M2.7",
+        fallbacks: ["openai/gpt-5.4"],
+        timeoutMs: 120000,
+      },
+      tools: {
+        deny: ["exec"],
+      },
+    },
+  },
+}
+```
+
+- `model`: fallback model selection for spawned sub-agents when the target agent and `agents.defaults.subagents.model` do not set one. The object form uses the shared model config shape (`primary`, `fallbacks`, `timeoutMs`).
+- `tools`: allow/deny policy applied to spawned sub-agent runtimes. Deny entries win.
+- Model precedence for spawned sub-agents is: explicit `sessions_spawn` model, target agent `subagents.model`, `agents.defaults.subagents.model`, `tools.subagents.model`, target agent model, then the global default model.
+
 ### `agents.defaults.subagents`
 
 ```json5
@@ -404,7 +429,7 @@ Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto
 - `allowAgents`: default allowlist of target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any; default: same agent only).
 - `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
 - `announceTimeoutMs`: per-call timeout (milliseconds) for gateway `agent` announce delivery attempts. Default: `120000`. Transient retries can make the total announce wait longer than one configured timeout.
-- Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
+- Per-subagent tool policy and global fallback model policy live under `tools.subagents`.
 
 ---
 
