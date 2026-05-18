@@ -1048,7 +1048,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "22.18.0"
+          node-version: "22.19.0"
           cache-key-suffix: "node22-pnpm11"
           install-bun: "false"
 

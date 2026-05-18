@@ -50,7 +50,7 @@ Skills own workflows; root owns hard policy and routing.
 
 ## Commands
 
-- Runtime: Node 22+. Keep Node + Bun paths working.
+- Runtime: Node 22.19+; Node 24 recommended. Keep Node + Bun paths working.
 - Package manager/runtime: repo defaults only. No swaps without approval.
 - Install: `pnpm install` (keep Bun lock/patches aligned if touched).
 - Sharp/Homebrew libvips source-build fail: `SHARP_IGNORE_GLOBAL_LIBVIPS=1 pnpm install`.
