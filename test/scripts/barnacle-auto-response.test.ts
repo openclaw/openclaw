@@ -135,6 +135,7 @@ function barnacleGithub(
     maintainerLogins?: string[];
     removeLabelNotFound?: string[];
     repositoryRoles?: Record<string, string>;
+    comments?: Array<{ body: string }>;
   } = {},
 ) {
   const maintainerLogins = new Set(
@@ -154,8 +155,10 @@ function barnacleGithub(
     removeLabel: [] as Array<{ issue_number: number; name: string }>,
     update: [] as Array<{ issue_number: number; state?: string }>,
   };
+  const listFiles = async () => files;
+  const listComments = async () => options.comments ?? [];
   const github = {
-    paginate: async () => files,
+    paginate: async (fn: unknown) => (fn === listComments ? (options.comments ?? []) : files),
     rest: {
       issues: {
         addLabels: async (params: { issue_number: number; labels: string[] }) => {
@@ -173,6 +176,7 @@ function barnacleGithub(
               managedLabelSpecs[params.name as keyof typeof managedLabelSpecs]?.description ?? "",
           },
         }),
+        listComments,
         lock: async (params: { issue_number: number; lock_reason?: string }) => {
           calls.lock.push(params);
         },
@@ -190,7 +194,7 @@ function barnacleGithub(
         updateLabel: async () => undefined,
       },
       pulls: {
-        listFiles: async () => files,
+        listFiles,
       },
       repos: {
         getCollaboratorPermissionLevel: async ({ username }: { username: string }) => {
@@ -783,6 +787,36 @@ describe("barnacle-auto-response", () => {
       expect(calls.removeLabel).toEqual([expectedRemoveLabel(123, PROOF_SUFFICIENT_LABEL)]);
     },
   );
+
+  it("preserves sufficient proof on synchronize when ClawSweeper passed the exact head", async () => {
+    const headSha = "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f";
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")], {
+      comments: [
+        {
+          body: `<!-- clawsweeper-verdict:pass item=123 sha=${headSha} confidence=high -->`,
+        },
+      ],
+    });
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          body: blankTemplateBody,
+          head: { sha: headSha },
+        },
+        [PROOF_SUFFICIENT_LABEL],
+        { action: "synchronize" },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).not.toContainEqual(
+      expect.objectContaining({ name: PROOF_SUFFICIENT_LABEL }),
+    );
+  });
 
   it("preserves ClawSweeper's sufficient proof label on ordinary label events", async () => {
     const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
