@@ -1933,10 +1933,15 @@ export async function runAgentTurnWithFallback(params: {
                   }
                   // Trigger typing when tools start executing.
                   // Must await to ensure typing indicator starts before tool summaries are emitted.
+                  // Only trigger on "start" phase. Upstream also emits "update" phases
+                  // (per-partial-result and final commit) for the same toolUseId. Letting
+                  // those flow into onToolStart causes duplicate, interleaved progress-draft
+                  // lines in Telegram/Discord because draft-preview dedupe only collapses
+                  // adjacent identical lines, so repeated start/update cycles accumulate.
                   if (evt.stream === "tool") {
                     const phase = readStringValue(evt.data.phase) ?? "";
                     const name = readStringValue(evt.data.name);
-                    if (phase === "start" || phase === "update") {
+                    if (phase === "start") {
                       const toolStartProgressPromise = params.opts?.onToolStart?.({
                         name,
                         phase,

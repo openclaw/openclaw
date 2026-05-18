@@ -5066,4 +5066,50 @@ describe("runAgentTurnWithFallback", () => {
       modelOverrideFallbackOriginModel: "claude-opus",
     });
   });
+
+  describe("onToolStart phase filtering", () => {
+    it("only calls onToolStart on phase=start, not phase=update or phase=end", async () => {
+      const onToolStart = vi.fn();
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        // Simulate a tool_execution_start
+        await params.onAgentEvent?.({
+          stream: "tool",
+          data: { phase: "start", name: "exec", toolCallId: "tc-1", args: { command: "ls" } },
+        });
+        // Followed by multiple tool_execution_update (partial results)
+        await params.onAgentEvent?.({
+          stream: "tool",
+          data: { phase: "update", name: "exec", toolCallId: "tc-1" },
+        });
+        await params.onAgentEvent?.({
+          stream: "tool",
+          data: { phase: "update", name: "exec", toolCallId: "tc-1" },
+        });
+        // And a tool_execution_end
+        await params.onAgentEvent?.({
+          stream: "tool",
+          data: { phase: "end", name: "exec", toolCallId: "tc-1" },
+        });
+        return { payloads: [{ text: "done" }], meta: {} };
+      });
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams({
+          opts: { onToolStart } satisfies GetReplyOptions,
+        }),
+      });
+
+      expect(result.kind).toBe("success");
+      // onToolStart should only be called once — for phase=start
+      expect(onToolStart).toHaveBeenCalledTimes(1);
+      expect(onToolStart).toHaveBeenCalledWith({
+        name: "exec",
+        phase: "start",
+        args: { command: "ls" },
+        detailMode: undefined,
+      });
+    });
+  });
 });
