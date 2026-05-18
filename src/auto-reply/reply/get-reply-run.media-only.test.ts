@@ -1593,6 +1593,7 @@ describe("runPreparedReply media-only handling", () => {
   it("queues active room events as followups instead of steering fake prompts", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const abortController = new AbortController();
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
       mode: "steer",
       debounceMs: 500,
@@ -1610,6 +1611,7 @@ describe("runPreparedReply media-only handling", () => {
 
     await runPreparedReply(
       baseParams({
+        opts: { abortSignal: abortController.signal },
         ctx: {
           Body: "ambient",
           RawBody: "ambient",
@@ -1638,7 +1640,56 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.resolvedQueue.mode).toBe("steer");
     expect(call.followupRun.prompt).toBe("[OpenClaw room event]");
     expect(call.followupRun.currentInboundEventKind).toBe("room_event");
+    expect(call.followupRun.abortSignal).toBe(abortController.signal);
     expect(call.followupRun.currentInboundContext?.text).toContain("Current event:");
+  });
+
+  it("detaches queued user requests from superseded source abort signals", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const abortController = new AbortController();
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "collect",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("user request context");
+
+    await runPreparedReply(
+      baseParams({
+        opts: { abortSignal: abortController.signal },
+        ctx: {
+          Body: "@bot keep this",
+          RawBody: "@bot keep this",
+          CommandBody: "@bot keep this",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "@bot keep this",
+          BodyStripped: "@bot keep this",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          InboundEventKind: "user_request",
+          MessageSid: "994",
+          SenderName: "Alice",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call.shouldFollowup).toBe(true);
+    expect(call.isActive).toBe(true);
+    expect(call.followupRun.currentInboundEventKind).toBe("user_request");
+    expect(call.followupRun.abortSignal).toBeUndefined();
   });
 
   it("queues active room events instead of interrupting active user requests", async () => {
