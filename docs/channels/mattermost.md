@@ -295,6 +295,38 @@ Enable via `channels.mattermost.streaming`:
   </Accordion>
 </AccordionGroup>
 
+## Ack reactions
+
+Mattermost supports automatic ack reactions in addition to typing indicators and draft preview streaming.
+
+```json5
+{
+  messages: {
+    ackReaction: "👀",
+    ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all
+    removeAckAfterReply: false,
+  },
+  channels: {
+    mattermost: {
+      ackReaction: "eyes", // optional channel override
+      accounts: {
+        default: {
+          ackReaction: "thumbsup", // optional account override
+        },
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- `messages.ackReactionScope` controls when Mattermost sends auto-acks.
+- With the default `group-mentions` scope, open `chatmode: "onmessage"` rooms do not auto-ack unless that room still requires mentions.
+- `messages.removeAckAfterReply` removes the ack after a visible reply is delivered.
+- Mattermost normalizes common unicode defaults like `👀` to emoji names automatically.
+- `channels.mattermost.actions.reactions=false` disables both manual reaction tool calls and automatic ack reactions.
+
 ## Reactions (message tool)
 
 - Use `message action=react` with `channel=mattermost`.
