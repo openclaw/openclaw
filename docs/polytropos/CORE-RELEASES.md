@@ -114,6 +114,33 @@ To exit dev mode, reinstall a released tarball (see release procedure above).
 
 ## Notes / guardrails
 
+### Release directory invariants (DO NOT VIOLATE)
+
+- `~/polytropos/releases/` is an **authoritative store** of runnable releases.
+- Versioned files `v<ver>+poly.<N>.tgz` are **immutable** once created. Never overwrite them.
+- `current.tgz` and `previous.tgz` are **symlinks** to versioned tarballs.
+
+**Critical footgun:** do **not** use `cp` to write to `current.tgz` or `previous.tgz`.
+
+- `cp some.tgz current.tgz` will **follow the symlink** and overwrite the target versioned file.
+- This silently corrupts the release store (filenames no longer match contents) and can destroy rollback.
+
+If you must copy for any reason, use symlink-safe semantics (e.g. `cp -P` / `--no-dereference`) and still prefer the scripted procedure.
+
+### Required verification
+
+Before updating symlinks or installing anything globally, verify:
+
+- Each `v<ver>+poly.<N>.tgz` contains `package/package.json` with `version == <ver>`.
+- `current.tgz` points at the intended versioned tarball.
+
+### Activation safety
+
+Activation (restart/reload) must use the **proper gateway procedure/tooling** for the environment.
+Do not improvise restarts.
+
+---
+
 - Plugins remain deployed separately under `~/.openclaw/extensions/<pluginId>`.
 - Core switching changes only the gateway runtime code, not the config file.
 - Avoid watch-mode gateways. Rebuild the worktree `dist/` and restart when needed.
