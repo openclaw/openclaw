@@ -291,7 +291,7 @@ Behavior:
   - Updates ~/polytropos/releases/previous.tgz -> old current.tgz (if present)
   - Updates ~/polytropos/releases/current.tgz -> new tarball
   - Installs current.tgz globally into /home/ec2-user/.npm-global
-  - Does not restart/activate the gateway (run: systemctl --user restart openclaw-gateway)
+  - Does not restart/activate the gateway (restart procedure depends on your environment)
 `);
 }
 
@@ -387,7 +387,7 @@ banner(logStream, "Running Polytropos bundled plugin deps helper...");
 
 banner(
   logStream,
-  "Activation required: restart gateway to run the new code (systemctl --user restart openclaw-gateway)",
+  "Activation required: restart the gateway to run the new code",
 );
 
 banner(logStream, "Release staged (not activated).");
@@ -395,6 +395,6 @@ banner(logStream, `- Tag: ${polyTag}`);
 banner(logStream, `- Tarball: ${tarPath}`);
 banner(logStream, `- current.tgz -> ${readlinkAbs(currentTgz)}`);
 banner(logStream, `- previous.tgz -> ${readlinkAbs(previousTgz)}`);
-banner(logStream, "- Next: systemctl --user restart openclaw-gateway");
+banner(logStream, "- Next: restart the gateway");
 
 logStream.end();
