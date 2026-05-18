@@ -1155,14 +1155,25 @@ export const agentHandlers: GatewayRequestHandlers = {
           // - Client supplied a different sessionId → "new" (matches
           //   sessions.reset's reason for the /new slash command).
           // - Previous session's transcript file disappeared → "deleted".
-          // - Otherwise the rotation came from freshness expiry, which the
-          //   policy treats as the daily-reset boundary → "daily".
+          // - Freshness expired under an idle-reset policy → "idle".
+          // - Freshness expired under a daily-reset policy → "daily".
+          //
+          // The freshness object carries `idleExpiresAt` (set only when the
+          // policy uses an idle window) and `dailyResetAt` (set only when
+          // the policy uses daily-mode). Prefer the specific reason so
+          // plugins that branch on session_end.reason see the actual cause.
           if (usableRequestedSessionId && entry.sessionId !== usableRequestedSessionId) {
             rotationReason = "new";
           } else if (failedSessionTranscriptMissing) {
             rotationReason = "deleted";
           } else if (!canReuseSession) {
-            rotationReason = "daily";
+            if (freshness?.idleExpiresAt != null && now > freshness.idleExpiresAt) {
+              rotationReason = "idle";
+            } else if (freshness?.dailyResetAt != null) {
+              rotationReason = "daily";
+            } else {
+              rotationReason = "daily";
+            }
           }
         }
         const touchInteraction =
