@@ -384,6 +384,10 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "pi" })),
   }));
 
+  vi.doMock("../harness/policy.js", () => ({
+    resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "pi" })),
+  }));
+
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     prepareProviderRuntimeAuth: vi.fn(async () => ({ resolvedApiKey: undefined })),
     resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
