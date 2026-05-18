@@ -1815,7 +1815,7 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.groupChat.unmentionedInbound":
     'Controls how unmentioned always-on group chatter is submitted. "user_request" treats it as a user request; "room_event" submits it as quiet context where visible output requires the message tool.',
   "messages.groupChat.visibleReplies":
-    'Overrides visible source replies for group/channel conversations. Defaults to "message_tool" when no global visible reply policy is set. "message_tool" requires message(action=send) for room output and keeps normal final text private. "automatic" posts normal replies as before.',
+    'Overrides visible source replies for group/channel conversations. Defaults to "automatic" when no global visible reply policy is set. "message_tool" requires message(action=send) for room output and keeps normal final text private. "automatic" posts normal replies as before.',
   "messages.queue":
     "Queue strategy for inbound messages that arrive while a session run is active. Use this to tune steering, deferred followups, batching, or interruption.",
   "messages.queue.mode":
