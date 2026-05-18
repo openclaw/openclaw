@@ -435,7 +435,7 @@ describe("doctor preview warnings", () => {
     expect(warnings.join("\n")).not.toContain("stale plugin reference");
   });
 
-  it("warns softly when default group visible replies need an unavailable message tool", () => {
+  it("does not warn when default group visible replies are automatic", () => {
     const warnings = collectVisibleReplyToolPolicyWarnings({
       channels: {
         slack: {},
@@ -445,12 +445,7 @@ describe("doctor preview warnings", () => {
       },
     });
 
-    const warning = expectSingleWarningContaining(
-      warnings,
-      'messages.groupChat.visibleReplies defaults to "message_tool"',
-    );
-    expect(warning).toContain("message tool is unavailable");
-    expect(warning).toContain("falls back to automatic group/channel replies");
+    expect(warnings).toStrictEqual([]);
   });
 
   it("warns strongly when explicit group visible replies require an unavailable message tool", () => {
@@ -491,6 +486,11 @@ describe("doctor preview warnings", () => {
         discord: {},
         telegram: {},
       },
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
+      },
       tools: {
         profile: "coding" as const,
       },
@@ -517,6 +517,11 @@ describe("doctor preview warnings", () => {
       channels: {
         discord: {},
       },
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
+      },
       tools: {
         profile: "coding" as const,
         byProvider: {
@@ -528,7 +533,7 @@ describe("doctor preview warnings", () => {
     };
 
     expectWarningsContaining(collectVisibleReplyToolPolicyWarnings(cfg), [
-      'messages.groupChat.visibleReplies defaults to "message_tool"',
+      'messages.groupChat.visibleReplies is set to "message_tool"',
     ]);
     expect(collectChannelBoundMessageToolPolicyWarnings(cfg)).toEqual([
       '- Agent "main" is routed from channel "discord", but the message tool is unavailable for that agent; explicit channel actions such as sendAttachment, upload-file, thread-reply, or reply can fail. Add "message" to the agent tool allowlist, add "group:messaging", or switch the agent to a profile that includes messaging tools.',
@@ -551,6 +556,11 @@ describe("doctor preview warnings", () => {
       },
       channels: {
         discord: {},
+      },
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
       },
       tools: {
         profile: "coding" as const,
