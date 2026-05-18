@@ -352,6 +352,62 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("writes redacted QA trace events when requested", async () => {
+    const previousTrace = process.env.OPENCLAW_QA_WHATSAPP_TRACE;
+    const previousTracePath = process.env.OPENCLAW_QA_WHATSAPP_TRACE_PATH;
+    const tracePath = path.join(getAuthDir(), "whatsapp-qa-trace.jsonl");
+    process.env.OPENCLAW_QA_WHATSAPP_TRACE_PATH = tracePath;
+    const onMessage = vi.fn(async (msg) => {
+      await msg.reply("pong");
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    try {
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("qa-trace"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "ping",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      await waitForMessageCalls(onMessage, 1);
+
+      await vi.waitFor(() => {
+        const trace = fsSync.readFileSync(tracePath, "utf8");
+        const phases = trace
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line).phase);
+        expect(phases).toEqual(
+          expect.arrayContaining([
+            "messages_upsert",
+            "inbound_enqueue",
+            "on_message_start",
+            "outbound_send_start",
+            "outbound_send_done",
+            "on_message_done",
+          ]),
+        );
+        expect(trace).not.toContain("999@s.whatsapp.net");
+        expect(trace).not.toContain("ping");
+      });
+    } finally {
+      if (previousTrace === undefined) {
+        delete process.env.OPENCLAW_QA_WHATSAPP_TRACE;
+      } else {
+        process.env.OPENCLAW_QA_WHATSAPP_TRACE = previousTrace;
+      }
+      if (previousTracePath === undefined) {
+        delete process.env.OPENCLAW_QA_WHATSAPP_TRACE_PATH;
+      } else {
+        process.env.OPENCLAW_QA_WHATSAPP_TRACE_PATH = previousTracePath;
+      }
+      await listener.close();
+    }
+  });
+
   it("hydrates participating groups once after connect when group traffic is configured", async () => {
     const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
       cfg: GROUP_HYDRATION_CONFIG as never,

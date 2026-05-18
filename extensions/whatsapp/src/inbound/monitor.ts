@@ -1,3 +1,4 @@
+import { appendFile } from "node:fs/promises";
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
@@ -68,6 +69,8 @@ const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
 const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const INBOUND_CLOSE_DRAIN_TIMEOUT_MS = 5_000;
+const WHATSAPP_QA_TRACE_ENV = "OPENCLAW_QA_WHATSAPP_TRACE";
+const WHATSAPP_QA_TRACE_PATH_ENV = "OPENCLAW_QA_WHATSAPP_TRACE_PATH";
 export const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
 type WhatsAppGroupMetadataCacheEntry = {
@@ -123,8 +126,42 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   defaultRuntime.log(message);
 }
 
+function isQaTraceEnabled(): boolean {
+  const value = process.env[WHATSAPP_QA_TRACE_ENV]?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes";
+}
+
 function isGroupJid(jid: string): boolean {
   return (typeof isJidGroup === "function" ? isJidGroup(jid) : jid.endsWith("@g.us")) === true;
+}
+
+function jidKind(jid: string | undefined): "group" | "direct" | "status" | "unknown" {
+  if (!jid) {
+    return "unknown";
+  }
+  if (isGroupJid(jid)) {
+    return "group";
+  }
+  if (jid.endsWith("@status") || jid.endsWith("@broadcast")) {
+    return "status";
+  }
+  return "direct";
+}
+
+function traceWhatsAppQaEvent(event: Record<string, unknown>): void {
+  const tracePath = process.env[WHATSAPP_QA_TRACE_PATH_ENV]?.trim();
+  if (!tracePath && !isQaTraceEnabled()) {
+    return;
+  }
+  const line = `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`;
+  if (tracePath) {
+    void appendFile(tracePath, line).catch((error) => {
+      defaultRuntime.log(`Failed to write WhatsApp QA trace: ${String(error)}`);
+    });
+  }
+  if (isQaTraceEnabled()) {
+    defaultRuntime.log(`[whatsapp-qa-trace] ${line.trimEnd()}`);
+  }
 }
 
 function recordAcceptedInboundActivity(accountId: string): void {
@@ -348,7 +385,21 @@ export async function attachWebInboxToSocket(
         }
         try {
           if (entries.length === 1) {
+            traceWhatsAppQaEvent({
+              phase: "on_message_start",
+              accountId: last.accountId,
+              chatType: last.chatType,
+              batched: false,
+              entries: entries.length,
+            });
             await options.onMessage(last);
+            traceWhatsAppQaEvent({
+              phase: "on_message_done",
+              accountId: last.accountId,
+              chatType: last.chatType,
+              batched: false,
+              entries: entries.length,
+            });
             await finalizeInboundDelivery(entries);
             return;
           }
@@ -369,7 +420,21 @@ export async function attachWebInboxToSocket(
             mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
             isBatched: true,
           };
+          traceWhatsAppQaEvent({
+            phase: "on_message_start",
+            accountId: combinedMessage.accountId,
+            chatType: combinedMessage.chatType,
+            batched: true,
+            entries: entries.length,
+          });
           await options.onMessage(combinedMessage);
+          traceWhatsAppQaEvent({
+            phase: "on_message_done",
+            accountId: combinedMessage.accountId,
+            chatType: combinedMessage.chatType,
+            batched: true,
+            entries: entries.length,
+          });
           await finalizeInboundDelivery(entries);
         } catch (error) {
           await finalizeInboundDelivery(entries, error);
@@ -422,12 +487,32 @@ export async function attachWebInboxToSocket(
       const currentSock = getCurrentSock();
       if (currentSock) {
         try {
+          traceWhatsAppQaEvent({
+            phase: "outbound_send_start",
+            attempt,
+            accountId: options.accountId,
+            jidKind: jidKind(jid),
+            payloadKind: "text" in content ? "text" : "media",
+          });
           const result = sendOptions
             ? await currentSock.sendMessage(jid, content, sendOptions)
             : await currentSock.sendMessage(jid, content);
+          traceWhatsAppQaEvent({
+            phase: "outbound_send_done",
+            attempt,
+            accountId: options.accountId,
+            jidKind: jidKind(jid),
+          });
           rememberOutboundMessage(jid, result);
           return result;
         } catch (err) {
+          traceWhatsAppQaEvent({
+            phase: "outbound_send_error",
+            attempt,
+            accountId: options.accountId,
+            jidKind: jidKind(jid),
+            retryable: shouldRetryDisconnect() && isRetryableSendDisconnectError(err),
+          });
           if (!shouldRetryDisconnect() || !isRetryableSendDisconnectError(err)) {
             throw err;
           }
@@ -782,6 +867,14 @@ export async function attachWebInboxToSocket(
       }
       return;
     }
+    traceWhatsAppQaEvent({
+      phase: "inbound_normalized",
+      accountId: options.accountId,
+      chatType: inbound.group ? "group" : "direct",
+      jidKind: jidKind(inbound.remoteJid),
+      messageIdPresent: Boolean(inbound.id),
+      fromMe: Boolean(msg.key?.fromMe),
+    });
 
     const readReceipt = stored?.metadata?.readReceipt ?? buildReadReceiptTarget(inbound);
     const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
@@ -842,6 +935,13 @@ export async function attachWebInboxToSocket(
       await maybeMarkReadReceiptAfterCompletedDelivery(inbound, deliveryReadReceipt);
       return;
     }
+    traceWhatsAppQaEvent({
+      phase: "inbound_enriched",
+      accountId: options.accountId,
+      chatType: inbound.group ? "group" : "direct",
+      bodyLength: enriched.body.length,
+      hasMedia: Boolean(enriched.mediaPath),
+    });
 
     const dedupeKey = inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : "";
     const dedupeClaim = dedupeKey ? await claimRecentInboundMessageDelivery(dedupeKey) : "claimed";
@@ -1055,6 +1155,14 @@ export async function attachWebInboxToSocket(
       readReceipt: durable.readReceipt,
     };
     const debounceKey = buildInboundDebounceKey(inboundMessage);
+    traceWhatsAppQaEvent({
+      phase: "inbound_enqueue",
+      accountId: inboundMessage.accountId,
+      chatType: inboundMessage.chatType,
+      bodyLength: inboundMessage.body.length,
+      hasMedia: Boolean(inboundMessage.mediaPath),
+      debounced: Boolean(debounceKey && inboundDebounceMs > 0),
+    });
     if (debounceKey) {
       inboundMessage.debounceKey = debounceKey;
       if (inboundDebounceMs > 0 && shouldDebounceInboundMessage(inboundMessage)) {
@@ -1087,6 +1195,12 @@ export async function attachWebInboxToSocket(
     if (upsert.type !== "notify" && upsert.type !== "append") {
       return;
     }
+    traceWhatsAppQaEvent({
+      phase: "messages_upsert",
+      accountId: options.accountId,
+      upsertType: upsert.type,
+      messageCount: upsert.messages?.length ?? 0,
+    });
     for (const msg of upsert.messages ?? []) {
       if (
         await maybeResolveWhatsAppApprovalReaction({
@@ -1101,7 +1215,6 @@ export async function attachWebInboxToSocket(
       ) {
         continue;
       }
-
       await processDurableInboundMessage(msg, upsert.type);
     }
   };

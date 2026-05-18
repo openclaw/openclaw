@@ -179,19 +179,29 @@ describe("WhatsApp QA live runtime", () => {
     );
   });
 
-  it("arms WhatsApp gateway heap checkpoints only when requested", () => {
+  it("arms WhatsApp gateway diagnostics only when requested", () => {
     expect(
-      __testing.buildWhatsAppGatewayHeapCheckpointRuntimeEnvPatch({
-        OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "0",
+      __testing.buildWhatsAppGatewayRuntimeEnvPatch({
+        env: {
+          OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "0",
+          OPENCLAW_QA_WHATSAPP_TRACE: "0",
+        },
+        tracePath: "/tmp/openclaw-whatsapp-trace.jsonl",
       }),
     ).toBeUndefined();
     expect(
-      __testing.buildWhatsAppGatewayHeapCheckpointRuntimeEnvPatch({
-        OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "1",
-        NODE_OPTIONS: "--max-old-space-size=4096",
+      __testing.buildWhatsAppGatewayRuntimeEnvPatch({
+        env: {
+          OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "1",
+          OPENCLAW_QA_WHATSAPP_TRACE: "1",
+          NODE_OPTIONS: "--max-old-space-size=4096",
+        },
+        tracePath: "/tmp/openclaw-whatsapp-trace.jsonl",
       }),
     ).toEqual({
       NODE_OPTIONS: "--max-old-space-size=4096 --heapsnapshot-signal=SIGUSR2",
+      OPENCLAW_QA_WHATSAPP_TRACE: "1",
+      OPENCLAW_QA_WHATSAPP_TRACE_PATH: "/tmp/openclaw-whatsapp-trace.jsonl",
     });
   });
 
