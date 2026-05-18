@@ -41,6 +41,13 @@ const DEFAULT_TIMEOUT_MS = 5 * 60_000;
 export const DEFAULT_COMFY_MODEL = "workflow";
 
 type ComfyMode = "local" | "cloud";
+type ComfyDimensionConfig = {
+  widthNodeId: string;
+  widthInputName?: string;
+  heightNodeId: string;
+  heightInputName?: string;
+};
+
 type ComfyCapability = "image" | "music" | "video";
 type ComfyOutputKind = "audio" | "gifs" | "images" | "videos";
 type ComfyWorkflow = Record<string, unknown>;
@@ -255,6 +262,92 @@ function setWorkflowInput(params: {
     throw new Error(`Comfy workflow node "${params.nodeId}" is missing an inputs object`);
   }
   inputs[params.inputName] = params.value;
+}
+
+function setWorkflowDimensionInput(
+  workflow: ComfyWorkflow,
+  config: ComfyDimensionConfig | undefined,
+  width: number,
+  height: number,
+): void {
+  if (!config) return;
+  const wNode = workflow[config.widthNodeId];
+  if (!isRecord(wNode)) {
+    throw new Error(`Comfy workflow missing node "${config.widthNodeId}" for dimensions`);
+  }
+  const wInputs = wNode.inputs;
+  if (!isRecord(wInputs)) {
+    throw new Error(
+      `Comfy workflow node "${config.widthNodeId}" is missing an inputs object`,
+    );
+  }
+  const wName = config.widthInputName ?? "width";
+  wInputs[wName] = width;
+
+  if (config.heightNodeId === config.widthNodeId) {
+    // Same node — set height too
+    const hName = config.heightInputName ?? "height";
+    wInputs[hName] = height;
+  } else {
+    const hNode = workflow[config.heightNodeId];
+    if (!isRecord(hNode)) {
+      throw new Error(`Comfy workflow missing node "${config.heightNodeId}" for dimensions`);
+    }
+    const hInputs = hNode.inputs;
+    if (!isRecord(hInputs)) {
+      throw new Error(
+        `Comfy workflow node "${config.heightNodeId}" is missing an inputs object`,
+      );
+    }
+    const hName = config.heightInputName ?? "height";
+    hInputs[hName] = height;
+  }
+}
+
+function calculateDimensions(params: {
+  aspectRatio?: string;
+  size?: string | undefined;
+}): { width: number; height: number } | null {
+  const { aspectRatio, size } = params;
+
+  // If size is explicit (e.g. "1024x1024"), use it directly
+  if (size) {
+    const match = size.trim().match(/^(\d+)x(\d+)$/);
+    if (match) {
+      const w = parseInt(match[1], 10);
+      const h = parseInt(match[2], 10);
+      if (w > 0 && h > 0) return { width: w, height: h };
+    }
+  }
+
+  // If aspect ratio is given, calculate from a base resolution
+  if (!aspectRatio) return null;
+
+  const parts = aspectRatio.split(":");
+  if (parts.length !== 2) return null;
+  const arW = parseInt(parts[0], 10);
+  const arH = parseInt(parts[1], 10);
+  if (!arW || !arH || arW <= 0 || arH <= 0) return null;
+
+  // Use a base of 1024px for the shorter side, then scale up
+  const baseSize = 1024;
+  let width: number, height: number;
+
+  if (arW >= arH) {
+    // Landscape / square: width = baseSize
+    width = baseSize;
+    height = Math.round((baseSize * arH) / arW);
+  } else {
+    // Portrait: height = baseSize
+    height = baseSize;
+    width = Math.round((baseSize * arW) / arH);
+  }
+
+  // Round to nearest multiple of 64 (ComfyUI / most models require it)
+  width = Math.round(width / 64) * 64;
+  height = Math.round(height / 64) * 64;
+
+  return { width, height };
 }
 
 function resolveComfyNetworkPolicy(params: {
@@ -618,6 +711,8 @@ export async function runComfyWorkflow(params: {
   capability: ComfyCapability;
   outputKinds: readonly ComfyOutputKind[];
   inputImage?: ComfySourceImage;
+  aspectRatio?: string;
+  size?: string;
 }): Promise<ComfyWorkflowResult> {
   const config = getComfyConfig(params.cfg);
   const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
@@ -630,6 +725,19 @@ export async function runComfyWorkflow(params: {
   const inputImageInputName =
     normalizeOptionalString(capabilityConfig.inputImageInputName) ?? DEFAULT_INPUT_IMAGE_INPUT_NAME;
   const outputNodeId = normalizeOptionalString(capabilityConfig.outputNodeId);
+
+  // Calculate and inject dimensions from aspectRatio/size if configured
+  let appliedDimensions: { width: number; height: number } | null = null;
+  if (params.aspectRatio || params.size) {
+    const dims = calculateDimensions({
+      aspectRatio: params.aspectRatio,
+      size: params.size,
+    });
+    if (dims) {
+      appliedDimensions = dims;
+      setWorkflowDimensionInput(workflow, capabilityConfig.dimensions, dims.width, dims.height);
+    }
+  }
   const pollIntervalMs =
     readConfigInteger(capabilityConfig, "pollIntervalMs") ?? DEFAULT_POLL_INTERVAL_MS;
   const timeoutMs =

@@ -2,6 +2,7 @@ import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
+import type { ImageGenerationRequest } from "openclaw/plugin-sdk/image-generation/types";
 import {
   DEFAULT_COMFY_MODEL,
   setComfyFetchGuardForTesting,
@@ -26,8 +27,8 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
     capabilities: {
       generate: {
         maxCount: 1,
-        supportsSize: false,
-        supportsAspectRatio: false,
+        supportsSize: true,
+        supportsAspectRatio: true,
         supportsResolution: false,
       },
       edit: {
@@ -39,7 +40,7 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
         supportsResolution: false,
       },
     },
-    async generateImage(req) {
+    async generateImage(req: ImageGenerationRequest) {
       if ((req.inputImages?.length ?? 0) > 1) {
         throw new Error("Comfy image generation currently supports at most one reference image");
       }
@@ -54,6 +55,8 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
         capability: "image",
         outputKinds: ["images"],
         inputImage: req.inputImages?.[0],
+        aspectRatio: req.aspectRatio,
+        size: req.size,
       });
 
       const images: GeneratedImageAsset[] = result.assets.map((asset) => ({
