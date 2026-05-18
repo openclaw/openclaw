@@ -28,7 +28,7 @@ const TEST_ENV_KEYS = [
   "OPENCLAW_SKIP_CANVAS_HOST",
   "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
   "OPENCLAW_SKIP_PROVIDERS",
-] as const;
+];
 
 type Cleanup = () => Promise<void> | void;
 
