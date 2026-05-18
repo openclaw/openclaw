@@ -79,6 +79,7 @@ import org.commonmark.node.Image as MarkdownImage
 import org.commonmark.node.Text as MarkdownTextNode
 
 private const val LIST_INDENT_DP = 14
+private const val DATA_IMAGE_HEADER_MAX_CHARS = 64
 private val dataImageRegex = Regex("^data:image/([a-zA-Z0-9+.-]+);base64,([A-Za-z0-9+/=\\n\\r]+)$")
 
 private val markdownParser: Parser by lazy {
@@ -606,9 +607,10 @@ private fun standaloneDataImage(paragraph: Paragraph): ParsedDataImage? {
   return parseDataImageDestination(only.destination)
 }
 
-private fun parseDataImageDestination(destination: String?): ParsedDataImage? {
+internal fun parseDataImageDestination(destination: String?): ParsedDataImage? {
   val raw = destination?.trim().orEmpty()
   if (raw.isEmpty()) return null
+  if (raw.length > CHAT_IMAGE_MAX_BASE64_CHARS + DATA_IMAGE_HEADER_MAX_CHARS) return null
   val match = dataImageRegex.matchEntire(raw) ?: return null
   val subtype =
     match.groupValues
@@ -623,6 +625,7 @@ private fun parseDataImageDestination(destination: String?): ParsedDataImage? {
       ?.trim()
       .orEmpty()
   if (base64.isEmpty()) return null
+  if (base64.length > CHAT_IMAGE_MAX_BASE64_CHARS) return null
   return ParsedDataImage(mimeType = "image/$subtype", base64 = base64)
 }
 
@@ -650,7 +653,7 @@ private data class TableRenderRow(
   val cells: List<AnnotatedString>,
 )
 
-private data class ParsedDataImage(
+internal data class ParsedDataImage(
   val mimeType: String,
   val base64: String,
 )

@@ -2,6 +2,7 @@ package ai.openclaw.app.ui.chat
 
 import androidx.compose.ui.text.LinkAnnotation
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -38,5 +39,21 @@ class ChatMarkdownTest {
 
     assertEquals("No link here", annotated.text)
     assertTrue(annotated.getLinkAnnotations(0, annotated.length).isEmpty())
+  }
+
+  @Test
+  fun parseDataImageDestinationAcceptsBoundedPayloads() {
+    val parsed = parseDataImageDestination("data:image/png;base64,QUJD")
+
+    assertEquals(ParsedDataImage(mimeType = "image/png", base64 = "QUJD"), parsed)
+  }
+
+  @Test
+  fun parseDataImageDestinationRejectsOversizedPayloads() {
+    val oversized = "A".repeat(CHAT_IMAGE_MAX_BASE64_CHARS + 1)
+
+    val parsed = parseDataImageDestination("data:image/png;base64,$oversized")
+
+    assertNull(parsed)
   }
 }
