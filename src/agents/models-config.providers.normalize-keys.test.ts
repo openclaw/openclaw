@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
+import { planOpenClawModelsJsonWithDeps } from "./models-config.plan.js";
 import { normalizeProviders } from "./models-config.providers.normalize.js";
 import { resolveApiKeyFromProfiles } from "./models-config.providers.secret-helpers.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
@@ -313,6 +314,110 @@ describe("normalizeProviders", () => {
 
       expect(resolved?.apiKey).toBe("MINIMAX_API_KEY"); // pragma: allowlist secret
       expect(resolved?.source).toBe("env-ref");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not copy plaintext auth-profile keys into generated provider config", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const env = { ...process.env } as NodeJS.ProcessEnv;
+    delete env.OPENAI_API_KEY;
+    try {
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-profile-plaintext-secret", // pragma: allowlist secret
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          models: [createModel()],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir, env });
+
+      expect(normalized?.openai?.apiKey).toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("strips profile-backed plaintext keys preserved by models.json merge mode", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const env = { ...process.env } as NodeJS.ProcessEnv;
+    delete env.OPENAI_API_KEY;
+    try {
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-profile-plaintext-secret", // pragma: allowlist secret
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const plan = await planOpenClawModelsJsonWithDeps(
+        {
+          cfg: { models: { mode: "merge", providers: {} } },
+          agentDir,
+          env,
+          existingRaw: "",
+          existingParsed: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "sk-profile-plaintext-secret", // pragma: allowlist secret
+                api: "openai-completions",
+                models: [createModel({ id: "gpt-proof" })],
+              },
+            },
+          },
+        },
+        {
+          resolveImplicitProviders: async () => ({
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-completions",
+              models: [createModel({ id: "gpt-proof" })],
+            },
+          }),
+        },
+      );
+
+      expect(plan.action).toBe("write");
+      if (plan.action !== "write") {
+        throw new Error("Expected models.json write plan");
+      }
+      const parsed = JSON.parse(plan.contents) as {
+        providers?: Record<string, { apiKey?: string }>;
+      };
+      expect(parsed.providers?.openai?.apiKey).toBeUndefined();
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

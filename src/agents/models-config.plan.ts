@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isRecord } from "../utils.js";
+import { isNonSecretApiKeyMarker, isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import {
   mergeProviders,
   mergeWithExistingProviderSecrets,
@@ -105,6 +106,120 @@ function resolveProvidersForMode(params: {
   });
 }
 
+type ExistingAuthSurfaces = {
+  apiKey?: string;
+  sensitiveHeaders: Map<string, string>;
+};
+
+function shouldPersistProviderApiKey(value: unknown): value is string {
+  return typeof value === "string" && isNonSecretApiKeyMarker(value);
+}
+
+function isSensitiveProviderHeaderName(headerName: string): boolean {
+  const normalized = headerName.trim().toLowerCase();
+  return (
+    normalized === "authorization" ||
+    normalized === "proxy-authorization" ||
+    normalized === "api-key" ||
+    normalized === "x-api-key" ||
+    normalized === "x-goog-api-key" ||
+    normalized === "anthropic-api-key" ||
+    normalized.endsWith("-api-key")
+  );
+}
+
+function shouldPersistSensitiveHeaderValue(value: unknown): value is string {
+  return typeof value === "string" && isSecretRefHeaderValueMarker(value);
+}
+
+function collectExistingAuthSurfaces(existingParsed: unknown): Map<string, ExistingAuthSurfaces> {
+  const existingProviders =
+    isRecord(existingParsed) && isRecord(existingParsed.providers)
+      ? (existingParsed.providers as Record<string, ExistingProviderConfig>)
+      : undefined;
+  const out = new Map<string, ExistingAuthSurfaces>();
+  for (const [providerKey, provider] of Object.entries(existingProviders ?? {})) {
+    if (!isRecord(provider)) {
+      continue;
+    }
+    const apiKey = typeof provider.apiKey === "string" ? provider.apiKey : undefined;
+    const sensitiveHeaders = new Map<string, string>();
+    const headers = isRecord(provider.headers)
+      ? (provider.headers as Record<string, unknown>)
+      : undefined;
+    for (const [headerName, headerValue] of Object.entries(headers ?? {})) {
+      if (isSensitiveProviderHeaderName(headerName) && typeof headerValue === "string") {
+        sensitiveHeaders.set(headerName.trim().toLowerCase(), headerValue);
+      }
+    }
+    if (apiKey !== undefined || sensitiveHeaders.size > 0) {
+      out.set(providerKey, { ...(apiKey !== undefined ? { apiKey } : {}), sensitiveHeaders });
+    }
+  }
+  return out;
+}
+
+function stripPromptVisibleProviderSecrets(
+  providers: Record<string, ProviderConfig>,
+  opts: { existingAuthSurfaces?: ReadonlyMap<string, ExistingAuthSurfaces> } = {},
+): Record<string, ProviderConfig> {
+  let nextProviders: Record<string, ProviderConfig> | undefined;
+
+  for (const [providerKey, provider] of Object.entries(providers)) {
+    if (!isRecord(provider)) {
+      continue;
+    }
+    let nextProvider: ProviderConfig | undefined;
+    const existingAuth = opts.existingAuthSurfaces?.get(providerKey);
+    const apiKey = (provider as { apiKey?: unknown }).apiKey;
+    if (
+      apiKey !== undefined &&
+      !shouldPersistProviderApiKey(apiKey) &&
+      !(typeof apiKey === "string" && existingAuth?.apiKey === apiKey)
+    ) {
+      nextProvider = { ...provider };
+      delete (nextProvider as { apiKey?: unknown }).apiKey;
+    }
+
+    const currentProvider = nextProvider ?? provider;
+    const headers = isRecord(currentProvider.headers)
+      ? (currentProvider.headers as Record<string, unknown>)
+      : undefined;
+    if (headers) {
+      let nextHeaders: Record<string, NonNullable<ProviderConfig["headers"]>[string]> | undefined;
+      for (const [headerName, headerValue] of Object.entries(headers)) {
+        if (
+          !isSensitiveProviderHeaderName(headerName) ||
+          shouldPersistSensitiveHeaderValue(headerValue) ||
+          (typeof headerValue === "string" &&
+            existingAuth?.sensitiveHeaders.get(headerName.trim().toLowerCase()) === headerValue)
+        ) {
+          continue;
+        }
+        nextHeaders ??= {
+          ...(headers as Record<string, NonNullable<ProviderConfig["headers"]>[string]>),
+        };
+        delete nextHeaders[headerName];
+      }
+      if (nextHeaders) {
+        nextProvider = { ...(nextProvider ?? provider) };
+        if (Object.keys(nextHeaders).length > 0) {
+          nextProvider.headers = nextHeaders;
+        } else {
+          delete (nextProvider as { headers?: unknown }).headers;
+        }
+      }
+    }
+
+    if (nextProvider) {
+      nextProviders ??= { ...providers };
+      nextProviders[providerKey] = nextProvider;
+    }
+  }
+
+  return nextProviders ?? providers;
+}
+
 export async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -170,10 +285,20 @@ export async function planOpenClawModelsJsonWithDeps(
     providers: normalizedProviders,
     secretRefManagedProviders,
   });
-  const normalizedMergedProviders =
-    normalizeProviderCatalogModelsForConfig(mergedProviders, {
-      manifestPlugins,
+  const normalizedPostMergeProviders =
+    normalizeProviders({
+      providers: mergedProviders,
+      agentDir,
+      env,
+      secretDefaults: cfg.secrets?.defaults,
+      sourceProviders: params.sourceConfigForSecrets?.models?.providers,
+      sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
+      secretRefManagedProviders,
     }) ?? mergedProviders;
+  const normalizedMergedProviders =
+    normalizeProviderCatalogModelsForConfig(normalizedPostMergeProviders, {
+      manifestPlugins,
+    }) ?? normalizedPostMergeProviders;
   const secretEnforcedProviders =
     enforceSourceManagedProviderSecrets({
       providers: normalizedMergedProviders,
@@ -182,7 +307,11 @@ export async function planOpenClawModelsJsonWithDeps(
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
   const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
-  const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
+  const persistedProviders = stripPromptVisibleProviderSecrets(finalProviders, {
+    existingAuthSurfaces:
+      mode === "merge" ? collectExistingAuthSurfaces(params.existingParsed) : undefined,
+  });
+  const nextContents = `${JSON.stringify({ providers: persistedProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {
     return { action: "noop" };

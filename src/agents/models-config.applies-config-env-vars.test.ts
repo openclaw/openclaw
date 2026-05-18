@@ -246,6 +246,87 @@ describe("models-config", () => {
     ]);
   });
 
+  it("strips new plaintext provider auth from persisted models.json while preserving markers", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            mode: "merge",
+            providers: {
+              custom: {
+                baseUrl: "https://config.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-config-plaintext", // pragma: allowlist secret
+                headers: {
+                  Authorization: "Bearer sk-config-header", // pragma: allowlist secret
+                  "X-Api-Key": "sk-config-header-key", // pragma: allowlist secret
+                  "X-Tenant": "tenant-a",
+                },
+                models: [
+                  {
+                    id: "config-model",
+                    name: "Config model",
+                    input: ["text"],
+                    reasoning: false,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128000,
+                    maxTokens: 4096,
+                  },
+                ],
+              },
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                api: "openai-responses",
+                apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
+                headers: {
+                  Authorization: "secretref-env:OPENAI_PROXY_TOKEN",
+                },
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: {
+          providers: {
+            legacy: {
+              baseUrl: "https://legacy.example/v1",
+              api: "openai-completions",
+              apiKey: "sk-existing-plaintext", // pragma: allowlist secret
+              headers: {
+                Authorization: "Bearer sk-existing-header", // pragma: allowlist secret
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      {
+        resolveImplicitProviders: async () => ({}),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string; headers?: Record<string, string> }>;
+    };
+    expect(parsed.providers?.custom?.apiKey).toBeUndefined();
+    expect(parsed.providers?.custom?.headers).toEqual({ "X-Tenant": "tenant-a" });
+    expect(parsed.providers?.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+    expect(parsed.providers?.openai?.headers?.Authorization).toBe(
+      "secretref-env:OPENAI_PROXY_TOKEN",
+    );
+    expect(parsed.providers?.legacy?.apiKey).toBe("sk-existing-plaintext"); // pragma: allowlist secret
+    expect(parsed.providers?.legacy?.headers?.Authorization).toBe(
+      "Bearer sk-existing-header",
+    ); // pragma: allowlist secret
+  });
+
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       unsetEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR]);
