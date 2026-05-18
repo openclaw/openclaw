@@ -8,6 +8,23 @@ import {
 
 type ImportedSourceState = Parameters<typeof shouldSkipImportedSourceWrite>[0]["state"];
 
+type FileStatLike = {
+  isFile?: unknown;
+  nlink?: unknown;
+};
+
+function isRegularFileStat(value: unknown): value is FileStatLike & { nlink: number } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const stat = value as FileStatLike;
+  const isFile =
+    typeof stat.isFile === "function"
+      ? (stat.isFile as () => boolean).call(stat)
+      : stat.isFile === true;
+  return isFile && typeof stat.nlink === "number";
+}
+
 export async function writeImportedSourcePage(params: {
   vaultRoot: string;
   syncKey: string;
@@ -51,7 +68,7 @@ export async function writeImportedSourcePage(params: {
   const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
   if (existing !== rendered) {
     try {
-      if (pageStat && pageStat.isFile && pageStat.nlink > 1) {
+      if (isRegularFileStat(pageStat) && pageStat.nlink > 1) {
         await vault.remove(params.pagePath);
       }
       await vault.write(params.pagePath, rendered);
