@@ -29,7 +29,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../button-types.js";
-import { splitTelegramCaption } from "../caption.js";
+import { splitTelegramRenderedCaption } from "../caption.js";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
@@ -350,12 +350,14 @@ async function deliverMediaReply(params: {
     });
     const fileName = media.fileName ?? (isGif ? "animation.gif" : "file");
     const file = new InputFile(media.buffer, fileName);
-    const { caption, followUpText } = splitTelegramCaption(
+    const {
+      caption,
+      renderedCaption: htmlCaption,
+      followUpText,
+    } = splitTelegramRenderedCaption(
       isFirstMedia ? (params.reply.text ?? undefined) : undefined,
+      (caption) => renderTelegramHtmlText(caption, { tableMode: params.tableMode }),
     );
-    const htmlCaption = caption
-      ? renderTelegramHtmlText(caption, { tableMode: params.tableMode })
-      : undefined;
     if (followUpText) {
       pendingFollowUpText = followUpText;
     }

@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { splitTelegramCaption, TELEGRAM_MAX_CAPTION_LENGTH } from "./caption.js";
+import {
+  splitTelegramCaption,
+  splitTelegramRenderedCaption,
+  TELEGRAM_MAX_CAPTION_LENGTH,
+} from "./caption.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
 
 describe("splitTelegramCaption", () => {
@@ -22,6 +26,25 @@ describe("splitTelegramCaption", () => {
     expect(splitTelegramCaption(text)).toEqual({
       caption: undefined,
       followUpText: text,
+    });
+  });
+
+  it("moves captions that exceed the limit after rendering into follow-up text", () => {
+    const text = "&".repeat(300);
+    expect(
+      splitTelegramRenderedCaption(text, (caption) => caption.replaceAll("&", "&amp;")),
+    ).toEqual({
+      caption: undefined,
+      renderedCaption: undefined,
+      followUpText: text,
+    });
+  });
+
+  it("returns rendered captions when they stay within the limit", () => {
+    expect(splitTelegramRenderedCaption(" hello ", (caption) => `<b>${caption}</b>`)).toEqual({
+      caption: "hello",
+      renderedCaption: "<b>hello</b>",
+      followUpText: undefined,
     });
   });
 });

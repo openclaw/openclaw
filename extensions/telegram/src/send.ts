@@ -13,7 +13,7 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import { buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
-import { splitTelegramCaption } from "./caption.js";
+import { splitTelegramRenderedCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText, splitTelegramHtmlChunks } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -809,17 +809,18 @@ export async function sendMessageTelegram(
       media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
     const file = new InputFileCtor(media.buffer, fileName);
     let caption: string | undefined;
+    let htmlCaption: string | undefined;
     let followUpText: string | undefined;
 
     if (isVideoNote) {
       caption = undefined;
       followUpText = text.trim() ? text : undefined;
     } else {
-      const split = splitTelegramCaption(text);
+      const split = splitTelegramRenderedCaption(text, renderHtmlText);
       caption = split.caption;
       followUpText = split.followUpText;
+      htmlCaption = split.renderedCaption;
     }
-    const htmlCaption = caption ? renderHtmlText(caption) : undefined;
     // If text exceeds Telegram's caption limit, send media without caption
     // then send text as a separate follow-up message.
     const needsSeparateText = Boolean(followUpText);
