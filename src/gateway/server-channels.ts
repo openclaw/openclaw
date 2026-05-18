@@ -830,11 +830,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return { channels, channelAccounts };
   };
 
-  const isManuallyStopped_ = (channelId: ChannelId, accountId: string): boolean => {
+  const isManuallyStoppedFlag = (channelId: ChannelId, accountId: string): boolean => {
     return manuallyStopped.has(restartKey(channelId, accountId));
   };
 
-  const resetRestartAttempts_ = (channelId: ChannelId, accountId: string): void => {
+  const resetRestartAttemptsForTest = (channelId: ChannelId, accountId: string): void => {
     restartAttempts.delete(restartKey(channelId, accountId));
   };
 
@@ -844,8 +844,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     startChannel,
     stopChannel,
     markChannelLoggedOut,
-    isManuallyStopped: isManuallyStopped_,
-    resetRestartAttempts: resetRestartAttempts_,
+    isManuallyStopped: isManuallyStoppedFlag,
+    resetRestartAttempts: resetRestartAttemptsForTest,
     isHealthMonitorEnabled,
   };
 }

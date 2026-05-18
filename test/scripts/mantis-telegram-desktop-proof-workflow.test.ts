@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, normalize } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -10,6 +11,7 @@ const PACKAGE_JSON = "package.json";
 const WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof.yml";
 const LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 const PROMPT = ".github/codex/prompts/mantis-telegram-desktop-proof.md";
+const TELEGRAM_PROOF_SKILL = ".agents/skills/telegram-crabbox-e2e-proof/SKILL.md";
 const DOCS = ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"];
 
 type WorkflowStep = {
@@ -196,12 +198,25 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     for (const doc of DOCS) {
       expect(readFileSync(doc, "utf8")).not.toContain("pnpm qa:telegram-user:crabbox");
     }
+    expect(readFileSync(TELEGRAM_PROOF_SKILL, "utf8")).not.toContain(
+      "pnpm qa:telegram-user:crabbox",
+    );
+    expect(readFileSync(TELEGRAM_PROOF_SKILL, "utf8")).toContain(
+      "OPENCLAW_TELEGRAM_USER_PROOF_CMD",
+    );
     expect(readFileSync(PROOF_SCRIPT, "utf8")).not.toContain("pnpm qa:telegram-user:crabbox");
+    const payloadValidationImport =
+      "../../qa/convex-credential-broker/convex/payload-validation.js";
     expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).toContain(
       'const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";',
     );
-    expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).toContain(
-      "../qa/convex-credential-broker/convex/payload-validation.js",
+    expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).toContain(payloadValidationImport);
+    const payloadValidationSource = normalize(
+      `${dirname(CREDENTIAL_SCRIPT)}/${payloadValidationImport.replace(/\.js$/, ".ts")}`,
+    );
+    expect(existsSync(payloadValidationSource)).toBe(true);
+    expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).not.toMatch(
+      /from "\.\.\/qa\/convex-credential-broker\/convex\/payload-validation\.js"/u,
     );
   });
 
@@ -317,6 +332,20 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(defaultProof.indexOf("requireUserDriverScript(opts);")).toBeLessThan(
       defaultProof.indexOf("leaseCredential({ localRoot, opts, root })"),
     );
+  });
+
+  it("crops the Telegram Desktop chat pane for PR proof GIFs", () => {
+    const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
+    const skill = readFileSync(TELEGRAM_PROOF_SKILL, "utf8");
+
+    expect(proofScript).toContain("const TELEGRAM_PROOF_WINDOW =");
+    expect(proofScript).toContain("const TELEGRAM_PROOF_CROP =");
+    expect(proofScript).toContain("x: TELEGRAM_PROOF_WINDOW.x + 220");
+    expect(proofScript).toContain("width: 430");
+    expect(proofScript).toContain("geometry: TELEGRAM_PROOF_WINDOW");
+    expect(proofScript).toContain("crop: TELEGRAM_PROOF_CROP");
+    expect(skill).toContain("crop can isolate the chat pane");
+    expect(skill).not.toContain("650px` is the largest tested clean width");
   });
 
   it("does not pass the full workflow environment into the local Telegram SUT", () => {

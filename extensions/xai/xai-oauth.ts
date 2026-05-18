@@ -145,6 +145,23 @@ export function buildXaiOAuthAuthorizeUrl(params: {
   return url.toString();
 }
 
+export function buildXaiOAuthAuthorizationCodeTokenBody(params: {
+  code: string;
+  codeVerifier: string;
+  codeChallenge: string;
+}): Record<string, string> {
+  return {
+    grant_type: "authorization_code",
+    code: params.code,
+    redirect_uri: XAI_OAUTH_REDIRECT_URI,
+    client_id: XAI_OAUTH_CLIENT_ID,
+    code_verifier: params.codeVerifier,
+    // xAI validates these PKCE fields again at token exchange for this client.
+    code_challenge: params.codeChallenge,
+    code_challenge_method: "S256",
+  };
+}
+
 function normalizeExpires(value: unknown, now: () => number): number | undefined {
   const seconds =
     typeof value === "number"
@@ -312,13 +329,11 @@ export async function loginXaiOAuth(ctx: ProviderAuthContext): Promise<ProviderA
       tokenEndpoint: discovery.tokenEndpoint,
       context: "xAI OAuth token exchange",
       requireRefreshToken: true,
-      body: {
-        grant_type: "authorization_code",
+      body: buildXaiOAuthAuthorizationCodeTokenBody({
         code: callback.code,
-        redirect_uri: XAI_OAUTH_REDIRECT_URI,
-        client_id: XAI_OAUTH_CLIENT_ID,
-        code_verifier: pkce.verifier,
-      },
+        codeVerifier: pkce.verifier,
+        codeChallenge: pkce.challenge,
+      }),
     });
     const identity = resolveXaiOAuthIdentity(tokens);
     progress.stop("xAI OAuth complete");

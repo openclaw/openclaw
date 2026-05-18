@@ -41,7 +41,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
   createOpenClawCodingTools: (...args: unknown[]) => createOpenClawCodingToolsMock(...args),
 }));
 
-const { __testing, runCodexAppServerSideQuestion } = await import("./side-question.js");
+const { testing, runCodexAppServerSideQuestion } = await import("./side-question.js");
 
 type ServerRequest = Required<Pick<RpcRequest, "id" | "method">> & {
   params?: RpcRequest["params"];
@@ -359,7 +359,7 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(forkParams?.cwd).toBe("/tmp/workspace");
     expect(forkParams?.config).toEqual({
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     expect(forkParams?.developerInstructions).toContain("You are in a side conversation");
     expect(forkParams?.developerInstructions).toContain(
@@ -481,7 +481,7 @@ describe("runCodexAppServerSideQuestion", () => {
     const config = forkParams?.config as Record<string, unknown> | undefined;
     expect(config?.["features.hooks"]).toBe(true);
     expect(config?.["features.code_mode"]).toBe(true);
-    expect(config?.["features.code_mode_only"]).toBe(true);
+    expect(config?.["features.code_mode_only"]).toBe(false);
     expect(config?.["hooks.PermissionRequest"]).toEqual([]);
     const preToolUseHooks = config?.["hooks.PreToolUse"] as
       | Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
@@ -689,13 +689,29 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(config).toMatchObject({
       "features.hooks": false,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       "hooks.PreToolUse": [],
       "hooks.PostToolUse": [],
       "hooks.PermissionRequest": [],
       "hooks.Stop": [],
     });
     expect(config).not.toHaveProperty("hooks.state");
+  });
+
+  it("passes Codex code-mode-only opt-in to side-thread forks", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), {
+        pluginConfig: { appServer: { codeModeOnly: true } },
+      }),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
+    const config = forkParams?.config as Record<string, unknown> | undefined;
+    expect(config?.["features.code_mode"]).toBe(true);
+    expect(config?.["features.code_mode_only"]).toBe(true);
   });
 
   it("keeps native hook relays alive across side-thread startup and completion timeouts", async () => {
@@ -930,7 +946,7 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("uses configured image generation timeout for side-thread image_generate calls", () => {
-    const timeoutMs = __testing.resolveSideDynamicToolCallTimeoutMs({
+    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
       call: {
         threadId: "side-thread",
         turnId: "turn-1",

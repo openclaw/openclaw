@@ -95,6 +95,7 @@ import {
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   classifyProviderRequestError,
@@ -1176,6 +1177,12 @@ export async function runAgentTurnWithFallback(params: {
       requesterSenderUsername: params.followupRun.run.senderUsername,
       requesterSenderE164: params.followupRun.run.senderE164,
     });
+  const currentTurnImages = await resolveCurrentTurnImages({
+    ctx: params.sessionCtx,
+    cfg: runtimeConfig,
+    images: params.followupRun.images ?? params.opts?.images,
+    imageOrder: params.followupRun.imageOrder ?? params.opts?.imageOrder,
+  });
   let didNotifyAgentRunStart = false;
   const notifyAgentRunStart = () => {
     if (didNotifyAgentRunStart) {
@@ -1519,6 +1526,8 @@ export async function runAgentTurnWithFallback(params: {
       const onToolResult = params.opts?.onToolResult;
       const outcomePlan = buildAgentRuntimeOutcomePlan();
       const runLane = CommandLane.Main;
+      let queuedUserMessagePersistedAcrossFallback = false;
+      let assistantErrorPersistedAcrossFallback = false;
       const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
         ...resolveModelFallbackOptions(effectiveRun, runtimeConfig),
         runId,
@@ -1563,6 +1572,11 @@ export async function runAgentTurnWithFallback(params: {
           return classification;
         },
         run: async (provider, model, runOptions) => {
+          const suppressQueuedUserPersistenceForCandidate =
+            (params.followupRun.run.suppressNextUserMessagePersistence ?? false) ||
+            queuedUserMessagePersistedAcrossFallback;
+          const suppressAssistantErrorPersistenceForCandidate =
+            assistantErrorPersistedAcrossFallback;
           const candidateRun = resolveRunForFallbackCandidate(provider, model);
           const activeProbe = effectiveRun.autoFallbackPrimaryProbe;
           if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
@@ -1688,8 +1702,8 @@ export async function runAgentTurnWithFallback(params: {
                   bootstrapPromptWarningSignaturesSeen[
                     bootstrapPromptWarningSignaturesSeen.length - 1
                   ],
-                images: params.opts?.images,
-                imageOrder: params.opts?.imageOrder,
+                images: currentTurnImages.images,
+                imageOrder: currentTurnImages.imageOrder,
                 skillsSnapshot: params.followupRun.run.skillsSnapshot,
                 messageChannel: params.followupRun.originatingChannel ?? undefined,
                 messageProvider: hookMessageProvider,
@@ -1786,10 +1800,16 @@ export async function runAgentTurnWithFallback(params: {
                 forceMessageTool:
                   params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
                 silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
-                suppressNextUserMessagePersistence:
-                  params.followupRun.run.suppressNextUserMessagePersistence,
+                suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
+                onUserMessagePersisted: () => {
+                  queuedUserMessagePersistedAcrossFallback = true;
+                },
                 suppressTranscriptOnlyAssistantPersistence:
                   params.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
+                suppressAssistantErrorPersistence: suppressAssistantErrorPersistenceForCandidate,
+                onAssistantErrorMessagePersisted: () => {
+                  assistantErrorPersistedAcrossFallback = true;
+                },
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(
                     params.sessionCtx.Surface,
@@ -1807,8 +1827,8 @@ export async function runAgentTurnWithFallback(params: {
                 forceHeartbeatTool: params.opts?.forceHeartbeatTool,
                 bootstrapContextMode: params.opts?.bootstrapContextMode,
                 bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
-                images: params.opts?.images,
-                imageOrder: params.opts?.imageOrder,
+                images: currentTurnImages.images,
+                imageOrder: currentTurnImages.imageOrder,
                 abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                 replyOperation: params.replyOperation,
                 blockReplyBreak: params.resolvedBlockStreamingBreak,

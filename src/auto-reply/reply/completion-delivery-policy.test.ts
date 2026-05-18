@@ -68,28 +68,34 @@ describe("completion delivery policy", () => {
     ).toBe(expected);
   });
 
-  it("requires message-tool delivery for group and channel completions by default", () => {
+  it("allows automatic delivery for group and channel completions by default", () => {
     expect(
       completionRequiresMessageToolDelivery({
         cfg: {},
         requesterSessionKey: "agent:main:whatsapp:123@g.us",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       completionRequiresMessageToolDelivery({
         cfg: {},
         requesterSessionKey: "agent:main:discord:guild-123:channel-456",
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("honors automatic group visible-reply config", () => {
+  it("honors group visible-reply config", () => {
     expect(
       completionRequiresMessageToolDelivery({
         cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
         requesterSessionKey: "agent:main:slack:channel:C123",
       }),
     ).toBe(false);
+    expect(
+      completionRequiresMessageToolDelivery({
+        cfg: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+        requesterSessionKey: "agent:main:slack:channel:C123",
+      }),
+    ).toBe(true);
   });
 
   it("requires message-tool delivery for direct completions only when globally configured", () => {

@@ -3,7 +3,7 @@ import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import "./agent-command.test-mocks.js";
-import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
+import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
@@ -366,7 +366,7 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
-  it("enables the Codex runtime plugin for one-shot OpenAI model overrides", async () => {
+  it("enables the Codex runtime plugin and provider owner for one-shot OpenAI model overrides", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
       mockConfig(home, storePath, { models: undefined });
@@ -387,7 +387,7 @@ describe("agentCommand", () => {
         expect(registryLoad?.config).toBeTypeOf("object");
         expect(registryLoad?.activationSourceConfig).toBeTypeOf("object");
         expect(registryLoad?.workspaceDir).toBe(path.join(home, "openclaw"));
-        expect(registryLoad?.onlyPluginIds).toEqual(["codex"]);
+        expect(registryLoad?.onlyPluginIds).toEqual(["codex", "openai"]);
       }
       expectLastRunProviderModel("openai", "gpt-5.2");
     });

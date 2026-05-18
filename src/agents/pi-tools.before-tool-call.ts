@@ -814,7 +814,7 @@ export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: str
   return params;
 }
 
-export const __testing = {
+export const testing = {
   BEFORE_TOOL_CALL_WRAPPED,
   buildAdjustedParamsKey,
   adjustedParamsByToolCallId,
@@ -822,3 +822,4 @@ export const __testing = {
   mergeParamsWithApprovalOverrides,
   isPlainObject,
 };
+export { testing as __testing };

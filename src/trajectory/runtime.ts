@@ -192,7 +192,7 @@ function limitTrajectoryPayloadValue(
     limited[key] = limitTrajectoryPayloadValue(record[key], depth + 1, seen);
   }
   if (keys.length > TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS) {
-    limited._truncated = truncatedTrajectoryValue("trajectory-object-size-limit", {
+    limited["_truncated"] = truncatedTrajectoryValue("trajectory-object-size-limit", {
       originalKeys: keys.length,
       limitKeys: TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS,
     });

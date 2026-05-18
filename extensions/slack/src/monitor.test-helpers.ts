@@ -72,11 +72,11 @@ function ensureSlackTestRuntime(): {
     __slackHandlers?: Map<string, SlackHandler>;
     __slackClient?: SlackClient;
   };
-  if (!globalState.__slackHandlers) {
-    globalState.__slackHandlers = new Map<string, SlackHandler>();
+  if (!globalState["__slackHandlers"]) {
+    globalState["__slackHandlers"] = new Map<string, SlackHandler>();
   }
-  if (!globalState.__slackClient) {
-    globalState.__slackClient = {
+  if (!globalState["__slackClient"]) {
+    globalState["__slackClient"] = {
       auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user" }) },
       conversations: {
         info: vi.fn().mockResolvedValue({
@@ -108,8 +108,8 @@ function ensureSlackTestRuntime(): {
     };
   }
   return {
-    handlers: globalState.__slackHandlers,
-    client: globalState.__slackClient,
+    handlers: globalState["__slackHandlers"],
+    client: globalState["__slackClient"],
   };
 }
 

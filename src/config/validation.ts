@@ -648,7 +648,7 @@ function resolveExplicitPluginReferencePath(
   return undefined;
 }
 
-export const __testing = {
+export const testing = {
   mapZodIssueToConfigIssue,
 };
 
@@ -1774,3 +1774,4 @@ function validateConfigObjectWithPluginsBase(
 
   return { ok: true, config: mutatedConfig, warnings };
 }
+export { testing as __testing };
