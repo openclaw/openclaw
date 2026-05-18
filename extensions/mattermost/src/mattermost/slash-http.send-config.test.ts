@@ -5,9 +5,16 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 
+type ParseSlashCommandPayload = typeof import("./slash-commands.js").parseSlashCommandPayload;
+type BuildModelsProviderData = typeof import("./runtime-api.js").buildModelsProviderData;
+type AuthorizeMattermostCommandInvocation =
+  typeof import("./monitor-auth.js").authorizeMattermostCommandInvocation;
+type FetchMattermostChannel = typeof import("./client.js").fetchMattermostChannel;
+type GetMattermostCommand = typeof import("./slash-commands.js").getMattermostCommand;
+
 const mockState = vi.hoisted(() => ({
   readRequestBodyWithLimit: vi.fn(async () => "token=valid-token"),
-  parseSlashCommandPayload: vi.fn(() => ({
+  parseSlashCommandPayload: vi.fn<ParseSlashCommandPayload>(() => ({
     token: "valid-token",
     command: "/oc_models",
     text: "models",
@@ -17,7 +24,15 @@ const mockState = vi.hoisted(() => ({
     team_id: "team-1",
   })),
   resolveCommandText: vi.fn((_trigger: string, text: string) => text),
-  buildModelsProviderData: vi.fn(async () => ({ providers: [], modelNames: new Map() })),
+  buildModelsProviderData: vi.fn<BuildModelsProviderData>(async () => ({
+    providers: [],
+    byProvider: new Map(),
+    resolvedDefault: {
+      provider: "",
+      model: "",
+    },
+    modelNames: new Map(),
+  })),
   resolveMattermostModelPickerEntry: vi.fn(() => ({ kind: "summary" })),
   buildMattermostModelPickerDialog: vi.fn(() => ({
     callback_id: "oc_model_picker",
@@ -25,7 +40,7 @@ const mockState = vi.hoisted(() => ({
     elements: [],
   })),
   resolveMattermostModelPickerCurrentRuntime: vi.fn(() => "auto"),
-  authorizeMattermostCommandInvocation: vi.fn(() => ({
+  authorizeMattermostCommandInvocation: vi.fn<AuthorizeMattermostCommandInvocation>(async () => ({
     ok: true,
     commandAuthorized: true,
     channelInfo: { id: "chan-1", type: "O", name: "town-square", display_name: "Town Square" },
@@ -37,7 +52,7 @@ const mockState = vi.hoisted(() => ({
   })),
   createMattermostClient: vi.fn(() => ({})),
   openMattermostInteractiveDialog: vi.fn(async () => undefined),
-  fetchMattermostChannel: vi.fn(async () => ({
+  fetchMattermostChannel: vi.fn<FetchMattermostChannel>(async () => ({
     id: "chan-1",
     type: "O",
     name: "town-square",
@@ -45,13 +60,14 @@ const mockState = vi.hoisted(() => ({
   })),
   sendMessageMattermost: vi.fn(async () => ({ messageId: "post-1", channelId: "chan-1" })),
   normalizeMattermostAllowList: vi.fn((value: unknown) => value),
-  getMattermostCommand: vi.fn(async () => ({
+  getMattermostCommand: vi.fn<GetMattermostCommand>(async () => ({
     id: "cmd-1",
     token: "valid-token",
     team_id: "team-1",
     trigger: "oc_models",
     method: "P",
     url: "https://gateway.example.com/slash",
+    auto_complete: true,
     delete_at: 0,
   })),
   listMattermostCommands: vi.fn(async () => []),
@@ -353,19 +369,29 @@ describe("slash-http cfg threading", () => {
       trigger: "oc_model",
       method: "P",
       url: callbackUrlFixture,
+      auto_complete: true,
       delete_at: 0,
     });
     mockState.authorizeMattermostCommandInvocation.mockImplementationOnce(
-      async ({ channelInfo }) => ({
-        ok: true,
-        commandAuthorized: true,
-        channelInfo,
-        kind: "channel",
-        chatType: "channel",
-        channelName: channelInfo?.name ?? "",
-        channelDisplay: channelInfo?.display_name ?? channelInfo?.name ?? "",
-        roomLabel: channelInfo?.name ? `#${channelInfo.name}` : "#chan-private-1",
-      }),
+      async ({ channelInfo }) => {
+        const resolvedChannelInfo = channelInfo ?? {
+          id: "chan-private-1",
+          type: "O",
+          name: "secret-planning",
+          display_name: "secret-planning",
+          team_id: "team-1",
+        };
+        return {
+          ok: true,
+          commandAuthorized: true,
+          channelInfo: resolvedChannelInfo,
+          kind: "channel",
+          chatType: "channel",
+          channelName: resolvedChannelInfo.name ?? "",
+          channelDisplay: resolvedChannelInfo.display_name ?? resolvedChannelInfo.name ?? "",
+          roomLabel: `#${resolvedChannelInfo.name ?? "chan-private-1"}`,
+        };
+      },
     );
     mockState.buildModelsProviderData.mockResolvedValueOnce({
       providers: ["openai"],
@@ -444,19 +470,29 @@ describe("slash-http cfg threading", () => {
       trigger: "oc_model",
       method: "P",
       url: callbackUrlFixture,
+      auto_complete: true,
       delete_at: 0,
     });
     mockState.authorizeMattermostCommandInvocation.mockImplementationOnce(
-      async ({ channelInfo }) => ({
-        ok: true,
-        commandAuthorized: true,
-        channelInfo,
-        kind: "direct",
-        chatType: "direct",
-        channelName: channelInfo?.name ?? "",
-        channelDisplay: channelInfo?.display_name ?? channelInfo?.name ?? "",
-        roomLabel: channelInfo?.name ? `#${channelInfo.name}` : "#chan-dm-1",
-      }),
+      async ({ channelInfo }) => {
+        const resolvedChannelInfo = channelInfo ?? {
+          id: "chan-dm-1",
+          type: "D",
+          name: "1a358pib8ffm9cwme4z8c1z5uc__tnrrznrcsj81pqdi8kwoedrfby",
+          display_name: "1a358pib8ffm9cwme4z8c1z5uc__tnrrznrcsj81pqdi8kwoedrfby",
+          team_id: "team-1",
+        };
+        return {
+          ok: true,
+          commandAuthorized: true,
+          channelInfo: resolvedChannelInfo,
+          kind: "direct",
+          chatType: "direct",
+          channelName: resolvedChannelInfo.name ?? "",
+          channelDisplay: resolvedChannelInfo.display_name ?? resolvedChannelInfo.name ?? "",
+          roomLabel: `#${resolvedChannelInfo.name ?? "chan-dm-1"}`,
+        };
+      },
     );
     mockState.buildModelsProviderData.mockResolvedValueOnce({
       providers: ["openai"],
@@ -520,6 +556,7 @@ describe("slash-http cfg threading", () => {
       trigger: "oc_models",
       method: "P",
       url: callbackUrlFixture,
+      auto_complete: true,
       delete_at: 0,
     });
 
@@ -600,6 +637,7 @@ describe("slash-http cfg threading", () => {
       trigger: "oc_models",
       method: "P",
       url: callbackUrlFixture,
+      auto_complete: true,
       delete_at: 0,
     });
 
