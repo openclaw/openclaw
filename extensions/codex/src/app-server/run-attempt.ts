@@ -1209,7 +1209,7 @@ export async function runCodexAppServerAttempt(
     embeddedAgentLog.info("codex plugin thread config eligibility", {
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
-      enabled: pluginThreadConfigEnabled,
+      enabled: pluginThreadConfigRequired,
       policyConfigured: resolvedPluginPolicy?.configured === true,
       policyEnabled: resolvedPluginPolicy?.enabled === true,
       pluginConfigKeys: resolvedPluginPolicy?.pluginPolicies
