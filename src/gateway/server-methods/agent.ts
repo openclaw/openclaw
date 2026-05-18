@@ -125,6 +125,7 @@ import {
   validateAgentWaitParams,
 } from "../protocol/index.js";
 import {
+  emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
   performGatewaySessionReset,
 } from "../session-reset-service.js";
@@ -976,11 +977,14 @@ export const agentHandlers: GatewayRequestHandlers = {
       let resolvedSessionStorePath: string | undefined;
       let resolvedSessionKey = requestedSessionKey;
       let isNewSession = false;
-      // #83507 follow-up: carry the replaced session ID across the auto-rotation
-      // branch so emitGatewaySessionStartPluginHook can pass `resumedFrom` and
-      // plugins can link the old → new session lifecycle. Defaults to undefined
-      // when no prior session was rotated.
+      // #83507 follow-up: carry the replaced session ID + sessionFile across
+      // the auto-rotation branch so emitGatewaySessionEndPluginHook can fire
+      // for the old session (pairing the lifecycle boundary, matching
+      // sessions.reset) and emitGatewaySessionStartPluginHook can pass
+      // `resumedFrom` (linking old → new). Both default to undefined when no
+      // prior session was rotated.
       let previousSessionId: string | undefined;
+      let previousSessionFile: string | undefined;
       let skipTimestampInjection = false;
       let shouldPrependStartupContext = false;
 
@@ -1125,11 +1129,13 @@ export const agentHandlers: GatewayRequestHandlers = {
           (!canReuseSession && !usableRequestedSessionId) ||
           Boolean(usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId);
         const rotatedSessionId = Boolean(entry?.sessionId && entry.sessionId !== sessionId);
-        // #83507 follow-up: capture the replaced session ID so the start-hook
-        // call below can pass it as `resumedFrom`, matching the canonical
-        // sessions.reset path which already carries this lifecycle linkage.
+        // #83507 follow-up: capture the replaced session ID + sessionFile
+        // so the lifecycle pair (end-hook for old + start-hook for new) can
+        // fire below, matching sessions.reset which calls both at
+        // session-reset-service.ts:835-844.
         if (rotatedSessionId && entry?.sessionId) {
           previousSessionId = entry.sessionId;
+          previousSessionFile = entry.sessionFile;
         }
         const touchInteraction =
           request.bootstrapContextRunKind !== "cron" &&
@@ -1543,6 +1549,27 @@ export const agentHandlers: GatewayRequestHandlers = {
               sessionKey: resolvedSessionKey,
               reason: "create",
             });
+            // #83507 follow-up: pair the lifecycle boundary by firing the
+            // end-hook for the replaced session BEFORE the start-hook for
+            // the rotated one, exactly matching sessions.reset at
+            // session-reset-service.ts:835-844. Without this, shutdown
+            // tracking and plugin lifecycle state become asymmetric — the
+            // old session stays "tracked" while the new one is added.
+            // Hook function's existing sessionId guard skips when no prior
+            // session was rotated (previousSessionId stays undefined).
+            if (previousSessionId) {
+              emitGatewaySessionEndPluginHook({
+                cfg: resolvedSessionCfg,
+                sessionKey: resolvedSessionKey,
+                sessionId: previousSessionId,
+                storePath: resolvedSessionStorePath,
+                sessionFile: previousSessionFile,
+                agentId: resolveAgentIdFromSessionKey(resolvedSessionKey),
+                reason: "daily",
+                nextSessionId: resolvedSessionId,
+                nextSessionKey: resolvedSessionKey,
+              });
+            }
             // #83507: every other session-creation path
             // (sessions.reset, sessions.create with emitCommandHooks=true,
             // /new and /reset slash commands) emits the session_start
