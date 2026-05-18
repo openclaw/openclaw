@@ -71,7 +71,7 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     const identity = extractTranscriptIdentityFromSessionsMemoryHit(
       "qmd/sessions-main/normal-session.md",
     );
-    expect(identity).toEqual({ stem: "normal-session", ownerAgentId: "main", archived: false });
+    expect(identity).toEqual({ stem: "normal-session", archived: false });
   });
 
   it("returns archived identity for QMD-normalized reset .md stems", () => {
@@ -80,7 +80,6 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     );
     expect(identity).toEqual({
       stem: "abc-uuid",
-      ownerAgentId: "main",
       archived: true,
     });
   });
@@ -107,7 +106,6 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     );
     expect(identity).toEqual({
       stem: "abc-uuid",
-      ownerAgentId: "main",
       archived: true,
     });
   });
@@ -118,7 +116,6 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     );
     expect(identity).toEqual({
       stem: "abc.jsonl.reset.not-a-timestamp",
-      ownerAgentId: "main",
       archived: false,
     });
   });
@@ -144,14 +141,13 @@ describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
     });
   });
 
-  it("extracts owner metadata from QMD session collection archive paths", () => {
+  it("does not derive owner metadata from lossy QMD session collection names", () => {
     expect(
       extractTranscriptIdentityFromSessionsMemoryHit(
         "qmd/sessions-main/deleted-uuid-jsonl-deleted-2026-02-16t22-27-33-000z.md",
       ),
     ).toEqual({
       stem: "deleted-uuid",
-      ownerAgentId: "main",
       archived: true,
     });
   });
@@ -199,9 +195,21 @@ describe("resolveTranscriptStemToSessionKeys", () => {
       "agent:main:s1": baseEntry({ sessionId: "foo_bar.v1" }),
     };
 
-    expect(resolveTranscriptStemToSessionKeys({ store, stem: "foo-bar-v1" })).toEqual([
-      "agent:main:s1",
-    ]);
+    expect(
+      resolveTranscriptStemToSessionKeys({
+        store,
+        stem: "foo-bar-v1",
+        allowQmdSlugFallback: true,
+      }),
+    ).toEqual(["agent:main:s1"]);
+  });
+
+  it("does not use QMD-slugified fallback unless requested", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:s1": baseEntry({ sessionId: "foo_bar.v1" }),
+    };
+
+    expect(resolveTranscriptStemToSessionKeys({ store, stem: "foo-bar-v1" })).toEqual([]);
   });
 
   it("prefers exact stem matches before QMD-slugified fallback matches", () => {

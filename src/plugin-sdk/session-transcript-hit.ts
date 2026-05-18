@@ -51,14 +51,10 @@ function parseSessionsPath(hitPath: string): { base: string; ownerAgentId?: stri
     : normalized;
   const parts = fromSessionsRoot.split("/").filter(Boolean);
   const base = path.posix.basename(fromSessionsRoot);
-  const qmdCollection = normalized.startsWith("qmd/") ? parts[1] : undefined;
-  const qmdOwnerAgentId = qmdCollection?.startsWith("sessions-")
-    ? normalizeAgentId(qmdCollection.slice("sessions-".length))
-    : undefined;
   const ownerAgentId =
     normalized.startsWith("sessions/") && parts.length === 2
       ? normalizeAgentId(parts[0])
-      : qmdOwnerAgentId;
+      : undefined;
   return { base, ownerAgentId };
 }
 
@@ -114,6 +110,7 @@ export function resolveTranscriptStemToSessionKeys(params: {
   store: Record<string, SessionEntry>;
   stem: string;
   archivedOwnerAgentId?: string;
+  allowQmdSlugFallback?: boolean;
 }): string[] {
   const { store } = params;
   const matches: string[] = [];
@@ -139,7 +136,7 @@ export function resolveTranscriptStemToSessionKeys(params: {
     return deduped;
   }
   const normalizedStem = normalizeQmdSessionStem(params.stem);
-  if (normalizedStem) {
+  if (params.allowQmdSlugFallback === true && normalizedStem) {
     for (const [sessionKey, entry] of Object.entries(store)) {
       const sessionFile = normalizeOptionalString(entry.sessionFile);
       if (sessionFile) {

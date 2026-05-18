@@ -417,30 +417,4 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
 
     expect(filtered).toEqual([hit]);
   });
-
-  it("drops QMD archived .md hits when the session collection owner is outside scope", async () => {
-    combinedSessionStore = {};
-    const hit: MemorySearchResult = {
-      path: "qmd/sessions-main/abc-uuid-jsonl-deleted-2026-02-16t22-26-33-000z.md",
-      source: "sessions",
-      score: 1,
-      snippet: "x",
-      startLine: 1,
-      endLine: 2,
-    };
-    const cfg = asOpenClawConfig({
-      tools: {
-        sessions: { visibility: "all" },
-      },
-    });
-
-    const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg,
-      requesterSessionKey: "agent:peer:main",
-      sandboxed: false,
-      hits: [hit],
-    });
-
-    expect(filtered).toStrictEqual([]);
-  });
 });
