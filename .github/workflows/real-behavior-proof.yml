@@ -18,6 +18,7 @@ jobs:
     name: Real behavior proof
     permissions:
       contents: read
+      issues: read
       pull-requests: read
     runs-on: ubuntu-24.04
     steps:
