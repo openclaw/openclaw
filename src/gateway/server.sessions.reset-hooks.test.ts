@@ -482,3 +482,45 @@ test("sessions.create without emitCommandHooks does not fire command:new hook (#
   expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
   expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
 });
+
+test("sessions.reset drops cli session bindings so the next turn does not --resume the old claude-cli session", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-with-binding", "hello");
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-with-binding", {
+        claudeCliSessionId: "claude-cli-old-session",
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "claude-cli-old-session" },
+        },
+        cliSessionIds: { "claude-cli": "claude-cli-old-session" },
+      }),
+    },
+  });
+
+  const [{ getRuntimeConfig }, { resolveGatewaySessionStoreTarget }, { loadSessionStore }] =
+    await Promise.all([
+      import("../config/config.js"),
+      import("./session-utils.js"),
+      import("../config/sessions.js"),
+    ]);
+  const gatewayStorePath = resolveGatewaySessionStoreTarget({
+    cfg: getRuntimeConfig(),
+    key: "main",
+  }).storePath;
+
+  const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
+    key: "main",
+    reason: "new",
+  });
+  expect(reset.ok).toBe(true);
+
+  const store = loadSessionStore(gatewayStorePath, { skipCache: true });
+  const nextEntry = store["agent:main:main"];
+  expect(nextEntry).toBeDefined();
+  expect(nextEntry?.sessionId).not.toBe("sess-with-binding");
+  expect(nextEntry?.claudeCliSessionId).toBeUndefined();
+  expect(nextEntry?.cliSessionBindings).toBeUndefined();
+  expect(nextEntry?.cliSessionIds).toBeUndefined();
+});
