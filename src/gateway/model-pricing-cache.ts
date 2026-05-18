@@ -897,6 +897,12 @@ export function collectConfiguredModelPricingRefs(
     ...normalizationParams,
   });
   addModelListLike({
+    value: config.agents?.defaults?.subagents?.model,
+    aliasIndex,
+    refs,
+    ...normalizationParams,
+  });
+  addModelListLike({
     value: config.agents?.defaults?.imageModel,
     aliasIndex,
     refs,
