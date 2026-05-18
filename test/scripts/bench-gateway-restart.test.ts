@@ -213,6 +213,55 @@ describe("gateway restart benchmark script", () => {
     expect(result.summary.resourceSlope.rssMbPerRestart?.p50).toBe(6);
   });
 
+  it("counts sample failures that happen before restart iterations", () => {
+    const result = __testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
+      {
+        childExitCode: null,
+        childSignal: null,
+        events: [],
+        failureCode: "initial_readyz_timeout",
+        firstOutputMs: 1,
+        initialGatewayReadyLogLine: "[gateway] ready",
+        initialGatewayReadyLogMs: 20,
+        initialHealthz: {
+          downtimeMs: null,
+          firstErrorKind: null,
+          firstRecoveryMs: null,
+          ms: 10,
+          status: 200,
+          transitions: [],
+          unavailableMs: null,
+        },
+        initialHttpListenLogLine: "[gateway] http server listening (0 plugins)",
+        initialHttpListenLogMs: 9,
+        initialReadyz: {
+          downtimeMs: null,
+          firstErrorKind: "http-503",
+          firstRecoveryMs: null,
+          ms: null,
+          status: 503,
+          transitions: [],
+          unavailableMs: null,
+        },
+        initialStartupTrace: {},
+        iterations: [],
+        maxRssMb: 220,
+        outputTail: "",
+        resourceSlope: {
+          activeHandlesCountPerRestart: null,
+          activeRequestsCountPerRestart: null,
+          activeTimersCountPerRestart: null,
+          fdCountPerRestart: null,
+          heapUsedMbPerRestart: null,
+          rssMbPerRestart: null,
+        },
+      },
+    ]);
+
+    expect(result.summary.failureRate).toBe(1);
+    expect(result.summary.firstFailureCode).toBe("initial_readyz_timeout");
+  });
+
   it("writes restart intent files for the target gateway pid", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-bench-test-"));
     try {

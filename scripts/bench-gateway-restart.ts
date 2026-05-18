@@ -476,6 +476,12 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewayRestartSampl
     }
   }
   const failedIterations = iterations.filter((iteration) => iteration.failureCode !== null);
+  const sampleOnlyFailures = samples.filter(
+    (sample) =>
+      sample.failureCode !== null &&
+      !sample.iterations.some((iteration) => iteration.failureCode !== null),
+  );
+  const failureUnits = iterations.length + sampleOnlyFailures.length;
   const firstFailureCode =
     samples.find((sample) => sample.failureCode)?.failureCode ??
     failedIterations[0]?.failureCode ??
@@ -490,7 +496,10 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewayRestartSampl
           .map((iteration) => iteration.readyz.downtimeMs ?? iteration.healthz.downtimeMs)
           .filter((value): value is number => typeof value === "number"),
       ),
-      failureRate: iterations.length === 0 ? 0 : failedIterations.length / iterations.length,
+      failureRate:
+        failureUnits === 0
+          ? 0
+          : (failedIterations.length + sampleOnlyFailures.length) / failureUnits,
       firstFailureCode,
       healthzRecoveryMs: summarizeNumbers(
         iterations
