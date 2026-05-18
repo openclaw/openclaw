@@ -20,6 +20,7 @@ const EXPECTED_BUNDLED_VIDEO_PROVIDER_PLUGIN_IDS = [
 
 const EXPECTED_BUNDLED_MUSIC_PROVIDER_PLUGIN_IDS = [
   "comfy",
+  "fal",
   "google",
   "minimax",
   "openrouter",

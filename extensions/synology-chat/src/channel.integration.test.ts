@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  buildChannelTurnContextMock,
+  buildChannelInboundEventContextMock,
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContextMock,
   registerPluginHttpRouteMock,
@@ -35,6 +35,18 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function requireMockCall<TArgs extends unknown[]>(
+  mock: { mock: { calls: TArgs[] } },
+  index: number,
+  label: string,
+): TArgs {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
 describe("Synology channel wiring integration", () => {
   beforeAll(async () => {
     ({ createSynologyChatPlugin } = await import("./channel.js"));
@@ -43,7 +55,7 @@ describe("Synology channel wiring integration", () => {
   beforeEach(() => {
     registerPluginHttpRouteMock.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
-    buildChannelTurnContextMock.mockClear();
+    buildChannelInboundEventContextMock.mockClear();
     finalizeInboundContextMock.mockClear();
     resolveAgentRouteMock.mockClear();
     setSynologyRuntimeConfigForTest({});
@@ -143,11 +155,8 @@ describe("Synology channel wiring integration", () => {
     );
 
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(2);
-    const alphaRoute = registerPluginHttpRouteMock.mock.calls[0]?.[0];
-    const betaRoute = registerPluginHttpRouteMock.mock.calls[1]?.[0];
-    if (!alphaRoute || !betaRoute) {
-      throw new Error("Expected both Synology Chat routes to register");
-    }
+    const [alphaRoute] = requireMockCall(registerPluginHttpRouteMock, 0, "alpha Synology route");
+    const [betaRoute] = requireMockCall(registerPluginHttpRouteMock, 1, "beta Synology route");
 
     const alphaReq = makeReq(
       "POST",
@@ -178,8 +187,8 @@ describe("Synology channel wiring integration", () => {
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
     expect(finalizeInboundContextMock).toHaveBeenCalledTimes(2);
 
-    const alphaCtx = finalizeInboundContextMock.mock.calls[0]?.[0];
-    const betaCtx = finalizeInboundContextMock.mock.calls[1]?.[0];
+    const [alphaCtx] = requireMockCall(finalizeInboundContextMock, 0, "alpha inbound context");
+    const [betaCtx] = requireMockCall(finalizeInboundContextMock, 1, "beta inbound context");
     const alphaContext = requireRecord(alphaCtx, "alpha inbound context");
     expect(alphaContext.AccountId).toBe("alpha");
     expect(alphaContext.SessionKey).toBe("agent:agent-alpha:synology-chat:alpha:direct:123");

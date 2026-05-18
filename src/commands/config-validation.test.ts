@@ -46,7 +46,11 @@ describe("requireValidConfigSnapshot", () => {
   }
 
   function requireFirstLog(runtime: ReturnType<typeof createRuntime>): string {
-    const [message] = runtime.log.mock.calls[0] ?? [];
+    const [call] = runtime.log.mock.calls;
+    if (!call) {
+      throw new Error("expected runtime log message");
+    }
+    const [message] = call;
     if (message === undefined) {
       throw new Error("expected runtime log message");
     }

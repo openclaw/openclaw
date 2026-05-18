@@ -365,7 +365,7 @@ function expectFailureAnnounceCall(params: {
   message: string;
 }) {
   expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledTimes(1);
-  const call = sendFailureNotificationAnnounceMock.mock.calls[0];
+  const call = sendFailureNotificationAnnounceMock.mock.calls.at(0);
   if (!call) {
     throw new Error("expected failure announcement call");
   }
@@ -513,7 +513,25 @@ describe("gateway server cron", () => {
       expect(wrappedPayload?.sessionTarget).toBe("main");
       expect(wrappedPayload?.wakeMode).toBe("now");
       expect((wrappedPayload?.schedule as { kind?: unknown } | undefined)?.kind).toBe("at");
+    } finally {
+      await cleanupCronTestRun({
+        cronState,
+        prevSkipCron,
+        clearSessionConfig: true,
+      });
+    }
+  });
 
+  test("handles cron patch merge and validation semantics", { timeout: 45_000 }, async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-patch-",
+      sessionConfig: { mainKey: "primary" },
+      cronEnabled: false,
+    });
+
+    const cronState = await createDirectCronState();
+
+    try {
       const patchJobId = await addMainSystemEventCronJobDirect({
         cronState,
         name: "patch test",

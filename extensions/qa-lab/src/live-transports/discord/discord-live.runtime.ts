@@ -152,6 +152,8 @@ type DiscordObservedMessage = {
   scenarioTitle?: string;
   matchedScenario?: boolean;
   text: string;
+  triggerMessageId?: string;
+  triggerTimestamp?: string;
   replyToMessageId?: string;
   timestamp?: string;
 };
@@ -167,6 +169,8 @@ type DiscordObservedMessageArtifact = {
   scenarioTitle?: string;
   matchedScenario?: boolean;
   text?: string;
+  triggerMessageId?: string;
+  triggerTimestamp?: string;
   replyToMessageId?: string;
   timestamp?: string;
 };
@@ -177,6 +181,7 @@ type DiscordQaScenarioResult = {
   title: string;
   status: "pass" | "fail";
   details: string;
+  rttMs?: number;
 };
 
 type DiscordQaRunResult = {
@@ -760,6 +765,18 @@ function normalizeDiscordReactionSnapshot(params: {
   };
 }
 
+function computeDiscordRttMs(triggerTimestamp?: string, replyTimestamp?: string) {
+  if (!triggerTimestamp || !replyTimestamp) {
+    return undefined;
+  }
+  const triggerAtMs = Date.parse(triggerTimestamp);
+  const replyAtMs = Date.parse(replyTimestamp);
+  if (!Number.isFinite(triggerAtMs) || !Number.isFinite(replyAtMs)) {
+    return undefined;
+  }
+  return Math.max(0, Math.round(replyAtMs - triggerAtMs));
+}
+
 function collectSeenReactionSequence(
   snapshots: readonly DiscordReactionSnapshot[],
   expectedSequence: readonly string[],
@@ -1096,6 +1113,8 @@ async function pollChannelMessages(params: {
   observedMessages: DiscordObservedMessage[];
   observationScenarioId: string;
   observationScenarioTitle: string;
+  triggerMessageId?: string;
+  triggerTimestamp?: string;
 }) {
   const startedAt = Date.now();
   let afterSnowflake = params.afterSnowflake;
@@ -1120,6 +1139,8 @@ async function pollChannelMessages(params: {
         scenarioId: params.observationScenarioId,
         scenarioTitle: params.observationScenarioTitle,
         matchedScenario,
+        triggerMessageId: params.triggerMessageId,
+        triggerTimestamp: params.triggerTimestamp,
       };
       params.observedMessages.push(observedMessage);
       if (matchedScenario) {
@@ -1414,6 +1435,8 @@ function buildObservedMessagesArtifact(params: {
       ? {
           ...scenarioContext,
           senderIsBot: message.senderIsBot,
+          triggerTimestamp: message.triggerTimestamp,
+          timestamp: message.timestamp,
         }
       : {
           ...scenarioContext,
@@ -1423,6 +1446,8 @@ function buildObservedMessagesArtifact(params: {
           senderId: message.senderId,
           senderIsBot: message.senderIsBot,
           senderUsername: message.senderUsername,
+          triggerMessageId: message.triggerMessageId,
+          triggerTimestamp: message.triggerTimestamp,
           replyToMessageId: message.replyToMessageId,
           timestamp: message.timestamp,
         };
@@ -1737,6 +1762,8 @@ export async function runDiscordQaLive(params: {
             observedMessages,
             observationScenarioId: scenario.id,
             observationScenarioTitle: scenario.title,
+            triggerMessageId: sent.id,
+            triggerTimestamp: sent.timestamp,
             predicate: (message) =>
               matchesDiscordScenarioReply({
                 channelId: runtimeEnv.channelId,
@@ -1752,6 +1779,7 @@ export async function runDiscordQaLive(params: {
             expectedTextIncludes: scenarioRun.expectedTextIncludes,
             message: matched.message,
           });
+          const rttMs = computeDiscordRttMs(sent.timestamp, matched.message.timestamp);
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
@@ -1759,6 +1787,7 @@ export async function runDiscordQaLive(params: {
             details: redactPublicMetadata
               ? "reply matched"
               : `reply message ${matched.message.messageId} matched`,
+            ...(rttMs === undefined ? {} : { rttMs }),
           });
         } catch (error) {
           if (scenarioRun.kind === "channel-message" && !scenarioRun.expectReply) {
@@ -1917,6 +1946,7 @@ export const __testing = {
   buildDiscordQaConfig,
   buildDiscordWebMessageUrl,
   buildObservedMessagesArtifact,
+  computeDiscordRttMs,
   findScenario,
   getCurrentDiscordUser,
   getChannelMessage,

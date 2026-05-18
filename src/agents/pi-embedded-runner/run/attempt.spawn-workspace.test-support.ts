@@ -105,6 +105,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSentTargets: () => [] as MessagingToolSend[],
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
+    getVisibleBlockReplyCount: () => 0,
     getSuccessfulCronAdds: () => 0,
     getReplayState: () => ({
       replayInvalid: false,
@@ -440,6 +441,7 @@ vi.mock("../../session-write-lock.js", () => ({
   acquireSessionWriteLock: (params: Parameters<AcquireSessionWriteLockFn>[0]) =>
     hoisted.acquireSessionWriteLockMock(params),
   resolveSessionWriteLockAcquireTimeoutMs: () => 60000,
+  resolveSessionWriteLockOptions: () => ({ timeoutMs: 60000, staleMs: 1_800_000, maxHoldMs: 1 }),
   resolveSessionLockMaxHoldFromTimeout: () => 1,
 }));
 
@@ -810,7 +812,8 @@ export type MutableSession = {
   isCompacting: boolean;
   isStreaming: boolean;
   agent: {
-    streamFn?: unknown;
+    prompt?: (...args: unknown[]) => Promise<unknown>;
+    streamFn?: (...args: unknown[]) => Promise<unknown>;
     transport?: string;
     reset: () => void;
     state: {
@@ -839,6 +842,22 @@ type SessionPromptOverride = (
   prompt: string,
   options?: { images?: unknown[] },
 ) => Promise<void>;
+
+type TestAgentStream = {
+  result: () => Promise<unknown>;
+  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
+};
+
+function createCompletedAssistantStream(): TestAgentStream {
+  return {
+    async result() {
+      return { role: "assistant", content: "done" };
+    },
+    [Symbol.asyncIterator]() {
+      return (async function* () {})();
+    },
+  };
+}
 
 let runEmbeddedAttemptPromise:
   | Promise<typeof import("./attempt.js").runEmbeddedAttempt>
@@ -966,12 +985,30 @@ export function createDefaultEmbeddedSession(params?: {
     options?: { images?: unknown[] },
   ) => Promise<void>;
 }): MutableSession {
+  let pendingPrompt:
+    | {
+        prompt: string;
+        options?: { images?: unknown[] };
+      }
+    | undefined;
   const session: MutableSession = {
     sessionId: "embedded-session",
     messages: [...(params?.initialMessages ?? [])],
     isCompacting: false,
     isStreaming: false,
     agent: {
+      prompt: async (prompt, options) => {
+        pendingPrompt = { prompt: String(prompt), options: options as { images?: unknown[] } };
+        await session.agent.streamFn?.();
+      },
+      streamFn: async () => {
+        if (params?.prompt && pendingPrompt) {
+          const currentPrompt = pendingPrompt;
+          pendingPrompt = undefined;
+          await params.prompt(session, currentPrompt.prompt, currentPrompt.options);
+        }
+        return createCompletedAssistantStream();
+      },
       reset: () => {
         session.messages = [];
       },
@@ -986,8 +1023,8 @@ export function createDefaultEmbeddedSession(params?: {
     },
     setActiveToolsByName: () => {},
     prompt: async (prompt, options) => {
+      await session.agent.prompt?.(prompt, options);
       if (params?.prompt) {
-        await params.prompt(session, prompt, options);
         return;
       }
       session.messages = [
@@ -1029,9 +1066,7 @@ export function createContextEngineBootstrapAndAssemble() {
 }
 
 export function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessionKey: string) {
-  expect(mock).toHaveBeenCalled();
-  const [params] = mock.mock.calls.at(-1) ?? [];
-  expect((params as { sessionKey?: string } | undefined)?.sessionKey).toBe(sessionKey);
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
 }
 
 export const testModel = {

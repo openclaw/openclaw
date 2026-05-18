@@ -21,7 +21,11 @@ function createRuntime(): RuntimeEnv {
 }
 
 function readJsonLog(runtime: RuntimeEnv): unknown {
-  return JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
+  const [call] = vi.mocked(runtime.log).mock.calls;
+  if (!call) {
+    throw new Error("expected runtime log call");
+  }
+  return JSON.parse(String(call[0]));
 }
 
 async function withTaskJsonStateDir(run: () => Promise<void>): Promise<void> {

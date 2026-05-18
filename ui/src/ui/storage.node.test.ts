@@ -131,6 +131,16 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/openclaw"));
   });
 
+  it("defaults chat auto-scroll to near-bottom", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    expect(loadSettings().chatAutoScroll).toBe("near-bottom");
+  });
+
   it("infers base path from nested pathname when configured base path is not set", () => {
     setTestLocation({
       protocol: "http:",
@@ -191,11 +201,13 @@ describe("loadSettings default gateway URL derivation", () => {
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      textScale: 100,
       sessionsByGateway: {
         "wss://gateway.example:8443/openclaw": {
           sessionKey: "agent",
@@ -224,11 +236,13 @@ describe("loadSettings default gateway URL derivation", () => {
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      textScale: 100,
     });
 
     const settings = loadSettings();
@@ -255,6 +269,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 220,
@@ -272,6 +287,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 220,
@@ -320,11 +336,13 @@ describe("loadSettings default gateway URL derivation", () => {
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      textScale: 100,
       sessionsByGateway: {
         [gwUrl]: {
           sessionKey: "main",
@@ -333,6 +351,52 @@ describe("loadSettings default gateway URL derivation", () => {
       },
     });
     expect(sessionStorage.length).toBe(1);
+  });
+
+  it("normalizes persisted text scale to the nearest supported stop", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${gwUrl}`,
+      JSON.stringify({
+        gatewayUrl: gwUrl,
+        textScale: 123,
+      }),
+    );
+
+    expect(loadSettings().textScale).toBe(125);
+  });
+
+  it("loads valid chat auto-scroll modes and normalizes invalid values", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${gwUrl}`,
+      JSON.stringify({
+        gatewayUrl: gwUrl,
+        chatAutoScroll: "off",
+      }),
+    );
+    expect(loadSettings().chatAutoScroll).toBe("off");
+
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${gwUrl}`,
+      JSON.stringify({
+        gatewayUrl: gwUrl,
+        chatAutoScroll: "disabled",
+      }),
+    );
+    expect(loadSettings().chatAutoScroll).toBe("near-bottom");
   });
 
   it("clears the current-tab token when saving an empty token", () => {
@@ -571,14 +635,18 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "agent:current:main",
       lastActiveSessionKey: "agent:current:main",
     });
-    const scopes = Object.keys(scopedSessions);
-    expect(scopes).toHaveLength(10);
-    // oldest stale entries should be evicted
-    expect(scopes).not.toContain("wss://stale-0.example:8443");
-    expect(scopes).not.toContain("wss://stale-1.example:8443");
-    // newest stale entries and the current gateway should be retained
-    expect(scopes).toContain("wss://stale-10.example:8443");
-    expect(scopes).toContain("wss://gateway.example:8443");
+    expect(Object.keys(scopedSessions)).toEqual([
+      "wss://stale-2.example:8443",
+      "wss://stale-3.example:8443",
+      "wss://stale-4.example:8443",
+      "wss://stale-5.example:8443",
+      "wss://stale-6.example:8443",
+      "wss://stale-7.example:8443",
+      "wss://stale-8.example:8443",
+      "wss://stale-9.example:8443",
+      "wss://stale-10.example:8443",
+      "wss://gateway.example:8443",
+    ]);
   });
 
   it("persists local user identity separately from gateway settings", () => {

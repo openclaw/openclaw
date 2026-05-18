@@ -408,11 +408,27 @@ describe("matrix driver client", () => {
       }),
     ).resolves.toBe("!encrypted:matrix-qa.test");
 
-    expect(createRoomBodies[0]?.initial_state).toContainEqual({
-      type: "m.room.encryption",
-      state_key: "",
-      content: { algorithm: "m.megolm.v1.aes-sha2" },
-    });
+    expect(createRoomBodies).toStrictEqual([
+      {
+        creation_content: { "m.federate": false },
+        initial_state: [
+          {
+            type: "m.room.history_visibility",
+            state_key: "",
+            content: { history_visibility: "joined" },
+          },
+          {
+            type: "m.room.encryption",
+            state_key: "",
+            content: { algorithm: "m.megolm.v1.aes-sha2" },
+          },
+        ],
+        invite: ["@sut:matrix-qa.test"],
+        is_direct: false,
+        name: "Encrypted QA Room",
+        preset: "private_chat",
+      },
+    ]);
   });
 
   it("provisions a three-member room so Matrix QA runs in a group context", async () => {

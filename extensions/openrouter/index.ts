@@ -115,6 +115,7 @@ export default definePluginEntry({
             groupId: "openrouter",
             groupLabel: "OpenRouter",
             groupHint: "API key",
+            onboardingScopes: ["text-inference", "music-generation"],
           },
         }),
       ],
@@ -169,6 +170,7 @@ export default definePluginEntry({
     });
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
+    api.registerMusicGenerationProvider(buildOpenRouterMusicGenerationProvider());
     api.registerVideoGenerationProvider(buildOpenRouterVideoGenerationProvider());
     api.registerModelCatalogProvider({
       provider: PROVIDER_ID,

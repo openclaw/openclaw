@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
@@ -9,6 +10,7 @@ import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
   readLatestAssistantTextFromSessionTranscript,
+  readTailAssistantTextFromSessionTranscript,
 } from "./transcript.js";
 
 describe("appendAssistantMessageToSessionTranscript", () => {
@@ -18,6 +20,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   type ExactAssistantMessage = Parameters<
     typeof appendExactAssistantMessageToSessionTranscript
   >[0]["message"];
+  type TranscriptRepairMessage = Parameters<typeof repairToolUseResultPairing>[0][number];
+  type TranscriptUpdateEmitterSpy = {
+    mock: {
+      calls: [string | SessionTranscriptUpdate][];
+    };
+  };
 
   function writeTranscriptStore() {
     fs.writeFileSync(
@@ -58,6 +66,18 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     };
   }
 
+  function requireTranscriptUpdateCall(spy: TranscriptUpdateEmitterSpy): SessionTranscriptUpdate {
+    const call = spy.mock.calls[0];
+    if (!call) {
+      throw new Error("expected transcript update event");
+    }
+    const event = call[0];
+    if (typeof event === "string") {
+      throw new Error("expected structured transcript update event");
+    }
+    return event;
+  }
+
   it("creates transcript file and appends message for valid session", async () => {
     writeTranscriptStore();
 
@@ -90,6 +110,65 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("appends to legacy lowercase Signal group session entries", async () => {
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+    const signalSessionKey = `agent:main:signal:group:${mixedGroupId}`;
+    const legacySignalSessionKey = signalSessionKey.toLowerCase();
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [legacySignalSessionKey]: {
+          sessionId,
+          chatType: "group",
+          channel: "signal",
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey: signalSessionKey,
+      text: "Hello Signal group",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const lines = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
+      expect(lines).toHaveLength(2);
+      const messageLine = JSON.parse(lines[1]);
+      expect(messageLine.message.content[0].text).toBe("Hello Signal group");
+    }
+  });
+
+  it("falls back to the canonical transcript path for malformed persisted sessionFile metadata", async () => {
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          sessionFile: { path: "../../escaped.jsonl" },
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from a repaired metadata boundary",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.sessionFile).toBe(
+        resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir()),
+      );
+      expect(fs.existsSync(result.sessionFile)).toBe(true);
+    }
+  });
+
   it("emits transcript update events for delivery mirrors", async () => {
     const store = {
       [sessionKey]: {
@@ -109,7 +188,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     expect(emitSpy).toHaveBeenCalledTimes(1);
-    const [event] = emitSpy.mock.calls[0] as [SessionTranscriptUpdate];
+    const event = requireTranscriptUpdateCall(emitSpy);
     const message = event.message as
       | {
           role?: string;
@@ -228,6 +307,80 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("skips transcript-only OpenClaw assistant entries when reading latest assistant text", async () => {
+    writeTranscriptStore();
+
+    const finalResult = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({ text: "Complete final answer" }),
+    });
+    expect(finalResult.ok).toBe(true);
+    if (!finalResult.ok) {
+      return;
+    }
+
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Earlier retained preview",
+      storePath: fixture.storePath(),
+    });
+    await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({
+        text: "Injected transcript text",
+        provider: "openclaw",
+        model: "gateway-injected",
+      }),
+    });
+
+    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(
+      finalResult.sessionFile,
+    );
+    expect(latestAssistantText?.id).toBe(finalResult.messageId);
+    expect(latestAssistantText?.text).toBe("Complete final answer");
+  });
+
+  it("does not report transcript-only OpenClaw assistant entries as latest assistant text", async () => {
+    writeTranscriptStore();
+
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Only delivery mirror",
+      storePath: fixture.storePath(),
+    });
+    expect(mirrorResult.ok).toBe(true);
+    if (!mirrorResult.ok) {
+      return;
+    }
+
+    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(
+      mirrorResult.sessionFile,
+    );
+    expect(latestAssistantText).toBeUndefined();
+  });
+
+  it("keeps transcript-only OpenClaw assistant entries available to the tail reader", async () => {
+    writeTranscriptStore();
+
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Tail delivery mirror",
+      storePath: fixture.storePath(),
+    });
+    expect(mirrorResult.ok).toBe(true);
+    if (!mirrorResult.ok) {
+      return;
+    }
+
+    const tailAssistantText = await readTailAssistantTextFromSessionTranscript(
+      mirrorResult.sessionFile,
+    );
+    expect(tailAssistantText?.id).toBe(mirrorResult.messageId);
+    expect(tailAssistantText?.text).toBe("Tail delivery mirror");
+  });
+
   it("does not reuse an older matching assistant message across turns", async () => {
     writeTranscriptStore();
 
@@ -264,6 +417,78 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.model).toBe("delivery-mirror");
       expect(messageLine.message.content[0].text).toBe("Repeated answer");
     }
+  });
+
+  it("keeps delivery mirrors in transcripts while repair preserves real tool results", async () => {
+    writeTranscriptStore();
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const toolCallId = "call_maniple_list";
+
+    const toolCallResult = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: toolCallId,
+            name: "maniple__list_workers",
+            arguments: {},
+          },
+        ],
+        stopReason: "toolUse",
+      },
+    });
+
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Maniple List Workers",
+      storePath: fixture.storePath(),
+    });
+
+    expect(mirrorResult.ok).toBe(true);
+    if (!mirrorResult.ok) {
+      return;
+    }
+    expect(mirrorResult.messageId).not.toBe(toolCallResult.messageId);
+    const linesAfterMirror = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
+    expect(linesAfterMirror).toHaveLength(3);
+    const mirrorLine = JSON.parse(linesAfterMirror[2]);
+    expect(mirrorLine.message.model).toBe("delivery-mirror");
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "toolResult",
+        toolCallId,
+        toolName: "maniple__list_workers",
+        content: [{ type: "text", text: "workers listed" }],
+        isError: false,
+      },
+    });
+
+    const messages = fs
+      .readFileSync(sessionFile, "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { message?: TranscriptRepairMessage })
+      .flatMap((entry) => (entry.message ? [entry.message] : []));
+    expect(messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "assistant",
+      "toolResult",
+    ]);
+    const repair = repairToolUseResultPairing(messages, {
+      missingToolResultText: "aborted",
+    });
+
+    expect(repair.added).toHaveLength(0);
+    expect(repair.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect((repair.messages[2] as { model?: string }).model).toBe("delivery-mirror");
   });
 
   it("finds session entry using normalized (lowercased) key", async () => {

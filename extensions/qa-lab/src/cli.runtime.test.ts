@@ -267,6 +267,27 @@ describe("qa cli runtime", () => {
     });
   });
 
+  it("passes runtime-pair suite selection through to the host runner", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      scenarioIds: ["approval-turn-tool-followthrough"],
+      runtimePair: "pi,codex",
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: undefined,
+      transportId: "qa-channel",
+      providerMode: "mock-openai",
+      primaryModel: undefined,
+      alternateModel: undefined,
+      fastMode: undefined,
+      scenarioIds: ["approval-turn-tool-followthrough"],
+      runtimePair: ["pi", "codex"],
+    });
+  });
+
   it("drops blank suite model refs so provider defaults apply", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -601,7 +622,7 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-6",
+      alternateModel: "anthropic/claude-opus-4-7",
       preflight: true,
     });
 
@@ -611,7 +632,7 @@ describe("qa cli runtime", () => {
       transportId: "qa-channel",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-6",
+      alternateModel: "anthropic/claude-opus-4-7",
       scenarioIds: ["approval-turn-tool-followthrough"],
       concurrency: 1,
     });
@@ -740,6 +761,97 @@ describe("qa cli runtime", () => {
     });
   });
 
+  it("expands the personal-agent pack onto the suite scenario list", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      pack: "personal-agent",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      scenarioIds: [
+        "channel-chat-baseline",
+        "personal-reminder-roundtrip",
+        "personal-channel-thread-reply",
+        "personal-memory-preference-recall",
+        "personal-redaction-no-secret-leak",
+        "personal-tool-safety-followthrough",
+        "personal-approval-denial-stop",
+        "personal-task-followthrough-status",
+      ],
+    });
+  });
+
+  it("expands runtime parity tier selections onto the suite scenario list", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      runtimeParityTier: ["standard"],
+      scenarioIds: ["channel-chat-baseline", "runtime-tool-bash"],
+    });
+
+    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      scenarioIds: [
+        "channel-chat-baseline",
+        "runtime-tool-bash",
+        "runtime-first-hour-20-turn",
+        "runtime-tool-apply-patch",
+        "runtime-tool-edit",
+        "runtime-tool-exec",
+        "runtime-tool-fs-list",
+        "runtime-tool-fs-read",
+        "runtime-tool-fs-write",
+        "runtime-tool-grep",
+        "runtime-tool-image-generate",
+        "runtime-tool-session-status",
+        "runtime-tool-sessions-spawn",
+        "runtime-tool-web-fetch",
+        "runtime-tool-web-search",
+      ],
+    });
+  });
+
+  it("accepts comma-separated runtime parity tier filters", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      runtimeParityTier: ["optional,soak"],
+    });
+
+    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+      scenarioIds: [
+        "runtime-soak-100-turn",
+        "runtime-tool-memory-add",
+        "runtime-tool-memory-recall",
+        "runtime-tool-message-tool",
+        "runtime-tool-skill-invocation",
+        "runtime-tool-tavily-extract",
+        "runtime-tool-tavily-search",
+        "runtime-tool-tts",
+      ],
+    });
+  });
+
+  it("rejects unknown runtime parity tier filters", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runtimeParityTier: ["standardish"],
+      }),
+    ).rejects.toThrow(
+      '--runtime-parity-tier must be one of standard, optional, live-only, soak, got "standardish".',
+    );
+  });
+
+  it("rejects unknown suite packs", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        pack: "personal-admin",
+      }),
+    ).rejects.toThrow('--pack must be one of personal-agent, got "personal-admin"');
+  });
+
   it("rejects unknown suite CLI auth modes", async () => {
     await expect(
       runQaSuiteCommand({
@@ -783,11 +895,249 @@ describe("qa cli runtime", () => {
     }
   });
 
+  it("writes a runtime-axis parity report from one summary", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-runtime-parity-"));
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    try {
+      await fs.writeFile(
+        path.join(repoRoot, "runtime-summary.json"),
+        JSON.stringify({
+          scenarios: [
+            {
+              name: "Approval turn tool followthrough",
+              status: "fail",
+              steps: [],
+              runtimeParity: {
+                scenarioId: "approval-turn-tool-followthrough",
+                drift: "tool-call-shape",
+                driftDetails: "tool call 1 differs",
+                cells: {
+                  pi: {
+                    runtime: "pi",
+                    transcriptBytes: '{"role":"assistant"}\n',
+                    toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
+                    finalText: "done",
+                    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                    wallClockMs: 10,
+                    bootStateLines: [],
+                  },
+                  codex: {
+                    runtime: "codex",
+                    transcriptBytes: '{"role":"assistant"}\n',
+                    toolCalls: [{ tool: "read_file", argsHash: "b", resultHash: "r" }],
+                    finalText: "done",
+                    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                    wallClockMs: 10,
+                    runtimeErrorClass: "tool-error",
+                    bootStateLines: [],
+                  },
+                },
+              },
+            },
+          ],
+          counts: { total: 1, passed: 0, failed: 1 },
+          run: {
+            providerMode: "mock-openai",
+            primaryModel: "openai/gpt-5.5",
+            runtimePair: ["pi", "codex"],
+          },
+        }),
+        "utf8",
+      );
+
+      await runQaParityReportCommand({
+        repoRoot,
+        runtimeAxis: true,
+        summary: "runtime-summary.json",
+      });
+
+      expect(process.exitCode).toBe(1);
+      expect(stdoutWrite).toHaveBeenCalledWith(
+        expect.stringContaining("QA runtime parity report:"),
+      );
+      expect(stdoutWrite).toHaveBeenCalledWith(
+        expect.stringContaining("QA runtime parity verdict: fail"),
+      );
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a runtime-axis token-efficiency report when requested", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-runtime-token-efficiency-"));
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    try {
+      await fs.writeFile(
+        path.join(repoRoot, "runtime-summary.json"),
+        JSON.stringify({
+          scenarios: [
+            {
+              name: "runtime-tool-fs-read",
+              status: "pass",
+              steps: [],
+              runtimeParity: {
+                scenarioId: "runtime-tool-fs-read",
+                drift: "none",
+                cells: {
+                  pi: {
+                    runtime: "pi",
+                    transcriptBytes: '{"role":"assistant"}\n',
+                    toolCalls: [{ tool: "fs.read", argsHash: "a", resultHash: "r" }],
+                    finalText: "done",
+                    usage: { inputTokens: 72_000, outputTokens: 381, totalTokens: 72_381 },
+                    wallClockMs: 10,
+                    bootStateLines: [],
+                  },
+                  codex: {
+                    runtime: "codex",
+                    transcriptBytes: '{"role":"assistant"}\n',
+                    toolCalls: Array.from({ length: 40 }, (_, index) => ({
+                      tool: "fs.read",
+                      argsHash: `a-${index}`,
+                      resultHash: `r-${index}`,
+                    })),
+                    finalText: "done",
+                    usage: { inputTokens: 118_000, outputTokens: 1_489, totalTokens: 119_489 },
+                    wallClockMs: 10,
+                    bootStateLines: [],
+                  },
+                },
+              },
+            },
+          ],
+          counts: { total: 1, passed: 1, failed: 0 },
+          run: {
+            providerMode: "live-frontier",
+            primaryModel: "openai/gpt-5.5",
+            runtimePair: ["pi", "codex"],
+          },
+        }),
+        "utf8",
+      );
+
+      await runQaParityReportCommand({
+        repoRoot,
+        runtimeAxis: true,
+        summary: "runtime-summary.json",
+        tokenEfficiency: true,
+      });
+
+      expect(process.exitCode).toBe(1);
+      expect(stdoutWrite).toHaveBeenCalledWith(
+        expect.stringContaining("QA runtime parity verdict: pass"),
+      );
+      expect(stdoutWrite).toHaveBeenCalledWith(
+        expect.stringContaining("QA runtime token efficiency report:"),
+      );
+      expect(stdoutWrite).toHaveBeenCalledWith(
+        expect.stringContaining("QA runtime token efficiency verdict: fail"),
+      );
+      const [artifactDir] = await fs.readdir(path.join(repoRoot, ".artifacts", "qa-e2e"));
+      const tokenSummary = JSON.parse(
+        await fs.readFile(
+          path.join(
+            repoRoot,
+            ".artifacts",
+            "qa-e2e",
+            artifactDir ?? "",
+            "qa-runtime-token-efficiency-summary.json",
+          ),
+          "utf8",
+        ),
+      ) as { aggregate?: { flaggedScenarios?: string[] } };
+      expect(tokenSummary.aggregate?.flaggedScenarios).toEqual(["runtime-tool-fs-read"]);
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects token-efficiency without runtime-axis mode", async () => {
+    await expect(
+      runQaParityReportCommand({
+        repoRoot: process.cwd(),
+        candidateSummary: "candidate.json",
+        baselineSummary: "baseline.json",
+        tokenEfficiency: true,
+      }),
+    ).rejects.toThrow("--token-efficiency requires --runtime-axis.");
+  });
+
   it("prints a markdown coverage report from scenario metadata", async () => {
     await runQaCoverageReportCommand({ repoRoot: process.cwd() });
 
     expectWriteContains(stdoutWrite, "# QA Coverage Inventory");
     expectWriteContains(stdoutWrite, "memory.recall");
+  });
+
+  it("prints a markdown tool coverage report from runtime tool fixtures", async () => {
+    await runQaCoverageReportCommand({ repoRoot: process.cwd(), tools: true });
+
+    expectWriteContains(stdoutWrite, "# OpenClaw Runtime Tool Coverage");
+    expectWriteContains(stdoutWrite, "codex-native-workspace");
+  });
+
+  it("exits nonzero when tool coverage summary is missing a required runtime tool call", async () => {
+    const priorExitCode = process.exitCode;
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-tool-coverage-"));
+    try {
+      await fs.writeFile(
+        path.join(repoRoot, "runtime-summary.json"),
+        JSON.stringify({
+          scenarios: [
+            {
+              name: "runtime-tool-web-search",
+              status: "fail",
+              runtimeParity: {
+                scenarioId: "runtime-tool-web-search",
+                drift: "tool-call-shape",
+                driftDetails: "Codex emitted no web_search call",
+                cells: {
+                  pi: {
+                    runtime: "pi",
+                    transcriptBytes: "",
+                    toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
+                    finalText: "",
+                    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                    wallClockMs: 1,
+                    bootStateLines: [],
+                  },
+                  codex: {
+                    runtime: "codex",
+                    transcriptBytes: "",
+                    toolCalls: [],
+                    finalText: "",
+                    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                    wallClockMs: 1,
+                    bootStateLines: [],
+                  },
+                },
+              },
+            },
+          ],
+          run: { runtimePair: ["pi", "codex"] },
+        }),
+        "utf8",
+      );
+
+      await runQaCoverageReportCommand({
+        repoRoot,
+        tools: true,
+        summary: "runtime-summary.json",
+      });
+
+      expect(process.exitCode).toBe(1);
+      expectWriteContains(stdoutWrite, "- Verdict: fail");
+      expectWriteContains(stdoutWrite, "web-search missing codex tool call web_search");
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
   });
 
   it("resolves character eval paths and passes model refs through", async () => {
@@ -802,7 +1152,7 @@ describe("qa cli runtime", () => {
       fast: true,
       thinking: "medium",
       modelThinking: ["codex-cli/test-model=medium"],
-      judgeModel: ["openai/gpt-5.5,thinking=xhigh,fast", "anthropic/claude-opus-4-6,thinking=high"],
+      judgeModel: ["openai/gpt-5.5,thinking=xhigh,fast", "anthropic/claude-opus-4-7,thinking=high"],
       judgeTimeoutMs: 180_000,
       blindJudgeModels: true,
       concurrency: 4,
@@ -823,10 +1173,10 @@ describe("qa cli runtime", () => {
         "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: false },
         "codex-cli/test-model": { thinkingDefault: "high", fastMode: true },
       },
-      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-6"],
+      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-7"],
       judgeModelOptions: {
         "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: true },
-        "anthropic/claude-opus-4-6": { thinkingDefault: "high" },
+        "anthropic/claude-opus-4-7": { thinkingDefault: "high" },
       },
       judgeTimeoutMs: 180_000,
       judgeBlindModels: true,
@@ -948,6 +1298,24 @@ describe("qa cli runtime", () => {
       disk: "24G",
     });
     expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
+  });
+
+  it("passes runtime-pair suite selection through to the multipass runner", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      runner: "multipass",
+      providerMode: "mock-openai",
+      scenarioIds: ["approval-turn-tool-followthrough"],
+      runtimePair: "codex,pi",
+      allowFailures: true,
+    });
+
+    expect(runQaMultipass).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        runtimePair: ["pi", "codex"],
+      }),
+    );
   });
 
   it("passes live suite selection through to the multipass runner", async () => {
@@ -1139,7 +1507,7 @@ describe("qa cli runtime", () => {
       providerMode: "mock-openai",
       parityPack: "agentic",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-6",
+      alternateModel: "anthropic/claude-opus-4-7",
     });
 
     expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
@@ -1148,7 +1516,7 @@ describe("qa cli runtime", () => {
       transportId: "qa-channel",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-6",
+      alternateModel: "anthropic/claude-opus-4-7",
       fastMode: undefined,
       scenarioIds: [
         "approval-turn-tool-followthrough",

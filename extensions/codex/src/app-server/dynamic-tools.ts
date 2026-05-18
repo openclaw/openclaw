@@ -15,9 +15,12 @@ import {
   type AnyAgentTool,
   type HeartbeatToolResponse,
   type MessagingToolSend,
+  type MessagingToolSourceReplyPayload,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { CodexDynamicToolsLoading } from "./config.js";
+import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
   type CodexDynamicToolCallOutputContentItem,
   type CodexDynamicToolCallParams,
@@ -32,6 +35,7 @@ type CodexDynamicToolHookContext = {
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
+  channelId?: string;
 };
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
@@ -47,6 +51,7 @@ export type CodexDynamicToolBridge = {
     messagingToolSentTexts: string[];
     messagingToolSentMediaUrls: string[];
     messagingToolSentTargets: MessagingToolSend[];
+    messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
     heartbeatToolResponse?: HeartbeatToolResponse;
     toolMediaUrls: string[];
     toolAudioAsVoice: boolean;
@@ -56,7 +61,10 @@ export type CodexDynamicToolBridge = {
 
 export const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 
+// Keep OpenClaw session spawning searchable in Codex mode so Codex's native
+// spawn_agent remains the primary Codex subagent surface.
 const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set(["sessions_yield"]);
+const DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
 
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
@@ -66,6 +74,7 @@ export function createCodexDynamicToolBridge(params: {
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
+  const toolResultMaxChars = resolveCodexDynamicToolResultMaxChars(params.hookContext);
   const tools = params.tools.map((tool) =>
     isToolWrappedWithBeforeToolCallHook(tool)
       ? tool
@@ -77,6 +86,7 @@ export function createCodexDynamicToolBridge(params: {
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
+    messagingToolSourceReplyPayloads: [],
     toolMediaUrls: [],
     toolAudioAsVoice: false,
   };
@@ -148,12 +158,13 @@ export function createCodexDynamicToolBridge(params: {
           agentId: toolResultHookContext.agentId,
           sessionId: toolResultHookContext.sessionId,
           sessionKey: toolResultHookContext.sessionKey,
+          channelId: toolResultHookContext.channelId,
           startArgs: args,
           result,
           startedAt,
         });
         return {
-          contentItems: result.content.flatMap(convertToolContent),
+          contentItems: convertToolContents(result.content, toolResultMaxChars),
           success: !resultIsError,
         };
       } catch (error) {
@@ -171,6 +182,7 @@ export function createCodexDynamicToolBridge(params: {
           agentId: toolResultHookContext.agentId,
           sessionId: toolResultHookContext.sessionId,
           sessionKey: toolResultHookContext.sessionKey,
+          channelId: toolResultHookContext.channelId,
           startArgs: args,
           error: error instanceof Error ? error.message : String(error),
           startedAt,
@@ -212,13 +224,51 @@ function createCodexDynamicToolSpec(params: {
 function toToolResultHookContext(
   ctx: CodexDynamicToolHookContext | undefined,
 ): CodexToolResultHookContext {
-  const { agentId, sessionId, sessionKey, runId } = ctx ?? {};
+  const { agentId, sessionId, sessionKey, runId, channelId } = ctx ?? {};
   return {
     ...(agentId && { agentId }),
     ...(sessionId && { sessionId }),
     ...(sessionKey && { sessionKey }),
     ...(runId && { runId }),
+    ...(channelId && { channelId }),
   };
+}
+
+function resolveCodexDynamicToolResultMaxChars(
+  ctx: CodexDynamicToolHookContext | undefined,
+): number {
+  const configured = resolveAgentContextLimitValue({
+    config: ctx?.config,
+    agentId: ctx?.agentId,
+    key: "toolResultMaxChars",
+  });
+  return configured ?? DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
+}
+
+function resolveAgentContextLimitValue(params: {
+  config: EmbeddedRunAttemptParams["config"] | undefined;
+  agentId?: string;
+  key: string;
+}): number | undefined {
+  const agents = readRecord(params.config?.agents);
+  const defaults = readRecord(readRecord(agents?.defaults)?.contextLimits);
+  const defaultValue = readPositiveInteger(defaults?.[params.key]);
+  if (!params.agentId) {
+    return defaultValue;
+  }
+  const list = agents?.list;
+  if (!Array.isArray(list)) {
+    return defaultValue;
+  }
+  const normalizedAgentId = normalizeAgentId(params.agentId);
+  const agent = list.find((entry) => {
+    const entryId = readRecord(entry)?.id;
+    return typeof entryId === "string" && normalizeAgentId(entryId) === normalizedAgentId;
+  });
+  const agentValue = readPositiveInteger(
+    readRecord(readRecord(agent)?.contextLimits)?.[params.key],
+  );
+  return agentValue ?? defaultValue;
 }
 
 function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
@@ -279,6 +329,11 @@ function collectToolTelemetry(params: {
     return;
   }
   params.telemetry.didSendViaMessagingTool = true;
+  const sourceReplyPayload = extractInternalSourceReplyPayload(params.result?.details);
+  if (sourceReplyPayload) {
+    params.telemetry.messagingToolSourceReplyPayloads.push(sourceReplyPayload);
+    return;
+  }
   const text = readFirstString(params.args, ["text", "message", "body", "content"]);
   if (text) {
     params.telemetry.messagingToolSentTexts.push(text);
@@ -296,8 +351,54 @@ function collectToolTelemetry(params: {
   });
 }
 
+function extractInternalSourceReplyPayload(
+  details: unknown,
+): MessagingToolSourceReplyPayload | undefined {
+  if (!isRecord(details) || details.sourceReplySink !== "internal-ui") {
+    return undefined;
+  }
+  const rawPayload = details.sourceReply;
+  if (!isRecord(rawPayload)) {
+    return undefined;
+  }
+  const text = readFirstString(rawPayload, ["text", "message"]);
+  const mediaUrls = collectMediaUrls(rawPayload);
+  const mediaUrl =
+    typeof rawPayload.mediaUrl === "string" && rawPayload.mediaUrl.trim()
+      ? rawPayload.mediaUrl.trim()
+      : mediaUrls[0];
+  const payload: MessagingToolSourceReplyPayload = {
+    ...(text ? { text } : {}),
+    ...(mediaUrl ? { mediaUrl } : {}),
+    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+    ...(rawPayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
+    ...(isRecord(rawPayload.presentation)
+      ? { presentation: rawPayload.presentation as never }
+      : {}),
+    ...(isRecord(rawPayload.interactive) ? { interactive: rawPayload.interactive as never } : {}),
+    ...(isRecord(rawPayload.channelData) ? { channelData: rawPayload.channelData } : {}),
+    ...(typeof details.idempotencyKey === "string" && details.idempotencyKey.trim()
+      ? { idempotencyKey: details.idempotencyKey.trim() }
+      : {}),
+  };
+  return text || mediaUrls.length > 0 || payload.presentation || payload.interactive
+    ? payload
+    : undefined;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function readPositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
 }
 
 function isToolResultError(result: AgentToolResult<unknown>): boolean {
@@ -326,16 +427,77 @@ function isToolResultError(result: AgentToolResult<unknown>): boolean {
   );
 }
 
+function normalizeToolResultMaxChars(maxChars: number): number {
+  return typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
+    ? Math.floor(maxChars)
+    : DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
+}
+
+function convertToolContents(
+  content: Array<TextContent | ImageContent>,
+  toolResultMaxChars = DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS,
+): CodexDynamicToolCallOutputContentItem[] {
+  const maxChars = normalizeToolResultMaxChars(toolResultMaxChars);
+  const totalTextChars = content.reduce(
+    (total, item) => total + (item.type === "text" ? item.text.length : 0),
+    0,
+  );
+  if (totalTextChars <= maxChars) {
+    return content.flatMap(convertToolContent);
+  }
+
+  const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalTextChars} chars, showing ${maxChars}; rerun with narrower args.)`;
+  const notice = `\n${noticeText}`;
+  const textBudget = Math.max(0, maxChars - notice.length);
+  let remainingTextBudget = textBudget;
+  let appendedNotice = false;
+  const output: CodexDynamicToolCallOutputContentItem[] = [];
+
+  for (const item of content) {
+    if (item.type !== "text") {
+      output.push(...convertToolContent(item));
+      continue;
+    }
+    if (appendedNotice) {
+      continue;
+    }
+    if (notice.length >= maxChars) {
+      output.push({ type: "inputText", text: noticeText.slice(0, maxChars) });
+      appendedNotice = true;
+      continue;
+    }
+    const sliceLength = Math.min(item.text.length, remainingTextBudget);
+    remainingTextBudget -= sliceLength;
+    const shouldAppendNotice = remainingTextBudget <= 0;
+    const text = item.text.slice(0, sliceLength);
+    if (shouldAppendNotice) {
+      output.push({ type: "inputText", text: `${text.trimEnd()}${notice}`.slice(0, maxChars) });
+      appendedNotice = true;
+    } else if (text.length > 0) {
+      output.push({ type: "inputText", text });
+    }
+  }
+
+  if (!appendedNotice) {
+    output.push({ type: "inputText", text: noticeText.slice(0, maxChars) });
+  }
+  return output;
+}
+
 function convertToolContent(
   content: TextContent | ImageContent,
 ): CodexDynamicToolCallOutputContentItem[] {
   if (content.type === "text") {
     return [{ type: "inputText", text: content.text }];
   }
+  const imageUrl = sanitizeInlineImageDataUrl(`data:${content.mimeType};base64,${content.data}`);
+  if (!imageUrl) {
+    return [{ type: "inputText", text: invalidInlineImageText("codex dynamic tool") }];
+  }
   return [
     {
       type: "inputImage",
-      imageUrl: `data:${content.mimeType};base64,${content.data}`,
+      imageUrl,
     },
   ];
 }
@@ -374,11 +536,32 @@ function readFirstString(record: Record<string, unknown>, keys: string[]): strin
 
 function collectMediaUrls(record: Record<string, unknown>): string[] {
   const urls: string[] = [];
-  for (const key of ["mediaUrl", "media_url", "imageUrl", "image_url"]) {
-    const value = record[key];
+  const pushMediaUrl = (value: unknown) => {
     if (typeof value === "string" && value.trim()) {
       urls.push(value.trim());
     }
+  };
+  const pushAttachment = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return;
+    }
+    const attachment = value as Record<string, unknown>;
+    for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"]) {
+      pushMediaUrl(attachment[key]);
+    }
+  };
+  for (const key of [
+    "media",
+    "mediaUrl",
+    "media_url",
+    "path",
+    "filePath",
+    "fileUrl",
+    "imageUrl",
+    "image_url",
+  ]) {
+    const value = record[key];
+    pushMediaUrl(value);
   }
   for (const key of ["mediaUrls", "media_urls", "imageUrls", "image_urls"]) {
     const value = record[key];
@@ -386,9 +569,13 @@ function collectMediaUrls(record: Record<string, unknown>): string[] {
       continue;
     }
     for (const entry of value) {
-      if (typeof entry === "string" && entry.trim()) {
-        urls.push(entry.trim());
-      }
+      pushMediaUrl(entry);
+    }
+  }
+  const attachments = record.attachments;
+  if (Array.isArray(attachments)) {
+    for (const attachment of attachments) {
+      pushAttachment(attachment);
     }
   }
   return urls;

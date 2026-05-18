@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
+import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
@@ -127,6 +128,25 @@ async function fetchHistoryMessages(
   expect(historyRes.ok).toBe(true);
   return historyRes.payload?.messages ?? [];
 }
+
+type ConfiguredImageModelCase = {
+  id: string;
+  imageModel: AgentModelConfig;
+  expectedFallbacks: string[];
+};
+
+const configuredImageModelCases: ConfiguredImageModelCase[] = [
+  {
+    id: "with-image-fallback",
+    imageModel: { primary: "openai/gpt-4o", fallbacks: ["openai/gpt-4o-mini"] },
+    expectedFallbacks: ["openai/gpt-4o-mini"],
+  },
+  {
+    id: "without-image-fallback",
+    imageModel: { primary: "openai/gpt-4o" },
+    expectedFallbacks: [],
+  },
+];
 
 async function prepareMainHistoryHarness(params: {
   ws: GatewaySocket;
@@ -252,6 +272,7 @@ describe("gateway server chat", () => {
         chatRunBuffers: new Map(),
         chatDeltaSentAt: new Map(),
         chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -295,12 +316,14 @@ describe("gateway server chat", () => {
       }, FAST_WAIT_OPTS);
 
       await callSend("duplicate");
-      expect(responses).toContainEqual({
-        id: "duplicate",
-        ok: true,
-        payload: { runId: "idem-attachment-race", status: "started" },
-        error: undefined,
-      });
+      expect(responses).toEqual([
+        {
+          id: "duplicate",
+          ok: true,
+          payload: { runId: "idem-attachment-race", status: "started" },
+          error: undefined,
+        },
+      ]);
 
       firstCatalog.resolve([
         {
@@ -312,12 +335,20 @@ describe("gateway server chat", () => {
       ]);
       await first;
 
-      expect(responses).toContainEqual({
-        id: "first",
-        ok: true,
-        payload: { runId: "idem-attachment-race", status: "in_flight" },
-        error: undefined,
-      });
+      expect(responses).toEqual([
+        {
+          id: "duplicate",
+          ok: true,
+          payload: { runId: "idem-attachment-race", status: "started" },
+          error: undefined,
+        },
+        {
+          id: "first",
+          ok: true,
+          payload: { runId: "idem-attachment-race", status: "in_flight" },
+          error: undefined,
+        },
+      ]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
       dispatchRelease.resolve();
@@ -332,6 +363,158 @@ describe("gateway server chat", () => {
       await fs.rm(sessionDir, { recursive: true, force: true });
     }
   });
+
+  test.each(configuredImageModelCases)(
+    "chat.send inlines image attachments through configured imageModel with allowlist present: $id",
+    async ({ id, imageModel, expectedFallbacks }) => {
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      try {
+        testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+        testState.agentConfig = {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+            fallbacks: ["anthropic/claude-haiku-4-6"],
+          },
+          imageModel,
+          models: {
+            "anthropic/claude-opus-4-6": {},
+          },
+        };
+        await writeSessionStore({
+          entries: {
+            main: {
+              sessionId: "sess-main",
+              modelProvider: "anthropic",
+              model: "claude-opus-4-6",
+              updatedAt: Date.now(),
+            },
+          },
+        });
+
+        const context = {
+          loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(
+            async () => [
+              {
+                id: "claude-opus-4-6",
+                name: "Claude Opus 4.6",
+                provider: "anthropic",
+                input: ["text"],
+              },
+              {
+                id: "gpt-4o",
+                name: "GPT-4o",
+                provider: "openai",
+                input: ["text", "image"],
+              },
+              {
+                id: "gpt-4o-mini",
+                name: "GPT-4o mini",
+                provider: "openai",
+                input: ["text", "image"],
+              },
+              {
+                id: "claude-haiku-4-6",
+                name: "Claude Haiku 4.6",
+                provider: "anthropic",
+                input: ["text"],
+              },
+            ],
+          ),
+          logGateway: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+          },
+          agentRunSeq: new Map<string, number>(),
+          chatAbortControllers: new Map(),
+          chatAbortedRuns: new Map(),
+          chatRunBuffers: new Map(),
+          chatDeltaSentAt: new Map(),
+          chatDeltaLastBroadcastLen: new Map(),
+          chatDeltaLastBroadcastText: new Map(),
+          addChatRun: vi.fn(),
+          removeChatRun: vi.fn(),
+          broadcast: vi.fn(),
+          nodeSendToSession: vi.fn(),
+          registerToolEventRecipient: vi.fn(),
+          dedupe: new Map(),
+        } as unknown as GatewayRequestContext;
+        const pngB64 =
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+        let captured: { ctx?: Record<string, unknown>; replyOptions?: GetReplyOptions } | undefined;
+        dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+          const [params] = args as [
+            {
+              ctx: Record<string, unknown>;
+              replyOptions?: GetReplyOptions;
+            },
+          ];
+          captured = {
+            ctx: params.ctx,
+            replyOptions: params.replyOptions,
+          };
+        });
+
+        const { chatHandlers } = await import("./server-methods/chat.js");
+        const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+        await chatHandlers["chat.send"]({
+          req: {
+            type: "req",
+            id: `configured-image-model-${id}`,
+            method: "chat.send",
+            params: {
+              sessionKey: "main",
+              message: "see image",
+              idempotencyKey: `idem-configured-image-model-${id}`,
+              attachments: [
+                {
+                  type: "image",
+                  mimeType: "image/png",
+                  fileName: "dot.png",
+                  content: pngB64,
+                },
+              ],
+            },
+          },
+          params: {
+            sessionKey: "main",
+            message: "see image",
+            idempotencyKey: `idem-configured-image-model-${id}`,
+            attachments: [
+              {
+                type: "image",
+                mimeType: "image/png",
+                fileName: "dot.png",
+                content: pngB64,
+              },
+            ],
+          },
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error) => {
+            responses.push({ ok, payload, error });
+          }) as RespondFn,
+          context,
+        });
+
+        expect(responses[0]?.ok).toBe(true);
+        await vi.waitFor(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
+        expect(captured?.replyOptions?.images).toEqual([
+          expect.objectContaining({ type: "image", mimeType: "image/png" }),
+        ]);
+        expect(captured?.replyOptions?.modelOverride).toBe("openai/gpt-4o");
+        expect(captured?.replyOptions?.modelOverrideFallbacks).toEqual(expectedFallbacks);
+        expect(captured?.ctx?.MediaPaths).toBeUndefined();
+      } finally {
+        dispatchInboundMessageMock.mockReset();
+        testState.agentConfig = undefined;
+        testState.sessionStorePath = undefined;
+        clearConfigCache();
+        await fs.rm(sessionDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("chat.send reuses an active internal run for duplicate WebChat text sends", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
@@ -362,6 +545,7 @@ describe("gateway server chat", () => {
         chatRunBuffers: new Map(),
         chatDeltaSentAt: new Map(),
         chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -407,22 +591,32 @@ describe("gateway server chat", () => {
 
       const first = Promise.resolve(callSend("first", "idem-active-a"));
       await vi.waitFor(() => {
-        expect(responses).toContainEqual({
-          id: "first",
-          ok: true,
-          payload: { runId: "idem-active-a", status: "started" },
-          error: undefined,
-        });
+        expect(responses).toEqual([
+          {
+            id: "first",
+            ok: true,
+            payload: { runId: "idem-active-a", status: "started" },
+            error: undefined,
+          },
+        ]);
       }, FAST_WAIT_OPTS);
 
       await callSend("duplicate", "idem-active-b");
 
-      expect(responses).toContainEqual({
-        id: "duplicate",
-        ok: true,
-        payload: { runId: "idem-active-a", status: "in_flight" },
-        error: undefined,
-      });
+      expect(responses).toEqual([
+        {
+          id: "first",
+          ok: true,
+          payload: { runId: "idem-active-a", status: "started" },
+          error: undefined,
+        },
+        {
+          id: "duplicate",
+          ok: true,
+          payload: { runId: "idem-active-a", status: "in_flight" },
+          error: undefined,
+        },
+      ]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
 
@@ -468,6 +662,7 @@ describe("gateway server chat", () => {
         chatRunBuffers: new Map(),
         chatDeltaSentAt: new Map(),
         chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -521,18 +716,20 @@ describe("gateway server chat", () => {
         expect(context.removeChatRun).toHaveBeenCalledTimes(2);
       }, FAST_WAIT_OPTS);
 
-      expect(responses).toContainEqual({
-        id: "first",
-        ok: true,
-        payload: { runId: "idem-sequential-a", status: "started" },
-        error: undefined,
-      });
-      expect(responses).toContainEqual({
-        id: "second",
-        ok: true,
-        payload: { runId: "idem-sequential-b", status: "started" },
-        error: undefined,
-      });
+      expect(responses).toEqual([
+        {
+          id: "first",
+          ok: true,
+          payload: { runId: "idem-sequential-a", status: "started" },
+          error: undefined,
+        },
+        {
+          id: "second",
+          ok: true,
+          payload: { runId: "idem-sequential-b", status: "started" },
+          error: undefined,
+        },
+      ]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(context.addChatRun).toHaveBeenCalledTimes(2);
     } finally {

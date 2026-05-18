@@ -173,6 +173,14 @@ vi.mock("../agents/auth-profiles.js", () => ({
   }) => {
     seedTestAuthProfile(params);
   },
+  upsertAuthProfileWithLock: async (params: {
+    profileId: string;
+    credential: StoredAuthProfile;
+    agentDir?: string;
+  }) => {
+    seedTestAuthProfile(params);
+    return { version: 1, profiles: readTestAuthProfileStore(params.agentDir).profiles };
+  },
 }));
 
 function normalizeText(value: unknown): string {
@@ -633,7 +641,7 @@ describe("applyAuthChoice", () => {
     });
   }
   function expectPromptMessageContaining(mock: { mock: { calls: unknown[][] } }, expected: string) {
-    expect(promptMessages(mock).some((message) => message.includes(expected))).toBe(true);
+    expect(promptMessages(mock).join("\n")).toContain(expected);
   }
   function expectPromptMessage(mock: { mock: { calls: unknown[][] } }, expected: string) {
     expect(promptMessages(mock)).toContain(expected);

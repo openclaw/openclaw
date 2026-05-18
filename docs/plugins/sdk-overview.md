@@ -107,6 +107,10 @@ methods:
 
 ### Tools and commands
 
+Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
+with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
+or fully dynamic tool registration.
+
 | Method                          | What it registers                             |
 | ------------------------------- | --------------------------------------------- |
 | `api.registerTool(tool, opts?)` | Agent tool (required or `{ optional: true }`) |
@@ -320,9 +324,9 @@ descriptor-backed placeholders for parse-time lazy loading.
 ### CLI backend registration
 
 `api.registerCliBackend(...)` lets a plugin own the default config for a local
-AI CLI backend such as `codex-cli`.
+AI CLI backend such as `claude-cli` or `my-cli`.
 
-- The backend `id` becomes the provider prefix in model refs like `codex-cli/gpt-5`.
+- The backend `id` becomes the provider prefix in model refs like `my-cli/gpt-5`.
 - The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
 - User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
   plugin default before running the CLI.

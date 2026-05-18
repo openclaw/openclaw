@@ -22,7 +22,8 @@ function expectSendChatFields(
   sendChat: ReturnType<typeof vi.fn>,
   expected: { message: string; sessionId?: string; sessionKey?: string },
 ) {
-  const call = sendChat.mock.calls.at(-1);
+  const calls = sendChat.mock.calls;
+  const call = calls[calls.length - 1];
   if (!call) {
     throw new Error("expected gateway sendChat call");
   }
@@ -34,6 +35,16 @@ function expectSendChatFields(
   if (expected.sessionKey !== undefined) {
     expect(payload.sessionKey).toBe(expected.sessionKey);
   }
+}
+
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockArg(mock: MockWithCalls, label: string) {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
 }
 
 function createHarness(params?: {
@@ -245,7 +256,7 @@ describe("tui command handlers", () => {
     const { handleCommand, sendChat, openOverlay, closeOverlay } = createHarness();
 
     await handleCommand("/context");
-    const selector = openOverlay.mock.calls[0]?.[0] as SelectableOverlay | undefined;
+    const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
     selector?.onSelect?.({ value: "detail", label: "detail" });
     await flushAsyncSelect();
 
@@ -323,6 +334,17 @@ describe("tui command handlers", () => {
     });
   });
 
+  it("handles /exit without sending through the gateway", async () => {
+    const { handleCommand, requestExit, sendChat, addUser, addSystem } = createHarness();
+
+    await handleCommand("/exit");
+
+    expect(requestExit).toHaveBeenCalledTimes(1);
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).not.toHaveBeenCalled();
+  });
+
   it("leaves a Crestodian breadcrumb after switching agents", async () => {
     const { handleCommand, addSystem, setSession, state } = createHarness();
 
@@ -349,7 +371,7 @@ describe("tui command handlers", () => {
 
     await handleCommand("hello");
 
-    const sentRunId = (sendChat.mock.calls[0]?.[0] as { runId: string }).runId;
+    const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
     expect(typeof sentRunId).toBe("string");
     expect(sentRunId.length).toBeGreaterThan(0);
     expect(state.activeChatRunId).toBeNull();
@@ -413,7 +435,7 @@ describe("tui command handlers", () => {
 
     // /new creates a unique session key (isolates TUI client) (#39217)
     expect(setSessionMock).toHaveBeenCalledTimes(1);
-    const newSessionKey = setSessionMock.mock.calls[0]?.[0] as string | undefined;
+    const newSessionKey = firstMockArg(setSessionMock, "setSession") as string | undefined;
     if (!newSessionKey) {
       throw new Error("expected /new to set a TUI session key");
     }
@@ -467,6 +489,22 @@ describe("tui command handlers", () => {
     expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
+  });
+
+  it("rejects normal sends while a run is active", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, requestRender, state } = createHarness({
+      activeChatRunId: "run-active",
+    });
+
+    await handleCommand("/context detail");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+    expect(requestRender).toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-active");
   });
 
   it("runs /auth through the local auth flow and refreshes session info", async () => {
@@ -561,7 +599,7 @@ describe("tui command handlers", () => {
 
     await handleCommand("/model");
 
-    const selector = openOverlay.mock.calls[0]?.[0] as SelectableOverlay | undefined;
+    const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
     expect(selector?.items?.[0]?.value).toBe("openrouter/auto");
     expect(selector?.items?.[0]?.label).toBe("openrouter/auto");
 

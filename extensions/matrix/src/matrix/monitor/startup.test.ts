@@ -169,7 +169,7 @@ describe("runMatrixStartupMaintenance", () => {
     await runMatrixStartupMaintenance(params, deps);
 
     expect(deps.syncMatrixOwnProfile).toHaveBeenCalledTimes(1);
-    const [profileSyncParams] = vi.mocked(deps.syncMatrixOwnProfile).mock.calls[0] ?? [];
+    const [profileSyncParams] = vi.mocked(deps.syncMatrixOwnProfile).mock.calls.at(0) ?? [];
     if (!profileSyncParams) {
       throw new Error("profile sync params missing");
     }

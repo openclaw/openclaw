@@ -59,6 +59,14 @@ describe("update-startup", () => {
   let resetUpdateAvailableStateForTest: (typeof import("./update-startup.js"))["resetUpdateAvailableStateForTest"];
   let loaded = false;
 
+  function requireFirstRunCommandCall(): Parameters<typeof runCommandWithTimeout> {
+    const [call] = vi.mocked(runCommandWithTimeout).mock.calls;
+    if (!call) {
+      throw new Error("expected update command run");
+    }
+    return call;
+  }
+
   beforeAll(async () => {
     await suiteRootTracker.setup();
   });
@@ -435,7 +443,7 @@ describe("update-startup", () => {
     }
 
     expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
-    const [argv, options] = vi.mocked(runCommandWithTimeout).mock.calls[0] ?? [];
+    const [argv, options] = requireFirstRunCommandCall();
     expect(argv).toEqual([
       process.execPath,
       "/opt/openclaw/dist/entry.js",

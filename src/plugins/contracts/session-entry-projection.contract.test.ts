@@ -285,16 +285,16 @@ describe("plugin session extension SessionEntry projection", () => {
     expect(registry.registry.sessionExtensions ?? []).toHaveLength(0);
     expect(
       registry.registry.diagnostics.map(({ pluginId, message }) => ({ pluginId, message })),
-    ).toContainEqual({
-      pluginId: "slot-collision",
-      message: "sessionEntrySlotKey is reserved by SessionEntry: updatedAt",
-    });
-    expect(
-      registry.registry.diagnostics.map(({ pluginId, message }) => ({ pluginId, message })),
-    ).toContainEqual({
-      pluginId: "slot-collision",
-      message: "sessionEntrySlotKey is reserved by SessionEntry: subagentRecovery",
-    });
+    ).toStrictEqual([
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: updatedAt",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: subagentRecovery",
+      },
+    ]);
   });
 
   it("rejects sessionEntrySlotKey values inherited from Object.prototype", () => {
@@ -327,18 +327,20 @@ describe("plugin session extension SessionEntry projection", () => {
       pluginId,
       message,
     }));
-    expect(diagnostics).toContainEqual({
-      pluginId: "object-slot-collision",
-      message: "sessionEntrySlotKey is reserved by Object: toString",
-    });
-    expect(diagnostics).toContainEqual({
-      pluginId: "object-slot-collision",
-      message: "sessionEntrySlotKey is reserved by Object: hasOwnProperty",
-    });
-    expect(diagnostics).toContainEqual({
-      pluginId: "object-slot-collision",
-      message: "sessionEntrySlotKey is reserved by Object: valueOf",
-    });
+    expect(diagnostics).toStrictEqual([
+      {
+        pluginId: "object-slot-collision",
+        message: "sessionEntrySlotKey is reserved by Object: toString",
+      },
+      {
+        pluginId: "object-slot-collision",
+        message: "sessionEntrySlotKey is reserved by Object: hasOwnProperty",
+      },
+      {
+        pluginId: "object-slot-collision",
+        message: "sessionEntrySlotKey is reserved by Object: valueOf",
+      },
+    ]);
   });
 
   it("rejects duplicate promoted SessionEntry slot keys across registrations", () => {
@@ -381,14 +383,16 @@ describe("plugin session extension SessionEntry projection", () => {
       pluginId,
       message,
     }));
-    expect(diagnostics).toContainEqual({
-      pluginId: "slot-owner",
-      message: "sessionEntrySlotKey already registered: approvalSnapshot",
-    });
-    expect(diagnostics).toContainEqual({
-      pluginId: "slot-colliding-plugin",
-      message: "sessionEntrySlotKey already registered: approvalSnapshot",
-    });
+    expect(diagnostics).toStrictEqual([
+      {
+        pluginId: "slot-owner",
+        message: "sessionEntrySlotKey already registered: approvalSnapshot",
+      },
+      {
+        pluginId: "slot-colliding-plugin",
+        message: "sessionEntrySlotKey already registered: approvalSnapshot",
+      },
+    ]);
   });
 
   it("clears promoted SessionEntry slots with plugin-owned session state", async () => {

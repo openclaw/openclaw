@@ -186,9 +186,17 @@ function buildProjectContextSection(params: {
     const hasSoulFile = params.files.some(
       (file) => getContextFileBasename(file.path) === "soul.md",
     );
+    const hasMemoryFile = params.files.some(
+      (file) => getContextFileBasename(file.path) === "memory.md",
+    );
     lines.push("The following project context files have been loaded:");
     if (hasSoulFile) {
       lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
+    }
+    if (hasMemoryFile) {
+      lines.push(
+        "MEMORY.md: durable user preferences and behavior guidance. Keep following it throughout the session unless higher-priority instructions override.",
+      );
     }
     lines.push("");
   }
@@ -389,9 +397,22 @@ function buildTimeSection(params: { userTimezone?: string }) {
   return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
 }
 
-function buildAssistantOutputDirectivesSection(isMinimal: boolean) {
-  if (isMinimal) {
+function buildAssistantOutputDirectivesSection(params: {
+  isMinimal: boolean;
+  sourceMessageToolOnly: boolean;
+}) {
+  if (params.isMinimal) {
     return [];
+  }
+  if (params.sourceMessageToolOnly) {
+    return [
+      "## Assistant Output Directives",
+      "- Visible source-channel output is delivered through `message(action=send)`.",
+      "- Attach media with message-tool attachment fields such as `media`, `path`, or `filePath`; do not use legacy `MEDIA:` directives for source-channel delivery.",
+      "- Voice-note audio hint: use message-tool `asVoice` when sending audio as a voice note.",
+      "- Native quote/reply: use message-tool `replyTo` when an explicit reply target is needed.",
+      "",
+    ];
   }
   return [
     "## Assistant Output Directives",
@@ -403,7 +424,11 @@ function buildAssistantOutputDirectivesSection(isMinimal: boolean) {
   ];
 }
 
-function buildWebchatCanvasSection(params: { isMinimal: boolean; runtimeChannel?: string }) {
+function buildWebchatCanvasSection(params: {
+  isMinimal: boolean;
+  runtimeChannel?: string;
+  sourceMessageToolOnly: boolean;
+}) {
   if (params.isMinimal || params.runtimeChannel !== "webchat") {
     return [];
   }
@@ -411,7 +436,9 @@ function buildWebchatCanvasSection(params: { isMinimal: boolean; runtimeChannel?
     "## Control UI Embed",
     "Use `[embed ...]` only in Control UI/webchat sessions for inline rich rendering inside the assistant bubble.",
     "- Do not use `[embed ...]` for non-web channels.",
-    "- `[embed ...]` is separate from `MEDIA:`. Use `MEDIA:` for attachments; use `[embed ...]` for web-only rich rendering.",
+    params.sourceMessageToolOnly
+      ? "- `[embed ...]` is separate from message-tool attachments; use message-tool attachment fields for files and `[embed ...]` for web-only rich rendering."
+      : "- `[embed ...]` is separate from `MEDIA:`. Use `MEDIA:` for attachments; use `[embed ...]` for web-only rich rendering.",
     '- Use self-closing form for hosted embed documents: `[embed ref="cv_123" title="Status" height="320" /]`.',
     '- You may also use an explicit hosted URL: `[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]`.',
     '- Never use local filesystem paths or `file://...` URLs in `[embed ...]`. Hosted embeds must point at `/__openclaw__/canvas/...` URLs or use `ref="..."`.',
@@ -465,6 +492,7 @@ function buildMessagingSection(params: {
   messageChannelOptions?: string;
   messageToolHints?: string[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  silentReplyPromptMode?: SilentReplyPromptMode;
 }) {
   if (params.isMinimal) {
     return [];
@@ -474,7 +502,8 @@ function buildMessagingSection(params: {
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
   const hasSubagents = params.availableTools.has("subagents");
   const hasSessionsYield = params.availableTools.has("sessions_yield");
-  const completionEventGuidance = messageToolOnly
+  const suppressSilentTokenGuidance = messageToolOnly || params.silentReplyPromptMode === "none";
+  const completionEventGuidance = suppressSilentTokenGuidance
     ? "- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to a silent placeholder)."
     : `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`;
   const subagentOrchestrationGuidance = hasSessionsSpawn
@@ -487,7 +516,7 @@ function buildMessagingSection(params: {
   return [
     "## Messaging",
     messageToolOnly
-      ? "- Reply in current session → private by default for this source channel; use `message(action=send)` for visible channel output."
+      ? "- Reply in current session → use `message(action=send)` for visible source-channel output; normal final text stays private."
       : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     subagentOrchestrationGuidance,
@@ -505,8 +534,10 @@ function buildMessagingSection(params: {
             ? `- No current/default source channel: include \`channel\` for proactive sends; valid ids: ${params.messageChannelOptions}.`
             : "- Pass `channel` only when sending outside the current/default source channel.",
           messageToolOnly
-            ? "- If you use `message` (`action=send`) to deliver visible output, do not repeat that visible content in your final answer; final answers are private in this mode."
-            : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
+            ? "- If you use `message` (`action=send`) to deliver visible output, do not repeat that visible content in your final answer."
+            : suppressSilentTokenGuidance
+              ? "- Do not use `message(action=send)` to deliver the current source-channel reply; reply normally so OpenClaw can route it once."
+              : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled
               ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
@@ -1166,7 +1197,7 @@ export function buildAgentSystemPrompt(params: {
       "## Workspace Files (injected)",
       "These user-editable files are loaded by OpenClaw and included below in Project Context.",
       "",
-      ...buildAssistantOutputDirectivesSection(isMinimal),
+      ...buildAssistantOutputDirectivesSection({ isMinimal, sourceMessageToolOnly }),
     ];
 
     if (reasoningHint) {
@@ -1218,6 +1249,7 @@ export function buildAgentSystemPrompt(params: {
     ...buildWebchatCanvasSection({
       isMinimal,
       runtimeChannel,
+      sourceMessageToolOnly,
     }),
     ...buildMessagingSection({
       isMinimal,
@@ -1227,6 +1259,7 @@ export function buildAgentSystemPrompt(params: {
       messageChannelOptions,
       messageToolHints: params.messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      silentReplyPromptMode,
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   );

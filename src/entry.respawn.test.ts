@@ -19,6 +19,14 @@ function expectCliRespawnPlan(plan: ReturnType<typeof buildCliRespawnPlan>): Cli
   return plan;
 }
 
+function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("buildCliRespawnPlan", () => {
   it("returns null when respawn policy skips the argv", () => {
     expect(
@@ -185,9 +193,12 @@ describe("runCliRespawnPlan", () => {
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
       },
     );
-    expect(attachChildProcessBridge.mock.calls[0]?.[0]).toBe(child);
-    const bridgeOptions = attachChildProcessBridge.mock.calls[0]?.[1];
-    expect(typeof bridgeOptions?.onSignal).toBe("function");
+    const [bridgeChild, bridgeOptions] = requireFirstMockCall(
+      attachChildProcessBridge,
+      "child process bridge attach",
+    );
+    expect(bridgeChild).toBe(child);
+    expect(bridgeOptions).toEqual({ onSignal: expect.any(Function) });
 
     child.emit("exit", 0, null);
 

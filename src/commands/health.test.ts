@@ -52,21 +52,41 @@ const createHealthSummary = (params: {
 };
 
 const callGatewayMock = vi.fn();
+const formatGatewayTransportErrorJsonMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  formatGatewayTransportErrorJson: (...args: unknown[]) =>
+    formatGatewayTransportErrorJsonMock(...args),
 }));
 
 function requireFirstRuntimeLog(): string {
-  const [message] = runtime.log.mock.calls[0] ?? [];
+  const [call] = runtime.log.mock.calls;
+  if (!call) {
+    throw new Error("expected health command log output");
+  }
+  const [message] = call;
   if (message === undefined) {
     throw new Error("expected health command log output");
   }
   return String(message);
 }
 
+function requireFirstGatewayRequest(): Record<string, unknown> {
+  const [call] = callGatewayMock.mock.calls;
+  if (!call) {
+    throw new Error("expected gateway call");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected gateway request");
+  }
+  return request as Record<string, unknown>;
+}
+
 describe("healthCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    formatGatewayTransportErrorJsonMock.mockReturnValue(null);
   });
 
   it("outputs JSON from gateway", async () => {
@@ -124,10 +144,37 @@ describe("healthCommand", () => {
     );
 
     expect(callGatewayMock).toHaveBeenCalledOnce();
-    const [gatewayRequest] = callGatewayMock.mock.calls[0] ?? [];
-    expect(gatewayRequest?.method).toBe("health");
-    expect(gatewayRequest?.token).toBe("setup-token");
-    expect(gatewayRequest?.password).toBe("setup-password");
+    const gatewayRequest = requireFirstGatewayRequest();
+    expect(gatewayRequest.method).toBe("health");
+    expect(gatewayRequest.token).toBe("setup-token");
+    expect(gatewayRequest.password).toBe("setup-password");
+  });
+
+  it("outputs JSON for gateway transport failures in JSON mode", async () => {
+    const error = new Error("gateway closed (1006)");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1006)",
+        code: 1006,
+        reason: "no close reason",
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        bindDetail: "Bind: loopback",
+      },
+    };
+    callGatewayMock.mockRejectedValueOnce(error);
+    formatGatewayTransportErrorJsonMock.mockReturnValueOnce(payload);
+
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+
+    expect(formatGatewayTransportErrorJsonMock).toHaveBeenCalledWith(error);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
   });
 
   it("prints degraded model-pricing health without failing the command", async () => {
@@ -210,6 +257,29 @@ describe("healthCommand", () => {
 
     const lines = formatHealthChannelLines(summary, { accountMode: "default" });
     expect(lines).toStrictEqual(["WhatsApp: auth stabilizing"]);
+  });
+
+  it("formats iMessage probe failures as failed health lines", () => {
+    const summary = createHealthSummary({
+      channels: {
+        imessage: {
+          accountId: "default",
+          configured: true,
+          probe: {
+            ok: false,
+            error:
+              "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+          },
+        },
+      },
+      channelOrder: ["imessage"],
+      channelLabels: { imessage: "iMessage" },
+    });
+
+    const lines = formatHealthChannelLines(summary, { accountMode: "default" });
+    expect(lines).toContain(
+      "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
   });
 });
 

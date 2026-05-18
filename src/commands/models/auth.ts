@@ -14,7 +14,7 @@ import { externalCliDiscoveryForProviderAuth } from "../../agents/auth-profiles.
 import {
   listProfilesForProvider,
   promoteAuthProfileInOrder,
-  upsertAuthProfile,
+  upsertAuthProfileWithLock,
 } from "../../agents/auth-profiles/profiles.js";
 import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
@@ -24,6 +24,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   applyProviderAuthConfigPatch,
@@ -35,6 +36,10 @@ import {
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { createVpsAwareOAuthHandlers } from "../../plugins/provider-oauth-flow.js";
 import { resolvePluginProviders } from "../../plugins/providers.runtime.js";
+import {
+  resolvePluginSetupProvider,
+  resolvePluginSetupRegistry,
+} from "../../plugins/setup-registry.js";
 import type {
   ProviderAuthMethod,
   ProviderAuthResult,
@@ -51,6 +56,8 @@ import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
+
+type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
 function guardCancel<T>(value: T | symbol): T {
   if (typeof value === "symbol" || isCancel(value)) {
@@ -108,6 +115,51 @@ function listProvidersWithTokenMethods(providers: ProviderPlugin[]): ProviderPlu
   return providers.filter((provider) => listTokenAuthMethods(provider).length > 0);
 }
 
+function mergeSetupProviders(
+  providers: readonly ProviderPlugin[],
+  setupProviders: readonly ProviderPlugin[],
+): ProviderPlugin[] {
+  if (setupProviders.length === 0) {
+    return [...providers];
+  }
+  const setupById = new Map(
+    setupProviders.map((provider) => [normalizeProviderId(provider.id), provider] as const),
+  );
+  const merged = providers.map(
+    (provider) => setupById.get(normalizeProviderId(provider.id)) ?? provider,
+  );
+  const existing = new Set(merged.map((provider) => normalizeProviderId(provider.id)));
+  for (const provider of setupProviders) {
+    if (!existing.has(normalizeProviderId(provider.id))) {
+      merged.push(provider);
+    }
+  }
+  return merged;
+}
+
+function preferSetupAuthProviders(params: {
+  providers: readonly ProviderPlugin[];
+  config: OpenClawConfig;
+  workspaceDir: string;
+  requestedProvider?: string;
+}): ProviderPlugin[] {
+  const requestedProvider = params.requestedProvider?.trim();
+  if (requestedProvider) {
+    const setupProvider = resolvePluginSetupProvider({
+      provider: requestedProvider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+    });
+    return setupProvider ? [setupProvider] : [...params.providers];
+  }
+
+  const setupProviders = resolvePluginSetupRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  }).providers.map((entry) => entry.provider);
+  return mergeSetupProviders(params.providers, setupProviders);
+}
+
 async function resolveModelsAuthContext(params?: {
   requestedProvider?: string;
   rawAgentId?: string | null;
@@ -130,11 +182,17 @@ async function resolveModelsAuthContext(params?: {
       ? { providerRefs: [params.requestedProvider], activate: true }
       : {}),
   });
+  const authProviders = preferSetupAuthProviders({
+    providers,
+    config,
+    workspaceDir,
+    requestedProvider: params?.requestedProvider,
+  });
   return {
     config,
     agentDir,
     workspaceDir,
-    providers,
+    providers: authProviders,
   };
 }
 
@@ -189,9 +247,13 @@ async function pickProviderAuthMethod(params: {
   requestedMethod?: string;
   prompter: ReturnType<typeof createClackPrompter>;
 }) {
-  const requestedMethod = pickAuthMethod(params.provider, params.requestedMethod);
-  if (requestedMethod) {
-    return requestedMethod;
+  const rawRequestedMethod = params.requestedMethod?.trim();
+  if (rawRequestedMethod) {
+    return pickAuthMethod(params.provider, rawRequestedMethod);
+  }
+  const oauthMethod = params.provider.auth.find((method) => method.kind === "oauth");
+  if (oauthMethod) {
+    return oauthMethod;
   }
   if (params.provider.auth.length === 1) {
     return params.provider.auth[0] ?? null;
@@ -247,8 +309,11 @@ async function persistProviderAuthResult(params: {
   prompter: ReturnType<typeof createClackPrompter>;
   setDefault?: boolean;
 }) {
+  const defaultModel = params.result.defaultModel
+    ? normalizeAgentModelRefForConfig(params.result.defaultModel)
+    : undefined;
   for (const profile of params.result.profiles) {
-    upsertAuthProfile({
+    await upsertAuthProfileWithLockOrThrow({
       profileId: profile.profileId,
       credential: profile.credential,
       agentDir: params.agentDir,
@@ -280,15 +345,15 @@ async function persistProviderAuthResult(params: {
       priorAgentsDefaultsModel,
       setDefault: params.setDefault,
     });
-    if (params.setDefault && params.result.defaultModel) {
-      next = applyDefaultModel(next, params.result.defaultModel);
+    if (params.setDefault && defaultModel) {
+      next = applyDefaultModel(next, defaultModel);
     }
     return next;
   });
-  if (params.result.defaultModel) {
+  if (defaultModel) {
     const repaired = await repairCodexRuntimePluginInstallForModelSelection({
       cfg: updated,
-      model: params.result.defaultModel,
+      model: defaultModel,
     });
     for (const warning of repaired.warnings) {
       params.runtime.error?.(warning);
@@ -301,11 +366,11 @@ async function persistProviderAuthResult(params: {
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
     );
   }
-  if (params.result.defaultModel) {
+  if (defaultModel) {
     params.runtime.log(
       params.setDefault
-        ? `Default model set to ${params.result.defaultModel}`
-        : `Default model available: ${params.result.defaultModel} (use --set-default to apply)`,
+        ? `Default model set to ${defaultModel}`
+        : `Default model available: ${defaultModel} (use --set-default to apply)`,
     );
   }
   if (params.result.notes && params.result.notes.length > 0) {
@@ -323,7 +388,8 @@ async function runProviderAuthMethod(params: {
   prompter: ReturnType<typeof createClackPrompter>;
   setDefault?: boolean;
 }) {
-  await clearStaleProfileLockouts(params.provider.id, params.agentDir);
+  const selectedProviderId = normalizeProviderId(params.provider.id);
+  await clearStaleProfileLockouts(selectedProviderId, params.agentDir);
 
   const result = await params.method.run({
     config: params.config,
@@ -342,6 +408,14 @@ async function runProviderAuthMethod(params: {
       createVpsAwareHandlers: (runtimeParams) => createVpsAwareOAuthHandlers(runtimeParams),
     },
   });
+  const resultProviderIds = new Set(
+    result.profiles.map((profile) => normalizeProviderId(profile.credential.provider)),
+  );
+  for (const providerId of resultProviderIds) {
+    if (providerId && providerId !== selectedProviderId) {
+      await clearStaleProfileLockouts(providerId, params.agentDir);
+    }
+  }
 
   await persistProviderAuthResult({
     result,
@@ -453,7 +527,7 @@ export async function modelsAuthPasteTokenCommand(
       })
     : undefined;
 
-  upsertAuthProfile({
+  await upsertAuthProfileWithLockOrThrow({
     profileId,
     credential: {
       type: "token",
@@ -472,6 +546,15 @@ export async function modelsAuthPasteTokenCommand(
     runtime.log("Anthropic setup-token auth is supported in OpenClaw.");
     runtime.log("OpenClaw prefers Claude CLI reuse when it is available on the host.");
     runtime.log("Anthropic staff told us this OpenClaw path is allowed again.");
+  }
+}
+
+async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
+  const updated = await upsertAuthProfileWithLock(params);
+  if (!updated) {
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
   }
 }
 

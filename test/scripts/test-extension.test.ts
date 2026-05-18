@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   detectChangedExtensionIds,
   listAvailableExtensionIds,
@@ -17,6 +17,7 @@ import {
   resolveExtensionBatchParallelism,
   runExtensionBatchPlan,
 } from "../../scripts/test-extension-batch.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
 
@@ -35,7 +36,11 @@ function runScript(args: string[], cwd = process.cwd()) {
 }
 
 function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> } }): T {
-  const [arg] = mock.mock.calls[0] ?? [];
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected first mock call argument");
+  }
+  const [arg] = call;
   if (arg === undefined) {
     throw new Error("expected first mock call argument");
   }
@@ -59,6 +64,20 @@ function expectPositiveIntegerMetric(value: number) {
 }
 
 describe("scripts/test-extension.mjs", () => {
+  let balancedExtensionShards: ReturnType<typeof createExtensionTestShards>;
+  let balancedExpectedExtensionIds: string[];
+
+  beforeAll(() => {
+    balancedExtensionShards = createExtensionTestShards({
+      cwd: process.cwd(),
+      shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+    });
+    balancedExpectedExtensionIds = listAvailableExtensionIds().filter(
+      (extensionId) =>
+        resolveExtensionTestPlan({ cwd: process.cwd(), targetArg: extensionId }).hasTests,
+    );
+  });
+
   it("resolves split channel extensions onto their own vitest configs", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "slack", cwd: process.cwd() });
 
@@ -248,6 +267,25 @@ describe("scripts/test-extension.mjs", () => {
     );
   });
 
+  it("lists available extension ids from git without reading extension directories", () => {
+    const payload = expectNoNodeFsScans<{
+      changed: string[];
+      ids: number;
+    }>(`
+      const { detectChangedExtensionIds, listAvailableExtensionIds } =
+        await import("./scripts/lib/changed-extensions.mjs");
+      const ids = listAvailableExtensionIds();
+      const changed = detectChangedExtensionIds([
+        "extensions/slack/src/channel.ts",
+        "src/line/message.test.ts",
+        "extensions/not-real/package.json",
+      ]);
+      return { changed, ids: ids.length };
+    `);
+    expect(payload.changed).toEqual(["line", "slack"]);
+    expect(payload.ids).toBeGreaterThan(0);
+  });
+
   it("can fail safe to all extensions when the base revision is unavailable", () => {
     const extensionIds = listChangedExtensionIds({
       base: "refs/heads/openclaw-test-missing-base",
@@ -420,11 +458,33 @@ describe("scripts/test-extension.mjs", () => {
     ]);
   });
 
+  it("counts tracked extension tests without walking extension directories", () => {
+    const payload = expectNoNodeFsScans<{
+      batchTests: number;
+      shards: number;
+      shardTests: number;
+    }>(
+      `
+        const { createExtensionTestShards, resolveExtensionBatchPlan } =
+          await import("./scripts/lib/extension-test-plan.mjs");
+        const extensionIds = ["matrix", "openai", "slack", "telegram"];
+        const batch = resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds });
+        const shards = createExtensionTestShards({ cwd: process.cwd(), extensionIds, shardCount: 2 });
+        return {
+          batchTests: batch.testFileCount,
+          shards: shards.length,
+          shardTests: shards.reduce((total, shard) => total + shard.testFileCount, 0),
+        };
+      `,
+      { counters: ["readdirSync"] },
+    );
+    expect(payload.batchTests).toBeGreaterThan(0);
+    expect(payload.shards).toBe(2);
+    expect(payload.shardTests).toBe(payload.batchTests);
+  });
+
   it("balances extension test shards by estimated CI cost", () => {
-    const shards = createExtensionTestShards({
-      cwd: process.cwd(),
-      shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
-    });
+    const shards = balancedExtensionShards;
 
     expect(shards).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
     expect(shards.map((shard) => shard.checkName)).toEqual(
@@ -433,15 +493,11 @@ describe("scripts/test-extension.mjs", () => {
 
     const assigned = shards.flatMap((shard) => shard.extensionIds);
     const uniqueAssigned = [...new Set(assigned)];
-    const expected = listAvailableExtensionIds().filter(
-      (extensionId) =>
-        resolveExtensionTestPlan({ cwd: process.cwd(), targetArg: extensionId }).hasTests,
-    );
 
     expect(uniqueAssigned.toSorted((left, right) => left.localeCompare(right))).toEqual(
-      expected.toSorted((left, right) => left.localeCompare(right)),
+      balancedExpectedExtensionIds.toSorted((left, right) => left.localeCompare(right)),
     );
-    expect(assigned).toHaveLength(expected.length);
+    expect(assigned).toHaveLength(balancedExpectedExtensionIds.length);
 
     const totals = shards.map((shard) => shard.estimatedCost);
     expect(Math.max(...totals) - Math.min(...totals)).toBeLessThanOrEqual(1);

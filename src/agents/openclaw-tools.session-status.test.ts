@@ -1,5 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  clearInternalHooks,
+  registerInternalHook,
+  type InternalHookEvent,
+} from "../hooks/internal-hooks.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
@@ -30,6 +35,7 @@ const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   configFingerprint: "session-status-test-empty-plugin-metadata",
   plugins: [],
 }));
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -409,6 +415,10 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
   return call[argIndex];
 }
 
+function latestMockCallArg(mock: ReturnType<typeof vi.fn>, argIndex = 0) {
+  return mockCallArg(mock, mock.mock.calls.length - 1, argIndex);
+}
+
 function getSessionStatusTool(
   agentSessionKey = "main",
   options?: { sandboxed?: boolean; activeModelProvider?: string; activeModelId?: string },
@@ -427,6 +437,7 @@ function getSessionStatusTool(
 describe("session_status tool", () => {
   beforeEach(() => {
     buildStatusMessageMock.mockClear();
+    clearInternalHooks();
   });
 
   it("returns a status card for the current session", async () => {
@@ -521,6 +532,38 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("main");
+  });
+
+  it("uses runSessionKey thinking level for implicit no-arg status lookups (#82669)", async () => {
+    resetSessionStore({
+      "agent:main:telegram:default:direct:1234": {
+        sessionId: "s-tg-direct",
+        updatedAt: 5,
+        status: "done",
+        thinkingLevel: "off",
+      },
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+        status: "running",
+        thinkingLevel: "high",
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey: "agent:main:main",
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-implicit-run-session-thinking", {});
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
+
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    const sessionEntry = statusArg.sessionEntry as SessionEntry;
+    expect(sessionEntry.thinkingLevel).toBe("high");
   });
 
   it("resolves sessionKey=current to runSessionKey under default tree visibility (#76708)", async () => {
@@ -881,19 +924,50 @@ describe("session_status tool", () => {
     expect(details.model).toBe("claude-sonnet-4-6");
     expect(details.modelProvider).toBe("anthropic");
     expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
-    expect(updateSessionStoreMock).toHaveBeenCalled();
-    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
-      string,
-      Record<string, SessionEntry>,
-    ];
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
     const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
     expectRecordFields(saved, {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
       liveModelSwitchPending: true,
     });
-    expect(saved.sessionId).toBeTypeOf("string");
-    expect(saved.sessionId.trim().length).toBeGreaterThan(0);
+    expect(saved.sessionId).toMatch(UUID_RE);
+  });
+
+  it("fires session:patch when session_status changes the persisted session model", async () => {
+    const events: InternalHookEvent[] = [];
+    registerInternalHook("session:patch", async (event) => {
+      events.push(event);
+    });
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-session-status-model-hook", {
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const event = events[0];
+    expect(event.type).toBe("session");
+    expect(event.action).toBe("patch");
+    expect(event.sessionKey).toBe("main");
+    const context = event.context;
+    expect(context.patch).toMatchObject({
+      key: "main",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    expect(context.sessionEntry).toMatchObject({
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      liveModelSwitchPending: true,
+    });
   });
 
   it("materializes a valid persisted session entry when the default implicit current fallback mutates model state", async () => {
@@ -907,19 +981,15 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
-    expect(updateSessionStoreMock).toHaveBeenCalled();
-    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
-      string,
-      Record<string, SessionEntry>,
-    ];
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
     const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
     expectRecordFields(saved, {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
       liveModelSwitchPending: true,
     });
-    expect(saved.sessionId).toBeTypeOf("string");
-    expect(saved.sessionId.trim().length).toBeGreaterThan(0);
+    expect(saved.sessionId).toMatch(UUID_RE);
   });
 
   it("does not synthesize a current fallback for unknown non-literal session keys", async () => {
@@ -1672,7 +1742,7 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:main");
-    expect(updateSessionStoreMock).toHaveBeenCalled();
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
   });
 
   it("blocks unsandboxed sessionId session_status outside tree visibility before mutation", async () => {
@@ -1981,11 +2051,8 @@ describe("session_status tool", () => {
     const result = await tool.execute("call3", { model: "default" });
     const details = result.details as { modelOverride?: string | null };
     expect(details.modelOverride).toBeNull();
-    expect(updateSessionStoreMock).toHaveBeenCalled();
-    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
-      string,
-      Record<string, unknown>,
-    ];
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, unknown>;
     const saved = savedStore.main as Record<string, unknown>;
     expect(saved.providerOverride).toBeUndefined();
     expect(saved.modelOverride).toBeUndefined();

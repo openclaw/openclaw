@@ -13,6 +13,14 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => loggerMocks),
 }));
 
+function requireFirstWarnCall(): [unknown, unknown] {
+  const [call] = loggerMocks.warn.mock.calls;
+  if (!call) {
+    throw new Error("expected logger warning");
+  }
+  return call as [unknown, unknown];
+}
+
 const CREDENTIAL_AND_GATEWAY_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEY_SECONDARY",
@@ -182,7 +190,7 @@ describe("loadDotEnv", () => {
         expect(process.env.FOO).toBe("from-global");
         expect(process.env.BAR).toBe("from-gateway");
         expect(loggerMocks.warn).toHaveBeenCalledOnce();
-        const [message, metadata] = loggerMocks.warn.mock.calls[0] ?? [];
+        const [message, metadata] = requireFirstWarnCall();
         expect(String(message)).toContain("Conflicting values in");
         expect(String((metadata as { ignoredPath?: unknown } | undefined)?.ignoredPath)).toContain(
           "gateway.env",

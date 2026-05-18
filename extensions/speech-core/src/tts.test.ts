@@ -108,6 +108,7 @@ vi.mock("../api.js", async () => {
 
 const {
   _test,
+  buildTtsSystemPromptHint,
   getTtsPersona,
   getTtsProvider,
   maybeApplyTtsToPayload,
@@ -167,6 +168,10 @@ function requireFirstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: 
   return call[0];
 }
 
+function requireFirstSynthesisRequest(label: string): Record<string, unknown> {
+  return requireRecord(requireFirstCallParam(synthesizeMock.mock.calls, label), label);
+}
+
 function requireAttempt(attempts: unknown[] | undefined, index: number) {
   if (!attempts) {
     throw new Error("expected synthesis attempts");
@@ -182,6 +187,7 @@ async function expectTtsPayloadResult(params: {
   audioAsVoice: true | undefined;
   providerResult?: MockSpeechSynthesisResult;
   mediaExtension?: string;
+  kind?: "tool" | "block" | "final";
 }) {
   if (params.providerResult) {
     synthesizeMock.mockResolvedValueOnce(params.providerResult);
@@ -193,7 +199,7 @@ async function expectTtsPayloadResult(params: {
       payload: { text: params.text },
       cfg,
       channel: params.channel,
-      kind: "final",
+      kind: params.kind ?? "final",
     });
 
     expect(synthesizeMock).toHaveBeenCalled();
@@ -205,6 +211,8 @@ async function expectTtsPayloadResult(params: {
     expect(result.audioAsVoice).toBe(params.audioAsVoice);
     expect(result.mediaUrl).toMatch(new RegExp(`voice-\\d+\\.${params.mediaExtension ?? "ogg"}$`));
     expect(result.spokenText).toBe(params.text);
+    expect(result.ttsSupplement).toEqual({ spokenText: params.text });
+    expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBe(true);
 
     mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
   } finally {
@@ -230,6 +238,18 @@ describe("speech-core native voice-note routing", () => {
     }
     expect(_test.supportsNativeVoiceNoteTts("slack")).toBe(false);
     expect(_test.supportsNativeVoiceNoteTts(undefined)).toBe(false);
+  });
+
+  it("tells generic TTS guidance to defer to MEMORY voice-delivery instructions", () => {
+    const hint = buildTtsSystemPromptHint(createTtsConfig("openclaw-speech-core-tts-hint-test"));
+
+    expect(hint).toContain("Voice (TTS) is enabled.");
+    expect(hint).toContain(
+      "If workspace context (especially MEMORY.md) tells you not to use [[tts:...]] or to use a local/non-tagged voice workflow, follow that workspace instruction instead.",
+    );
+    expect(hint).toContain(
+      "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
+    );
   });
 
   it("marks Discord auto TTS replies as native voice messages", async () => {
@@ -371,10 +391,7 @@ describe("speech-core native voice-note routing", () => {
 
     expect(result.success).toBe(true);
     expect(synthesizeMock).toHaveBeenCalled();
-    const request = requireRecord(
-      synthesizeMock.mock.calls[0]?.[0],
-      "runtime snapshot synthesis request",
-    );
+    const request = requireFirstSynthesisRequest("runtime snapshot synthesis request");
     expect(request.cfg).toBe(runtimeConfig);
     const providerConfig = requireRecord(request.providerConfig, "provider config");
     expect(providerConfig.apiKey).toBe("resolved-minimax-key");
@@ -426,17 +443,48 @@ describe("speech-core native voice-note routing", () => {
       });
 
       expect(synthesizeMock).toHaveBeenCalled();
-      const request = requireRecord(synthesizeMock.mock.calls[0]?.[0], "hidden TTS request");
+      const request = requireFirstSynthesisRequest("hidden TTS request");
       expect(request.text).toBe("hello");
       expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
       expect(result.audioAsVoice).toBe(true);
       expect(result.text).toBeUndefined();
+      expect(result.ttsSupplement).toBeUndefined();
       mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
     } finally {
       if (mediaDir) {
         rmSync(mediaDir, { recursive: true, force: true });
       }
     }
+  });
+
+  it("skips block delivery kind in final mode (accumulated final tail synthesizes instead)", async () => {
+    synthesizeMock.mockClear();
+    const cfg = createTtsConfig("openclaw-speech-core-block-kind-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: { text: "WebChat block stream chunks defer TTS to the final tail." },
+      cfg,
+      channel: "webchat",
+      kind: "block",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBeUndefined();
+    expect(result.text).toBe("WebChat block stream chunks defer TTS to the final tail.");
+  });
+
+  it("skips tool delivery kind in final mode", async () => {
+    synthesizeMock.mockClear();
+    const cfg = createTtsConfig("openclaw-speech-core-tool-kind-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: { text: "Intermediate tool output should not be spoken." },
+      cfg,
+      channel: "webchat",
+      kind: "tool",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBeUndefined();
+    expect(result.text).toBe("Intermediate tool output should not be spoken.");
   });
 
   it("keeps skipping untagged short TTS text", async () => {
@@ -547,7 +595,7 @@ describe("speech-core native voice-note routing", () => {
       });
 
       expect(synthesizeMock).toHaveBeenCalled();
-      const request = requireRecord(synthesizeMock.mock.calls[0]?.[0], "persona synthesis request");
+      const request = requireFirstSynthesisRequest("persona synthesis request");
       const providerConfig = requireRecord(request.providerConfig, "persona provider config");
       expect(providerConfig.model).toBe("base-model");
       expect(providerConfig.voice).toBe("persona-voice");
@@ -889,10 +937,7 @@ describe("speech-core per-agent TTS config", () => {
       });
 
       expect(synthesizeMock).toHaveBeenCalled();
-      const request = requireRecord(
-        synthesizeMock.mock.calls[0]?.[0],
-        "agent persona synthesis request",
-      );
+      const request = requireFirstSynthesisRequest("agent persona synthesis request");
       const providerConfig = requireRecord(request.providerConfig, "agent persona provider config");
       expect(providerConfig.model).toBe("base-model");
       expect(providerConfig.voice).toBe("agent-voice");

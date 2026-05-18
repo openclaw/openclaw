@@ -50,7 +50,30 @@ function installRuntime(): MockRuntime {
           });
           return { path: state.savePath, contentType: state.savedContentType };
         },
-        fetchRemoteMedia: async () => ({ buffer: Buffer.alloc(0), contentType: undefined }),
+        readRemoteMediaBuffer: async () => ({ buffer: Buffer.alloc(0), contentType: undefined }),
+        saveRemoteMedia: async () => ({
+          path: state.savePath,
+          contentType: state.savedContentType,
+        }),
+        saveResponseMedia: async (
+          response: Response,
+          options: {
+            fallbackContentType?: string;
+            subdir?: string;
+            maxBytes?: number;
+            originalFilename?: string;
+          },
+        ) => {
+          const buffer = Buffer.from(await response.arrayBuffer());
+          state.saveCalls.push({
+            buffer,
+            contentType: options.fallbackContentType,
+            direction: options.subdir ?? "inbound",
+            maxBytes: options.maxBytes ?? 0,
+            originalFilename: options.originalFilename,
+          });
+          return { path: state.savePath, contentType: state.savedContentType };
+        },
       },
     },
   } as unknown as Parameters<typeof setMSTeamsRuntime>[0]);
@@ -78,6 +101,14 @@ function buildTokenProvider(): MSTeamsAccessTokenProvider {
       return "graph-token";
     }),
   };
+}
+
+function firstMockCall(mock: ReturnType<typeof vi.fn>, label: string): unknown[] {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
 }
 
 async function resolvePublicHost(): Promise<{ address: string }> {
@@ -311,7 +342,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
       expect(media).toBeUndefined();
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]).toStrictEqual([
+      expect(firstMockCall(warn, "logger.warn")).toStrictEqual([
         "msteams botFramework attachmentInfo fetch failed",
         { error: "fetch failed | invalid onRequestStart method" },
       ]);
@@ -348,7 +379,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
       expect(media).toBeUndefined();
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]).toStrictEqual([
+      expect(firstMockCall(warn, "logger.warn")).toStrictEqual([
         "msteams botFramework attachmentView fetch failed",
         { error: "fetch failed" },
       ]);
@@ -375,7 +406,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
 
       expect(media).toBeUndefined();
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]).toStrictEqual([
+      expect(firstMockCall(warn, "logger.warn")).toStrictEqual([
         "msteams botFramework attachmentInfo non-ok",
         { status: 500 },
       ]);

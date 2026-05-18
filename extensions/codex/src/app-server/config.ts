@@ -4,7 +4,8 @@ import { hostname as readHostName } from "node:os";
 import { z } from "zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
-const START_OPTIONS_KEY_SECRET = randomBytes(32);
+const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
+const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
 const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
 
@@ -282,7 +283,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   const config = readCodexPluginConfig(pluginConfig).codexPlugins;
   const configured = config !== undefined;
   const enabled = config?.enabled === true;
-  const allowDestructiveActions = config?.allow_destructive_actions ?? false;
+  const allowDestructiveActions = config?.allow_destructive_actions ?? true;
   const pluginPolicies = Object.entries(config?.plugins ?? {})
     .flatMap(([configKey, entry]): ResolvedCodexPluginPolicy[] => {
       if (entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME || !entry.pluginName) {
@@ -387,6 +388,24 @@ export function resolveCodexAppServerRuntimeOptions(
       (policyMode === "guardian" ? "auto_review" : "user"),
     ...(serviceTier ? { serviceTier } : {}),
   };
+}
+
+export function isCodexAppServerApprovalPolicyAllowedByRequirements(
+  policy: CodexAppServerApprovalPolicy,
+  params: {
+    env?: NodeJS.ProcessEnv;
+    requirementsToml?: string | null;
+    requirementsPath?: string;
+    readRequirementsFile?: (path: string) => string | undefined;
+    platform?: NodeJS.Platform;
+  } = {},
+): boolean {
+  const content = readCodexRequirementsToml(params);
+  if (content === undefined) {
+    return true;
+  }
+  const allowedApprovalPolicies = parseAllowedApprovalPoliciesFromCodexRequirements(content);
+  return allowedApprovalPolicies === undefined || allowedApprovalPolicies.has(policy);
 }
 
 export function resolveCodexComputerUseConfig(
@@ -971,6 +990,14 @@ function hashSecretForKey(value: string | undefined, label: string): string | nu
     .update("\0")
     .update(value)
     .digest("hex");
+}
+
+function getStartOptionsKeySecret(): Buffer {
+  const globalState = globalThis as typeof globalThis & {
+    [START_OPTIONS_KEY_SECRET_SYMBOL]?: Buffer;
+  };
+  globalState[START_OPTIONS_KEY_SECRET_SYMBOL] ??= randomBytes(32);
+  return globalState[START_OPTIONS_KEY_SECRET_SYMBOL];
 }
 
 function splitShellWords(value: string): string[] {

@@ -15,13 +15,17 @@ top-level keys, see [Configuration reference](/gateway/configuration-reference).
 
 ### `agents.defaults.workspace`
 
-Default: `~/.openclaw/workspace`.
+Default: `OPENCLAW_WORKSPACE_DIR` when set, otherwise `~/.openclaw/workspace`.
 
 ```json5
 {
   agents: { defaults: { workspace: "~/.openclaw/workspace" } },
 }
 ```
+
+An explicit `agents.defaults.workspace` value takes precedence over
+`OPENCLAW_WORKSPACE_DIR`. Use the environment variable to point default agents
+at a mounted workspace when you do not want to write that path into config.
 
 ### `agents.defaults.repoRoot`
 
@@ -94,6 +98,9 @@ Controls when workspace bootstrap files are injected into the system prompt. Def
 }
 ```
 
+Per-agent override: `agents.list[].contextInjection`. Omitted values inherit
+`agents.defaults.contextInjection`.
+
 ### `agents.defaults.bootstrapMaxChars`
 
 Max characters per workspace bootstrap file before truncation. Default: `12000`.
@@ -103,6 +110,9 @@ Max characters per workspace bootstrap file before truncation. Default: `12000`.
   agents: { defaults: { bootstrapMaxChars: 12000 } },
 }
 ```
+
+Per-agent override: `agents.list[].bootstrapMaxChars`. Omitted values inherit
+`agents.defaults.bootstrapMaxChars`.
 
 ### `agents.defaults.bootstrapTotalMaxChars`
 
@@ -114,14 +124,43 @@ Max total characters injected across all workspace bootstrap files. Default: `60
 }
 ```
 
+Per-agent override: `agents.list[].bootstrapTotalMaxChars`. Omitted values
+inherit `agents.defaults.bootstrapTotalMaxChars`.
+
+### Per-agent bootstrap profile overrides
+
+Use per-agent bootstrap profile overrides when one agent needs different prompt
+injection behavior from the shared defaults. Omitted fields inherit from
+`agents.defaults`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      contextInjection: "continuation-skip",
+      bootstrapMaxChars: 12000,
+      bootstrapTotalMaxChars: 60000,
+    },
+    list: [
+      {
+        id: "strict-worker",
+        contextInjection: "always",
+        bootstrapMaxChars: 50000,
+        bootstrapTotalMaxChars: 300000,
+      },
+    ],
+  },
+}
+```
+
 ### `agents.defaults.bootstrapPromptTruncationWarning`
 
 Controls the agent-visible system-prompt notice when bootstrap context is truncated.
-Default: `"once"`.
+Default: `"always"`.
 
 - `"off"`: never inject truncation notice text into the system prompt.
-- `"once"`: inject a concise notice once per unique truncation signature (recommended).
-- `"always"`: inject a concise notice on every run when truncation exists.
+- `"once"`: inject a concise notice once per unique truncation signature.
+- `"always"`: inject a concise notice on every run when truncation exists (recommended).
 
 Detailed raw/injected counts and config tuning fields stay in diagnostics such
 as context/status reports and logs; routine WebChat user/runtime context only
@@ -129,7 +168,7 @@ gets the concise recovery notice.
 
 ```json5
 {
-  agents: { defaults: { bootstrapPromptTruncationWarning: "once" } }, // off | once | always
+  agents: { defaults: { bootstrapPromptTruncationWarning: "always" } }, // off | once | always
 }
 ```
 
@@ -157,6 +196,9 @@ Use the matching per-agent override only when one agent needs a different
 budget:
 
 - `agents.list[].skillsLimits.maxSkillsPromptChars`
+- `agents.list[].contextInjection`
+- `agents.list[].bootstrapMaxChars`
+- `agents.list[].bootstrapTotalMaxChars`
 - `agents.list[].contextLimits.*`
 
 #### `agents.defaults.startupContext`
@@ -387,6 +429,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `model.primary`: format `provider/model` (e.g. `openai/gpt-5.5` for OpenAI API-key or Codex OAuth access). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `responsesServerCompaction`, `responsesCompactThreshold`, `chat_template_kwargs`, `extra_body`/`extraBody`).
   - Use `provider/*` entries such as `"openai-codex/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
+  - Add `agentRuntime` to a `provider/*` entry when every dynamically discovered model for that provider should use the same runtime. Exact `provider/model` runtime policy still wins over the wildcard.
   - Safe edits: use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add entries. `config set` refuses replacements that would remove existing allowlist entries unless you pass `--replace`.
   - Provider-scoped configure/onboarding flows merge selected provider models into this map and preserve unrelated providers already configured.
   - For direct OpenAI Responses models, server-side compaction is enabled automatically. Use `params.responsesServerCompaction: false` to stop injecting `context_management`, or `params.responsesCompactThreshold` to override the threshold. See [OpenAI server-side compaction](/providers/openai#server-side-compaction-responses-api).
@@ -394,7 +437,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `params` merge precedence (config): `agents.defaults.params` (global base) is overridden by `agents.defaults.models["provider/model"].params` (per-model), then `agents.list[].params` (matching agent id) overrides by key. See [Prompt Caching](/reference/prompt-caching) for details.
 - `params.extra_body`/`params.extraBody`: advanced pass-through JSON merged into `api: "openai-completions"` request bodies for OpenAI-compatible proxies. If it collides with generated request keys, the extra body wins; non-native completions routes still strip OpenAI-only `store` afterward.
 - `params.chat_template_kwargs`: vLLM/OpenAI-compatible chat-template arguments merged into top-level `api: "openai-completions"` request bodies. For `vllm/nemotron-3-*` with thinking off, the bundled vLLM plugin automatically sends `enable_thinking: false` and `force_nonempty_content: true`; explicit `chat_template_kwargs` override generated defaults, and `extra_body.chat_template_kwargs` still has final precedence. For vLLM Qwen thinking controls, set `params.qwenThinkingFormat` to `"chat-template"` or `"top-level"` on that model entry.
-- `compat.thinkingFormat`: OpenAI-compatible thinking payload style. Use `"qwen"` for Qwen-style top-level `enable_thinking`, or `"qwen-chat-template"` for `chat_template_kwargs.enable_thinking` on Qwen-family backends that support request-level chat-template kwargs, such as vLLM. OpenClaw maps disabled thinking to `false` and enabled thinking to `true`.
+- `compat.thinkingFormat`: OpenAI-compatible thinking payload style. Use `"together"` for Together-style `reasoning.enabled`, `"qwen"` for Qwen-style top-level `enable_thinking`, or `"qwen-chat-template"` for `chat_template_kwargs.enable_thinking` on Qwen-family backends that support request-level chat-template kwargs, such as vLLM. OpenClaw maps disabled thinking to `false` and enabled thinking to `true`.
 - `compat.supportedReasoningEfforts`: per-model OpenAI-compatible reasoning effort list. Include `"xhigh"` for custom endpoints that truly accept it; OpenClaw then exposes `/think xhigh` in command menus, Gateway session rows, session patch validation, agent CLI validation, and `llm-task` validation for that configured provider/model. Use `compat.reasoningEffortMap` when the backend wants a provider-specific value for a canonical level.
 - `params.preserveThinking`: Z.AI-only opt-in for preserved thinking. When enabled and thinking is on, OpenClaw sends `thinking.clear_thinking: false` and replays prior `reasoning_content`; see [Z.AI thinking and preserved thinking](/providers/zai#thinking-and-preserved-thinking).
 - `localService`: optional provider-level process manager for local/self-hosted model servers. When the selected model belongs to that provider, OpenClaw probes `healthUrl` (or `baseUrl + "/models"`), starts `command` with `args` if the endpoint is down, waits up to `readyTimeoutMs`, then sends the model request. `command` must be an absolute path. `idleStopMs: 0` keeps the process alive until OpenClaw exits; a positive value stops the OpenClaw-spawned process after that many idle milliseconds. See [Local model services](/gateway/local-model-services).
@@ -420,6 +463,9 @@ Time format in system prompt. Default: `auto` (OS preference).
         "anthropic/claude-opus-4-7": {
           agentRuntime: { id: "claude-cli" },
         },
+        "vllm/*": {
+          agentRuntime: { id: "pi" },
+        },
       },
     },
   },
@@ -428,6 +474,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 
 - `id`: `"auto"`, `"pi"`, a registered plugin harness id, or a supported CLI backend alias. The bundled Codex plugin registers `codex`; the bundled Anthropic plugin provides the `claude-cli` CLI backend.
 - `id: "auto"` lets registered plugin harnesses claim supported turns and uses PI when no harness matches. An explicit plugin runtime such as `id: "codex"` requires that harness and fails closed if it is unavailable or fails.
+- Runtime precedence is exact model policy first (`agents.list[].models["provider/model"]`, `agents.defaults.models["provider/model"]`, or `models.providers.<provider>.models[]`), then `agents.list[]` / `agents.defaults.models["provider/*"]`, then provider-wide policy at `models.providers.<provider>.agentRuntime`.
 - Whole-agent runtime keys are legacy. `agents.defaults.agentRuntime`, `agents.list[].agentRuntime`, session runtime pins, and `OPENCLAW_AGENT_RUNTIME` are ignored by runtime selection. Run `openclaw doctor --fix` to remove stale values.
 - OpenAI agent models use the Codex harness by default; provider/model `agentRuntime.id: "codex"` remains valid when you want to make that explicit.
 - For Claude CLI deployments, prefer `model: "anthropic/claude-opus-4-7"` plus model-scoped `agentRuntime.id: "claude-cli"`. Legacy `claude-cli/claude-opus-4-7` model refs still work for compatibility, but new config should keep provider/model selection canonical and put the execution backend in provider/model runtime policy.
@@ -461,8 +508,8 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
   agents: {
     defaults: {
       cliBackends: {
-        "codex-cli": {
-          command: "/opt/homebrew/bin/codex",
+        "claude-cli": {
+          command: "/opt/homebrew/bin/claude",
         },
         "my-cli": {
           command: "my-cli",
@@ -542,7 +589,7 @@ Periodic heartbeat runs.
         includeSystemPromptSection: true, // default: true; false omits the Heartbeat section from the system prompt
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
         isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
-        skipWhenBusy: false, // default: false; true also waits for subagent/nested lanes
+        skipWhenBusy: false, // default: false; true also waits for this agent's subagent/nested lanes
         session: "main",
         to: "+15555550123",
         directPolicy: "allow", // allow (default) | block
@@ -564,7 +611,7 @@ Periodic heartbeat runs.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
-- `skipWhenBusy`: when true, heartbeat runs defer on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeats, even without this flag.
+- `skipWhenBusy`: when true, heartbeat runs defer on that agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeats, even without this flag.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
@@ -615,6 +662,36 @@ Periodic heartbeat runs.
 - `maxActiveTranscriptBytes`: optional byte threshold (`number` or strings like `"20mb"`) that triggers normal local compaction before a run when the active JSONL grows past the threshold. Requires `truncateAfterCompaction` so successful compaction can rotate to a smaller successor transcript. Disabled when unset or `0`.
 - `notifyUser`: when `true`, sends brief notices to the user when compaction starts and when it completes (for example, "Compacting context..." and "Compaction complete"). Disabled by default to keep compaction silent.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. Skipped when workspace is read-only.
+
+### `agents.defaults.runRetries`
+
+Outer run loop retry iteration boundaries for the embedded Pi runner to prevent infinite execution loops during failure recovery. Note that this setting currently only applies to the embedded agent runtime, not ACP or CLI runtimes.
+
+```json5
+{
+  agents: {
+    defaults: {
+      runRetries: {
+        base: 24,
+        perProfile: 8,
+        min: 32,
+        max: 160,
+      },
+    },
+    list: [
+      {
+        id: "main",
+        runRetries: { max: 50 }, // optional per-agent overrides
+      },
+    ],
+  },
+}
+```
+
+- `base`: base number of run retry iterations for the outer run loop. Default: `24`.
+- `perProfile`: additional run retry iterations granted per fallback profile candidate. Default: `8`.
+- `min`: minimum absolute limit for run retry iterations. Default: `32`.
+- `max`: maximum absolute limit for run retry iterations to prevent runaway execution. Default: `160`.
 
 ### `agents.defaults.contextPruning`
 
@@ -885,6 +962,7 @@ Transport is SSH into the OpenShell sandbox, but the plugin owns sandbox lifecyc
 **Containers default to `network: "none"`** — set to `"bridge"` (or a custom bridge network) if the agent needs outbound access.
 `"host"` is blocked. `"container:<id>"` is blocked by default unless you explicitly set
 `sandbox.docker.dangerouslyAllowContainerNamespaceJoin: true` (break-glass).
+Codex app-server turns in an active OpenClaw sandbox use this same egress setting for their native code-mode network access.
 
 **Inbound attachments** are staged into `media/inbound/*` in the active workspace.
 
@@ -1250,13 +1328,13 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
     ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all
     removeAckAfterReply: false,
     queue: {
-      mode: "steer", // steer | queue (legacy one-at-a-time) | followup | collect | steer-backlog | steer+backlog | interrupt
+      mode: "followup", // steer | followup | collect | interrupt
       debounceMs: 500,
       cap: 20,
       drop: "summarize", // old | new | summarize
       byChannel: {
-        whatsapp: "steer",
-        telegram: "steer",
+        whatsapp: "followup",
+        telegram: "followup",
       },
     },
     inbound: {
@@ -1295,9 +1373,14 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
 - `removeAckAfterReply`: removes ack after reply on reaction-capable channels such as Slack, Discord, Telegram, WhatsApp, and iMessage.
-- `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, and Telegram.
+- `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, Telegram, and WhatsApp.
   On Slack and Discord, unset keeps status reactions enabled when ack reactions are active.
-  On Telegram, set it explicitly to `true` to enable lifecycle status reactions.
+  On Telegram and WhatsApp, set it explicitly to `true` to enable lifecycle status reactions.
+- `messages.statusReactions.emojis`: overrides lifecycle emoji keys:
+  `queued`, `thinking`, `compacting`, `tool`, `coding`, `web`, `deploy`, `build`,
+  `concierge`, `done`, `error`, `stallSoft`, and `stallHard`.
+  Telegram only allows a fixed reaction set, so unsupported configured emoji fall back
+  to the nearest supported status variant for that chat.
 
 ### Inbound debounce
 

@@ -443,7 +443,11 @@ describe("exec notifyOnExit suppression", () => {
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("partial output");
     expect(options.sessionKey).toBe("agent:main:main");
-    expect(requestHeartbeatMock).toHaveBeenCalled();
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:main:main");
   });
 
   it("still notifies for no-output background exec timeouts", async () => {
@@ -452,7 +456,11 @@ describe("exec notifyOnExit suppression", () => {
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("Exec failed");
     expect(options.sessionKey).toBe("agent:main:main");
-    expect(requestHeartbeatMock).toHaveBeenCalled();
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:main:main");
   });
 });
 
@@ -481,6 +489,7 @@ describe("emitExecSystemEvent", () => {
         to: "telegram:-100123:topic:47",
         threadId: 47,
       },
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     const heartbeat = requireHeartbeatCall();
@@ -499,6 +508,7 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "agent:ops:primary",
       contextKey: "exec:run-cron",
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
@@ -520,6 +530,7 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "global",
       contextKey: "exec:run-global",
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
@@ -529,7 +540,7 @@ describe("emitExecSystemEvent", () => {
     expect(heartbeatParams.agentId).toBe("ops");
     expect(heartbeatParams.coalesceMs).toBe(0);
     expect(heartbeatParams.reason).toBe("exec-event");
-    expect(requestHeartbeatMock.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
+    expect(requireHeartbeatCall()).not.toHaveProperty("sessionKey");
   });
 
   it("keeps wake unscoped for non-agent session keys", () => {
@@ -541,6 +552,7 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "global",
       contextKey: "exec:run-global",
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     const heartbeat = requireHeartbeatCall();
@@ -555,6 +567,22 @@ describe("emitExecSystemEvent", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+  });
+
+  it("skips heartbeat wake for subagent session keys", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "agent:main:subagent:abc-123",
+      contextKey: "exec:run-sub",
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "agent:main:subagent:abc-123",
+      contextKey: "exec:run-sub",
+      deliveryContext: undefined,
+      forceSenderIsOwnerFalse: true,
+      trusted: false,
+    });
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 });

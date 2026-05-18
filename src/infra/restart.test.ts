@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
@@ -29,7 +30,6 @@ let triggerOpenClawRestart: typeof import("./restart.js").triggerOpenClawRestart
 
 let currentTimeMs = 0;
 const envSnapshot = captureFullEnv();
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
 beforeAll(async () => {
   ({ __testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
@@ -55,20 +55,19 @@ afterEach(() => {
   envSnapshot.restore();
   __testing.setSleepSyncOverride(null);
   __testing.setDateNowOverride(null);
-  if (originalPlatformDescriptor) {
-    Object.defineProperty(process, "platform", originalPlatformDescriptor);
-  }
   vi.restoreAllMocks();
 });
 
 function setPlatform(platform: NodeJS.Platform): void {
-  if (!originalPlatformDescriptor) {
-    return;
+  mockProcessPlatform(platform);
+}
+
+function requireFirstSpawnSyncCall(): [unknown, unknown, unknown] {
+  const [call] = spawnSyncMock.mock.calls;
+  if (!call) {
+    throw new Error("expected spawnSync call");
   }
-  Object.defineProperty(process, "platform", {
-    ...originalPlatformDescriptor,
-    value: platform,
-  });
+  return call as [unknown, unknown, unknown];
 }
 
 describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => {
@@ -168,7 +167,7 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
     expect(killed).toEqual([stalePid]);
     expect(resolveGatewayPortMock).not.toHaveBeenCalled();
     expect(spawnSyncMock).toHaveBeenCalledTimes(2);
-    const [command, args, options] = spawnSyncMock.mock.calls[0] ?? [];
+    const [command, args, options] = requireFirstSpawnSyncCall();
     expect(command).toBe("/usr/sbin/lsof");
     expect(args).toEqual(["-nP", "-iTCP:19999", "-sTCP:LISTEN", "-Fpc"]);
     expect((options as { encoding?: unknown; timeout?: unknown } | undefined)?.encoding).toBe(

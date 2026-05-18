@@ -964,9 +964,9 @@ export type PluginEmbeddingProvider = {
   id: string;
   model: string;
   maxInputTokens?: number;
-  embedQuery: (text: string) => Promise<number[]>;
-  embedBatch: (texts: string[]) => Promise<number[][]>;
-  embedBatchInputs?: (inputs: unknown[]) => Promise<number[][]>;
+  embedQuery: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>;
+  embedBatch: (texts: string[], options?: { signal?: AbortSignal }) => Promise<number[][]>;
+  embedBatchInputs?: (inputs: unknown[], options?: { signal?: AbortSignal }) => Promise<number[][]>;
   client?: unknown;
 };
 
@@ -1120,6 +1120,7 @@ export type ProviderPluginWizardSetup = {
   choiceHint?: string;
   assistantPriority?: number;
   assistantVisibility?: "visible" | "manual-only";
+  onboardingFeatured?: boolean;
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
@@ -1128,7 +1129,7 @@ export type ProviderPluginWizardSetup = {
    * Interactive onboarding surfaces where this auth choice should appear.
    * Defaults to `["text-inference"]` when omitted.
    */
-  onboardingScopes?: Array<"text-inference" | "image-generation">;
+  onboardingScopes?: Array<"text-inference" | "image-generation" | "music-generation">;
   /**
    * Optional model-allowlist prompt policy applied after this auth choice is
    * selected in configure/onboarding flows.
@@ -2255,6 +2256,7 @@ export type OpenClawGatewayDiscoveryAdvertiseContext = {
   gatewayPort: number;
   gatewayTlsEnabled: boolean;
   gatewayTlsFingerprintSha256?: string;
+  gatewayDirectReachable: boolean;
   canvasPort?: number;
   tailnetDns?: string;
   sshPort?: number;
@@ -2275,6 +2277,10 @@ export type OpenClawPluginServiceContext = {
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;
+  startupTrace?: {
+    detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+    measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
+  };
   internalDiagnostics?: {
     emit: (event: DiagnosticEventInput) => void;
     onEvent: (
@@ -2347,7 +2353,13 @@ export type PluginConfigMigration = (config: OpenClawConfig) =>
   | null
   | undefined;
 
-export type MigrationItemStatus = "planned" | "migrated" | "skipped" | "conflict" | "error";
+export type MigrationItemStatus =
+  | "planned"
+  | "migrated"
+  | "skipped"
+  | "warning"
+  | "conflict"
+  | "error";
 export type MigrationItemKind =
   | "config"
   | "secret"
@@ -2415,6 +2427,10 @@ export type MigrationApplyResult = MigrationPlan & {
   reportDir?: string;
 };
 
+export type MigrationProviderPreparation = {
+  dispose?: () => void | Promise<void>;
+};
+
 export type MigrationProviderContext = {
   config: OpenClawConfig;
   runtime?: PluginRuntime;
@@ -2423,6 +2439,7 @@ export type MigrationProviderContext = {
   source?: string;
   includeSecrets?: boolean;
   overwrite?: boolean;
+  providerOptions?: Record<string, unknown>;
   backupPath?: string;
   reportDir?: string;
   signal?: AbortSignal;
@@ -2434,6 +2451,9 @@ export type MigrationProviderPlugin = {
   label: string;
   description?: string;
   detect?: (ctx: MigrationProviderContext) => MigrationDetection | Promise<MigrationDetection>;
+  prepareApply?: (
+    ctx: MigrationProviderContext,
+  ) => MigrationProviderPreparation | Promise<MigrationProviderPreparation | undefined> | undefined;
   plan: (ctx: MigrationProviderContext) => MigrationPlan | Promise<MigrationPlan>;
   apply: (
     ctx: MigrationProviderContext,

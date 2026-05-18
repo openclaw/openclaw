@@ -722,7 +722,7 @@ describe("subagent registry persistence", () => {
     await waitForRegistryWork(() => vi.mocked(callGateway).mock.calls.length > 0);
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    const [request] = vi.mocked(callGateway).mock.calls[0] ?? [];
+    const [request] = vi.mocked(callGateway).mock.calls.at(0) ?? [];
     expectFields(request, { method: "agent.wait" });
     expectFields((request as { params?: unknown } | undefined)?.params, { runId });
     expect(
