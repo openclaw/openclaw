@@ -731,8 +731,12 @@ describe("gateway agent handler", () => {
       { reqId: "test-session-start-hook-auto-rotation" },
     );
 
-    // #83507 follow-up: end-hook fires for the OLD session id with resumedFrom
-    // metadata for the rotation, matching sessions.reset's lifecycle pairing.
+    // #83507 follow-up: end-hook fires for the OLD session id with the
+    // rotation-cause-derived `reason`, matching sessions.reset's lifecycle
+    // pairing. This test exercises the client-supplied-new-sessionId path,
+    // which classifies as `"new"` (the same reason sessions.reset emits for
+    // the /new slash command). Daily-reset and transcript-missing paths
+    // produce `"daily"` and `"deleted"` respectively.
     expect(mocks.emitGatewaySessionEndPluginHook).toHaveBeenCalledTimes(1);
     expect(mocks.emitGatewaySessionEndPluginHook).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -742,7 +746,7 @@ describe("gateway agent handler", () => {
         sessionFile: "/tmp/openclaw/agents/main/sessions/old-session-id.jsonl",
         storePath: "/tmp/sessions.json",
         agentId: "main",
-        reason: "daily",
+        reason: "new",
         nextSessionId: "new-session-id",
         nextSessionKey: "agent:main:main",
       }),

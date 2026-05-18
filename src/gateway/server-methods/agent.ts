@@ -985,6 +985,21 @@ export const agentHandlers: GatewayRequestHandlers = {
       // prior session was rotated.
       let previousSessionId: string | undefined;
       let previousSessionFile: string | undefined;
+      // #83507 follow-up: classify the rotation cause so the session_end
+      // hook's `reason` field can be derived instead of always sending
+      // `"daily"`. Plugin session-state bookkeeping branches on this field
+      // — misclassifying an idle/explicit/failed rotation as daily would
+      // corrupt plugin state. Defaults to "unknown" if we can't determine.
+      let rotationReason:
+        | "new"
+        | "reset"
+        | "idle"
+        | "daily"
+        | "compaction"
+        | "deleted"
+        | "shutdown"
+        | "restart"
+        | "unknown" = "unknown";
       let skipTimestampInjection = false;
       let shouldPrependStartupContext = false;
 
@@ -1136,6 +1151,19 @@ export const agentHandlers: GatewayRequestHandlers = {
         if (rotatedSessionId && entry?.sessionId) {
           previousSessionId = entry.sessionId;
           previousSessionFile = entry.sessionFile;
+          // Derive the rotation cause for the session_end hook reason:
+          // - Client supplied a different sessionId → "new" (matches
+          //   sessions.reset's reason for the /new slash command).
+          // - Previous session's transcript file disappeared → "deleted".
+          // - Otherwise the rotation came from freshness expiry, which the
+          //   policy treats as the daily-reset boundary → "daily".
+          if (usableRequestedSessionId && entry.sessionId !== usableRequestedSessionId) {
+            rotationReason = "new";
+          } else if (failedSessionTranscriptMissing) {
+            rotationReason = "deleted";
+          } else if (!canReuseSession) {
+            rotationReason = "daily";
+          }
         }
         const touchInteraction =
           request.bootstrapContextRunKind !== "cron" &&
@@ -1565,7 +1593,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                 storePath: resolvedSessionStorePath,
                 sessionFile: previousSessionFile,
                 agentId: resolveAgentIdFromSessionKey(resolvedSessionKey),
-                reason: "daily",
+                reason: rotationReason,
                 nextSessionId: resolvedSessionId,
                 nextSessionKey: resolvedSessionKey,
               });
