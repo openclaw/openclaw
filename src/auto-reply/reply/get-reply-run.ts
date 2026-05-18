@@ -1044,12 +1044,14 @@ export async function runPreparedReply(
       imageOrder: opts?.imageOrder,
     }),
   );
+  const queuedFollowupAbortSignal =
+    inboundEventKind === "room_event" ? opts?.abortSignal : undefined;
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
     currentInboundEventKind: inboundEventKind,
     currentInboundContext,
-    abortSignal: opts?.abortSignal,
+    ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     queuedLifecycle: opts?.queuedFollowupLifecycle,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
