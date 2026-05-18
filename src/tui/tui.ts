@@ -348,6 +348,12 @@ const TUI_SHUTDOWN_DRAIN_IDLE_MS = 100;
 const TUI_SHUTDOWN_HARD_EXIT_MS = 2000;
 const TUI_PROCESS_EXIT_AFTER_RETURN_MS = 2000;
 
+type TuiProcessExitTimer = {
+  unref?: () => void;
+};
+
+type TuiProcessExitTimeout = (callback: () => void, delayMs: number) => TuiProcessExitTimer;
+
 export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
   if (typeof tui.terminal?.drainInput === "function") {
     try {
@@ -362,13 +368,15 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
 export function scheduleProcessExitAfterTuiReturn(
   params: {
     delayMs?: number;
-    setTimeoutFn?: typeof setTimeout;
+    setTimeoutFn?: TuiProcessExitTimeout;
     exit?: (code?: number) => never | void;
     writeStderr?: (text: string) => void;
   } = {},
-): ReturnType<typeof setTimeout> {
+): TuiProcessExitTimer {
   const delayMs = Math.max(0, Math.floor(params.delayMs ?? TUI_PROCESS_EXIT_AFTER_RETURN_MS));
-  const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
+  const setTimeoutFn =
+    params.setTimeoutFn ??
+    ((callback, timeoutMs) => setTimeout(callback, timeoutMs) as unknown as TuiProcessExitTimer);
   const exit = params.exit ?? ((code?: number) => process.exit(code));
   const writeStderr =
     params.writeStderr ??

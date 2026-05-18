@@ -420,7 +420,7 @@ describe("TUI shutdown safety", () => {
     const setTimeoutFn = vi.fn((fn: () => void, ms: number) => {
       callback = fn;
       expect(ms).toBe(2000);
-      return { unref } as ReturnType<typeof setTimeout>;
+      return { unref };
     });
     const exit = vi.fn();
     const writeStderr = vi.fn();
