@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Sessions: skip trailing custom transcript entries when checking tail assistant replies so embedded CLI gap-fill does not duplicate canonical assistant output. (#83635) Thanks @yaoyi1222.
 - Telegram: keep verbose tool progress visible without mirroring non-final progress into active session transcripts, preventing embedded provider replies from aborting mid-run. (#83631) Thanks @kurplunkin.
 - Cron: link isolated scheduled task runs to their stable cron session so task status and cleanup can follow the backing agent run. (#83606) Thanks @jai.
 - CLI: enforce the documented Node.js 22.19 runtime floor in the source launcher.
