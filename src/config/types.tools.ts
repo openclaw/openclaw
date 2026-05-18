@@ -308,6 +308,8 @@ export type ExecToolConfig = {
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */
   safeBins?: string[];
+  /** Paths that exec commands may not reference (supports recursive glob suffixes). */
+  deniedPaths?: string[];
   /**
    * Require explicit approval for interpreter inline-eval forms (`python -c`, `node -e`, etc.).
    * Prevents silent allowlist reuse and allow-always persistence for those forms.

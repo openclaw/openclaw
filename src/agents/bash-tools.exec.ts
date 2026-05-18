@@ -1218,6 +1218,155 @@ function rejectUnsafeControlShellCommand(command: string): void {
   }
 }
 
+type DeniedExecPathPattern = {
+  root: string;
+  recursive: boolean;
+};
+
+function normalizeDeniedExecPathPatterns(
+  entries: string[] | undefined,
+  workdir: string | undefined,
+): DeniedExecPathPattern[] {
+  const patterns: DeniedExecPathPattern[] = [];
+  for (const entry of entries ?? []) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const recursive = trimmed.endsWith("/**") || trimmed.endsWith("\\**");
+    const rawRoot = recursive ? trimmed.slice(0, -3) : trimmed;
+    const rootInput =
+      rawRoot || (trimmed.startsWith("/") ? path.parse(path.resolve("/")).root : "");
+    if (!rootInput) {
+      continue;
+    }
+    const root = path.isAbsolute(rootInput)
+      ? path.resolve(rootInput)
+      : path.resolve(workdir ?? process.cwd(), rootInput);
+    patterns.push({ root, recursive });
+  }
+  return patterns;
+}
+
+function expandExecPathToken(token: string): string[] {
+  const trimmed = token.trim();
+  if (!trimmed) {
+    return [];
+  }
+  const candidates = new Set<string>([trimmed]);
+  const withoutRedirect = trimmed.replace(/^(?:\d*(?:>>?|<<?)|&>|>\|)/u, "");
+  if (withoutRedirect !== trimmed && withoutRedirect) {
+    candidates.add(withoutRedirect);
+  }
+  const assignmentIndex = trimmed.indexOf("=");
+  if (assignmentIndex > 0 && assignmentIndex < trimmed.length - 1) {
+    candidates.add(trimmed.slice(assignmentIndex + 1));
+  }
+  return Array.from(candidates);
+}
+
+function resolveExecPathCandidate(params: {
+  raw: string;
+  workdir: string | undefined;
+  env: NodeJS.ProcessEnv;
+}): string | null {
+  const value = params.raw.trim();
+  if (!value || value === "-") {
+    return null;
+  }
+  if (path.isAbsolute(value)) {
+    return path.resolve(value);
+  }
+  if (value === "~" || value.startsWith("~/")) {
+    const home = normalizeOptionalString(params.env.HOME);
+    if (!home) {
+      return null;
+    }
+    return path.resolve(home, value.slice(2));
+  }
+  if (/^\.{1,2}(?:[\\/]|$)/u.test(value) || value.includes("/") || value.includes("\\")) {
+    return path.resolve(params.workdir ?? process.cwd(), value);
+  }
+  return null;
+}
+
+function collectExecPathCandidates(params: {
+  command: string;
+  workdir: string | undefined;
+  env: NodeJS.ProcessEnv;
+}): string[] {
+  const tokens: string[] = [];
+  const analysis = analyzeShellCommand({
+    command: params.command,
+    cwd: params.workdir,
+    env: params.env,
+    platform: process.platform,
+  });
+  if (analysis.ok) {
+    for (const segment of analysis.segments) {
+      tokens.push(...segment.argv);
+      const rawArgv = segment.raw ? splitShellArgs(segment.raw.trim()) : null;
+      if (rawArgv) {
+        tokens.push(...rawArgv);
+      }
+    }
+  } else {
+    const argv = splitShellArgs(params.command);
+    if (argv) {
+      tokens.push(...argv);
+    }
+  }
+
+  const candidates = new Set<string>();
+  for (const token of tokens) {
+    for (const expanded of expandExecPathToken(token)) {
+      const candidate = resolveExecPathCandidate({
+        raw: expanded,
+        workdir: params.workdir,
+        env: params.env,
+      });
+      if (candidate) {
+        candidates.add(candidate);
+      }
+    }
+  }
+  return Array.from(candidates);
+}
+
+function pathMatchesDeniedPattern(candidate: string, pattern: DeniedExecPathPattern): boolean {
+  if (!pattern.recursive) {
+    return candidate === pattern.root;
+  }
+  const rootPrefix = pattern.root.endsWith(path.sep) ? pattern.root : `${pattern.root}${path.sep}`;
+  return candidate === pattern.root || candidate.startsWith(rootPrefix);
+}
+
+function assertExecDeniedPaths(params: {
+  deniedPaths: string[] | undefined;
+  command: string;
+  workdir: string | undefined;
+  env: NodeJS.ProcessEnv;
+}): void {
+  const patterns = normalizeDeniedExecPathPatterns(params.deniedPaths, params.workdir);
+  if (patterns.length === 0) {
+    return;
+  }
+  const candidates = collectExecPathCandidates({
+    command: params.command,
+    workdir: params.workdir,
+    env: params.env,
+  });
+  if (params.workdir) {
+    candidates.push(path.resolve(params.workdir));
+  }
+  for (const candidate of candidates) {
+    const matched = patterns.find((pattern) => pathMatchesDeniedPattern(candidate, pattern));
+    if (matched) {
+      throw new Error(`Security Violation: exec command references denied path ${candidate}`);
+    }
+  }
+}
+
 export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
@@ -1520,6 +1669,13 @@ export function createExecTool(
       } else {
         applyPathPrepend(env, defaultPathPrepend);
       }
+
+      assertExecDeniedPaths({
+        deniedPaths: defaults?.deniedPaths,
+        command: params.command,
+        workdir,
+        env,
+      });
 
       if (host === "node") {
         return executeNodeHostCommand({

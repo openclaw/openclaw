@@ -13,6 +13,7 @@ export type ExecToolDefaults = {
   node?: string;
   pathPrepend?: string[];
   safeBins?: string[];
+  deniedPaths?: string[];
   strictInlineEval?: boolean;
   commandHighlighting?: boolean;
   safeBinTrustedDirs?: string[];

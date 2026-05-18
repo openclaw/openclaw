@@ -260,6 +260,23 @@ describe("exec PATH login shell merge", () => {
 });
 
 describe("exec host env validation", () => {
+  it("blocks commands that target configured denied paths before host execution", async () => {
+    const deniedRoot = path.join(os.tmpdir(), "openclaw-denied-secrets");
+    const deniedFile = path.join(deniedRoot, "provider.key");
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      deniedPaths: [path.join(deniedRoot, "**")],
+    });
+
+    await expect(
+      tool.execute("call-denied-path", {
+        command: `cat "${deniedFile}"`,
+      }),
+    ).rejects.toThrow(`Security Violation: exec command references denied path ${deniedFile}`);
+  });
+
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 

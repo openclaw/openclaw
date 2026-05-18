@@ -298,6 +298,7 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     node: agentExec?.node ?? globalExec?.node,
     pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
+    deniedPaths: agentExec?.deniedPaths ?? globalExec?.deniedPaths,
     strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
     commandHighlighting: resolveExecCommandHighlighting({
       config: cfg,
@@ -737,6 +738,7 @@ export function createOpenClawCodingTools(options?: {
         node: options?.exec?.node ?? execConfig.node,
         pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
         safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
+        deniedPaths: options?.exec?.deniedPaths ?? execConfig.deniedPaths,
         strictInlineEval: options?.exec?.strictInlineEval ?? execConfig.strictInlineEval,
         commandHighlighting: options?.exec?.commandHighlighting ?? execConfig.commandHighlighting,
         safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
