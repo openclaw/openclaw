@@ -742,14 +742,14 @@ export async function runEmbeddedPiAgent(
       startupStages.mark("model-resolution");
       notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
-      const pluginHarnessNeedsOpenClawAuthBootstrap =
+      const pluginHarnessSupportsOpenClawAuthBootstrap =
         pluginHarnessOwnsTransport &&
         provider === OPENAI_CODEX_PROVIDER_ID &&
         effectiveModel.api === "openai-codex-responses";
       const authStore =
-        pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
+        pluginHarnessOwnsTransport && !pluginHarnessSupportsOpenClawAuthBootstrap
           ? createEmptyAuthProfileStore()
-          : pluginHarnessNeedsOpenClawAuthBootstrap
+          : pluginHarnessSupportsOpenClawAuthBootstrap
             ? ensureAuthProfileStore(agentDir, {
                 externalCliProviderIds: [OPENAI_CODEX_PROVIDER_ID],
                 allowKeychainPrompt: false,
@@ -759,7 +759,7 @@ export async function runEmbeddedPiAgent(
                 allowKeychainPrompt: false,
               }));
       const attemptAuthProfileStore =
-        pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
+        pluginHarnessOwnsTransport && !pluginHarnessSupportsOpenClawAuthBootstrap
           ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
               allowKeychainPrompt: false,
             })
@@ -823,6 +823,8 @@ export async function runEmbeddedPiAgent(
       const pluginHarnessProfileOrder = pluginHarnessOwnsTransport
         ? resolvePluginHarnessProfileOrder()
         : [];
+      const pluginHarnessNeedsOpenClawAuthBootstrap =
+        pluginHarnessSupportsOpenClawAuthBootstrap && pluginHarnessProfileOrder.length > 0;
       const resolvePluginHarnessPreferredProfileId = (): string | undefined =>
         pluginHarnessProfileOrder[0];
       const preferredProfileId = pluginHarnessOwnsTransport
