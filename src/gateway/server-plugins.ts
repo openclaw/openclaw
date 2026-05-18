@@ -8,7 +8,7 @@ import { clearActivatedPluginRuntimeState, loadOpenClawPlugins } from "../plugin
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
+import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
@@ -46,21 +46,6 @@ const getFallbackGatewayContextState = () =>
     context: undefined,
     resolveContext: undefined,
   }));
-
-const pluginRegistryGatewayContexts = new WeakMap<PluginRegistry, GatewayRequestContext>();
-
-export function setPluginRegistryGatewayContext(
-  registry: PluginRegistry,
-  context: GatewayRequestContext,
-): void {
-  pluginRegistryGatewayContexts.set(registry, context);
-}
-
-export function getPluginRegistryGatewayContext(
-  registry: PluginRegistry,
-): GatewayRequestContext | undefined {
-  return pluginRegistryGatewayContexts.get(registry);
-}
 
 export function setFallbackGatewayContext(ctx: GatewayRequestContext): () => void {
   const fallbackGatewayContextState = getFallbackGatewayContextState();

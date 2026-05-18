@@ -13,7 +13,6 @@ import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "../method-scopes.js";
 import { isApprovalRecordVisibleToClient } from "../server-methods/approval-shared.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
-import { setPluginRegistryGatewayContext } from "../server-plugins.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./plugins-http.js";
@@ -192,44 +191,82 @@ describe("plugin HTTP route runtime scopes", () => {
     });
   });
 
-  it("uses the server-local gateway context when routes resolve from the active registry", async () => {
-    const serverRegistry = createTestRegistry();
-    const serverContext = { label: "server-gateway" } as unknown as GatewayRequestContext;
-    const activeContext = { label: "active-gateway" } as unknown as GatewayRequestContext;
-    let observedContext: GatewayRequestContext | undefined;
-    const activeRegistry = createTestRegistry({
+  it("uses server-local routes and gateway context when the active registry belongs to another gateway", async () => {
+    const serverAContext = { label: "server-a" } as unknown as GatewayRequestContext;
+    const serverBContext = { label: "server-b" } as unknown as GatewayRequestContext;
+    const observed: Array<{ route: string; context?: GatewayRequestContext }> = [];
+    const serverARegistry = createTestRegistry({
       httpRoutes: [
         createRoute({
           path: "/secure-hook",
           auth: "gateway",
           handler: async () => {
-            observedContext = getPluginRuntimeGatewayRequestScope()?.context;
+            const context = getPluginRuntimeGatewayRequestScope()?.context;
+            observed.push({ route: "server-a", ...(context ? { context } : {}) });
+            return true;
+          },
+        }),
+      ],
+    });
+    const serverBRegistry = createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: "/secure-hook",
+          auth: "gateway",
+          handler: async () => {
+            const context = getPluginRuntimeGatewayRequestScope()?.context;
+            observed.push({ route: "server-b", ...(context ? { context } : {}) });
             return true;
           },
         }),
       ],
     });
 
-    setPluginRegistryGatewayContext(serverRegistry, serverContext);
-    setPluginRegistryGatewayContext(activeRegistry, activeContext);
-    setActivePluginRegistry(activeRegistry);
-    pinActivePluginHttpRouteRegistry(activeRegistry);
+    setActivePluginRegistry(serverBRegistry);
+    pinActivePluginHttpRouteRegistry(serverBRegistry);
 
-    const handler = createGatewayPluginRequestHandler({
-      registry: serverRegistry,
+    const handlerA = createGatewayPluginRequestHandler({
+      registry: serverARegistry,
+      getRouteRegistry: () => serverARegistry,
       log: createMockLogger(),
+      getGatewayRequestContext: () => serverAContext,
+    });
+    const handlerB = createGatewayPluginRequestHandler({
+      registry: serverBRegistry,
+      getRouteRegistry: () => serverBRegistry,
+      log: createMockLogger(),
+      getGatewayRequestContext: () => serverBContext,
     });
 
-    const { res } = makeMockHttpResponse();
-    const handled = await handler({ url: "/secure-hook" } as IncomingMessage, res, undefined, {
-      gatewayAuthSatisfied: true,
-      gatewayRequestOperatorScopes: ["operator.write"],
-    });
+    const responseA = makeMockHttpResponse();
+    const handledA = await handlerA(
+      { url: "/secure-hook" } as IncomingMessage,
+      responseA.res,
+      undefined,
+      {
+        gatewayAuthSatisfied: true,
+        gatewayRequestOperatorScopes: ["operator.write"],
+      },
+    );
+    const responseB = makeMockHttpResponse();
+    const handledB = await handlerB(
+      { url: "/secure-hook" } as IncomingMessage,
+      responseB.res,
+      undefined,
+      {
+        gatewayAuthSatisfied: true,
+        gatewayRequestOperatorScopes: ["operator.write"],
+      },
+    );
 
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(200);
-    expect(observedContext).toBe(serverContext);
-    expect(observedContext).not.toBe(activeContext);
+    expect(handledA).toBe(true);
+    expect(handledB).toBe(true);
+    expect(responseA.res.statusCode).toBe(200);
+    expect(responseB.res.statusCode).toBe(200);
+    expect(observed).toEqual([
+      { route: "server-a", context: serverAContext },
+      { route: "server-b", context: serverBContext },
+    ]);
   });
 
   it("does not give approval-scoped gateway-auth routes global approval visibility", async () => {
