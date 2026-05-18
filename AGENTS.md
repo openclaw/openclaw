@@ -111,11 +111,10 @@ Skills own workflows; root owns hard policy and routing.
 - No `@ts-nocheck`. Lint suppressions only intentional + explained.
 - External boundaries: prefer `zod` or existing schema helpers.
 - Runtime branching: discriminated unions/closed codes over freeform strings. Avoid semantic sentinels (`?? 0`, empty object/string).
-- If formatter output becomes a jagged staircase, refactor the expression instead of accepting the formatted shape.
-- For function calls with config objects, compute complex fields above the call; keep object fields simple.
-- Avoid dense inline plumbing: no nested ternaries, long `??` chains, or repeated `params.foo?.bar` inside argument objects.
-- Prefer named intermediate values when a value has domain meaning, e.g. `channel`, `parentSessionKey`, `selectedModelRef`, `sourceProvider`.
-- Code should read top-down: gather inputs, normalize/resolve, then call helpers.
+- Formatter-friendly shape: when oxfmt explodes an expression vertically, extract named booleans, payloads, or small helpers. Do not change width or use format-ignore for local compactness.
+- Calls should be boring: complex decisions happen above; call args/object fields are names, literals, or simple property reads.
+- Prefer early returns over nested condition pyramids. Split code into gather -> normalize -> decide -> act.
+- Use named intermediates only for domain meaning or readability; avoid temp-variable soup.
 - Dynamic import: no static+dynamic import for same prod module. Use `*.runtime.ts` lazy boundary. After edits: `pnpm build`; check `[INEFFECTIVE_DYNAMIC_IMPORT]`.
 - Cycles: keep `pnpm check:import-cycles` + architecture/madge green.
 - Classes: no prototype mixins/mutations. Prefer inheritance/composition. Tests prefer per-instance stubs.
