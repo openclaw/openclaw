@@ -152,7 +152,22 @@ function collectConfiguredProviderIds(cfg: OpenClawConfig): Set<string> {
   for (const providerId of Object.keys(asObjectRecord(cfg.models?.providers) ?? {})) {
     add(providerId);
   }
-  for (const { value } of collectConfiguredModelRefs(cfg)) {
+  const modelByChannel = asObjectRecord(cfg.channels?.modelByChannel);
+  for (const [providerId, channelMap] of Object.entries(modelByChannel ?? {})) {
+    add(providerId);
+    for (const modelRef of Object.values(asObjectRecord(channelMap) ?? {})) {
+      if (typeof modelRef !== "string") {
+        continue;
+      }
+      const slash = modelRef.indexOf("/");
+      if (slash > 0) {
+        add(modelRef.slice(0, slash));
+      }
+    }
+  }
+  for (const { value } of collectConfiguredModelRefs(cfg, {
+    includeChannelModelOverrides: false,
+  })) {
     const slash = value.indexOf("/");
     if (slash > 0) {
       add(value.slice(0, slash));
