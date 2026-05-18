@@ -389,6 +389,16 @@ function summarizeShellCommand(command: string): {
   commandPreview?: string;
 } {
   const decodedCommand = decodeBasicHtmlEntities(command);
+  if (hasShellHereDocument(decodedCommand)) {
+    return {
+      headline: "run a terminal command",
+      actions: ["run a command with embedded shell input"],
+      risk: "high",
+      riskReason:
+        "Here-documents can feed hidden multi-line input into commands, scripts, or remote shells.",
+      commandPreview: buildCommandPreview(decodedCommand),
+    };
+  }
   const expandedSegments = splitCommandSegments(decodedCommand).flatMap((segment) =>
     expandCommandSegment(segment),
   );
@@ -831,6 +841,20 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
     );
   }
 
+  if (hasShellHereDocument(segment)) {
+    return withSudo(
+      {
+        text: "run a command with embedded shell input",
+        risk: "high",
+        kind: "unknown",
+        reason:
+          "Here-documents can feed hidden multi-line input into commands, scripts, or remote shells.",
+        showCommandPreview: true,
+      },
+      sudoPrefix,
+    );
+  }
+
   switch (command) {
     case "cd":
       return withSudo(
@@ -1167,11 +1191,52 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
     case "curl":
     case "wget":
       return withSudo(summarizeNetworkCommand(command, args, segment), sudoPrefix);
+    case "xargs":
+    case "parallel":
+      return withSudo(
+        {
+          text: `run commands for input items with ${command}`,
+          risk: "high",
+          kind: "unknown",
+          reason:
+            "Command fan-out tools can run another command many times using piped or file-provided input.",
+          showCommandPreview: true,
+        },
+        sudoPrefix,
+      );
+    case "watch":
+    case "entr":
+      return withSudo(
+        {
+          text: `rerun another command automatically with ${command}`,
+          risk: "high",
+          kind: "unknown",
+          reason:
+            "Command watcher tools can repeatedly run another command while the approval prompt shows only the wrapper.",
+          showCommandPreview: true,
+        },
+        sudoPrefix,
+      );
+    case "tar":
+    case "unzip":
+    case "zip":
+    case "gzip":
+    case "gunzip":
+    case "7z":
+      return withSudo(summarizeArchiveCommand(command, args, targetText), sudoPrefix);
     case "npm":
     case "pnpm":
     case "yarn":
     case "bun":
       return withSudo(summarizePackageManagerCommand(command, args), sudoPrefix);
+    case "pip":
+    case "pip3":
+    case "uv":
+    case "cargo":
+    case "go":
+    case "gem":
+    case "brew":
+      return withSudo(summarizeEcosystemPackageCommand(command, args), sudoPrefix);
     case "npx":
       return withSudo(
         {
@@ -1184,6 +1249,15 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
       );
     case "git":
       return withSudo(summarizeGitCommand(args), sudoPrefix);
+    case "aws":
+    case "gcloud":
+    case "az":
+    case "kubectl":
+    case "helm":
+    case "terraform":
+    case "op":
+    case "gh":
+      return withSudo(summarizeInfrastructureCommand(command, args, targetText), sudoPrefix);
     case "docker":
     case "docker-compose":
       return withSudo(summarizeDockerCommand(command, args), sudoPrefix);
@@ -1213,6 +1287,14 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
       );
     case "ssh":
       return withSudo(summarizeRemoteCommand(args, targetText), sudoPrefix);
+    case "rclone":
+    case "sftp":
+    case "ftp":
+    case "nc":
+    case "ncat":
+    case "netcat":
+    case "socat":
+      return withSudo(summarizeRemoteTransferCommand(command, targetText), sudoPrefix);
     case "scp":
       return withSudo(
         {
@@ -1279,7 +1361,44 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
         sudoPrefix,
       );
     }
-    case "awk":
+    case "awk": {
+      if (hasAwkSystemCall(args)) {
+        return withSudo(
+          {
+            text: "run awk with shell command execution",
+            risk: "high",
+            kind: "unknown",
+            reason:
+              "awk system() can execute shell commands while appearing to be text processing.",
+            showCommandPreview: true,
+          },
+          sudoPrefix,
+        );
+      }
+      const textInputTargets = getTextProcessorInputTargets(command, args, inputRedirectionTargets);
+      const textSensitiveTarget = textInputTargets.some(isSensitivePath);
+      const textSystemTarget = textInputTargets.some(isSystemPath);
+      return withSudo(
+        {
+          text: redirected
+            ? "process text and write the result"
+            : textInputTargets.length > 0
+              ? `process text from files${formatTargets(textInputTargets)}`
+              : "process text output",
+          risk: redirected || textSensitiveTarget || textSystemTarget ? "medium" : "low",
+          kind: redirected ? "write" : textInputTargets.length > 0 ? "read" : "format",
+          reason: redirected
+            ? "Shell redirection writes to a file."
+            : textSensitiveTarget
+              ? "It may read secret or credential files."
+              : textSystemTarget
+                ? "It may read system-level files."
+                : undefined,
+          hideWhenGrouped: !redirected && textInputTargets.length === 0,
+        },
+        sudoPrefix,
+      );
+    }
     case "cut":
     case "sort":
     case "tr":
@@ -1400,6 +1519,90 @@ function summarizePackageManagerCommand(
     kind: "package",
     reason: "Package manager commands can execute project tooling or change dependencies.",
   };
+}
+
+function summarizeEcosystemPackageCommand(
+  command: string,
+  args: readonly string[],
+): CommandActionSummary {
+  const subcommand = getFirstNonOptionArg(args);
+  const label = subcommand ? `${command} ${subcommand}` : command;
+  return {
+    text: `use package ecosystem tooling (${label})`,
+    risk: "high",
+    kind: "package",
+    reason:
+      "Package ecosystem tools can install dependencies, run project code, or change local developer state.",
+    showCommandPreview: true,
+  };
+}
+
+function summarizeArchiveCommand(
+  command: string,
+  args: readonly string[],
+  targetText: string,
+): CommandActionSummary {
+  if (isArchiveInspectionCommand(command, args)) {
+    return {
+      text: `inspect archive contents${targetText}`,
+      risk: "medium",
+      kind: "read",
+      reason: "Archive inspection can reveal file names from the archive.",
+    };
+  }
+  return {
+    text: `create, extract, or modify archives${targetText}`,
+    risk: "high",
+    kind: "write",
+    reason:
+      "Archive commands can create or overwrite many files, including paths chosen by archive contents.",
+    showCommandPreview: true,
+  };
+}
+
+function isArchiveInspectionCommand(command: string, args: readonly string[]): boolean {
+  if (command === "tar") {
+    return args.some((arg) => /^-[A-Za-z]*t[A-Za-z]*$/.test(arg) || arg === "--list");
+  }
+  if (command === "unzip") {
+    return args.includes("-l") || args.includes("-Z");
+  }
+  if (command === "7z") {
+    return ["l", "t"].includes(args.find((arg) => arg && !arg.startsWith("-")) ?? "");
+  }
+  return false;
+}
+
+function summarizeInfrastructureCommand(
+  command: string,
+  args: readonly string[],
+  targetText: string,
+): CommandActionSummary {
+  const subcommand = getFirstNonOptionArg(args);
+  const action = subcommand ? `${command} ${subcommand}` : command;
+  return {
+    text: `run cloud, infrastructure, or credential tooling (${action})${targetText}`,
+    risk: "high",
+    kind: "service",
+    reason:
+      "Cloud and infrastructure CLIs can read secrets, change remote resources, or deploy code outside this machine.",
+    showCommandPreview: true,
+  };
+}
+
+function summarizeRemoteTransferCommand(command: string, targetText: string): CommandActionSummary {
+  return {
+    text: `transfer data over the network with ${command}${targetText}`,
+    risk: "high",
+    kind: "remote",
+    reason:
+      "Remote transfer tools can send local files outside this machine or write files received from another host.",
+    showCommandPreview: true,
+  };
+}
+
+function getFirstNonOptionArg(args: readonly string[]): string {
+  return args.find((arg) => arg && !arg.startsWith("-")) ?? "";
 }
 
 const PACKAGE_MANAGER_INSTALL_SUBCOMMANDS = new Set(["install", "i", "add", "update", "upgrade"]);
@@ -1711,6 +1914,16 @@ function summarizeDockerCommand(command: string, args: readonly string[]): Comma
   const text = words.join(" ");
   if (/\b(?:logs|ps|inspect|images|compose\s+ls)\b/.test(text)) {
     return { text: `inspect Docker/container state (${text})`, risk: "low", kind: "service" };
+  }
+  if (/\b(?:exec|login|push|run)\b/.test(text)) {
+    return {
+      text: `run Docker command execution or registry operation (${text})`,
+      risk: "high",
+      kind: "service",
+      reason:
+        "Docker exec/run/login/push commands can run code, expose credentials, or publish data.",
+      showCommandPreview: true,
+    };
   }
   if (/\b(?:down|kill|prune|rm|stop)\b/.test(text)) {
     return {
@@ -2108,6 +2321,14 @@ function hasShellExecutionExpansion(segment: string): boolean {
     escaped = false;
   }
   return false;
+}
+
+function hasShellHereDocument(segment: string): boolean {
+  return /(^|[\s;&|])\d*<<-?(?![<])\s*(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s;&|]+)/.test(segment);
+}
+
+function hasAwkSystemCall(args: readonly string[]): boolean {
+  return args.some((arg) => /\bsystem\s*\(/.test(stripShellWordQuotes(arg)));
 }
 
 function hasVariableShellCommandHead(segment: string): boolean {
