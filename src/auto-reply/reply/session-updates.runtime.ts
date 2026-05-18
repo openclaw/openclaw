@@ -1,1 +1,1 @@
-export { ensureSkillSnapshot } from "./session-updates.js";
+export { ensureSkillSnapshot, prewarmMirroredSession } from "./session-updates.js";

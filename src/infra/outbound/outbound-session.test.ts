@@ -9,10 +9,14 @@ type InboundMetadataParams = {
 };
 
 const mocks = vi.hoisted(() => ({
-  recordSessionMetaFromInbound: vi.fn(async (_params: InboundMetadataParams) => ({ ok: true })),
+  recordSessionMetaFromInbound: vi.fn(
+    async (_params: InboundMetadataParams) =>
+      null as { sessionId: string; updatedAt: number } | null,
+  ),
   resolveStorePath: vi.fn(
     (_store: unknown, params?: { agentId?: string }) => `/stores/${params?.agentId ?? "main"}.json`,
   ),
+  prewarmMirroredSession: vi.fn(async () => undefined),
 }));
 
 function firstMockArg(
@@ -33,6 +37,10 @@ function firstMockArg(
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
   recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
   resolveStorePath: mocks.resolveStorePath,
+}));
+
+vi.mock("../../auto-reply/reply/session-updates.runtime.js", () => ({
+  prewarmMirroredSession: mocks.prewarmMirroredSession,
 }));
 
 describe("resolveOutboundSessionRoute", () => {
@@ -483,6 +491,7 @@ describe("ensureOutboundSessionEntry", () => {
   beforeEach(() => {
     mocks.recordSessionMetaFromInbound.mockClear();
     mocks.resolveStorePath.mockClear();
+    mocks.prewarmMirroredSession.mockClear();
   });
 
   it("persists metadata in the owning session store for the route session key", async () => {
@@ -513,5 +522,37 @@ describe("ensureOutboundSessionEntry", () => {
     );
     expect(metadata.storePath).toBe("/stores/main.json");
     expect(metadata.sessionKey).toBe("agent:main:workspace:channel:c1");
+  });
+
+  it("prewarms mirrored outbound sessions before the first callback turn", async () => {
+    const cfg = {
+      session: {
+        store: "/stores/{agentId}.json",
+      },
+    } as OpenClawConfig;
+    mocks.recordSessionMetaFromInbound.mockResolvedValueOnce({
+      sessionId: "sess-1",
+      updatedAt: 1,
+    });
+
+    await ensureOutboundSessionEntry({
+      cfg,
+      channel: "telegram",
+      route: {
+        sessionKey: "agent:main:telegram:group:-100123:topic:42",
+        baseSessionKey: "agent:main:telegram:group:-100123",
+        peer: { kind: "group", id: "-100123:topic:42" },
+        chatType: "group",
+        from: "telegram:group:-100123:topic:42",
+        to: "telegram:-100123",
+        threadId: 42,
+      },
+    });
+
+    expect(mocks.prewarmMirroredSession).toHaveBeenCalledWith({
+      cfg,
+      storePath: "/stores/main.json",
+      sessionKey: "agent:main:telegram:group:-100123:topic:42",
+    });
   });
 });
