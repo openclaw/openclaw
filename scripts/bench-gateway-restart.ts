@@ -61,7 +61,6 @@ type GatewayRestartFailureCode =
   | "restart_deadline_timeout"
   | "restart_signal_failed"
   | "restart_child_exited"
-  | "no_unavailable_window"
   | "next_healthz_timeout"
   | "next_readyz_timeout"
   | "ready_log_timeout"
@@ -1165,9 +1164,6 @@ function resolveIterationFailure(iteration: RestartIteration): GatewayRestartFai
   if (typeof iteration.restartTrace["restart.ready.total"] !== "number") {
     return "trace_missing";
   }
-  if (iteration.healthz.unavailableMs === null && iteration.readyz.unavailableMs === null) {
-    return "no_unavailable_window";
-  }
   return null;
 }
 
@@ -1508,7 +1504,7 @@ async function runGatewaySample(options: {
       console.error(
         `[gateway-restart-bench] ${options.benchCase.id} restart ${index}/${options.restarts}: readyz=${formatMs(iteration.readyz.ms)} downtime=${formatMs(iteration.readyz.downtimeMs ?? iteration.healthz.downtimeMs)} restartReady=${formatMs(traceValue(iteration, "restart.ready.total"))} cpu=${formatMs(iteration.cpuMs)} rss=${formatMb(traceValue(iteration, "restart.ready.rssMb", "restart.ready.memory.ready.rssMb") ?? lastSnapshotValue(iteration, "rssMb"))} failure=${iteration.failureCode ?? "none"}`,
       );
-      if (iteration.failureCode && iteration.failureCode !== "no_unavailable_window") {
+      if (iteration.failureCode) {
         failureCode = iteration.failureCode;
         break;
       }

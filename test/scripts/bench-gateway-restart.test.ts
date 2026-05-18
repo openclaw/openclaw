@@ -209,6 +209,33 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
     expect(__testing.resolveRestartDeadlineFailure(true)).toBe("restart_child_exited");
   });
 
+  it("does not fail successful restarts when probes miss the unavailable window", () => {
+    const iteration = __testing.createRestartIteration(1);
+    iteration.gatewayReadyLogMs = 40;
+    iteration.gatewayReadyLogLine = "[gateway] ready";
+    iteration.healthz = {
+      downtimeMs: null,
+      firstErrorKind: null,
+      firstRecoveryMs: null,
+      ms: 24,
+      status: 200,
+      transitions: [],
+      unavailableMs: null,
+    };
+    iteration.readyz = {
+      downtimeMs: null,
+      firstErrorKind: null,
+      firstRecoveryMs: null,
+      ms: 26,
+      status: 200,
+      transitions: [],
+      unavailableMs: null,
+    };
+    iteration.restartTrace = { "restart.ready.total": 35 };
+
+    expect(__testing.finalizeRestartIteration(iteration, false, () => {})).toBeNull();
+  });
+
   it("summarizes failure rate, restart.ready totals, and resource slope", () => {
     const result = __testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
       {
