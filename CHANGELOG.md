@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers/Xiaomi: replay MiMo Anthropic-compatible `reasoning_content` as provider-required thinking blocks even when OpenClaw thinking is disabled, fixing follow-up tool turns for `mimo-v2-flash`. Fixes #83407. Thanks @Xgenious7.
 - Agents/exec approvals: forward approval-runtime credentials on agent-owned Gateway approval calls so approved async commands complete through the existing runtime path instead of stalling on unauthenticated follow-up calls. Thanks @IWhatsskill, @Patrick-Erichsen, and @jesse-merhi.
 - Gateway/skills: preflight remote macOS skill-bin refreshes with a WebSocket connectivity check so stale node sessions skip quickly instead of logging slow `system.which` timeout warnings.
 - GitHub Copilot: drop unsafe native Responses reasoning replay items with non-replayable IDs before dispatch, preventing affected Copilot sessions from failing with `invalid_request_body`. Fixes #83220. Thanks @galiniliev.
