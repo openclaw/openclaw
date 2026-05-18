@@ -1,4 +1,5 @@
-import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
+import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
+import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -154,24 +155,27 @@ function buildUnavailableResult(params: {
   };
 }
 
-function resolveProbeApiKey(providerCfg: ModelProviderConfig | undefined, provider: string): string | undefined {
-  // First try the provider config's apiKey field
-  const configKey = providerCfg?.apiKey;
-  if (configKey && typeof configKey === "string" && configKey.trim()) {
-    return configKey.trim();
-  }
-  // Try direct env var: LITELLM_API_KEY, VLLM_API_KEY, SGLANG_API_KEY, etc.
-  const upperName = provider.toUpperCase().replace(/[^A-Z0-9_]/g, "");
-  const directKey = process.env[upperName + "_API_KEY"];
-  if (directKey?.trim()) {
-    return directKey.trim();
-  }
-  // Fall back to env var lookup via provider-registered env var names
+async function resolveProbeApiKey(
+  providerCfg: ModelProviderConfig | undefined,
+  provider: string,
+  cfg: OpenClawConfig,
+): Promise<string | undefined> {
+  // Use the same API key resolution chain as normal inference calls
+  // (getApiKeyForModel → resolveApiKeyForProvider). This checks all sources:
+  // config apiKey, env vars, auth-profiles.json, OAuth tokens, plugin synthetic auth.
   try {
-    const envResult = resolveEnvApiKey(provider, process.env);
-    if (envResult?.apiKey) return envResult.apiKey;
+    const agentDir = resolveOpenClawAgentDir();
+    const result = await resolveApiKeyForProvider({
+      provider,
+      cfg,
+      agentDir,
+      env: process.env,
+    });
+    if (result.apiKey && typeof result.apiKey === "string" && result.apiKey.trim()) {
+      return result.apiKey.trim();
+    }
   } catch {
-    // ignore resolution errors
+    // If resolution fails, probe without auth (existing behavior for authless providers)
   }
   return undefined;
 }
@@ -234,7 +238,7 @@ export async function preflightCronModelProvider(params: {
 
   let result: EndpointPreflightResult;
   try {
-    const probeApiKey = resolveProbeApiKey(providerConfig, params.provider);
+    const probeApiKey = await resolveProbeApiKey(providerConfig, params.provider, params.cfg);
     await probeLocalProviderEndpoint({
       api,
       baseUrl,
