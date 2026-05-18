@@ -1185,14 +1185,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       (entry): entry is SessionMessageEntry =>
         entry.type === "message" && entry.message.role === "assistant",
     );
-    expect(assistantMessages).toHaveLength(3);
+    expect(assistantMessages).toHaveLength(2);
     expect(JSON.stringify(assistantMessages[0]?.message)).toContain(`MEDIA:${mediaUrl}`);
+    expect(JSON.stringify(assistantMessages[0]?.message)).toContain("Earlier image.");
     expect(JSON.stringify(assistantMessages[1]?.message)).toContain("A newer assistant turn.");
-    expect((assistantMessages[2]?.message as { idempotencyKey?: unknown }).idempotencyKey).toBe(
+    expect(JSON.stringify(assistantMessages)).not.toContain(
       "idem-agent-media-current-only:assistant-media",
     );
-    expect(JSON.stringify(assistantMessages[2]?.message)).toContain("Current image.");
-    expect(JSON.stringify(assistantMessages[2]?.message)).not.toContain(`MEDIA:${mediaUrl}`);
+    expect(JSON.stringify(assistantMessages)).not.toContain("Current image.");
   });
 
   it("replaces raw final MEDIA transcript replies before appending normalized media", async () => {
