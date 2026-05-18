@@ -48,11 +48,7 @@ function normalizeChannelId(value: string | undefined | null): string {
 }
 
 export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {
-  const normalized = normalizeChannelId(channel);
-  if (normalized === "telegram") {
-    return true;
-  }
-  return resolveDefaultTopLevelPlacement(normalized) === "child";
+  return resolveDefaultTopLevelPlacement(channel) === "child";
 }
 
 export function requiresNativeThreadContextForThreadHere(channel: string): boolean {

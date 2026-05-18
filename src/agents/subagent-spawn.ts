@@ -73,6 +73,8 @@ import {
   resolveSandboxRuntimeStatus,
   updateSessionStore,
   isAdminOnlyMethod,
+  getSessionBindingService,
+  resolveConversationDeliveryTarget,
 } from "./subagent-spawn.runtime.js";
 import {
   type SpawnSubagentContextMode,
@@ -691,6 +693,35 @@ function hasRoutableDeliveryOrigin(
   return Boolean(origin?.channel && origin.to);
 }
 
+function resolveBoundThreadDeliveryOrigin(params: {
+  childSessionKey: string;
+}): DeliveryContext | undefined {
+  const bindings = getSessionBindingService()
+    .listBySession(params.childSessionKey)
+    .filter((binding) => binding.status !== "inactive");
+  for (const binding of bindings) {
+    const conversation = binding.conversation;
+    if (!conversation.parentConversationId) {
+      continue;
+    }
+    const target = resolveConversationDeliveryTarget({
+      channel: conversation.channel,
+      conversationId: conversation.conversationId,
+      parentConversationId: conversation.parentConversationId,
+    });
+    const origin = normalizeDeliveryContext({
+      channel: conversation.channel,
+      accountId: conversation.accountId,
+      to: target.to,
+      ...(target.threadId != null && target.threadId !== "" ? { threadId: target.threadId } : {}),
+    });
+    if (hasRoutableDeliveryOrigin(origin)) {
+      return origin;
+    }
+  }
+  return undefined;
+}
+
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
@@ -1007,26 +1038,12 @@ export async function spawnSubagentDirect(
       };
     }
     threadBindingReady = true;
-    hasBoundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(bindResult.deliveryOrigin);
-    if (spawnMode === "session" && !hasBoundThreadDeliveryOrigin) {
-      try {
-        await callSubagentGateway({
-          method: "sessions.delete",
-          params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
-          timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
-        });
-      } catch {
-        // Best-effort cleanup only.
-      }
-      return {
-        status: "error",
-        error:
-          "Thread-bound session hook returned threadBindingReady=true without a routable deliveryOrigin; refusing to mix bound-session delivery with auto-announce.",
-        childSessionKey,
-      };
-    }
+    const boundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(bindResult.deliveryOrigin)
+      ? bindResult.deliveryOrigin
+      : resolveBoundThreadDeliveryOrigin({ childSessionKey });
+    hasBoundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(boundThreadDeliveryOrigin);
     childSessionOrigin =
-      mergeDeliveryContext(bindResult.deliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
+      mergeDeliveryContext(boundThreadDeliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
   }
   const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
 

@@ -63,6 +63,22 @@ describe("readSubagentOutput", () => {
     expect(deps.readLatestAssistantReply).not.toHaveBeenCalled();
   });
 
+  it("filters unsafe fallback assistant output", async () => {
+    const deps = installOutputDeps({
+      messages: [],
+      latestAssistantReply: JSON.stringify({
+        url: "https://example.test/page",
+        status: 200,
+        contentType: "text/html",
+        text: "SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source",
+        externalContent: { untrusted: true },
+      }),
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+    expect(deps.readLatestAssistantReply).toHaveBeenCalledOnce();
+  });
+
   it("returns final assistant output that arrives after a sessions_yield wait turn", async () => {
     installOutputDeps({
       messages: [

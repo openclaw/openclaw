@@ -32,3 +32,5 @@ export {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "./tools/sessions-helpers.js";
+export { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
+export { resolveConversationDeliveryTarget } from "../utils/delivery-context.js";

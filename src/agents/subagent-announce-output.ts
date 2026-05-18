@@ -387,7 +387,9 @@ export async function readSubagentOutput(
     sessionKey,
     limit: 100,
   });
-  return latestAssistant?.trim() ? latestAssistant : undefined;
+  return latestAssistant?.trim() && !isUnsafeSubagentOutputText(latestAssistant)
+    ? latestAssistant
+    : undefined;
 }
 
 export async function readLatestSubagentOutputWithRetry(params: {
