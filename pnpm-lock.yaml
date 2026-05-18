@@ -1736,6 +1736,9 @@ importers:
       dompurify:
         specifier: 3.4.3
         version: 3.4.3
+      highlight.js:
+        specifier: 10.7.3
+        version: 10.7.3
       json5:
         specifier: 2.2.3
         version: 2.2.3
