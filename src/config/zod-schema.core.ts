@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import {
   formatExecSecretRefIdValidationMessage,
@@ -438,8 +439,8 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "zai",
 ]);
 
-function isBuiltInModelProviderOverlayId(providerId: string): boolean {
-  return BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS.has(providerId.trim().toLowerCase());
+export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
+  return BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS.has(normalizeProviderId(providerId));
 }
 
 const ModelProviderSchema = z

@@ -102,7 +102,7 @@ describe("model provider localService config", () => {
     const result = validateConfigObjectRaw({
       models: {
         providers: {
-          "google-antigravity": {
+          "z.ai": {
             timeoutSeconds: 600,
           },
         },
@@ -110,6 +110,10 @@ describe("model provider localService config", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.models?.providers?.["z.ai"]?.models).toEqual([]);
+      expect(result.config.models?.providers?.["z.ai"]?.baseUrl).toBe("");
+    }
   });
 
   it("still requires baseUrl and models for custom provider declarations", () => {
