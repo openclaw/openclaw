@@ -131,6 +131,9 @@ describe("resolveSourceReplyDeliveryMode", () => {
         },
       }),
     ).toBe("automatic");
+  });
+
+  it("keeps unauthorized text slash command turns tool-only under the default group mode", () => {
     expect(
       resolveSourceReplyDeliveryMode({
         cfg: emptyConfig,
@@ -141,7 +144,7 @@ describe("resolveSourceReplyDeliveryMode", () => {
           CommandBody: "/status",
         },
       }),
-    ).toBe("automatic");
+    ).toBe("message_tool_only");
   });
 
   it("uses structured command-turn context for cross-channel visible command replies", () => {

@@ -22,6 +22,15 @@ export function isExplicitSourceReplyCommand(ctx: SourceReplyDeliveryModeContext
   return isExplicitCommandTurn(resolveCommandTurnContext(ctx));
 }
 
+function isUnauthorizedTextSlashCommand(ctx: SourceReplyDeliveryModeContext): boolean {
+  const commandTurn = resolveCommandTurnContext(ctx);
+  return (
+    commandTurn.kind === "text-slash" &&
+    !commandTurn.authorized &&
+    (commandTurn.commandName || commandTurn.body?.trim().startsWith("/") === true)
+  );
+}
+
 export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
@@ -46,6 +55,12 @@ export function resolveSourceReplyDeliveryMode(params: {
     return "automatic";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
+  if (
+    (chatType === "group" || chatType === "channel") &&
+    isUnauthorizedTextSlashCommand(params.ctx)
+  ) {
+    return "message_tool_only";
+  }
   let mode: SourceReplyDeliveryMode;
   if (chatType === "group" || chatType === "channel") {
     const configuredMode =
