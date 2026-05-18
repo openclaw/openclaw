@@ -133,7 +133,7 @@ function supersedeTelegramReplyFenceState(key: string): boolean {
 function supersedeTelegramNonInterruptingReplyFenceChildren(key: string): boolean {
   let superseded = false;
   const childPrefix = buildTelegramNonInterruptingReplyFenceKeyPrefix(key);
-  for (const childKey of [...telegramReplyFenceByKey.keys()]) {
+  for (const childKey of telegramReplyFenceByKey.keys()) {
     if (childKey.startsWith(childPrefix)) {
       superseded = supersedeTelegramReplyFenceState(childKey) || superseded;
     }
