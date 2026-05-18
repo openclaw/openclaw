@@ -790,10 +790,10 @@ export async function performGatewaySessionReset(params: {
       totalTokens: 0,
       totalTokensFresh: true,
     };
-    // Drop the claude-cli `--resume` binding so the next turn after reset
-    // starts a fresh CLI conversation on the provider side. Preserved only
-    // for spawned subagents (canonical `:subagent:` keys), where Tak Hoffman's
-    // fa56682b3ced regression fix intentionally protects CLI continuity for
+    // Drop CLI provider bindings so the next turn after reset starts a fresh
+    // CLI conversation on the provider side. Preserved only for spawned
+    // subagents (canonical `:subagent:` keys), where Tak Hoffman's fa56682b3ced
+    // regression fix intentionally protects CLI continuity for
     // orchestration-driven resets. Non-subagent sessions that happen to set
     // `parentSessionKey` (e.g. dashboard children) are not exempt.
     if (!isSubagentSessionKey(primaryKey)) {
