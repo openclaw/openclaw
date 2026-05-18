@@ -25,11 +25,11 @@ import {
   resolveConfiguredMediaMaxBytes,
   resolveGeneratedMediaMaxBytes,
 } from "../../media/configured-max-bytes.js";
-import { getImageMetadata } from "../../media/image-ops.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
+import { getImageMetadata } from "../../media/media-services.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
