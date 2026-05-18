@@ -110,6 +110,37 @@ function readPayloadToolName(tool: unknown): string | undefined {
   return typeof record.function?.name === "string" ? record.function.name : undefined;
 }
 
+function isCodeModePayloadToolName(name: string | undefined): boolean {
+  return name === "exec" || name === "wait";
+}
+
+function filterCodeModeToolDeclarations(declarations: unknown): unknown[] | undefined {
+  if (!Array.isArray(declarations)) {
+    return undefined;
+  }
+  return declarations.filter((declaration) =>
+    isCodeModePayloadToolName(readPayloadToolName(declaration)),
+  );
+}
+
+function filterCodeModeGroupedToolDeclarations(tool: unknown): Record<string, unknown> | undefined {
+  if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
+    return undefined;
+  }
+  const record = tool as Record<string, unknown>;
+  const filteredGroups: Record<string, unknown> = {};
+  for (const key of ["functionDeclarations", "function_declarations"] as const) {
+    const filtered = filterCodeModeToolDeclarations(record[key]);
+    if (filtered === undefined) {
+      continue;
+    }
+    if (filtered.length > 0) {
+      filteredGroups[key] = filtered;
+    }
+  }
+  return Object.keys(filteredGroups).length > 0 ? filteredGroups : undefined;
+}
+
 function filterCodeModePayloadTools(payload: unknown): void {
   if (!payload || typeof payload !== "object") {
     return;
@@ -118,9 +149,13 @@ function filterCodeModePayloadTools(payload: unknown): void {
   if (!Array.isArray(record.tools)) {
     return;
   }
-  record.tools = record.tools.filter((tool) => {
+  record.tools = record.tools.flatMap((tool) => {
     const name = readPayloadToolName(tool);
-    return name === "exec" || name === "wait";
+    if (isCodeModePayloadToolName(name)) {
+      return [tool];
+    }
+    const grouped = filterCodeModeGroupedToolDeclarations(tool);
+    return grouped ? [grouped] : [];
   });
 }
 

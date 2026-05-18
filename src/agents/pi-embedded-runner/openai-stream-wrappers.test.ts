@@ -232,6 +232,56 @@ describe("createCodexNativeWebSearchWrapper", () => {
       { type: "function", name: "wait" },
     ]);
   });
+
+  it("keeps grouped provider tool declarations when code mode filters the payload", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        model: model.id,
+        tools: [
+          {
+            functionDeclarations: [
+              { name: "exec", description: "Run code" },
+              { name: "read", description: "Read a file" },
+              { name: "wait", description: "Resume code" },
+            ],
+          },
+          { google_search: {} },
+        ],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      codeModeToolSurfaceEnabled: true,
+    });
+
+    void wrapped(
+      {
+        api: "google-generative-ai",
+        provider: "google",
+        id: "gemini-3.1-pro",
+      } as never,
+      {
+        messages: [],
+        tools: [
+          { name: "exec", description: "", parameters: {} },
+          { name: "wait", description: "", parameters: {} },
+        ],
+      },
+      {},
+    );
+
+    expect(payloads[0]?.tools).toEqual([
+      {
+        functionDeclarations: [
+          { name: "exec", description: "Run code" },
+          { name: "wait", description: "Resume code" },
+        ],
+      },
+    ]);
+  });
 });
 
 describe("createOpenAICompletionsStrictMessageKeysWrapper", () => {

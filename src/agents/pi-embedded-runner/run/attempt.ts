@@ -2615,16 +2615,6 @@ export async function runEmbeddedAttempt(
         resolvedApiKey: params.resolvedApiKey,
         authStorage: params.authStorage,
       });
-      if (codeModeControlsEnabledForRun) {
-        activeSession.agent.streamFn = createCodexNativeWebSearchWrapper(
-          activeSession.agent.streamFn,
-          {
-            config: params.config,
-            agentDir,
-            codeModeToolSurfaceEnabled: true,
-          },
-        );
-      }
       const providerTextTransforms = resolveProviderTextTransforms({
         provider: params.provider,
         config: params.config,
@@ -2653,6 +2643,16 @@ export async function runEmbeddedAttempt(
         resolvedTransport,
         { preparedExtraParams: effectiveExtraParams },
       );
+      if (codeModeControlsEnabledForRun) {
+        activeSession.agent.streamFn = createCodexNativeWebSearchWrapper(
+          activeSession.agent.streamFn,
+          {
+            config: params.config,
+            agentDir,
+            codeModeToolSurfaceEnabled: true,
+          },
+        );
+      }
       const effectivePromptCacheRetention = resolveCacheRetention(
         effectiveExtraParams,
         params.provider,
