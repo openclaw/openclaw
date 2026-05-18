@@ -2,8 +2,9 @@ import {
   defineBundledChannelEntry,
   type OpenClawPluginApi,
 } from "openclaw/plugin-sdk/channel-entry-contract";
+import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 
-type RegisteredLineCardCommand = Parameters<OpenClawPluginApi["registerCommand"]>[0];
+type RegisteredLineCardCommand = OpenClawPluginCommandDefinition;
 
 let lineCardCommandPromise: Promise<RegisteredLineCardCommand> | null = null;
 
