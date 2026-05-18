@@ -410,6 +410,8 @@ describe("codex conversation binding", () => {
     let requestHandler:
       | ((request: { method: string; params?: unknown }) => Promise<unknown>)
       | undefined;
+    let foreignThreadResponse: unknown;
+    let foreignTurnResponse: unknown;
     let toolResponse: unknown;
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
@@ -422,6 +424,28 @@ describe("codex conversation binding", () => {
         }
         if (method === "turn/start") {
           setImmediate(async () => {
+            foreignThreadResponse = await requestHandler?.({
+              method: "item/tool/call",
+              params: {
+                threadId: "thread-foreign",
+                turnId: "turn-1",
+                callId: "call-foreign-thread",
+                namespace: null,
+                tool: "test_plugin_echo",
+                arguments: { text: "wrong thread" },
+              },
+            });
+            foreignTurnResponse = await requestHandler?.({
+              method: "item/tool/call",
+              params: {
+                threadId: "thread-new",
+                turnId: "turn-foreign",
+                callId: "call-foreign-turn",
+                namespace: null,
+                tool: "test_plugin_echo",
+                arguments: { text: "wrong turn" },
+              },
+            });
             toolResponse = await requestHandler?.({
               method: "item/tool/call",
               params: {
@@ -503,12 +527,15 @@ describe("codex conversation binding", () => {
     expect(toolFactoryOptions.currentChannelId).toBe("5185575566");
     expect(toolFactoryOptions.messageTo).toBe("5185575566");
     expect(toolFactoryOptions.sessionId).toBe("5185575566");
+    expect(foreignThreadResponse).toBeUndefined();
+    expect(foreignTurnResponse).toBeUndefined();
     expect(execute).toHaveBeenCalledWith(
       "call-1",
       { text: "hello" },
       expect.any(AbortSignal),
       undefined,
     );
+    expect(execute).toHaveBeenCalledTimes(1);
     expect(toolResponse).toEqual({
       contentItems: [{ type: "inputText", text: "echo:hello" }],
       success: true,

@@ -474,18 +474,23 @@ async function runBoundTurn(params: {
     ...agentLookup,
   });
   const collector = createCodexConversationTurnCollector(threadId);
+  let activeTurnId: string | undefined;
   const notificationCleanup = client.addNotificationHandler((notification) =>
     collector.handleNotification(notification),
   );
   const requestCleanup = client.addRequestHandler(
     async (request): Promise<JsonValue | undefined> => {
       if (request.method === "item/tool/call") {
+        // Other bound turns may share this app-server client, so only dispatch
+        // tool calls that target this turn's thread and active turn id.
         const call = readCodexDynamicToolCallParams(request.params);
-        if (!call) {
-          return {
-            contentItems: [{ type: "inputText", text: "Invalid OpenClaw dynamic tool call." }],
-            success: false,
-          };
+        if (
+          !call ||
+          call.threadId !== threadId ||
+          activeTurnId === undefined ||
+          call.turnId !== activeTurnId
+        ) {
+          return undefined;
         }
         return toolBridge.handleToolCall(call, { signal: turnAbortController.signal });
       }
@@ -536,6 +541,7 @@ async function runBoundTurn(params: {
       { timeoutMs: runtime.requestTimeoutMs },
     );
     const turnId = response.turn.id;
+    activeTurnId = turnId;
     const activeCleanup = trackCodexConversationActiveTurn({
       sessionFile: params.data.sessionFile,
       threadId,
