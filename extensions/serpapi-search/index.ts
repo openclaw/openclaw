@@ -12,6 +12,7 @@ import { createSerpApiHotelsTool } from "./src/tools/hotels.js";
 import { createSerpApiJobsTool } from "./src/tools/jobs.js";
 import { createSerpApiLensTool } from "./src/tools/lens.js";
 import { createSerpApiMapsTool } from "./src/tools/maps.js";
+import { createSerpApiMapsReviewsTool } from "./src/tools/maps-reviews.js";
 import { createSerpApiNewsTool } from "./src/tools/news.js";
 import { createSerpApiScholarTool } from "./src/tools/scholar.js";
 import { createSerpApiShoppingTool } from "./src/tools/shopping.js";
@@ -28,6 +29,7 @@ export default definePluginEntry({
     api.registerTool((ctx) => createSerpApiNewsTool(api, ctx), { name: "serpapi_news" });
     api.registerTool((ctx) => createSerpApiScholarTool(api, ctx), { name: "serpapi_scholar" });
     api.registerTool((ctx) => createSerpApiMapsTool(api, ctx), { name: "serpapi_maps" });
+    api.registerTool((ctx) => createSerpApiMapsReviewsTool(api, ctx), { name: "serpapi_maps_reviews" });
     api.registerTool((ctx) => createSerpApiShoppingTool(api, ctx), { name: "serpapi_shopping" });
     api.registerTool((ctx) => createSerpApiAiOverviewTool(api, ctx), { name: "serpapi_ai_overview" });
     api.registerTool((ctx) => createSerpApiAmazonTool(api, ctx), { name: "serpapi_amazon" });
