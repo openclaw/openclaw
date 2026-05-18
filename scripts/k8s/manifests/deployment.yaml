@@ -31,6 +31,8 @@ spec:
             - |
               set -eu
               mkdir -p /home/node/.openclaw/workspace
+              # Seed once from ConfigMap, then keep PVC as the source of truth.
+              # This preserves user-edited runtime config (for example provider keys).
               if [ ! -f /home/node/.openclaw/openclaw.json ]; then
                 cp /config/openclaw.json /home/node/.openclaw/openclaw.json
               fi
