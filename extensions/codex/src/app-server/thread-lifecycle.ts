@@ -806,6 +806,7 @@ function compareJsonFingerprint(left: JsonValue, right: JsonValue): number {
 export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
     surface: "codex_app_server",
+    includeLegacyGlobalGuidance: false,
   }).join("\n");
   const sections = [
     "Running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes capabilities when available.",
@@ -813,7 +814,6 @@ export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): st
     buildVisibleReplyInstruction(params),
     nativeCommandGuidance,
     params.extraSystemPrompt,
-    params.skillsSnapshot?.prompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
 }

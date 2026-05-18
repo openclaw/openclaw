@@ -68,6 +68,18 @@ describe("Codex app-server native code mode config", () => {
     );
   });
 
+  it("keeps OpenClaw skill catalogs out of developer instructions", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.skillsSnapshot = {
+      prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+      skills: [],
+    };
+
+    const instructions = buildDeveloperInstructions(params);
+
+    expect(instructions).not.toContain("<available_skills>");
+  });
+
   it("enables Codex code mode on thread/start without clobbering other config", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",

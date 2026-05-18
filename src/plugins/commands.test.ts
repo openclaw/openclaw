@@ -438,6 +438,12 @@ describe("registerPluginCommand", () => {
       "Use /demo_cmd everywhere.",
       "Use /demo_cmd for subagents.",
     ]);
+    expect(
+      listRegisteredPluginAgentPromptGuidance({
+        surface: "subagent",
+        includeLegacyGlobalGuidance: false,
+      }),
+    ).toEqual(["Use /demo_cmd for subagents."]);
   });
 
   it("matches underscore aliases for hyphenated command names", () => {

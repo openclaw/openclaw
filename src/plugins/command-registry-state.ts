@@ -64,12 +64,16 @@ export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {
 
 export function listRegisteredPluginAgentPromptGuidance(params?: {
   surface?: AgentPromptSurfaceKind;
+  includeLegacyGlobalGuidance?: boolean;
 }): string[] {
   const lines: string[] = [];
   const seen = new Set<string>();
   for (const command of pluginCommands.values()) {
     for (const entry of command.agentPromptGuidance ?? []) {
-      const trimmed = resolveAgentPromptGuidanceTextForSurface(entry, params?.surface);
+      const trimmed = resolveAgentPromptGuidanceTextForSurface(entry, {
+        surface: params?.surface,
+        includeLegacyGlobalGuidance: params?.includeLegacyGlobalGuidance ?? true,
+      });
       if (!trimmed || seen.has(trimmed)) {
         continue;
       }
@@ -82,16 +86,22 @@ export function listRegisteredPluginAgentPromptGuidance(params?: {
 
 function resolveAgentPromptGuidanceTextForSurface(
   entry: AgentPromptGuidance,
-  surface?: AgentPromptSurfaceKind,
+  params: {
+    surface?: AgentPromptSurfaceKind;
+    includeLegacyGlobalGuidance: boolean;
+  },
 ): string | undefined {
   if (typeof entry === "string") {
-    return entry.trim();
+    return params.includeLegacyGlobalGuidance ? entry.trim() : undefined;
   }
   const text = entry.text.trim();
-  if (!surface || !entry.surfaces || entry.surfaces.length === 0) {
+  if (!params.surface) {
     return text;
   }
-  return entry.surfaces.includes(surface) ? text : undefined;
+  if (!entry.surfaces || entry.surfaces.length === 0) {
+    return params.includeLegacyGlobalGuidance ? text : undefined;
+  }
+  return entry.surfaces.includes(params.surface) ? text : undefined;
 }
 
 export function restorePluginCommands(commands: readonly RegisteredPluginCommand[]): void {
