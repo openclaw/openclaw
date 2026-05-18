@@ -8,14 +8,21 @@ describe("feishu tools config", () => {
     expect(resolved.chat).toBe(true);
   });
 
-  it("accepts tools.chat in config schema", () => {
+  it("keeps message tools disabled by default", () => {
+    const resolved = resolveToolsConfig(undefined);
+    expect(resolved.messages).toBe(false);
+  });
+
+  it("accepts tool gates in config schema", () => {
     const parsed = FeishuConfigSchema.parse({
       enabled: true,
       tools: {
         chat: false,
+        messages: false,
       },
     });
 
     expect(parsed.tools?.chat).toBe(false);
+    expect(parsed.tools?.messages).toBe(false);
   });
 });

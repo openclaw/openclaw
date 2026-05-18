@@ -4,6 +4,7 @@ import type { FeishuToolsConfig } from "./types.js";
  * Default tool configuration.
  * - doc, chat, wiki, drive, scopes: enabled by default
  * - perm: disabled by default (sensitive operation)
+ * - messages: disabled by default (message list/delete/recall/read-receipts are sensitive)
  */
 const DEFAULT_TOOLS_CONFIG: Required<FeishuToolsConfig> = {
   doc: true,
@@ -12,6 +13,7 @@ const DEFAULT_TOOLS_CONFIG: Required<FeishuToolsConfig> = {
   drive: true,
   perm: false,
   scopes: true,
+  messages: false,
 };
 
 /**

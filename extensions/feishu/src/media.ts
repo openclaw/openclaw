@@ -26,6 +26,7 @@ import {
   toFeishuSendResult,
 } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
+import { recordFeishuSentMessage } from "./sent-message-cache.js";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const FEISHU_VOICE_FILE_NAME = "voice.ogg";
@@ -588,6 +589,20 @@ export type SendMediaResult = {
   voiceIntentDegradedToFile?: boolean;
 };
 
+function recordSentMediaResult(params: {
+  cfg: ClawdbotConfig;
+  accountId?: string | null;
+  result: SendMediaResult;
+}): SendMediaResult {
+  recordFeishuSentMessage({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    chatId: params.result.chatId,
+    messageId: params.result.messageId,
+  });
+  return params.result;
+}
+
 /**
  * Upload an image to Feishu and get an image_key for sending.
  * Supports: JPEG, PNG, WEBP, GIF, TIFF, BMP, ICO
@@ -698,7 +713,12 @@ export async function sendImageFeishu(params: {
   accountId?: string;
 }): Promise<SendMediaResult> {
   const { cfg, to, imageKey, replyToMessageId, replyInThread, accountId } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+  const {
+    client,
+    receiveId,
+    receiveIdType,
+    accountId: resolvedAccountId,
+  } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
@@ -720,7 +740,11 @@ export async function sendImageFeishu(params: {
       { includeNestedErrorLogId: true },
     );
     assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
-    return toFeishuSendResult(response, receiveId, "media");
+    return recordSentMediaResult({
+      cfg,
+      accountId: resolvedAccountId,
+      result: toFeishuSendResult(response, receiveId, "media"),
+    });
   }
 
   const response = await requestFeishuApi(
@@ -737,7 +761,11 @@ export async function sendImageFeishu(params: {
     { includeNestedErrorLogId: true },
   );
   assertFeishuMessageApiSuccess(response, "Feishu image send failed");
-  return toFeishuSendResult(response, receiveId, "media");
+  return recordSentMediaResult({
+    cfg,
+    accountId: resolvedAccountId,
+    result: toFeishuSendResult(response, receiveId, "media"),
+  });
 }
 
 /**
@@ -755,7 +783,12 @@ export async function sendFileFeishu(params: {
 }): Promise<SendMediaResult> {
   const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
   const msgType = params.msgType ?? "file";
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+  const {
+    client,
+    receiveId,
+    receiveIdType,
+    accountId: resolvedAccountId,
+  } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
@@ -777,7 +810,11 @@ export async function sendFileFeishu(params: {
       { includeNestedErrorLogId: true },
     );
     assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
-    return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
+    return recordSentMediaResult({
+      cfg,
+      accountId: resolvedAccountId,
+      result: toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType)),
+    });
   }
 
   const response = await requestFeishuApi(
@@ -794,7 +831,11 @@ export async function sendFileFeishu(params: {
     { includeNestedErrorLogId: true },
   );
   assertFeishuMessageApiSuccess(response, "Feishu file send failed");
-  return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
+  return recordSentMediaResult({
+    cfg,
+    accountId: resolvedAccountId,
+    result: toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType)),
+  });
 }
 
 /**

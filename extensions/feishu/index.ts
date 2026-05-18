@@ -53,6 +53,14 @@ function registerFeishuBitableTools(api: OpenClawPluginApi) {
   register(api);
 }
 
+function registerFeishuMessageTools(api: OpenClawPluginApi) {
+  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
+    specifier: "./api.js",
+    exportName: "registerFeishuMessageTools",
+  });
+  register(api);
+}
+
 export default defineBundledChannelEntry({
   id: "feishu",
   name: "Feishu",
@@ -78,5 +86,6 @@ export default defineBundledChannelEntry({
     registerFeishuDriveTools(api);
     registerFeishuPermTools(api);
     registerFeishuBitableTools(api);
+    registerFeishuMessageTools(api);
   },
 });
