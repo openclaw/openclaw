@@ -242,6 +242,14 @@ function extractMarkerField(marker, name) {
   return match?.[1] ?? "";
 }
 
+function isTrustedClawSweeperComment(comment) {
+  const user = comment?.user ?? comment?.author ?? {};
+  const login = String(user?.login ?? "").toLowerCase();
+  const type = String(user?.type ?? "").toLowerCase();
+  const appSlug = String(comment?.performed_via_github_app?.slug ?? "").toLowerCase();
+  return appSlug === "clawsweeper" || (login === "clawsweeper[bot]" && type === "bot");
+}
+
 export function hasClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}) {
   const pullNumber = String(pullRequest?.number ?? "");
   const headSha = String(pullRequest?.head?.sha ?? pullRequest?.head_sha ?? "").toLowerCase();
@@ -250,6 +258,9 @@ export function hasClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}
   }
 
   for (const comment of comments) {
+    if (!isTrustedClawSweeperComment(comment)) {
+      continue;
+    }
     const body = String(comment?.body ?? "");
     const markers = body.match(/<!--\s*clawsweeper-verdict:pass\b[\s\S]*?-->/gi) ?? [];
     for (const marker of markers) {
