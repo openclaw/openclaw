@@ -2334,11 +2334,11 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.timeoutMs = 1;
+    params.timeoutMs = 30 * 60 * 1000;
 
-    await expect(runCodexAppServerAttempt(params, { startupTimeoutFloorMs: 1 })).rejects.toThrow(
-      "codex app-server startup timed out",
-    );
+    await expect(
+      runCodexAppServerAttempt(params, { startupTimeoutMs: 1, startupTimeoutFloorMs: 1 }),
+    ).rejects.toThrow("codex app-server startup timed out");
     expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
   });
 
@@ -2938,6 +2938,7 @@ describe("runCodexAppServerAttempt", () => {
           headers: {},
         },
         requestTimeoutMs: 60_000,
+        startupTimeoutMs: 120_000,
         turnCompletionIdleTimeoutMs: 60_000,
         approvalPolicy: "never",
         approvalsReviewer: "user",
