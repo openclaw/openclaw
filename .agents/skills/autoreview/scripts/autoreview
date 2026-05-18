@@ -59,6 +59,7 @@ parallel_tests_auto=false
 dry_run=false
 codex_review_prompt=
 codex_review_stdin_prompt=false
+codex_review_prompt_file=false
 openclaw_maintainer_validation=${AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION:-${OPENCLAW_TESTBOX:-0}}
 
 while [[ $# -gt 0 ]]; do
@@ -249,6 +250,9 @@ EOF
   if [[ "$review_kind" == local ]]; then
     review_cmd+=(-)
     codex_review_stdin_prompt=true
+  else
+    review_cmd=("$codex_bin" "${codex_args[@]}" review -)
+    codex_review_prompt_file=true
   fi
 fi
 
@@ -272,7 +276,7 @@ if [[ "$reviewer" == auto || "$reviewer" == codex ]]; then
   printf 'review:'
   printf ' %q' "${review_cmd[@]}"
   printf '\n'
-  if [[ "$codex_review_stdin_prompt" == true ]]; then
+  if [[ "$codex_review_stdin_prompt" == true || "$codex_review_prompt_file" == true ]]; then
     printf 'review policy: OpenClaw maintainer Crabbox/Testbox-aware validation prompt injected\n'
   fi
 else
@@ -323,7 +327,12 @@ trap cleanup EXIT
 
 run_review() {
   mkdir -p "$(dirname "$review_output")"
-  if [[ "$codex_review_stdin_prompt" == true ]]; then
+  if [[ "$codex_review_prompt_file" == true ]]; then
+    build_prompt_file || return
+    "${review_cmd[@]}" < "$prompt_file" 2>&1 | tee "$review_output"
+    rm -f "$prompt_file"
+    prompt_file=
+  elif [[ "$codex_review_stdin_prompt" == true ]]; then
     printf '%s\n' "$codex_review_prompt" | "${review_cmd[@]}" 2>&1 | tee "$review_output"
   else
     "${review_cmd[@]}" 2>&1 | tee "$review_output"
