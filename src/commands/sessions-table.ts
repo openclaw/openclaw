@@ -26,6 +26,16 @@ export type SessionDisplayRow = {
   modelOverride?: string;
   contextTokens?: number;
   runtimePolicySessionKey?: string;
+  sessionFile?: string;
+  spawnedBy?: string;
+  spawnedWorkspaceDir?: string;
+  spawnDepth?: number;
+  subagentRole?: SessionEntry["subagentRole"];
+  subagentControlScope?: SessionEntry["subagentControlScope"];
+  label?: string;
+  status?: SessionEntry["status"];
+  sessionStartedAt?: number;
+  lastInteractionAt?: number;
 };
 
 export const SESSION_KEY_PAD = 26;
@@ -57,6 +67,16 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
     contextTokens: entry?.contextTokens,
+    sessionFile: entry?.sessionFile,
+    spawnedBy: entry?.spawnedBy,
+    spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
+    spawnDepth: entry?.spawnDepth,
+    subagentRole: entry?.subagentRole,
+    subagentControlScope: entry?.subagentControlScope,
+    label: entry?.label,
+    status: entry?.status,
+    sessionStartedAt: entry?.sessionStartedAt,
+    lastInteractionAt: entry?.lastInteractionAt,
   };
 }
 

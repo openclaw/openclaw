@@ -256,6 +256,58 @@ describe("sessionsCommand", () => {
     expect(main?.runtimePolicySessionKey).toBe("agent:main:telegram:default:direct:42");
   });
 
+  it("exports subagent lineage metadata in JSON output", async () => {
+    const store = writeStore(
+      {
+        "agent:main:subagent:child": {
+          sessionId: "child-session",
+          updatedAt: Date.now() - 60_000,
+          sessionFile: "/tmp/openclaw-child.jsonl",
+          spawnedBy: "agent:main:main",
+          spawnedWorkspaceDir: "/tmp/openclaw-workspace",
+          spawnDepth: 1,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+          label: "review runner",
+          status: "done",
+          sessionStartedAt: Date.now() - 120_000,
+          lastInteractionAt: Date.now() - 30_000,
+        },
+      },
+      "sessions-subagent-metadata",
+    );
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{
+        key: string;
+        sessionFile?: string;
+        spawnedBy?: string;
+        spawnedWorkspaceDir?: string;
+        spawnDepth?: number;
+        subagentRole?: string;
+        subagentControlScope?: string;
+        label?: string;
+        status?: string;
+        sessionStartedAt?: number;
+        lastInteractionAt?: number;
+      }>;
+    }>(sessionsCommand, store);
+
+    const child = payload.sessions?.find((row) => row.key === "agent:main:subagent:child");
+    expect(child).toMatchObject({
+      sessionFile: "/tmp/openclaw-child.jsonl",
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/openclaw-workspace",
+      spawnDepth: 1,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+      label: "review runner",
+      status: "done",
+      sessionStartedAt: Date.now() - 120_000,
+      lastInteractionAt: Date.now() - 30_000,
+    });
+  });
+
   it("uses a default JSON output limit of 100 sessions", () => {
     expect(testing.parseSessionsLimit(undefined)).toBe(100);
   });
