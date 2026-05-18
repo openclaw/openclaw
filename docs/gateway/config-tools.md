@@ -331,7 +331,9 @@ Default: `tree` (current session + sessions spawned by it, such as subagents).
 
 ### `tools.sessions_spawn`
 
-Controls inline attachment support for `sessions_spawn`.
+Controls inline attachment support for `sessions_spawn`. The design contract
+for schema, limits, materialization, redaction, and cleanup lives in
+[`sessions_spawn` attachment contract](/reference/sessions-spawn-attachments-contract).
 
 ```json5
 {

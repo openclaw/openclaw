@@ -131,6 +131,11 @@ replacement for writing a clear task prompt.
 
 ## Tool: `sessions_spawn`
 
+For inline file attachments passed to native sub-agent spawns, see the
+[`sessions_spawn` attachment contract](/reference/sessions-spawn-attachments-contract)
+before changing schema, validation, materialization, redaction, or cleanup
+behavior.
+
 Starts a sub-agent run with `deliver: false` on the global `subagent` lane,
 then runs an announce step and posts the announce reply to the requester
 chat channel.
