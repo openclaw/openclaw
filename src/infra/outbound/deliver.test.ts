@@ -2540,6 +2540,22 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("logs a warning when failDelivery itself rejects on bestEffort partial failure (#83113)", async () => {
+    queueMocks.failDelivery.mockRejectedValueOnce(new Error("queue storage down"));
+
+    await runBestEffortPartialFailureDelivery();
+
+    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
+      "mock-queue-id",
+      "partial delivery failure (bestEffort)",
+    );
+    const warnCall = requireMockCall(logMocks.warn, "warn");
+    const warnMessage = String(warnCall[0]);
+    expect(warnMessage).toContain("failed to fail queued delivery");
+    expect(warnMessage).toContain("mock-queue-id");
+    expect(warnMessage).toContain("queue storage down");
+  });
+
   it("writes raw payloads to the queue before normalization", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-raw", roomId: "!room:example" });
     const rawPayloads: DeliverOutboundPayload[] = [
