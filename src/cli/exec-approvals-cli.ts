@@ -44,7 +44,15 @@ type EffectivePolicyReport = {
   scopes: ExecPolicyScopeSnapshot[];
   note?: string;
 };
+type PendingExecApprovalRow = {
+  ID: string;
+  Command: string;
+  Host: string;
+  Agent: string;
+  Expires: string;
+};
 const APPROVALS_GET_DEFAULT_TIMEOUT_MS = 60_000;
+const APPROVALS_PENDING_DEFAULT_TIMEOUT_MS = 60_000;
 
 type ExecApprovalsCliOpts = NodesRpcOpts & {
   node?: string;
@@ -169,6 +177,95 @@ function formatCliError(err: unknown): string {
   const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
   const safe = sanitizeForLog(firstLine);
   return safe.length > 300 ? `${safe.slice(0, 300)}...` : safe;
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readPendingApprovals(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+  if (isObjectRecord(payload) && Array.isArray(payload.approvals)) {
+    return payload.approvals;
+  }
+  return [];
+}
+
+function readPendingApprovalCommand(request: Record<string, unknown>): string {
+  const systemRunPlan = isObjectRecord(request.systemRunPlan) ? request.systemRunPlan : null;
+  const command =
+    normalizeOptionalString(request.command) ??
+    normalizeOptionalString(request.commandPreview) ??
+    normalizeOptionalString(systemRunPlan?.commandPreview) ??
+    normalizeOptionalString(systemRunPlan?.commandText);
+  return command ?? "(unknown command)";
+}
+
+function formatTimestamp(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return "unknown";
+  }
+  return new Date(value).toISOString();
+}
+
+function buildPendingApprovalRows(payload: unknown): PendingExecApprovalRow[] {
+  return readPendingApprovals(payload)
+    .map((approval): PendingExecApprovalRow | null => {
+      if (!isObjectRecord(approval)) {
+        return null;
+      }
+      const id = normalizeOptionalString(approval.id);
+      const request = isObjectRecord(approval.request) ? approval.request : {};
+      if (!id) {
+        return null;
+      }
+      return {
+        ID: id,
+        Command: readPendingApprovalCommand(request),
+        Host: normalizeOptionalString(request.host) ?? "gateway",
+        Agent: normalizeOptionalString(request.agentId) ?? "unknown",
+        Expires: formatTimestamp(approval.expiresAtMs),
+      };
+    })
+    .filter((row): row is PendingExecApprovalRow => row !== null);
+}
+
+function renderPendingApprovals(payload: unknown) {
+  const rows = buildPendingApprovalRows(payload);
+  const rich = isRich();
+  const heading = (text: string) => (rich ? theme.heading(text) : text);
+  const muted = (text: string) => (rich ? theme.muted(text) : text);
+  defaultRuntime.log(heading("Pending Exec Approvals"));
+  if (rows.length === 0) {
+    defaultRuntime.log(muted("No pending approvals."));
+    return;
+  }
+  defaultRuntime.log(
+    renderTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        { key: "ID", header: "ID", minWidth: 12 },
+        { key: "Command", header: "Command", minWidth: 24, flex: true },
+        { key: "Host", header: "Host", minWidth: 8 },
+        { key: "Agent", header: "Agent", minWidth: 10 },
+        { key: "Expires", header: "Expires", minWidth: 20 },
+      ],
+      rows,
+    }).trimEnd(),
+  );
+}
+
+function normalizeApprovalDecisionInput(decision: string): string {
+  const normalized = decision.trim().toLowerCase();
+  if (normalized === "always") {
+    return "allow-always";
+  }
+  if (normalized === "allow-once" || normalized === "allow-always" || normalized === "deny") {
+    return normalized;
+  }
+  exitWithError("Decision must be allow-once, allow-always, always, or deny.");
 }
 
 async function loadConfigForApprovalsTarget(params: {
@@ -552,6 +649,63 @@ export function registerExecApprovalsCli(program: Command) {
       }
     });
   nodesCallOpts(setCmd);
+
+  const pendingCmd = approvals
+    .command("pending")
+    .alias("list")
+    .description("List pending exec approval requests")
+    .action(async (opts: ExecApprovalsCliOpts) => {
+      try {
+        const pending = await callGatewayFromCli("exec.approval.list", opts, {});
+        if (opts.json) {
+          defaultRuntime.writeJson({ approvals: readPendingApprovals(pending) }, 0);
+          return;
+        }
+        renderPendingApprovals(pending);
+      } catch (err) {
+        defaultRuntime.error(formatCliError(err));
+        defaultRuntime.exit(1);
+      }
+    });
+  nodesCallOpts(pendingCmd, { timeoutMs: APPROVALS_PENDING_DEFAULT_TIMEOUT_MS });
+
+  const resolveCmd = approvals
+    .command("resolve <id> <decision>")
+    .alias("respond")
+    .description("Resolve a pending exec approval request")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatExample(
+          "openclaw approvals pending",
+          "Show pending approval IDs.",
+        )}\n${formatExample(
+          "openclaw approvals resolve <id> allow-once",
+          "Approve one pending command.",
+        )}\n${formatExample(
+          "openclaw approvals resolve <id> deny",
+          "Deny one pending command.",
+        )}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
+    )
+    .action(async (id: string, decision: string, opts: ExecApprovalsCliOpts) => {
+      try {
+        const trimmedId = requireTrimmedNonEmpty(id, "Approval id required.");
+        const normalizedDecision = normalizeApprovalDecisionInput(decision);
+        const result = await callGatewayFromCli("exec.approval.resolve", opts, {
+          id: trimmedId,
+          decision: normalizedDecision,
+        });
+        if (opts.json) {
+          defaultRuntime.writeJson(result, 0);
+          return;
+        }
+        defaultRuntime.log(`Approval ${normalizedDecision} submitted for ${trimmedId}.`);
+      } catch (err) {
+        defaultRuntime.error(formatCliError(err));
+        defaultRuntime.exit(1);
+      }
+    });
+  nodesCallOpts(resolveCmd, { timeoutMs: APPROVALS_PENDING_DEFAULT_TIMEOUT_MS });
 
   const allowlist = approvals
     .command("allowlist")

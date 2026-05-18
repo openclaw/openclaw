@@ -63,6 +63,8 @@ or `openclaw approvals set --node <id|name|ip>`.
 openclaw approvals get
 openclaw approvals get --node <id|name|ip>
 openclaw approvals get --gateway
+openclaw approvals pending
+openclaw approvals resolve <approval-id> allow-once
 ```
 
 `openclaw approvals get` now shows the effective exec policy for local, gateway, and node targets:
@@ -77,6 +79,19 @@ Precedence is intentional:
 - requested `tools.exec` policy can narrow or broaden intent, but the effective result is still derived from the host rules
 - `--node` combines the node host approvals file with gateway `tools.exec` policy, because both still apply at runtime
 - if gateway config is unavailable, the CLI falls back to the node approvals snapshot and notes that the final runtime policy could not be computed
+
+## Pending approval prompts
+
+When an agent asks for host exec approval and chat-native buttons are unavailable, the prompt includes a slash command such as `/approve <id> allow-once`. Operators can resolve the same pending request from the CLI:
+
+```bash
+openclaw approvals pending
+openclaw approvals resolve <approval-id> allow-once
+openclaw approvals resolve <approval-id> allow-always
+openclaw approvals resolve <approval-id> deny
+```
+
+`pending` and `resolve` talk to the running gateway runtime, not the local approvals JSON file. They require the same gateway connection options as other operator RPC commands. Use `pending --json` to script against the raw approval records.
 
 ## Replace approvals from a file
 

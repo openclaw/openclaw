@@ -222,6 +222,42 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
+  it("lists pending runtime approvals through the gateway", async () => {
+    callGatewayFromCli.mockResolvedValueOnce([
+      {
+        id: "approval-1",
+        request: {
+          command: "echo ok",
+          host: "gateway",
+          agentId: "main",
+        },
+        expiresAtMs: Date.UTC(2026, 4, 18, 12, 0, 0),
+      },
+    ]);
+
+    await runApprovalsCommand(["approvals", "pending"]);
+
+    expectGatewayCall(0, "exec.approval.list", {});
+    const output = defaultRuntime.log.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(output).toContain("Pending Exec Approvals");
+    expect(output).toContain("approval-1");
+    expect(output).toContain("echo ok");
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("resolves pending runtime approvals through the gateway", async () => {
+    await runApprovalsCommand(["approvals", "resolve", "approval-1", "always"]);
+
+    expectGatewayCall(0, "exec.approval.resolve", {
+      id: "approval-1",
+      decision: "allow-always",
+    });
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      "Approval allow-always submitted for approval-1.",
+    );
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
   it("adds effective policy to json output", async () => {
     localSnapshot.file = {
       version: 1,
