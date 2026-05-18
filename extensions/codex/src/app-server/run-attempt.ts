@@ -980,7 +980,9 @@ export async function runCodexAppServerAttempt(
     historyMessages =
       (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
   }
-  const baseDeveloperInstructions = buildDeveloperInstructions(params);
+  const baseDeveloperInstructions = buildDeveloperInstructions(params, {
+    dynamicTools: toolBridge.specs,
+  });
   // Keep OpenClaw user-editable context in the turn input so native Codex
   // system/developer instructions remain the higher-priority policy layer.
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({

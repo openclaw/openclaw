@@ -261,6 +261,7 @@ export async function startOrResumeThread(params: {
               threadId: binding.threadId,
               authProfileId,
               appServer: params.appServer,
+              dynamicTools: params.dynamicTools,
               developerInstructions: params.developerInstructions,
               config: resumeConfig,
               nativeCodeModeEnabled: params.nativeCodeModeEnabled,
@@ -585,7 +586,9 @@ export function buildThreadStartParams(
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
     }),
     ...(options.nativeCodeModeEnabled === false ? { environments: [] } : {}),
-    developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
+    developerInstructions:
+      options.developerInstructions ??
+      buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
     dynamicTools: options.dynamicTools,
     experimentalRawEvents: true,
     persistExtendedHistory: true,
@@ -598,6 +601,7 @@ export function buildThreadResumeParams(
     threadId: string;
     authProfileId?: string;
     appServer: CodexAppServerRuntimeOptions;
+    dynamicTools?: CodexDynamicToolSpec[];
     developerInstructions?: string;
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
@@ -623,7 +627,9 @@ export function buildThreadResumeParams(
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
     }),
-    developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
+    developerInstructions:
+      options.developerInstructions ??
+      buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
     persistExtendedHistory: true,
   };
 }
@@ -820,19 +826,40 @@ function compareJsonFingerprint(left: JsonValue, right: JsonValue): number {
   return JSON.stringify(left).localeCompare(JSON.stringify(right));
 }
 
-export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
+export function buildDeveloperInstructions(
+  params: EmbeddedRunAttemptParams,
+  options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
+): string {
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
     surface: "codex_app_server",
     includeLegacyGlobalGuidance: false,
   }).join("\n");
   const sections = [
     "Running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes capabilities when available.",
+    buildDeferredDynamicToolManifest(options.dynamicTools),
     "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation; if it is not already loaded, search for `sessions_spawn` in the `openclaw` dynamic tool namespace before calling it.",
     buildVisibleReplyInstruction(params),
     nativeCommandGuidance,
     params.extraSystemPrompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
+}
+
+function buildDeferredDynamicToolManifest(
+  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
+): string | undefined {
+  const deferredToolNames = [
+    ...new Set(
+      (dynamicTools ?? [])
+        .filter((tool) => tool.deferLoading === true)
+        .map((tool) => tool.name.trim())
+        .filter(Boolean),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+  if (deferredToolNames.length === 0) {
+    return undefined;
+  }
+  return `Deferred searchable OpenClaw dynamic tools available: ${deferredToolNames.join(", ")}. Use \`tool_search\` to load exact callable specs before use.`;
 }
 
 function buildVisibleReplyInstruction(params: EmbeddedRunAttemptParams): string {
