@@ -139,6 +139,7 @@ import {
   resolveSubagentToolPolicyForSession,
 } from "../../pi-tools.policy.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
@@ -1878,6 +1879,7 @@ export async function runEmbeddedAttempt(
     const promptMode =
       params.promptMode ??
       (isRawModelRun ? "none" : resolvePromptModeForSession(params.sessionKey));
+    const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
 
     // When toolsAllow is set, use minimal prompt and strip skills catalog
     const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
@@ -1955,7 +1957,10 @@ export async function runEmbeddedAttempt(
           config: params.config,
           sandboxed: sandboxInfo?.enabled === true,
         }),
-        nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
+        promptSurface,
+        nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+          surface: promptSurface,
+        }),
         runtimeInfo,
         messageToolHints,
         sandboxInfo,

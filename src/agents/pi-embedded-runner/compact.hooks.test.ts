@@ -2,12 +2,14 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyExtraParamsToAgentMock,
+  buildEmbeddedSystemPromptMock,
   contextEngineCompactMock,
   createOpenClawCodingToolsMock,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
   getMemorySearchManagerMock,
   hookRunner,
+  listRegisteredPluginAgentPromptGuidanceMock,
   loadCompactHooksHarness,
   maybeCompactAgentHarnessSessionMock,
   registerProviderStreamForModelMock,
@@ -258,6 +260,46 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       sessionKey: "agent:main:telegram:default:direct:12345",
       workspaceDir: "/tmp/workspace",
     });
+  });
+
+  it("uses subagent prompt surface and guidance for compacted subagent prompt rebuilds", async () => {
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:subagent:worker",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(listRegisteredPluginAgentPromptGuidanceMock).toHaveBeenCalledWith({
+      surface: "subagent",
+    });
+    expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptMode: "minimal",
+        promptSurface: "subagent",
+        nativeCommandGuidanceLines: ["Subagent compact command guidance."],
+      }),
+    );
+  });
+
+  it("uses ACP prompt surface and guidance for compacted ACP prompt rebuilds", async () => {
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:codex:acp:worker",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(listRegisteredPluginAgentPromptGuidanceMock).toHaveBeenCalledWith({
+      surface: "acp_backend",
+    });
+    expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptMode: "full",
+        promptSurface: "acp_backend",
+        nativeCommandGuidanceLines: ["ACP compact command guidance."],
+      }),
+    );
   });
 
   it("routes compaction through shared stream resolution and extra params", () => {
