@@ -6,6 +6,7 @@ import {
   readCronRunLogEntriesPageAll,
   resolveCronRunLogPath,
 } from "../../cron/run-log.js";
+import type { CronServiceContract } from "../../cron/service-contract.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
 import type { CronDelivery, CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
@@ -16,7 +17,7 @@ import {
   validateTargetProviderPrefix,
 } from "../../infra/outbound/channel-target-prefix.js";
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
-import { isSubagentSessionKey } from "../../routing/session-key.js";
+import { DEFAULT_AGENT_ID, isSubagentSessionKey } from "../../routing/session-key.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   ErrorCodes,
@@ -159,6 +160,30 @@ function assertValidCronUpdateDelivery(params: {
     cfg: params.cfg,
     delivery: nextJob.delivery,
   });
+}
+
+async function listCronJobsForRunNameLookup(params: {
+  cron: CronServiceContract;
+  agentId?: string;
+}): Promise<CronJob[]> {
+  const jobs: CronJob[] = [];
+  let offset = 0;
+
+  for (;;) {
+    const page = await params.cron.listPage({
+      includeDisabled: true,
+      agentId: params.agentId,
+      limit: 200,
+      offset,
+    });
+    jobs.push(...page.jobs);
+    if (!page.hasMore || page.nextOffset === null) {
+      break;
+    }
+    offset = page.nextOffset;
+  }
+
+  return jobs;
 }
 
 export const cronHandlers: GatewayRequestHandlers = {
@@ -539,6 +564,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       status?: "all" | "ok" | "error" | "skipped";
       deliveryStatuses?: Array<"delivered" | "not-delivered" | "unknown" | "not-requested">;
       deliveryStatus?: "delivered" | "not-delivered" | "unknown" | "not-requested";
+      agentId?: string;
       query?: string;
       sortDir?: "asc" | "desc";
     };
@@ -554,7 +580,11 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     if (scope === "all") {
-      const jobs = await context.cron.list({ includeDisabled: true });
+      const jobNameAgentId = p.agentId ?? context.cron.getDefaultAgentId() ?? DEFAULT_AGENT_ID;
+      const jobs = await listCronJobsForRunNameLookup({
+        cron: context.cron,
+        agentId: jobNameAgentId,
+      });
       const jobNameById = Object.fromEntries(
         jobs
           .filter((job) => typeof job.id === "string" && typeof job.name === "string")

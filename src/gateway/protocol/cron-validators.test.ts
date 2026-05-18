@@ -160,6 +160,7 @@ describe("cron protocol validators", () => {
     expect(
       validateCronRunsParams({
         scope: "all",
+        agentId: "main",
         limit: 25,
         statuses: ["ok", "error"],
         deliveryStatuses: ["delivered", "not-requested"],
