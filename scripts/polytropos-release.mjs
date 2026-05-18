@@ -357,6 +357,10 @@ const logStream = fs.createWriteStream(logPath, { flags: "a" });
 banner(logStream, `Log file: ${logPath}`);
 
 ensureCleanWorkingTree();
+const currentBranch = sh("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
+if (currentBranch !== "main") {
+  fail(`refusing to release from branch ${currentBranch}; releases must be cut from main`);
+}
 const repoRoot = getRepoRoot();
 const nearestReleaseTag = getNearestReachableReleaseTag();
 const { baseUpstreamTag } = parseReleaseTag(nearestReleaseTag);
