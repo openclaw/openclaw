@@ -33,7 +33,7 @@ Status: branch-local checkpoint, not release notes.
   passed 30 tests.
 - Focused local wrapper:
   `node scripts/run-vitest.mjs extensions/qa-lab/src/suite.test.ts extensions/qa-lab/src/suite.summary-json.test.ts extensions/qa-lab/src/live-transports/discord/discord-live.runtime.test.ts`
-  passed 50 tests.
+  passed 52 tests after the final rebase.
 - Testbox `tbx_01krvces8y0c99nzra2a90jg13` ran
   `pnpm openclaw qa suite --scenario channel-chat-baseline` and emitted gateway
   RSS trace fields. Observed sample: wall `15784ms`, gateway RSS
@@ -50,6 +50,12 @@ Status: branch-local checkpoint, not release notes.
   attempt on `tbx_01krwbsg15xvjdgpcz8fxq1htz` was blocked before reaching the
   changed gate: pnpm install rejected newly published
   `@earendil-works/pi-ai@0.74.1` under `minimumReleaseAge`.
+- After rebasing again, Testbox-through-Crabbox
+  `tbx_01krwcxpxx1n22t8jmvcj40228` ran
+  `pnpm check:changed` with an explicit `origin/main` fetch to repair the
+  delegated shallow checkout's merge base, and passed. The run escalated to all
+  changed-gate lanes in the delegated checkout, so it covered typecheck, lint,
+  and runtime import-cycle checks rather than only the narrow qa-lab diff.
 - Follow-up branch `perf/discord-rtt-summary-import` in `openclaw-rtt` updates
   `scripts/import-discord-rtt.mjs` to prefer the new summary `rttMs` field
   before observed-message or summary-duration fallback, and teaches Discord and
