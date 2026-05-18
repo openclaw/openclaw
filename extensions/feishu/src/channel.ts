@@ -559,6 +559,33 @@ function resolveFeishuCommandConversation(params: {
   return conversationId ? { conversationId } : null;
 }
 
+function resolveFeishuInboundConversation(params: {
+  to?: string;
+  conversationId?: string;
+  threadId?: string | number;
+}) {
+  const target = parseFeishuTargetId(params.to) ?? parseFeishuTargetId(params.conversationId);
+  if (!target) {
+    return null;
+  }
+  const parsed = parseFeishuConversationId({ conversationId: target });
+  const chatId = parsed?.chatId ?? target;
+  const explicitThreadId = params.threadId != null ? String(params.threadId).trim() : undefined;
+  const topicId = explicitThreadId || parsed?.topicId;
+  if (topicId) {
+    return {
+      conversationId: buildFeishuConversationId({
+        chatId,
+        scope: "group_topic",
+        topicId,
+      }),
+      parentConversationId: chatId,
+    };
+  }
+  const directId = parseFeishuDirectConversationId(target);
+  return directId ? { conversationId: directId } : { conversationId: chatId };
+}
+
 function jsonActionResult(details: Record<string, unknown>) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(details) }],
@@ -1252,6 +1279,8 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       messaging: {
         targetPrefixes: ["feishu", "lark"],
         normalizeTarget: (raw) => normalizeFeishuTarget(raw) ?? undefined,
+        resolveInboundConversation: ({ to, conversationId, threadId }) =>
+          resolveFeishuInboundConversation({ to, conversationId, threadId }),
         resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
           const directId = parseFeishuDirectConversationId(conversationId);
           if (directId) {

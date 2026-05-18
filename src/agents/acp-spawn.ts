@@ -1096,7 +1096,10 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     conversationId: params.binding?.conversation.conversationId,
     parentConversationId: params.binding?.conversation.parentConversationId,
   });
+  const preferBoundDeliveryTarget =
+    bindingMatchesRequesterConversation && boundDeliveryTarget.threadId != null;
   const inferredDeliveryTo =
+    (preferBoundDeliveryTarget ? boundDeliveryTarget.to : undefined) ??
     (bindingMatchesRequesterConversation
       ? normalizeOptionalString(params.requester.origin?.to)
       : undefined) ??
@@ -1106,9 +1109,11 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
       channel: params.requester.origin?.channel,
       conversationId: deliveryThreadId,
     });
-  const resolvedDeliveryThreadId = bindingMatchesRequesterConversation
-    ? fallbackThreadId
-    : (boundDeliveryTarget.threadId ?? deliveryThreadId);
+  const resolvedDeliveryThreadId = preferBoundDeliveryTarget
+    ? boundDeliveryTarget.threadId
+    : bindingMatchesRequesterConversation
+      ? fallbackThreadId
+      : (boundDeliveryTarget.threadId ?? deliveryThreadId);
   const hasDeliveryTarget = Boolean(params.requester.origin?.channel && inferredDeliveryTo);
 
   // Thread-bound session spawns always deliver inline to their bound thread.

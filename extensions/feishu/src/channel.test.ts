@@ -206,6 +206,42 @@ describe("feishuPlugin messaging", () => {
       parentConversationCandidates: ["oc_group_chat:topic:om_topic_root", "oc_group_chat"],
     });
   });
+
+  it("resolves inbound topic conversations for ACP thread binding", () => {
+    expect(
+      feishuPlugin.messaging?.resolveInboundConversation?.({
+        to: "chat:oc_group_chat",
+        threadId: "om_topic_root",
+        isGroup: true,
+      }),
+    ).toEqual({
+      conversationId: "oc_group_chat:topic:om_topic_root",
+      parentConversationId: "oc_group_chat",
+    });
+  });
+
+  it("normalizes sender-scoped topic conversations to topic bindings", () => {
+    expect(
+      feishuPlugin.messaging?.resolveInboundConversation?.({
+        to: "chat:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+        isGroup: true,
+      }),
+    ).toEqual({
+      conversationId: "oc_group_chat:topic:om_topic_root",
+      parentConversationId: "oc_group_chat",
+    });
+  });
+
+  it("resolves inbound direct conversations without a parent conversation", () => {
+    expect(
+      feishuPlugin.messaging?.resolveInboundConversation?.({
+        to: "user:ou_direct_user",
+        isGroup: false,
+      }),
+    ).toEqual({
+      conversationId: "ou_direct_user",
+    });
+  });
 });
 
 describe("feishuPlugin actions", () => {

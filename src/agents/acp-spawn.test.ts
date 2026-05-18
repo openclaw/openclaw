@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { feishuPlugin } from "../../extensions/feishu/channel-plugin-api.js";
 import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -594,6 +596,40 @@ function enableTelegramCurrentConversationBindings(): void {
   );
   registerSessionBindingAdapter({
     channel: "telegram",
+    accountId: "default",
+    capabilities: {
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"] satisfies SessionBindingPlacement[],
+    },
+    bind: async (input) => await hoisted.sessionBindingBindMock(input),
+    listBySession: (targetSessionKey) => hoisted.sessionBindingListBySessionMock(targetSessionKey),
+    resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
+    unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
+  });
+}
+
+function enableFeishuCurrentConversationBindings(): void {
+  replaceSpawnConfig({
+    ...hoisted.state.cfg,
+    channels: {
+      ...hoisted.state.cfg.channels,
+      feishu: {
+        threadBindings: {
+          enabled: true,
+        },
+      },
+    },
+  });
+  const plugin = feishuPlugin as ChannelPlugin;
+  hoisted.getChannelPluginMock.mockImplementation((channelId: string) =>
+    channelId === "feishu" ? plugin : undefined,
+  );
+  hoisted.getLoadedChannelPluginMock.mockImplementation((channelId: string) =>
+    channelId === "feishu" ? plugin : undefined,
+  );
+  registerSessionBindingAdapter({
+    channel: "feishu",
     accountId: "default",
     capabilities: {
       bindSupported: true,
@@ -2640,6 +2676,68 @@ describe("spawnAcpDirect", () => {
       .find((request) => request.method === "agent");
     expect(agentCall?.params?.deliver).toBe(true);
     expect(agentCall?.params?.channel).toBe("telegram");
+  });
+
+  it("binds Feishu topic ACP sessions through the plugin-owned conversation resolver", async () => {
+    enableFeishuCurrentConversationBindings();
+    hoisted.sessionBindingBindMock.mockImplementationOnce(
+      async (input: {
+        targetSessionKey: string;
+        conversation: { accountId: string; conversationId: string; parentConversationId?: string };
+        metadata?: Record<string, unknown>;
+      }) =>
+        createSessionBinding({
+          targetSessionKey: input.targetSessionKey,
+          conversation: {
+            channel: "feishu",
+            accountId: input.conversation.accountId,
+            conversationId: input.conversation.conversationId,
+            parentConversationId: input.conversation.parentConversationId,
+          },
+          metadata: {
+            boundBy:
+              typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+            agentId: "codex",
+          },
+        }),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey:
+          "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+        agentChannel: "feishu",
+        agentAccountId: "default",
+        agentTo: "chat:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+        agentThreadId: "om_topic_root",
+        agentGroupId: "oc_group_chat",
+      },
+    );
+
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("session");
+    expectBindingCallFields({
+      placement: "current",
+      conversation: {
+        channel: "feishu",
+        accountId: "default",
+        conversationId: "oc_group_chat:topic:om_topic_root",
+        parentConversationId: "oc_group_chat",
+      },
+    });
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.deliver).toBe(true);
+    expect(agentCall?.params?.channel).toBe("feishu");
+    expect(agentCall?.params?.to).toBe("chat:oc_group_chat");
+    expect(agentCall?.params?.threadId).toBe("om_topic_root");
   });
 
   it("drops self-parent Telegram current-conversation refs before binding", async () => {
