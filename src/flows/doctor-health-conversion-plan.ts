@@ -106,6 +106,12 @@ export const doctorHealthConversionRules = [
     rule: "Detect transcript integrity issues; repair applies scoped transcript cleanup.",
   },
   {
+    contributionId: "doctor:session-snapshots",
+    conversion: "repair-backed-detect",
+    target: ["doctor-run/session-snapshots"],
+    rule: "Keep this on the legacy doctor run path until the session snapshot scanner has a structured detector; do not register a clean core lint target before then.",
+  },
+  {
     contributionId: "doctor:config-audit-scrub",
     conversion: "repair-backed-detect",
     target: ["core/doctor/config-audit-scrub"],

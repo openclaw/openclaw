@@ -34,7 +34,6 @@ export const TRANSITIONAL_DOCTOR_HEALTH_PLACEHOLDER_IDS = [
   "core/doctor/codex-session-routes",
   "core/doctor/session-locks",
   "core/doctor/session-transcripts",
-  "core/doctor/session-snapshots",
   "core/doctor/config-audit-scrub",
   "core/doctor/legacy-cron-store",
   "core/doctor/sandbox/registry-files",

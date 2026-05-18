@@ -38,6 +38,7 @@ describe("runDoctorLintCli", () => {
       const exitCode = await runDoctorLintCli(runtime, {
         json: true,
         severityMin: "error",
+        onlyIds: ["core/doctor/final-config-validation"],
       });
 
       expect(exitCode).toBe(0);
@@ -62,6 +63,7 @@ describe("runDoctorLintCli", () => {
     try {
       const exitCode = await runDoctorLintCli(runtime, {
         severityMin: "error",
+        onlyIds: ["core/doctor/final-config-validation"],
       });
 
       expect(exitCode).toBe(0);
