@@ -562,6 +562,7 @@ export function buildAfterTurnRuntimeContext(params: {
       messageChannel: params.attempt.messageChannel,
       messageProvider: params.attempt.messageProvider,
       agentAccountId: params.attempt.agentAccountId,
+      agentId: params.activeAgentId,
       currentChannelId: params.attempt.currentChannelId,
       currentThreadTs: params.attempt.currentThreadTs,
       currentMessageId: params.attempt.currentMessageId,

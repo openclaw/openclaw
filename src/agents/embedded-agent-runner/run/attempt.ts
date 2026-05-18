@@ -1901,17 +1901,14 @@ export async function runEmbeddedAttempt(
         cwd: effectiveCwd,
         agentDir,
         cfg: params.config,
-        pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
-          config: params.config,
-          env: process.env,
-          workspaceDir: effectiveWorkspace,
-        }),
+        agentId: sessionAgentId,
+        pluginMetadataSnapshot,
         contextTokenBudget: params.contextTokenBudget,
       });
       const autoCompactionGuardArgs = {
         settingsManager,
         contextEngineInfo: activeContextEngine?.info,
-        compactionMode: resolveEffectiveCompactionMode(params.config),
+        compactionMode: resolveEffectiveCompactionMode(params.config, sessionAgentId),
         silentOverflowProneProvider: isSilentOverflowProneModel({
           provider: params.provider,
           modelId: params.modelId,
@@ -1925,6 +1922,8 @@ export async function runEmbeddedAttempt(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
+        workspaceDir: effectiveWorkspace,
+        agentId: sessionAgentId,
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
@@ -1943,6 +1942,7 @@ export async function runEmbeddedAttempt(
       applyAgentCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
+        agentId: sessionAgentId,
         contextTokenBudget: params.contextTokenBudget,
       });
       applyAgentAutoCompactionGuard(autoCompactionGuardArgs);

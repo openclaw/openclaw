@@ -17,6 +17,8 @@ export type ResolvedAgentConfig = {
   workspace?: string;
   agentDir?: string;
   model?: AgentEntry["model"];
+  compaction?: AgentEntry["compaction"];
+  contextPruning?: AgentEntry["contextPruning"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
@@ -120,6 +122,14 @@ export function resolveAgentConfig(
       typeof entry.model === "string" || (entry.model && typeof entry.model === "object")
         ? entry.model
         : undefined,
+    compaction:
+      typeof entry.compaction === "object" && entry.compaction
+        ? { ...agentDefaults?.compaction, ...entry.compaction }
+        : agentDefaults?.compaction,
+    contextPruning:
+      typeof entry.contextPruning === "object" && entry.contextPruning
+        ? { ...agentDefaults?.contextPruning, ...entry.contextPruning }
+        : agentDefaults?.contextPruning,
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     reasoningDefault: entry.reasoningDefault,

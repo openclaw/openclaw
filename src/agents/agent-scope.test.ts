@@ -180,6 +180,47 @@ describe("resolveAgentConfig", () => {
     });
   });
 
+  it("merges compaction and contextPruning from defaults with per-agent overrides", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "default",
+            reserveTokensFloor: 20_000,
+            model: "gpt-5.4",
+          },
+          contextPruning: {
+            mode: "off",
+            minPrunableToolChars: 8_192,
+          },
+        },
+        list: [
+          {
+            id: "main",
+            compaction: {
+              reserveTokensFloor: 24_000,
+            },
+            contextPruning: {
+              mode: "cache-ttl",
+              ttl: "15m",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "main")?.compaction).toEqual({
+      mode: "default",
+      reserveTokensFloor: 24_000,
+      model: "gpt-5.4",
+    });
+    expect(resolveAgentConfig(cfg, "main")?.contextPruning).toEqual({
+      mode: "cache-ttl",
+      minPrunableToolChars: 8_192,
+      ttl: "15m",
+    });
+  });
+
   it("resolves explicit and effective model primary separately", () => {
     const cfgWithStringDefault = {
       agents: {

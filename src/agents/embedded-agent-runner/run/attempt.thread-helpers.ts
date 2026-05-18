@@ -41,6 +41,7 @@ function shouldAppendAttemptCacheTtl(params: {
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
   config?: OpenClawConfig;
+  agentId?: string | null;
   provider: string;
   modelId: string;
   modelApi?: string;
@@ -49,8 +50,13 @@ function shouldAppendAttemptCacheTtl(params: {
   if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
     return false;
   }
+  const agentContextPruning = params.agentId
+    ? params.config?.agents?.list?.find((entry) => entry?.id?.trim() === params.agentId)
+        ?.contextPruning
+    : undefined;
   return (
-    params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
+    (agentContextPruning?.mode ?? params.config?.agents?.defaults?.contextPruning?.mode) ===
+      "cache-ttl" &&
     params.isCacheTtlEligibleProvider(params.provider, params.modelId, params.modelApi)
   );
 }
@@ -62,6 +68,7 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
   config?: OpenClawConfig;
+  agentId?: string | null;
   provider: string;
   modelId: string;
   modelApi?: string;

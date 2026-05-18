@@ -350,6 +350,29 @@ describe("resolveCompactionReserveTokensFloor", () => {
       }),
     ).toBe(0);
   });
+
+  it("uses per-agent reserveTokensFloor when an agent id is provided", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            reserveTokensFloor: 20_000,
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            compaction: {
+              reserveTokensFloor: 24_000,
+            },
+          },
+        ],
+      },
+    } as const;
+
+    expect(resolveCompactionReserveTokensFloor(cfg, "worker")).toBe(24_000);
+    expect(resolveCompactionReserveTokensFloor(cfg, "other")).toBe(20_000);
+  });
 });
 describe("resolveEffectiveCompactionMode", () => {
   it("defaults to default compaction mode", () => {
@@ -383,6 +406,30 @@ describe("resolveEffectiveCompactionMode", () => {
         agents: { defaults: { compaction: { mode: "default", provider: "deepseek" } } },
       }),
     ).toBe("safeguard");
+  });
+
+  it("prefers per-agent compaction mode and provider overrides", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "default",
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            compaction: {
+              mode: "safeguard",
+              provider: "anthropic",
+            },
+          },
+        ],
+      },
+    } as const;
+
+    expect(resolveEffectiveCompactionMode(cfg, "worker")).toBe("safeguard");
+    expect(resolveEffectiveCompactionMode(cfg, "other")).toBe("default");
   });
 });
 

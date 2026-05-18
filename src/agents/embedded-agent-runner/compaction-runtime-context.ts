@@ -2,12 +2,20 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
 import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../openai-codex-routing.js";
+
+function resolveScopedAgentConfig(cfg?: OpenClawConfig, agentId?: string | null) {
+  if (!cfg || !agentId) {
+    return undefined;
+  }
+  return resolveAgentConfig(cfg, agentId);
+}
 
 export type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
@@ -44,6 +52,7 @@ export type EmbeddedCompactionRuntimeContext = {
  */
 export function resolveEmbeddedCompactionTarget(params: {
   config?: OpenClawConfig;
+  agentId?: string | null;
   provider?: string | null;
   modelId?: string | null;
   authProfileId?: string | null;
@@ -55,9 +64,12 @@ export function resolveEmbeddedCompactionTarget(params: {
   model: string | undefined;
   authProfileId: string | undefined;
 } {
+  const compaction =
+    resolveScopedAgentConfig(params.config, params.agentId)?.compaction ??
+    params.config?.agents?.defaults?.compaction;
   const provider = params.provider?.trim() || params.defaultProvider;
   const model = params.modelId?.trim() || params.defaultModel;
-  const override = params.config?.agents?.defaults?.compaction?.model?.trim();
+  const override = compaction?.model?.trim();
   const resolveRuntimeProvider = (
     targetProvider: string | undefined,
     authProfileId: string | undefined,
@@ -113,6 +125,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   messageChannel?: string | null;
   messageProvider?: string | null;
   agentAccountId?: string | null;
+  agentId?: string | null;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
   currentMessageId?: string | number | null;
@@ -137,6 +150,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
 }): EmbeddedCompactionRuntimeContext {
   const resolved = resolveEmbeddedCompactionTarget({
     config: params.config,
+    agentId: params.agentId,
     provider: params.provider,
     modelId: params.modelId,
     authProfileId: params.authProfileId,

@@ -415,8 +415,13 @@ export async function compactEmbeddedAgentSessionDirect(
   if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
     return await compactEmbeddedAgentSessionDirectOnce(params);
   }
+  const fallbackAgentId = resolveSessionAgentIds({
+    sessionKey: params.sandboxSessionKey ?? params.sessionKey,
+    config: params.config,
+  }).sessionAgentId;
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
+    agentId: fallbackAgentId,
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
@@ -427,10 +432,6 @@ export async function compactEmbeddedAgentSessionDirect(
   const primaryModel = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
   const requestedPrimaryProvider = params.provider?.trim() || DEFAULT_PROVIDER;
   const fallbacksOverride = resolveCompactionFallbacksOverride(params);
-  const fallbackAgentId = resolveSessionAgentIds({
-    sessionKey: params.sandboxSessionKey ?? params.sessionKey,
-    config: params.config,
-  }).sessionAgentId;
   const fallbackSessionKey = params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
   try {
     const fallbackResult = await runWithModelFallback<EmbeddedAgentCompactResult>({
@@ -490,6 +491,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
   });
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
+    agentId: earlyAgentIds.sessionAgentId,
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
@@ -1065,6 +1067,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         cwd: effectiveCwd,
         agentDir,
         cfg: params.config,
+        agentId: sessionAgentId,
         pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
           config: params.config,
           env: process.env,
@@ -1077,6 +1080,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
+        workspaceDir: effectiveWorkspace,
+        agentId: sessionAgentId,
         provider,
         modelId,
         model,
@@ -1096,6 +1101,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       applyAgentCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
+        agentId: sessionAgentId,
         contextTokenBudget,
       });
       // contextEngineInfo is intentionally omitted: this guard runs inside the

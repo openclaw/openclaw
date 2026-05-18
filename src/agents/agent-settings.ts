@@ -1,9 +1,17 @@
 import type { AgentCompactionMode } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import { MIN_PROMPT_BUDGET_RATIO, MIN_PROMPT_BUDGET_TOKENS } from "./agent-compaction-constants.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { normalizeProviderId } from "./provider-id.js";
+
+function resolveScopedAgentConfig(cfg?: OpenClawConfig, agentId?: string | null) {
+  if (!cfg || !agentId) {
+    return undefined;
+  }
+  return resolveAgentConfig(cfg, agentId);
+}
 
 export const DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
 
@@ -43,8 +51,13 @@ export function ensureAgentCompactionReserveTokens(params: {
   return { didOverride: true, reserveTokens: minReserveTokens };
 }
 
-export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
-  const raw = cfg?.agents?.defaults?.compaction?.reserveTokensFloor;
+export function resolveCompactionReserveTokensFloor(
+  cfg?: OpenClawConfig,
+  agentId?: string | null,
+): number {
+  const raw =
+    resolveScopedAgentConfig(cfg, agentId)?.compaction?.reserveTokensFloor ??
+    cfg?.agents?.defaults?.compaction?.reserveTokensFloor;
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
     return Math.floor(raw);
   }
@@ -68,6 +81,7 @@ function toPositiveInt(value: unknown): number | undefined {
 export function applyAgentCompactionSettingsFromConfig(params: {
   settingsManager: AgentSettingsManagerLike;
   cfg?: OpenClawConfig;
+  agentId?: string | null;
   /** When known, the resolved context window budget for the current model. */
   contextTokenBudget?: number;
 }): {
@@ -76,11 +90,13 @@ export function applyAgentCompactionSettingsFromConfig(params: {
 } {
   const currentReserveTokens = params.settingsManager.getCompactionReserveTokens();
   const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
-  const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  const compactionCfg =
+    resolveScopedAgentConfig(params.cfg, params.agentId)?.compaction ??
+    params.cfg?.agents?.defaults?.compaction;
 
   const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
-  let reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
+  let reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg, params.agentId);
 
   // Cap the floor to a safe fraction of the context window so that
   // small-context models (e.g. Ollama with 16 K tokens) are not starved of
@@ -126,8 +142,12 @@ export function applyAgentCompactionSettingsFromConfig(params: {
 }
 
 /** Resolve the compaction mode after provider-backed safeguard promotion. */
-export function resolveEffectiveCompactionMode(cfg?: OpenClawConfig): AgentCompactionMode {
-  const compaction = cfg?.agents?.defaults?.compaction;
+export function resolveEffectiveCompactionMode(
+  cfg?: OpenClawConfig,
+  agentId?: string | null,
+): AgentCompactionMode {
+  const compaction =
+    resolveScopedAgentConfig(cfg, agentId)?.compaction ?? cfg?.agents?.defaults?.compaction;
   if (compaction?.provider) {
     return "safeguard";
   }

@@ -50,6 +50,7 @@ type CliCompactionDeps = {
     cwd: string;
     agentDir: string;
     cfg?: OpenClawConfig;
+    agentId?: string | null;
     contextTokenBudget?: number;
   }) => SettingsManagerLike | Promise<SettingsManagerLike>;
   applyAgentAutoCompactionGuard: (params: {
@@ -79,6 +80,7 @@ type CliCompactionRuntimeContextParams = {
   sessionKey: string;
   messageChannel?: string;
   agentAccountId?: string;
+  sessionAgentId?: string;
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
@@ -187,6 +189,7 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
       messageChannel: params.messageChannel,
       messageProvider: params.messageChannel,
       agentAccountId: params.agentAccountId,
+      agentId: params.sessionAgentId,
       authProfileId: undefined,
       workspaceDir: params.workspaceDir,
       cwd: params.cwd,
@@ -223,6 +226,7 @@ async function compactCliTranscript(params: {
   messageChannel?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
+  sessionAgentId: string;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
   bestEffortMaintenance?: boolean;
@@ -231,6 +235,7 @@ async function compactCliTranscript(params: {
     sessionKey: params.sessionKey,
     messageChannel: params.messageChannel,
     agentAccountId: params.agentAccountId,
+    sessionAgentId: params.sessionAgentId,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
     agentDir: params.agentDir,
@@ -260,7 +265,7 @@ async function compactCliTranscript(params: {
         compactionTarget: "budget",
         runtimeContext,
       },
-      resolveCompactionTimeoutMs(params.cfg),
+      resolveCompactionTimeoutMs(params.cfg, params.sessionAgentId),
     );
   } catch (error) {
     log.warn(
@@ -292,6 +297,7 @@ async function compactCliTranscript(params: {
       sessionManager: params.sessionManager,
       runtimeContext,
       config: params.cfg,
+      agentId: params.sessionAgentId,
     });
   } catch (error) {
     if (!params.bestEffortMaintenance) {
@@ -368,6 +374,7 @@ async function compactNativeHarnessCliTranscript(params: {
                   sessionKey: params.sessionKey,
                   messageChannel: params.messageChannel,
                   agentAccountId: params.agentAccountId,
+                  sessionAgentId,
                   workspaceDir: params.workspaceDir,
                   cwd: params.cwd,
                   agentDir: params.agentDir,
@@ -387,7 +394,7 @@ async function compactNativeHarnessCliTranscript(params: {
           ...(nativeHarnessId ? { agentHarnessId: nativeHarnessId } : {}),
           ...(abortSignal ? { abortSignal } : {}),
         }),
-      resolveCompactionTimeoutMs(params.cfg),
+      resolveCompactionTimeoutMs(params.cfg, sessionAgentId),
     );
   } catch (error) {
     log.warn(
@@ -447,6 +454,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     cwd: params.cwd ?? params.workspaceDir,
     agentDir: params.agentDir,
     cfg: params.cfg,
+    agentId: params.sessionAgentId,
     contextTokenBudget,
   });
 
@@ -487,7 +495,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     await cliCompactionDeps.applyAgentAutoCompactionGuard({
       settingsManager,
       contextEngineInfo: contextEngine.info,
-      compactionMode: resolveEffectiveCompactionMode(params.cfg),
+      compactionMode: resolveEffectiveCompactionMode(params.cfg, params.sessionAgentId),
     });
   };
 
@@ -513,6 +521,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       messageChannel: params.messageChannel,
       agentAccountId: params.agentAccountId,
       senderIsOwner: params.senderIsOwner,
+      sessionAgentId: params.sessionAgentId,
       thinkLevel: params.thinkLevel,
       extraSystemPrompt: params.extraSystemPrompt,
     });

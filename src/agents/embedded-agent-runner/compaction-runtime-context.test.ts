@@ -115,6 +115,38 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("openai:p1");
   });
 
+  it("prefers a per-agent compaction.model override over defaults", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      agentId: "worker",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              model: "gpt-4o",
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              compaction: {
+                model: "anthropic/claude-opus-4-6",
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-3.5-turbo",
+      authProfileId: "openai:p1",
+    });
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
+    expect(result.authProfileId).toBeUndefined();
+  });
+
   it("uses session model when no compaction.model override configured", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",

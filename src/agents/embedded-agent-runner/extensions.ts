@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { resolveCompactionProviderIdForOwnerPlugin } from "../../plugins/compaction-provider.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { resolveMemoryRoleSlot } from "../../plugins/slot-resolution.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../agent-hooks/context-pruning.js";
@@ -19,6 +22,13 @@ import type { AgentToolResult } from "../runtime/index.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
+
+function resolveScopedAgentConfig(cfg: OpenClawConfig | undefined, agentId?: string | null) {
+  if (!cfg || !agentId) {
+    return undefined;
+  }
+  return resolveAgentConfig(cfg, agentId);
+}
 
 type AgentToolResultEvent = {
   threadId?: string;
@@ -105,11 +115,14 @@ function resolveContextWindowTokens(params: {
 function buildContextPruningFactory(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
+  agentId?: string | null;
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
 }): ExtensionFactory | undefined {
-  const raw = params.cfg?.agents?.defaults?.contextPruning;
+  const raw =
+    resolveScopedAgentConfig(params.cfg, params.agentId)?.contextPruning ??
+    params.cfg?.agents?.defaults?.contextPruning;
   if (raw?.mode !== "cache-ttl") {
     return undefined;
   }
@@ -145,13 +158,24 @@ export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
   workspaceDir?: string;
+  agentId?: string | null;
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
-  if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
-    const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  const compactionCfg =
+    resolveScopedAgentConfig(params.cfg, params.agentId)?.compaction ??
+    params.cfg?.agents?.defaults?.compaction;
+  if (resolveEffectiveCompactionMode(params.cfg, params.agentId) === "safeguard") {
+    const compactionSlot =
+      params.cfg && !compactionCfg?.provider
+        ? resolveMemoryRoleSlot({ cfg: params.cfg, role: "compaction", agentId: params.agentId })
+        : undefined;
+    const slotCompactionProvider =
+      typeof compactionSlot === "string"
+        ? resolveCompactionProviderIdForOwnerPlugin(compactionSlot)
+        : undefined;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
@@ -173,7 +197,7 @@ export function buildEmbeddedExtensionFactories(params: {
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
       workspaceDir: params.workspaceDir,
       postCompactionSections: compactionCfg?.postCompactionSections,
-      provider: compactionCfg?.provider,
+      provider: compactionCfg?.provider ?? slotCompactionProvider,
     });
     factories.push(compactionSafeguardExtension);
   }
