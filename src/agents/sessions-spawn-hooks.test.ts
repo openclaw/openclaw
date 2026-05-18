@@ -5,6 +5,19 @@ import {
 } from "./subagent-spawn.test-helpers.js";
 
 type GatewayRequest = { method?: string; params?: Record<string, unknown> };
+type TestSubagentSpawningResult =
+  | undefined
+  | { status: "error"; error: string }
+  | {
+      status: "ok";
+      threadBindingReady: boolean;
+      deliveryOrigin?: {
+        channel: string;
+        to: string;
+        accountId?: string;
+        threadId?: string;
+      };
+    };
 
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
@@ -14,7 +27,7 @@ const hoisted = vi.hoisted(() => ({
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasSubagentEndedHook: true,
-  runSubagentSpawning: vi.fn(async (event: unknown) => {
+  runSubagentSpawning: vi.fn(async (event: unknown): Promise<TestSubagentSpawningResult> => {
     const input = event as {
       threadRequested?: boolean;
       requester?: { channel?: string };

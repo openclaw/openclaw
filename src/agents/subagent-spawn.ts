@@ -698,7 +698,7 @@ function resolveBoundThreadDeliveryOrigin(params: {
 }): DeliveryContext | undefined {
   const bindings = getSessionBindingService()
     .listBySession(params.childSessionKey)
-    .filter((binding) => binding.status !== "inactive");
+    .filter((binding) => binding.status === "active");
   for (const binding of bindings) {
     const conversation = binding.conversation;
     if (!conversation.parentConversationId) {

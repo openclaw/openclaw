@@ -682,7 +682,7 @@ export const telegramPlugin = createChatChannelPlugin({
     },
     conversationBindings: {
       supportsCurrentConversationBinding: true,
-      defaultTopLevelPlacement: "current",
+      defaultTopLevelPlacement: "child",
       resolveConversationRef: ({
         accountId: _accountId,
         conversationId,
