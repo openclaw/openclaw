@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/replies: persist queued follow-up user messages and assistant error stubs only once across model-fallback retries, preventing repeated provider rejections from corrupted same-role session transcripts. Fixes #83404. (#83417) Thanks @yetval.
 - Gateway/config: keep config writes from failing on unrelated unresolved auth-profile SecretRefs while preserving live auth-profile runtime snapshots.
 - Discord/OpenAI: keep realtime Discord voice sessions hearing follow-up turns with OpenAI realtime and prebuffer assistant playback to avoid choppy starts. (#80505) Thanks @Solvely-Colin.
 - Discord/subagents: route the initial reply from thread-bound delegated sessions into the bound Discord thread instead of the parent channel. Fixes #83170. (#83172) Thanks @100menotu001.

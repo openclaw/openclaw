@@ -2084,8 +2084,12 @@ export async function runEmbeddedAttempt(
         suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
         suppressTranscriptOnlyAssistantPersistence:
           params.suppressTranscriptOnlyAssistantPersistence,
+        suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
         onUserMessagePersisted: (message) => {
           params.onUserMessagePersisted?.(message);
+        },
+        onAssistantErrorMessagePersisted: (message) => {
+          params.onAssistantErrorMessagePersisted?.(message);
         },
       });
       trackSessionManagerAccess(params.sessionFile);
