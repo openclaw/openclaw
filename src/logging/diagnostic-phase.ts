@@ -8,6 +8,20 @@ import {
 
 const RECENT_PHASE_CAPACITY = 40;
 
+/**
+ * Maximum wall-clock time a diagnostic phase may remain on the active stack
+ * before it is automatically evicted during the next `getCurrentDiagnosticPhase`
+ * call. This prevents long-running tasks (e.g. channel polling loops that were
+ * accidentally wrapped in `withDiagnosticPhase`) from holding a stale phase
+ * entry indefinitely, which causes the liveness monitor to report the gateway
+ * event loop as "degraded" even when the channel is functional.
+ *
+ * When a phase exceeds this deadline it is removed from `activePhaseStack` and
+ * recorded with a synthetic completion snapshot so it still appears in
+ * `recentPhases` for observability.
+ */
+const DIAGNOSTIC_PHASE_MAX_LIFETIME_MS = 5 * 60_000;
+
 type ActiveDiagnosticPhase = {
   name: string;
   startedAt: number;
@@ -35,7 +49,47 @@ function pushRecentPhase(snapshot: DiagnosticPhaseSnapshot): void {
 }
 
 export function getCurrentDiagnosticPhase(): string | undefined {
+  evictStalePhases();
   return activePhaseStack.at(-1)?.name;
+}
+
+/**
+ * Remove any phases that have been active longer than
+ * `DIAGNOSTIC_PHASE_MAX_LIFETIME_MS`. Evicted phases are recorded as completed
+ * with a synthetic snapshot so they remain visible in `recentPhases`.
+ */
+function evictStalePhases(): void {
+  if (activePhaseStack.length === 0) {
+    return;
+  }
+  const nowMs = performance.now();
+  const evicted: ActiveDiagnosticPhase[] = [];
+  activePhaseStack = activePhaseStack.filter((entry) => {
+    const elapsed = nowMs - entry.startedWallMs;
+    if (elapsed > DIAGNOSTIC_PHASE_MAX_LIFETIME_MS) {
+      evicted.push(entry);
+      return false;
+    }
+    return true;
+  });
+  for (const entry of evicted) {
+    const durationMs = roundMetric(nowMs - entry.startedWallMs, 1);
+    const cpu = process.cpuUsage(entry.cpuStarted);
+    const cpuUserMs = roundMetric(cpu.user / 1_000, 1);
+    const cpuSystemMs = roundMetric(cpu.system / 1_000, 1);
+    const cpuTotalMs = roundMetric(cpuUserMs + cpuSystemMs, 1);
+    recordDiagnosticPhase({
+      name: entry.name,
+      startedAt: entry.startedAt,
+      endedAt: Date.now(),
+      durationMs,
+      cpuUserMs,
+      cpuSystemMs,
+      cpuTotalMs,
+      cpuCoreRatio: roundMetric(cpuTotalMs / Math.max(1, durationMs), 3),
+      details: { ...entry.details, evicted: true },
+    });
+  }
 }
 
 function resolveRecentPhaseLimit(limit: number): number | null {
