@@ -1068,9 +1068,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       };
     }
 
-    const channelInfo =
-      (await resolveChannelInfo(params.payload.channel_id)) ??
-      resolveMattermostModelPickerDialogChannelInfo(dialogState);
+    const channelInfo = await resolveChannelInfo(params.payload.channel_id);
     const pickerCommandText =
       pickerState.action === "select"
         ? `/model ${pickerState.provider}/${pickerState.model}`
@@ -1309,7 +1307,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       return {};
     }
 
-    const channelInfo = await resolveChannelInfo(params.payload.channel_id);
+    const channelInfo =
+      (await resolveChannelInfo(params.payload.channel_id)) ??
+      resolveMattermostModelPickerDialogChannelInfo(dialogState);
     const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
       cfg,
       surface: "mattermost",

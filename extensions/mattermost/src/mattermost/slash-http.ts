@@ -182,7 +182,7 @@ async function tryOpenMattermostModelPickerDialog(params: {
   channelId: string;
   teamId: string;
   triggerId?: string;
-  channelInfo: MattermostChannel;
+  channelInfo: MattermostChannel | null;
   kind: "direct" | "group" | "channel";
   log?: (msg: string) => void;
 }): Promise<{ handled: boolean; response?: MattermostSlashCommandResponse }> {
