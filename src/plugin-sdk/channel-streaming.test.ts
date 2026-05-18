@@ -453,6 +453,30 @@ describe("channel-streaming", () => {
     expect(
       formatChannelProgressDraftLine({
         event: "item",
+        itemId: "subagent:1",
+        itemKind: "subagent",
+        meta: "Worker A: running",
+      }),
+    ).toBe("🧑‍🔧 Sub-agent: Worker A: running");
+    expect(
+      formatChannelProgressDraftLine({
+        event: "item",
+        itemId: "subagent:1",
+        itemKind: "subagent",
+        progressText: "Worker A: completed; ready for parent review",
+      }),
+    ).toBe("🧑‍🔧 Sub-agent: Worker A: completed; ready for parent review");
+    expect(
+      buildChannelProgressDraftLine({
+        event: "item",
+        itemId: "subagent:1",
+        itemKind: "subagent",
+        progressText: "Worker A running",
+      })?.id,
+    ).toBe("subagent:1");
+    expect(
+      formatChannelProgressDraftLine({
+        event: "item",
         itemKind: "analysis",
         title: "Reasoning",
       }),

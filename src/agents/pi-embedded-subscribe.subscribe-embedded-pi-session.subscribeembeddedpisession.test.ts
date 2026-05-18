@@ -590,6 +590,109 @@ describe("subscribeEmbeddedPiSession", () => {
     });
   });
 
+  it("surfaces subagent completion internal events as transient item progress", () => {
+    const onAgentEvent = vi.fn();
+    createSubscribedHarness({
+      runId: "run",
+      sessionKey: "agent:main:telegram:dm",
+      onAgentEvent,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:main:subagent:child-1",
+          announceType: "subagent task",
+          taskLabel: "Worker A",
+          status: "ok",
+          statusLabel: "completed; ready for parent review",
+          result: "done",
+          replyInstruction: "Reply normally.",
+        },
+      ],
+    });
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "item",
+      sessionKey: "agent:main:telegram:dm",
+      data: {
+        itemId: "subagent:agent:main:subagent:child-1",
+        phase: "end",
+        kind: "subagent",
+        title: "Worker A",
+        status: "completed",
+        name: "sessions_spawn",
+        summary: "Worker A: completed; ready for parent review",
+      },
+    });
+  });
+
+  it("does not report unknown subagent completions as successful progress", () => {
+    const onAgentEvent = vi.fn();
+    createSubscribedHarness({
+      runId: "run",
+      sessionKey: "agent:main:telegram:dm",
+      onAgentEvent,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:main:subagent:child-unknown",
+          announceType: "subagent task",
+          taskLabel: "Worker B",
+          status: "unknown",
+          statusLabel: "finished with unknown status",
+          result: "unknown",
+          replyInstruction: "Reply normally.",
+        },
+      ],
+    });
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "item",
+      sessionKey: "agent:main:telegram:dm",
+      data: expect.objectContaining({
+        itemId: "subagent:agent:main:subagent:child-unknown",
+        phase: "end",
+        kind: "subagent",
+        title: "Worker B",
+        status: "blocked",
+        summary: "Worker B: finished with unknown status",
+      }),
+    });
+  });
+
+  it("redacts subagent completion labels before transient item progress", () => {
+    const onAgentEvent = vi.fn();
+    const rawSecret = "super-secret-token-1234567890";
+    createSubscribedHarness({
+      runId: "run",
+      sessionKey: "agent:main:telegram:dm",
+      onAgentEvent,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:main:subagent:child-secret",
+          announceType: "subagent task",
+          taskLabel: `inspect TOKEN=${rawSecret}`,
+          status: "ok",
+          statusLabel: `completed with TOKEN=${rawSecret}`,
+          result: "done",
+          replyInstruction: "Reply normally.",
+        },
+      ],
+    });
+
+    const payload = onAgentEvent.mock.calls[0]?.[0] as
+      | { data?: { title?: unknown; summary?: unknown } }
+      | undefined;
+    expect(payload?.data?.title).toEqual(expect.any(String));
+    expect(payload?.data?.summary).toEqual(expect.any(String));
+    expect(payload?.data?.title).not.toContain(rawSecret);
+    expect(payload?.data?.summary).not.toContain(rawSecret);
+    expect(String(payload?.data?.title).length).toBeLessThanOrEqual(80);
+  });
+
   it.each([
     {
       label: "music",

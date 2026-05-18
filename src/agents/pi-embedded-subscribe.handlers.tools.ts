@@ -44,6 +44,10 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
+import {
+  buildSubagentProgressSummary,
+  resolveSubagentProgressLabel,
+} from "./subagent-progress-label.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -183,6 +187,35 @@ function readToolResultDetailsRecord(result: unknown): Record<string, unknown> |
   return details && typeof details === "object" && !Array.isArray(details)
     ? (details as Record<string, unknown>)
     : undefined;
+}
+
+function buildSubagentSpawnItemData(params: {
+  toolCallId: string;
+  args: Record<string, unknown>;
+  result: unknown;
+  startedAt?: number;
+}): AgentItemEventData | undefined {
+  const details = readToolResultDetailsRecord(params.result);
+  if (!details || readStringValue(details.status) !== "accepted") {
+    return undefined;
+  }
+  const childSessionKey = readStringValue(details.childSessionKey);
+  const childRunId = readStringValue(details.runId);
+  const label = readStringValue(params.args.label);
+  const taskName = readStringValue(params.args.taskName);
+  const task = readStringValue(params.args.task);
+  const title = resolveSubagentProgressLabel([label, taskName, task]);
+  return {
+    itemId: `subagent:${childSessionKey ?? childRunId ?? params.toolCallId}`,
+    phase: "start",
+    kind: "subagent",
+    title,
+    status: "running",
+    name: "sessions_spawn",
+    meta: buildSubagentProgressSummary({ label: title, statusLabel: "running" }),
+    toolCallId: params.toolCallId,
+    startedAt: params.startedAt,
+  };
 }
 
 function readExecToolDetails(result: unknown): ExecToolDetails | null {
@@ -1051,6 +1084,17 @@ export async function handleToolExecutionEnd(
       : {}),
   };
   emitTrackedItemEvent(ctx, itemData);
+  if (!isToolError && toolName === "sessions_spawn") {
+    const subagentItemData = buildSubagentSpawnItemData({
+      toolCallId,
+      args: startArgs,
+      result: sanitizedResult,
+      startedAt: startData?.startTime,
+    });
+    if (subagentItemData) {
+      emitTrackedItemEvent(ctx, subagentItemData);
+    }
+  }
   void ctx.params.onAgentEvent?.({
     stream: "tool",
     data: {

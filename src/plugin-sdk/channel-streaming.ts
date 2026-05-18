@@ -293,6 +293,7 @@ function buildNamedProgressLine(
   metas: readonly (string | undefined | null)[] | undefined,
   options?: ChannelProgressLineOptions,
   fields?: {
+    id?: string;
     status?: string;
   },
 ): ChannelProgressDraftLine | undefined {
@@ -311,6 +312,7 @@ function buildNamedProgressLine(
     ? text.slice(prefix.length + 2).trim()
     : compactCommandPrefix;
   return {
+    ...(fields?.id ? { id: fields.id } : {}),
     kind,
     text,
     label: display.label,
@@ -329,6 +331,8 @@ function itemKindToToolName(kind: string | undefined): string | undefined {
       return "apply_patch";
     case "search":
       return "web_search";
+    case "subagent":
+      return "sessions_spawn";
     case "tool":
       return "tool_call";
     default:
@@ -433,6 +437,7 @@ export function buildChannelProgressDraftLine(
       }
       if (name) {
         return buildNamedProgressLine(input.event, name, [meta], options, {
+          id: input.itemId,
           status: input.status,
         });
       }

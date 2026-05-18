@@ -280,6 +280,97 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
   });
 });
 
+describe("handleToolExecutionEnd sessions_spawn progress", () => {
+  it("emits a keyed subagent item when a subagent run is accepted", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-subagent-1",
+        args: {
+          label: "Worker A",
+          task: "inspect the diff",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-subagent-1",
+        isError: false,
+        result: {
+          details: {
+            status: "accepted",
+            childSessionKey: "agent:main:subagent:child-1",
+            runId: "run-child-1",
+          },
+        },
+      } as never,
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "item",
+      data: expect.objectContaining({
+        itemId: "subagent:agent:main:subagent:child-1",
+        phase: "start",
+        kind: "subagent",
+        status: "running",
+        name: "sessions_spawn",
+        meta: "Worker A: running",
+      }),
+    });
+    expect(ctx.state.itemActiveIds.has("subagent:agent:main:subagent:child-1")).toBe(true);
+  });
+
+  it("redacts task fallback text before emitting subagent start progress", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const rawSecret = "super-secret-token-1234567890";
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-subagent-secret",
+        args: {
+          task: `inspect TOKEN=${rawSecret} before reporting`,
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-subagent-secret",
+        isError: false,
+        result: {
+          details: {
+            status: "accepted",
+            childSessionKey: "agent:main:subagent:child-secret",
+          },
+        },
+      } as never,
+    );
+
+    const event = requireEvent(
+      onAgentEvent.mock.calls.map(([payload]) => payload as CapturedAgentEvent),
+      (payload) => payload.stream === "item" && payload.data?.kind === "subagent",
+      "subagent progress",
+    );
+    const title = requireString(event.data?.title, "subagent title");
+    const meta = requireString(event.data?.meta, "subagent meta");
+    expect(title).not.toContain(rawSecret);
+    expect(meta).not.toContain(rawSecret);
+    expect(title.length).toBeLessThanOrEqual(80);
+  });
+});
+
 describe("handleToolExecutionEnd mutating failure recovery", () => {
   it("clears edit failure when the retry succeeds through common file path aliases", async () => {
     const { ctx } = createTestContext();

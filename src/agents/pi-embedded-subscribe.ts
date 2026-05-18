@@ -43,6 +43,10 @@ import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./pi-embedded-utils.js";
+import {
+  buildSubagentProgressSummary,
+  resolveSubagentProgressLabel,
+} from "./subagent-progress-label.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
@@ -115,6 +119,55 @@ function collectPendingMediaFromInternalEvents(
     }
   }
   return pending;
+}
+
+function normalizeInternalTaskCompletionStatus(status: string) {
+  switch (status) {
+    case "ok":
+      return "completed";
+    case "timeout":
+    case "error":
+      return "failed";
+    case "unknown":
+      return "blocked";
+    default:
+      return "blocked";
+  }
+}
+
+function emitInternalTaskCompletionProgress(params: SubscribeEmbeddedPiSessionParams): void {
+  const events = params.internalEvents?.filter(
+    (event) => event.type === "task_completion" && event.source === "subagent",
+  );
+  if (!events?.length) {
+    return;
+  }
+  for (const event of events) {
+    const title = resolveSubagentProgressLabel([event.taskLabel]);
+    const data = {
+      itemId: `subagent:${event.childSessionKey}`,
+      phase: "end",
+      kind: "subagent",
+      title,
+      status: normalizeInternalTaskCompletionStatus(event.status),
+      name: "sessions_spawn",
+      summary: buildSubagentProgressSummary({
+        label: event.taskLabel,
+        statusLabel: event.statusLabel,
+      }),
+    };
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "item",
+      data,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    });
+    void params.onAgentEvent?.({
+      stream: "item",
+      data,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    });
+  }
 }
 
 export type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
@@ -214,6 +267,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const pendingBlockReplyTasks = new Set<Promise<void>>();
   const replyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
+  emitInternalTaskCompletionProgress(params);
   const shouldAllowSilentTurnText = (text: string | undefined) =>
     Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
   const emitBlockReplySafely = (
