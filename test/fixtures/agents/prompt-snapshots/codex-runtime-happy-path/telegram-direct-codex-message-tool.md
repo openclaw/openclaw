@@ -4,8 +4,8 @@
 
 ## Scope
 
-- Default happy path: OpenAI model through the Codex harness/runtime, Telegram direct conversation, and message-tool-only visible replies.
-- A quiet turn is represented by not calling `message(action=send)`; the normal final assistant text is private to OpenClaw/Codex.
+- Opt-in message-tool path: OpenAI model through the Codex harness/runtime, Telegram direct conversation, and message-tool-only visible replies.
+- This scenario forces tool-only delivery; the default Codex direct path uses automatic final replies.
 - This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.
 - This also simulates workspace bootstrap files forwarded through Codex `turn/start` input runtime context: `SOUL.md`, `TOOLS.md`, and `HEARTBEAT.md`.
 
