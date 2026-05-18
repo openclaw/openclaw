@@ -33,6 +33,9 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
   if (!Object.hasOwn(overrides, "OPENCLAW_LOCAL_CHECK_MODE")) {
     delete env.OPENCLAW_LOCAL_CHECK_MODE;
   }
+  if (!Object.hasOwn(overrides, "CI")) {
+    delete env.CI;
+  }
   return env;
 }
 
