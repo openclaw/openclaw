@@ -34,12 +34,12 @@ export type CronConfig = {
   maxConcurrentRuns?: number;
   /**
    * Maximum setup time for isolated agent cron jobs before the runner starts.
-   * Accepts milliseconds or a duration string (e.g. "5m"). Default: "5m".
+   * Accepts milliseconds or a duration string (e.g. "3m"). Default: "3m".
    */
   isolatedAgentSetupWatchdog?: string | number;
   /**
    * Maximum time for isolated agent cron jobs after runner start but before
-   * execution progress. Capped to half of the job timeout. Default: "5m".
+   * execution progress. Capped to half of the job timeout. Default: "3m".
    */
   isolatedAgentPreExecutionWatchdog?: string | number;
   /** Override default retry policy for one-shot jobs on transient errors. */

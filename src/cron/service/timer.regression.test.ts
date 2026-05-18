@@ -38,9 +38,9 @@ const timerRegressionFixtures = setupCronRegressionFixtures({
 });
 
 describe("cron isolated agent watchdog resolution", () => {
-  it("defaults setup watchdog to 5m", () => {
-    expect(resolveCronAgentSetupWatchdogMs(900_000)).toBe(300_000);
-    expect(resolveCronAgentSetupWatchdogMs(120_000)).toBe(300_000);
+  it("defaults setup watchdog to 3m", () => {
+    expect(resolveCronAgentSetupWatchdogMs(900_000)).toBe(180_000);
+    expect(resolveCronAgentSetupWatchdogMs(120_000)).toBe(180_000);
   });
 
   it("honors configured setup watchdog durations", () => {
@@ -56,9 +56,9 @@ describe("cron isolated agent watchdog resolution", () => {
     ).toBe(90_000);
   });
 
-  it("defaults pre-execution watchdog to 5m and caps it by half the job timeout", () => {
+  it("defaults pre-execution watchdog to 3m and caps it by half the job timeout", () => {
     expect(resolveCronAgentPreExecutionWatchdogMs(120_000)).toBe(60_000);
-    expect(resolveCronAgentPreExecutionWatchdogMs(900_000)).toBe(300_000);
+    expect(resolveCronAgentPreExecutionWatchdogMs(900_000)).toBe(180_000);
   });
 
   it("honors configured pre-execution watchdog durations with timeout capping", () => {
@@ -1459,8 +1459,8 @@ describe("cron service timer regressions", () => {
 
       const timerPromise = onTimer(state);
       await started.promise;
-      await vi.advanceTimersByTimeAsync(300_100);
-      now += 300_100;
+      await vi.advanceTimersByTimeAsync(180_100);
+      now += 180_100;
       await timerPromise;
 
       const job = requireJob(state, "isolated-setup-timeout-74803");
@@ -1544,8 +1544,8 @@ describe("cron service timer regressions", () => {
 
       const timerPromise = onTimer(state);
       await started.promise;
-      await vi.advanceTimersByTimeAsync(300_100);
-      now += 300_100;
+      await vi.advanceTimersByTimeAsync(180_100);
+      now += 180_100;
       await timerPromise;
 
       const job = requireJob(state, "isolated-pre-model-timeout-74803");
