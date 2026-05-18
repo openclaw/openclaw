@@ -14,6 +14,10 @@ export const pluginRegistrationContractCases = {
     pluginId: "brave",
     webSearchProviderIds: ["brave"],
   },
+  composio: {
+    pluginId: "composio",
+    webSearchProviderIds: ["composio"],
+  },
   comfy: {
     pluginId: "comfy",
     providerIds: ["comfy"],

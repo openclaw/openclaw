@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/composio-plugin",
+  "version": "2026.5.18",
+  "private": true,
+  "description": "OpenClaw Composio plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -323,6 +323,10 @@
       - any-glob-to-any-file:
           - "extensions/cerebras/**"
           - "docs/providers/cerebras.md"
+"extensions: composio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/composio/**"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:

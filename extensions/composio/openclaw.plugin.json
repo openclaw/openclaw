@@ -1,0 +1,38 @@
+{
+  "id": "composio",
+  "activation": {
+    "onStartup": false
+  },
+  "providerAuthEnvVars": {
+    "composio": ["COMPOSIO_API_KEY"]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Composio API Key",
+      "help": "Composio API key for web search (fallback: COMPOSIO_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "ak_..."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["composio"]
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.composioApiKey"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          }
+        }
+      }
+    }
+  }
+}
