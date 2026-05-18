@@ -234,6 +234,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp: treat `upload-file` as a supported media send intent by lowering path/URL uploads through the channel's normal send-media transport. (#81883) Thanks @ngutman.
 - iOS: end Live Activities when OpenClaw is connected, idle, or disconnected, and show compact attention states for approval-required reconnects. (#83597) Thanks @ngutman.
 - Control UI: hide child nav items when collapsing the active sidebar group. Fixes #42167. (#42223) Thanks @Aroool.
+- CI/proof: skip the real-behavior-proof gate for private org maintainers by minting a least-privilege (`members: read`) GitHub App token and checking active membership in the `maintainer` team, instead of treating `author_association=CONTRIBUTOR` as definitively external. (#83418) Thanks @romneyda.
 
 ## 2026.5.17
 
