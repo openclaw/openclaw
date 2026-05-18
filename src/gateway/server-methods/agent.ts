@@ -1192,6 +1192,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           requestDeliveryHint,
         );
         const effectiveDeliveryFields = normalizeSessionDeliveryFields({
+          route: deliveryFields.route,
           deliveryContext: effectiveDelivery,
         });
         const nextEntryPatch: SessionEntry = {
