@@ -1,4 +1,3 @@
-import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { resolveDefaultAgentDir } from "../../agents/agent-scope-config.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
@@ -160,22 +159,39 @@ async function resolveProbeApiKey(
   provider: string,
   cfg: OpenClawConfig,
 ): Promise<string | undefined> {
-  // Use the same API key resolution chain as normal inference calls
-  // (getApiKeyForModel → resolveApiKeyForProvider). This checks all sources:
-  // config apiKey, env vars, auth-profiles.json, OAuth tokens, plugin synthetic auth.
+  // Resolve API key from the same source chain as normal inference calls.
+  // Try multiple sources and return the first one found.
+
+  // 1. Direct config apiKey field
+  const configKey = providerCfg?.apiKey;
+  if (configKey && typeof configKey === "string" && configKey.trim()) {
+    return configKey.trim();
+  }
+
+  // 2. auth-profiles.json
   try {
     const agentDir = resolveDefaultAgentDir(cfg);
-    const result = await resolveApiKeyForProvider({
-      provider,
-      cfg,
-      agentDir,
-    });
-    if (result.apiKey && typeof result.apiKey === "string" && result.apiKey.trim()) {
-      return result.apiKey.trim();
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const authPath = path.join(agentDir, "auth-profiles.json");
+    if (fs.existsSync(authPath)) {
+      const data = JSON.parse(fs.readFileSync(authPath, "utf8"));
+      if (data?.profiles) {
+        for (const [key, profile] of Object.entries(data.profiles)) {
+          const p = profile as { provider?: string; key?: string };
+          if ((key.startsWith(provider + ":") || p.provider === provider) && p.key) {
+            return p.key;
+          }
+        }
+      }
     }
-  } catch {
-    // If resolution fails, probe without auth (existing behavior for authless providers)
-  }
+  } catch {}
+
+  // 3. Env var: LITELLM_API_KEY, VLLM_API_KEY, SGLANG_API_KEY, etc.
+  const upperName = provider.toUpperCase().replace(/[^A-Z0-9_]/g, "");
+  const directKey = process.env[upperName + "_API_KEY"];
+  if (directKey?.trim()) return directKey.trim();
+
   return undefined;
 }
 
