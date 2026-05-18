@@ -91,6 +91,7 @@ import { reactivateCompletedSubagentSession } from "../session-subagent-reactiva
 import {
   archiveFileOnDisk,
   buildGatewaySessionRow,
+  deleteGatewaySessionStoreEntry,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadGatewaySessionRow,
@@ -106,6 +107,7 @@ import {
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
+  syncGatewaySessionStoreAliases,
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
@@ -1908,14 +1910,26 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       context.getRuntimeConfig(),
     );
     const applied = await updateSessionStore(storePath, async (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
-      return await applySessionsPatchToStore({
+      const { preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store,
+      });
+      const applied = await applySessionsPatchToStore({
         cfg,
         store,
         storeKey: primaryKey,
         patch: p,
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       });
+      if (applied.ok) {
+        syncGatewaySessionStoreAliases({
+          store,
+          primaryKey,
+          aliasKeys: preservedAliasKeys,
+        });
+      }
+      return applied;
     });
     if (!applied.ok) {
       respond(false, undefined, applied.error);
@@ -2120,12 +2134,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const sessionId = entry?.sessionId;
     const deleted = await updateSessionStore(storePath, (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
-      const hadEntry = Boolean(store[primaryKey]);
-      if (hadEntry) {
-        delete store[primaryKey];
-      }
-      return hadEntry;
+      const { preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store,
+      });
+      return deleteGatewaySessionStoreEntry({
+        store,
+        primaryKey,
+        aliasKeys: preservedAliasKeys,
+      });
     });
 
     const archivedTranscripts =

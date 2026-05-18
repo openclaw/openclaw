@@ -913,6 +913,76 @@ function resolvePreservedRawExternalStoreKey(params: {
   return lowered;
 }
 
+function normalizeSessionStoreKeys(keys: Iterable<string | undefined>): string[] {
+  const normalized = new Set<string>();
+  for (const key of keys) {
+    const trimmed = normalizeOptionalString(key ?? "") ?? "";
+    if (trimmed) {
+      normalized.add(trimmed);
+    }
+  }
+  return Array.from(normalized);
+}
+
+function resolvePreservedRawExternalAliasKeys(params: {
+  preservedRawKey: string | undefined;
+  storeKeys: Iterable<string>;
+}): string[] {
+  if (!params.preservedRawKey) {
+    return [];
+  }
+  const aliases = Array.from(params.storeKeys).filter(
+    (key) => normalizeLowercaseStringOrEmpty(key) === params.preservedRawKey,
+  );
+  aliases.push(params.preservedRawKey);
+  return normalizeSessionStoreKeys(aliases);
+}
+
+export function syncGatewaySessionStoreAliases(params: {
+  store: Record<string, SessionEntry>;
+  primaryKey: string;
+  aliasKeys: Iterable<string>;
+}) {
+  const entry = params.store[params.primaryKey];
+  if (!entry) {
+    return;
+  }
+  for (const aliasKey of normalizeSessionStoreKeys(params.aliasKeys)) {
+    if (aliasKey !== params.primaryKey) {
+      params.store[aliasKey] = entry;
+    }
+  }
+}
+
+export function writeGatewaySessionStoreEntry(params: {
+  store: Record<string, SessionEntry>;
+  primaryKey: string;
+  aliasKeys: Iterable<string>;
+  entry: SessionEntry;
+}) {
+  params.store[params.primaryKey] = params.entry;
+  syncGatewaySessionStoreAliases({
+    store: params.store,
+    primaryKey: params.primaryKey,
+    aliasKeys: params.aliasKeys,
+  });
+}
+
+export function deleteGatewaySessionStoreEntry(params: {
+  store: Record<string, SessionEntry>;
+  primaryKey: string;
+  aliasKeys: Iterable<string>;
+}): boolean {
+  let hadEntry = false;
+  for (const key of normalizeSessionStoreKeys([params.primaryKey, ...params.aliasKeys])) {
+    if (params.store[key]) {
+      hadEntry = true;
+    }
+    delete params.store[key];
+  }
+  return hadEntry;
+}
+
 export function migrateAndPruneGatewaySessionStoreKey(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -928,6 +998,10 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
     cfg: params.cfg,
     key: params.key,
     canonicalKey: primaryKey,
+  });
+  const preservedAliasKeys = resolvePreservedRawExternalAliasKeys({
+    preservedRawKey,
+    storeKeys: target.storeKeys,
   });
   const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
     params.store,
@@ -946,10 +1020,12 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
       (key) => normalizeLowercaseStringOrEmpty(key) !== preservedRawKey,
     ),
   });
-  if (preservedRawKey && params.store[primaryKey]) {
-    params.store[preservedRawKey] = params.store[primaryKey];
-  }
-  return { target, primaryKey, entry: params.store[primaryKey] };
+  syncGatewaySessionStoreAliases({
+    store: params.store,
+    primaryKey,
+    aliasKeys: preservedAliasKeys,
+  });
+  return { target, primaryKey, entry: params.store[primaryKey], preservedAliasKeys };
 }
 
 export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { expect, test, vi } from "vitest";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
@@ -19,6 +20,14 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
+
+async function writeRawSessionStore(
+  storePath: string,
+  entries: Record<string, Record<string, unknown>>,
+) {
+  await fs.writeFile(storePath, JSON.stringify(entries, null, 2), "utf-8");
+  clearSessionStoreCacheForTest();
+}
 
 function expectResetAcpState(
   acp:
@@ -106,6 +115,37 @@ test("sessions.reset aborts active runs and clears queues", async () => {
     targetSessionKey: "agent:main:main",
     reason: "session-reset",
   });
+});
+
+test("sessions.reset updates preserved raw external aliases", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({ entries: {}, storePath });
+  const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+  const canonicalKey = `agent:main:${rawKey}`;
+  await writeRawSessionStore(storePath, {
+    [rawKey]: {
+      sessionId: "sess-raw",
+      updatedAt: 1,
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: { sessionId: string };
+  }>("sessions.reset", {
+    key: rawKey,
+  });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.key).toBe(canonicalKey);
+  expect(reset.payload?.entry.sessionId).not.toBe("sess-raw");
+  const storeAfterReset = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { sessionId?: string }
+  >;
+  expect(storeAfterReset[canonicalKey]?.sessionId).toBe(reset.payload?.entry.sessionId);
+  expect(storeAfterReset[rawKey]?.sessionId).toBe(reset.payload?.entry.sessionId);
 });
 
 test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {

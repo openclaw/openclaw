@@ -13,6 +13,7 @@ import {
   buildGatewaySessionRow,
   capArrayByJsonBytes,
   classifySessionKey,
+  deleteGatewaySessionStoreEntry,
   deriveSessionTitle,
   getSessionDefaults,
   listAgentsForGateway,
@@ -29,6 +30,7 @@ import {
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionStoreKey,
+  writeGatewaySessionStoreEntry,
 } from "./session-utils.js";
 
 function resolveSyncRealpath(filePath: string): string {
@@ -1107,8 +1109,53 @@ describe("gateway session utils", () => {
 
     expect(result.primaryKey).toBe(canonicalKey);
     expect(result.entry?.sessionId).toBe("sess-raw");
+    expect(result.preservedAliasKeys).toEqual([rawKey]);
     expect(store[canonicalKey]?.sessionId).toBe("sess-raw");
     expect(store[rawKey]?.sessionId).toBe("sess-raw");
+  });
+
+  test("preserved raw external aliases follow replacement and delete operations", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+    const canonicalKey = `agent:main:${rawKey}`;
+    const store: Record<string, SessionEntry> = {
+      [rawKey]: {
+        sessionId: "sess-raw",
+        updatedAt: 2,
+      } as SessionEntry,
+    };
+
+    const migrated = migrateAndPruneGatewaySessionStoreKey({
+      cfg,
+      key: rawKey,
+      store,
+    });
+    const nextEntry = {
+      sessionId: "sess-next",
+      updatedAt: 3,
+    } as SessionEntry;
+
+    writeGatewaySessionStoreEntry({
+      store,
+      primaryKey: migrated.primaryKey,
+      aliasKeys: migrated.preservedAliasKeys,
+      entry: nextEntry,
+    });
+
+    expect(store[canonicalKey]).toBe(nextEntry);
+    expect(store[rawKey]).toBe(nextEntry);
+    expect(
+      deleteGatewaySessionStoreEntry({
+        store,
+        primaryKey: migrated.primaryKey,
+        aliasKeys: migrated.preservedAliasKeys,
+      }),
+    ).toBe(true);
+    expect(store[canonicalKey]).toBeUndefined();
+    expect(store[rawKey]).toBeUndefined();
   });
 
   test("listAgentsForGateway rejects avatar symlink escapes outside workspace", () => {

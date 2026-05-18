@@ -41,6 +41,7 @@ import {
   scopedHeartbeatWakeOptions,
   sendDurableMessageBatch,
   updateSessionStore,
+  writeGatewaySessionStoreEntry,
 } from "./server-node-events.runtime.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -249,26 +250,31 @@ async function touchSessionStore(params: {
     return;
   }
   await updateSessionStore(storePath, (store) => {
-    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+    const { preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
       cfg: params.cfg,
       key: params.sessionKey,
       store,
     });
-    store[primaryKey] = {
-      ...store[primaryKey],
-      sessionId: params.sessionId,
-      updatedAt: params.now,
-      thinkingLevel: params.entry?.thinkingLevel,
-      fastMode: params.entry?.fastMode,
-      verboseLevel: params.entry?.verboseLevel,
-      reasoningLevel: params.entry?.reasoningLevel,
-      systemSent: params.entry?.systemSent,
-      sendPolicy: params.entry?.sendPolicy,
-      lastChannel: params.entry?.lastChannel,
-      lastTo: params.entry?.lastTo,
-      lastAccountId: params.entry?.lastAccountId,
-      lastThreadId: params.entry?.lastThreadId,
-    };
+    writeGatewaySessionStoreEntry({
+      store,
+      primaryKey,
+      aliasKeys: preservedAliasKeys,
+      entry: {
+        ...store[primaryKey],
+        sessionId: params.sessionId,
+        updatedAt: params.now,
+        thinkingLevel: params.entry?.thinkingLevel,
+        fastMode: params.entry?.fastMode,
+        verboseLevel: params.entry?.verboseLevel,
+        reasoningLevel: params.entry?.reasoningLevel,
+        systemSent: params.entry?.systemSent,
+        sendPolicy: params.entry?.sendPolicy,
+        lastChannel: params.entry?.lastChannel,
+        lastTo: params.entry?.lastTo,
+        lastAccountId: params.entry?.lastAccountId,
+        lastThreadId: params.entry?.lastThreadId,
+      },
+    });
   });
 }
 

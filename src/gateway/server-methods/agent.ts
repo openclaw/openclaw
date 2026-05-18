@@ -133,6 +133,7 @@ import {
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewayModelSupportsImages,
   resolveSessionModelRef,
+  writeGatewaySessionStoreEntry,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -1272,13 +1273,18 @@ export const agentHandlers: GatewayRequestHandlers = {
         if (storePath) {
           const requestedStoreKey = requestedSessionKey;
           const persisted = await updateSessionStore(storePath, (store) => {
-            const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+            const { preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
               cfg,
               key: requestedStoreKey,
               store,
             });
             const merged = mergeSessionEntry(store[primaryKey], nextEntryPatch);
-            store[primaryKey] = merged;
+            writeGatewaySessionStoreEntry({
+              store,
+              primaryKey,
+              aliasKeys: preservedAliasKeys,
+              entry: merged,
+            });
             return merged;
           });
           sessionEntry = persisted;

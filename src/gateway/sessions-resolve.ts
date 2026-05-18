@@ -16,6 +16,7 @@ import {
   migrateAndPruneGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewaySessionStoreTarget,
+  syncGatewaySessionStoreAliases,
 } from "./session-utils.js";
 
 export type SessionsResolveResult = { ok: true; key: string } | { ok: false; error: ErrorShape };
@@ -141,10 +142,19 @@ export async function resolveSessionKeyFromResolveParams(params: {
       return noSessionFoundResult(key);
     }
     await updateSessionStore(target.storePath, (s) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store: s });
+      const { preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store: s,
+      });
       if (!s[primaryKey] && s[legacyKey]) {
         s[primaryKey] = s[legacyKey];
       }
+      syncGatewaySessionStoreAliases({
+        store: s,
+        primaryKey,
+        aliasKeys: preservedAliasKeys,
+      });
     });
     if (
       !isResolvedSessionKeyVisible({
