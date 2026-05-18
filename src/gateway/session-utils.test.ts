@@ -167,6 +167,54 @@ describe("gateway session utils", () => {
     expect(listed.hasMore).toBe(true);
   });
 
+  test("session lists collapse preserved raw external aliases", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+    const canonicalKey = `agent:main:${rawKey}`;
+    const store = {
+      [rawKey]: {
+        sessionId: "sess-raw",
+        subject: "Alias Needle",
+        updatedAt: 20,
+      },
+      [canonicalKey]: {
+        sessionId: "sess-raw",
+        subject: "Alias Needle",
+        updatedAt: 30,
+      },
+    } satisfies Record<string, SessionEntry>;
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: {},
+    });
+    expect(listed.sessions.map((session) => session.key)).toEqual([canonicalKey]);
+    expect(listed.count).toBe(1);
+    expect(listed.totalCount).toBe(1);
+    expect(listed.hasMore).toBe(false);
+
+    const searched = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { search: "alias needle" },
+    });
+    expect(searched.sessions.map((session) => session.key)).toEqual([canonicalKey]);
+    expect(searched.count).toBe(1);
+    expect(searched.totalCount).toBe(1);
+
+    const rawOnly = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store: { [rawKey]: store[rawKey]! },
+      opts: {},
+    });
+    expect(rawOnly.sessions.map((session) => session.key)).toEqual([rawKey]);
+    expect(rawOnly.totalCount).toBe(1);
+  });
+
   test("parseGroupKey handles group keys", () => {
     expect(parseGroupKey("discord:group:dev")).toEqual({
       channel: "discord",

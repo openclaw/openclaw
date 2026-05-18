@@ -2175,13 +2175,47 @@ function sortAndLimitSessionEntries(
   return limit === undefined ? sorted : sorted.slice(0, limit);
 }
 
+function isPreservedRawExternalAliasEntry(params: {
+  cfg: OpenClawConfig;
+  store: Record<string, SessionEntry>;
+  key: string;
+  entry: SessionEntry;
+}): boolean {
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: params.key,
+  });
+  if (!canonicalKey || canonicalKey === params.key) {
+    return false;
+  }
+  const preservedRawKey = resolvePreservedRawExternalStoreKey({
+    cfg: params.cfg,
+    key: params.key,
+    canonicalKey,
+  });
+  if (!preservedRawKey) {
+    return false;
+  }
+  const canonicalEntry = params.store[canonicalKey];
+  if (!canonicalEntry) {
+    return false;
+  }
+  if (canonicalEntry === params.entry) {
+    return true;
+  }
+  const sessionId = normalizeOptionalString(params.entry.sessionId) ?? "";
+  const canonicalSessionId = normalizeOptionalString(canonicalEntry.sessionId) ?? "";
+  return Boolean(sessionId && canonicalSessionId && sessionId === canonicalSessionId);
+}
+
 function filterSessionEntries(params: {
+  cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
   rowContext?: SessionListRowContext;
 }): SessionEntryPair[] {
-  const { store, opts, now } = params;
+  const { cfg, store, opts, now } = params;
   const rowContext = params.rowContext;
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
@@ -2195,6 +2229,7 @@ function filterSessionEntries(params: {
       : undefined;
 
   let entries = Object.entries(store)
+    .filter(([key, entry]) => !isPreservedRawExternalAliasEntry({ cfg, store, key, entry }))
     .filter(([key]) => {
       if (isCronRunSessionKey(key)) {
         return false;
@@ -2277,6 +2312,7 @@ function filterSessionEntries(params: {
 }
 
 function selectSessionEntries(params: {
+  cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
@@ -2294,6 +2330,7 @@ function selectSessionEntries(params: {
 }
 
 export function filterAndSortSessionEntries(params: {
+  cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
@@ -2323,6 +2360,7 @@ export function listSessionsFromStore(params: {
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
   const selection = selectSessionEntries({
+    cfg,
     store,
     opts,
     now,
@@ -2392,6 +2430,7 @@ export async function listSessionsFromStoreAsync(params: {
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
   const selection = selectSessionEntries({
+    cfg,
     store,
     opts,
     now,
