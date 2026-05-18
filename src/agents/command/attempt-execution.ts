@@ -18,7 +18,7 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
-import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
+import { resolveAuthProfileEligibility, resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
@@ -120,20 +120,6 @@ type HarnessAuthProfileSelection = {
   authProfileMode?: string;
 };
 
-function resolveProfileAuthFromStore(params: { agentDir: string; profileId: string | undefined }): {
-  provider?: string;
-  mode?: string;
-} {
-  const profileId = params.profileId?.trim();
-  if (!profileId) {
-    return {};
-  }
-  const credential = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  }).profiles[profileId];
-  return { provider: credential?.provider, mode: credential?.type };
-}
-
 function resolveHarnessAuthProfileSelection(params: {
   config: OpenClawConfig;
   agentDir: string;
@@ -148,16 +134,46 @@ function resolveHarnessAuthProfileSelection(params: {
 }): HarnessAuthProfileSelection {
   const sessionAuthProfileId = params.sessionAuthProfileId?.trim();
   if (sessionAuthProfileId) {
-    const profileAuth = resolveProfileAuthFromStore({
-      agentDir: params.agentDir,
-      profileId: sessionAuthProfileId,
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
     });
-    return {
-      authProfileId: sessionAuthProfileId,
-      authProfileIdSource: params.sessionAuthProfileSource,
+    const credential = store.profiles[sessionAuthProfileId];
+    const profileAuth = {
+      provider: credential?.provider,
+      mode: credential?.type,
+    };
+    const sessionAuthPlan = buildAgentRuntimeAuthPlan({
+      provider: params.provider,
       authProfileProvider: profileAuth.provider ?? params.authProfileProvider,
       authProfileMode: profileAuth.mode,
-    };
+      sessionAuthProfileId,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      harnessId: params.harnessId,
+      harnessRuntime: params.harnessRuntime,
+      allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
+    });
+    const sessionProfileProvider =
+      sessionAuthPlan.harnessAuthProvider ?? sessionAuthPlan.authProfileProviderForAuth;
+    const sessionProfileEligible =
+      credential !== undefined &&
+      resolveAuthProfileEligibility({
+        cfg: params.config,
+        store,
+        provider: sessionProfileProvider,
+        profileId: sessionAuthProfileId,
+      }).eligible;
+    if (
+      params.sessionAuthProfileSource === "user" ||
+      (sessionAuthPlan.forwardedAuthProfileId === sessionAuthProfileId && sessionProfileEligible)
+    ) {
+      return {
+        authProfileId: sessionAuthProfileId,
+        authProfileIdSource: params.sessionAuthProfileSource,
+        authProfileProvider: profileAuth.provider ?? params.authProfileProvider,
+        authProfileMode: profileAuth.mode,
+      };
+    }
   }
 
   const runtimeAuthPlan = buildAgentRuntimeAuthPlan({

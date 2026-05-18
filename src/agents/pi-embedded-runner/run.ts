@@ -730,6 +730,16 @@ export async function runEmbeddedPiAgent(
         });
         return runtimeAuthPlan.forwardedAuthProfileId === profileId;
       };
+      const isEligiblePluginHarnessAuthProfile = (profileId: string): boolean => {
+        const credential = attemptAuthProfileStore.profiles?.[profileId];
+        const providerForEligibility = credential?.provider ?? profileId.split(":", 1)[0];
+        return resolveAuthProfileEligibility({
+          cfg: params.config,
+          store: attemptAuthProfileStore,
+          provider: providerForEligibility,
+          profileId,
+        }).eligible;
+      };
       const resolvePluginHarnessProfileOrder = (): string[] => {
         if (requestedProfileId && requestedProfileIsUserLocked) {
           return isForwardablePluginHarnessAuthProfile(requestedProfileId)
@@ -759,7 +769,11 @@ export async function runEmbeddedPiAgent(
         if (resolvedOrder.length > 0) {
           return resolvedOrder;
         }
-        if (requestedProfileId && isForwardablePluginHarnessAuthProfile(requestedProfileId)) {
+        if (
+          requestedProfileId &&
+          isForwardablePluginHarnessAuthProfile(requestedProfileId) &&
+          (requestedProfileIsUserLocked || isEligiblePluginHarnessAuthProfile(requestedProfileId))
+        ) {
           return [requestedProfileId];
         }
         return [];
