@@ -8,9 +8,11 @@ OPENCLAW_RUNTIME_NPM_DIR="${OPENCLAW_RUNTIME_NPM_DIR:-/data/.openclaw/npm}"
 mkdir -p "$OPENCLAW_RUNTIME_NPM_DIR"
 chown -R node:node "$OPENCLAW_RUNTIME_NPM_DIR"
 
-if ! su node -c "cd \"$OPENCLAW_RUNTIME_NPM_DIR\" && node -e \"import('openclaw/plugin-sdk/plugin-entry')\"" >/dev/null 2>&1; then
+if [ ! -d "$OPENCLAW_RUNTIME_NPM_DIR/node_modules/openclaw" ] || \
+  [ ! -d "$OPENCLAW_RUNTIME_NPM_DIR/node_modules/@openclaw/codex" ] || \
+  ! su node -c "cd \"$OPENCLAW_RUNTIME_NPM_DIR\" && node -e \"import('openclaw/plugin-sdk/plugin-entry')\"" >/dev/null 2>&1; then
   echo "Repairing OpenClaw runtime npm cache in $OPENCLAW_RUNTIME_NPM_DIR..." >&2
-  su node -c "cd \"$OPENCLAW_RUNTIME_NPM_DIR\" && npm install --omit=dev openclaw@2026.5.17 @openclaw/codex@2026.5.17"
+  su node -c "cd \"$OPENCLAW_RUNTIME_NPM_DIR\" && npm install --omit=dev --no-audit --no-fund openclaw@2026.5.17 @openclaw/codex@2026.5.17"
 fi
 
 if [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
