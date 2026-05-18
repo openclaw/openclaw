@@ -141,7 +141,7 @@ describe("legacy agent model timeout migrate", () => {
     const defaults = agents.defaults as Record<string, unknown>;
     const defaultSubagents = defaults.subagents as Record<string, unknown>;
     const list = agents.list as Array<Record<string, unknown>>;
-    const firstAgent = list[0]!;
+    const firstAgent = list[0];
     const firstSubagents = firstAgent.subagents as Record<string, unknown>;
 
     expect(defaults.model).toEqual({
