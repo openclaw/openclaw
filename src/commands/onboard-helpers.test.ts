@@ -125,7 +125,9 @@ describe("moveToTrash", () => {
 
     expect(fs.existsSync(targetDir)).toBe(false);
     expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith(targetDir);
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(targetDir, {
+      allowedRoots: [path.dirname(path.resolve(targetDir))],
+    });
     const logMessages = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
       .map((call) => String(call[0]))
       .join("\n");

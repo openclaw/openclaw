@@ -20,6 +20,10 @@ const gatewayMocks = vi.hoisted(() => ({
   isGatewayTransportError: vi.fn(),
 }));
 
+const trashMocks = vi.hoisted(() => ({
+  movePathToTrash: vi.fn(async () => "/tmp/openclaw-trash/trashed"),
+}));
+
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
@@ -33,6 +37,10 @@ vi.mock("../gateway/call.js", () => ({
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: processMocks.runCommandWithTimeout,
+}));
+
+vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
+  movePathToTrash: trashMocks.movePathToTrash,
 }));
 
 import { agentsDeleteCommand } from "./agents.js";
@@ -85,6 +93,7 @@ describe("agents delete command", () => {
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.replaceConfigFile.mockReset();
     processMocks.runCommandWithTimeout.mockClear();
+    trashMocks.movePathToTrash.mockClear();
     gatewayMocks.callGateway.mockReset();
     gatewayMocks.callGateway.mockRejectedValue(
       Object.assign(new Error("closed"), { name: "GatewayTransportError" }),
@@ -282,9 +291,9 @@ describe("agents delete command", () => {
       expect(jsonOutput[0]?.workspaceRetained).toBe(true);
       expect(jsonOutput[0]?.workspaceRetainedReason).toBe("shared");
       expect(jsonOutput[0]?.workspaceSharedWith).toEqual(["main"]);
-      expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
-        ["trash", sharedWorkspace],
-        { timeoutMs: 5000 },
+      expect(trashMocks.movePathToTrash).not.toHaveBeenCalledWith(
+        sharedWorkspace,
+        expect.anything(),
       );
     });
   });
@@ -319,9 +328,9 @@ describe("agents delete command", () => {
       const output = readJsonLogs()[0];
       expect(output?.workspaceRetained).toBe(true);
       expect(output?.workspaceSharedWith).toEqual(["main"]);
-      expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
-        ["trash", childWorkspace],
-        { timeoutMs: 5000 },
+      expect(trashMocks.movePathToTrash).not.toHaveBeenCalledWith(
+        childWorkspace,
+        expect.anything(),
       );
     });
   });
@@ -356,9 +365,9 @@ describe("agents delete command", () => {
       const output = readJsonLogs()[0];
       expect(output?.workspaceRetained).toBe(true);
       expect(output?.workspaceSharedWith).toEqual(["main"]);
-      expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
-        ["trash", sharedWorkspace],
-        { timeoutMs: 5000 },
+      expect(trashMocks.movePathToTrash).not.toHaveBeenCalledWith(
+        sharedWorkspace,
+        expect.anything(),
       );
     });
   });
@@ -396,9 +405,9 @@ describe("agents delete command", () => {
         const output = readJsonLogs()[0];
         expect(output?.workspaceRetained).toBe(true);
         expect(output?.workspaceSharedWith).toEqual(["main"]);
-        expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
-          ["trash", aliasWorkspace],
-          { timeoutMs: 5000 },
+        expect(trashMocks.movePathToTrash).not.toHaveBeenCalledWith(
+          aliasWorkspace,
+          expect.anything(),
         );
       });
     },
@@ -432,9 +441,8 @@ describe("agents delete command", () => {
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-      // trash command should have been called for the workspace
-      expect(processMocks.runCommandWithTimeout).toHaveBeenCalledWith(["trash", opsWorkspace], {
-        timeoutMs: 5000,
+      expect(trashMocks.movePathToTrash).toHaveBeenCalledWith(opsWorkspace, {
+        allowedRoots: [path.dirname(path.resolve(opsWorkspace))],
       });
     });
   });

@@ -255,7 +255,7 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
     return;
   }
   try {
-    await movePathToTrash(pathname);
+    await movePathToTrash(pathname, { allowedRoots: [path.dirname(path.resolve(pathname))] });
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
