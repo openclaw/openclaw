@@ -55,8 +55,8 @@ function rememberSeenEvent(state: MirrorState, key: string): boolean {
   return true;
 }
 
-function isThreadBoundSubagentSession(sessionKey: string | undefined): sessionKey is string {
-  return Boolean(sessionKey && sessionKey.includes(":subagent:"));
+function hasSessionKey(sessionKey: string | undefined): sessionKey is string {
+  return Boolean(sessionKey);
 }
 
 function resolveTelegramThreadRoute(loaded: LoadedSessionEntry | undefined): DeliveryRoute | null {
@@ -239,7 +239,7 @@ export function createAgentEventChannelMirror(deps: AgentEventChannelMirrorDeps 
 
   return async (evt: AgentEventPayload): Promise<void> => {
     const sessionKey = normalizeOptionalString(evt.sessionKey);
-    if (!isThreadBoundSubagentSession(sessionKey)) {
+    if (!hasSessionKey(sessionKey)) {
       return;
     }
     const key = eventKey(evt);

@@ -107,9 +107,28 @@ describe("agent event channel mirror", () => {
     expect(sendDurableMessageBatch).not.toHaveBeenCalled();
   });
 
-  it("does not mirror non-thread or non-subagent sessions", async () => {
+  it("mirrors any session with an explicit Telegram thread route, including cron proof sessions", async () => {
+    const { mirror, sendDurableMessageBatch } = createHarness();
+
+    await mirror(
+      event({
+        sessionKey: "agent:main:cron:job-1:run:run-1",
+        data: { text: "cron threaded progress", delta: "cron threaded progress" },
+      }),
+    );
+
+    expect(sendDurableMessageBatch).toHaveBeenCalledTimes(1);
+    expect(sendDurableMessageBatch.mock.calls[0]?.[0]).toMatchObject({
+      channel: "telegram",
+      to: "-100",
+      threadId: "1189",
+      payloads: [{ text: "💬 cron threaded progress" }],
+    });
+  });
+
+  it("does not mirror sessions without a Telegram thread route", async () => {
     const { sendDurableMessageBatch, loadSessionEntry } = createHarness();
-    loadSessionEntry.mockReturnValueOnce({
+    loadSessionEntry.mockReturnValue({
       cfg: { channels: {} },
       entry: {
         sessionId: "session-1",
@@ -123,9 +142,11 @@ describe("agent event channel mirror", () => {
     });
 
     await mirror(
-      event({ sessionKey: "agent:main:explicit:abc", data: { text: "hello", delta: "hello" } }),
+      event({
+        sessionKey: "agent:main:explicit:abc",
+        data: { text: "no thread", delta: "no thread" },
+      }),
     );
-    await mirror(event({ seq: 2, data: { text: "no thread", delta: "no thread" } }));
 
     expect(sendDurableMessageBatch).not.toHaveBeenCalled();
   });
