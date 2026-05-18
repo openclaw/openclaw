@@ -45,6 +45,7 @@ type AfterTurnPromptCacheCall = { runtimeContext?: { promptCache?: Record<string
 type TrajectoryEvent = { type?: string; data?: Record<string, unknown> };
 type ToolResultGuardInstallParams = {
   midTurnPrecheck?: {
+    enabled?: boolean;
     onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
   };
 };
