@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeConfigPaths } from "../config/normalize-paths.js";
 
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
@@ -453,6 +454,43 @@ describe("executeNodeHostCommand", () => {
       }),
     ).rejects.toThrow(
       "Security Violation: exec command references denied path C:\\Secrets\\provider.key",
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps config-loaded home-relative denied paths in the Windows node HOME namespace", async () => {
+    const config = normalizeConfigPaths({
+      tools: {
+        exec: {
+          deniedPaths: ["~/.openclaw/credentials/**"],
+        },
+      },
+    });
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+        platform: "win32",
+      },
+    ]);
+
+    await expect(
+      executeNodeHostCommand({
+        command: "type C:\\Users\\agent\\.openclaw\\credentials\\provider.key",
+        workdir: "C:\\Work",
+        env: {},
+        requestedEnv: { HOME: "C:\\Users\\agent" },
+        security: "full",
+        ask: "off",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+        deniedPaths: config.tools?.exec?.deniedPaths,
+      }),
+    ).rejects.toThrow(
+      "Security Violation: exec command references denied path C:\\Users\\agent\\.openclaw\\credentials\\provider.key",
     );
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });

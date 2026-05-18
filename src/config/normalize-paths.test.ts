@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 
 describe("normalizeConfigPaths", () => {
-  it("expands tilde for path-ish keys only", async () => {
+  it("expands tilde for path-ish keys while preserving exec denied paths", async () => {
     await withTempHome(async (home) => {
       const cfg = normalizeConfigPaths({
         tools: {
@@ -59,9 +59,7 @@ describe("normalizeConfigPaths", () => {
       expect(cfg.hooks?.path).toBe(path.join(home, ".openclaw", "hooks.json5"));
       expect(cfg.hooks?.transformsDir).toBe(path.join(home, "hooks-xform"));
       expect(cfg.tools?.exec?.pathPrepend?.[0]).toBe(path.join(home, "bin"));
-      expect(cfg.tools?.exec?.deniedPaths?.[0]).toBe(
-        path.join(home, ".openclaw", "credentials", "**"),
-      );
+      expect(cfg.tools?.exec?.deniedPaths?.[0]).toBe("~/.openclaw/credentials/**");
       expect(cfg.channels?.telegram?.accounts?.personal?.tokenFile).toBe(
         path.join(home, ".openclaw", "telegram.token"),
       );

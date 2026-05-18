@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeConfigPaths } from "../config/normalize-paths.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
@@ -341,6 +342,50 @@ describe("exec host env validation", () => {
         }),
       ).rejects.toThrow(
         "Security Violation: exec command references denied path /run/secrets/provider.key",
+      );
+      expect(buildExecSpec).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps config-loaded home-relative denied paths in the sandbox HOME namespace", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-home-denied-"));
+    const workspaceDir = path.join(tempRoot, "host", "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    const config = normalizeConfigPaths({
+      tools: {
+        exec: {
+          deniedPaths: ["~/.openclaw/credentials/**"],
+        },
+      },
+    });
+    const buildExecSpec = vi.fn(async (params) => ({
+      argv: ["sh", "-c", "echo should-not-run"],
+      env: params.env,
+      stdinMode: "pipe-closed" as const,
+    }));
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      deniedPaths: config.tools?.exec?.deniedPaths,
+      sandbox: {
+        containerName: "openclaw-test-sandbox",
+        workspaceDir,
+        containerWorkdir: "/workspace",
+        buildExecSpec,
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-denied-sandbox-home-path", {
+          command: 'cat "$HOME/.openclaw/credentials/provider.key"',
+          workdir: "/workspace",
+        }),
+      ).rejects.toThrow(
+        "Security Violation: exec command references denied path /workspace/.openclaw/credentials/provider.key",
       );
       expect(buildExecSpec).not.toHaveBeenCalled();
     } finally {

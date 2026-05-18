@@ -1082,7 +1082,7 @@ type ConfigReadResolution = {
 
 const TILDE_PATH_VALUE_RE = /^~(?=$|[\\/])/;
 const PATH_LIKE_CONFIG_KEY_RE = /(dir|path|paths|file|root|workspace)$/i;
-const PATH_LIKE_CONFIG_LIST_KEYS = new Set(["paths", "pathPrepend", "deniedPaths"]);
+const PATH_LIKE_CONFIG_LIST_KEYS = new Set(["paths", "pathPrepend"]);
 
 function isPathLikeConfigKey(key: string | undefined): boolean {
   return Boolean(key && (PATH_LIKE_CONFIG_KEY_RE.test(key) || PATH_LIKE_CONFIG_LIST_KEYS.has(key)));
