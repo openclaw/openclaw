@@ -1,3 +1,4 @@
+import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -153,6 +154,17 @@ function buildUnavailableResult(params: {
   };
 }
 
+function resolveProbeApiKey(providerCfg: ModelProviderConfig | undefined, provider: string): string | undefined {
+  // First try the provider config's apiKey field
+  const configKey = providerCfg?.apiKey;
+  if (configKey && typeof configKey === "string" && configKey.trim()) {
+    return configKey.trim();
+  }
+  // Fall back to env var lookup using the provider name
+  const envResult = resolveEnvApiKey(provider, process.env);
+  return envResult?.apiKey || undefined;
+}
+
 async function probeLocalProviderEndpoint(params: {
   api: PreflightApi;
   baseUrl: string;
@@ -211,10 +223,11 @@ export async function preflightCronModelProvider(params: {
 
   let result: EndpointPreflightResult;
   try {
+    const probeApiKey = resolveProbeApiKey(providerConfig, params.provider);
     await probeLocalProviderEndpoint({
       api,
       baseUrl,
-      apiKey: providerConfig.apiKey,
+      apiKey: probeApiKey,
     });
     result = { status: "available" };
   } catch (error) {
