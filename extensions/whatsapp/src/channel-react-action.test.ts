@@ -4,6 +4,20 @@ import type { OpenClawConfig } from "./runtime-api.js";
 
 const hoisted = vi.hoisted(() => ({
   handleWhatsAppAction: vi.fn(async () => ({ content: [{ type: "text", text: '{"ok":true}' }] })),
+  resolveAuthorizedWhatsAppOutboundTarget: vi.fn(
+    ({
+      chatJid,
+      accountId,
+    }: {
+      chatJid: string;
+      accountId?: string;
+    }): { to: string; accountId: string } => ({
+      to: chatJid,
+      accountId: accountId ?? "default",
+    }),
+  ),
+  resolveWhatsAppAccount: vi.fn(() => ({ accountId: "default", mediaMaxMb: 50 })),
+  resolveWhatsAppMediaMaxBytes: vi.fn(() => 50 * 1024 * 1024),
   sendMessageWhatsApp: vi.fn(async () => ({
     messageId: "msg-media-1",
     toJid: "1555@s.whatsapp.net",
@@ -13,6 +27,9 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("./channel-react-action.runtime.js", async () => {
   return {
     handleWhatsAppAction: hoisted.handleWhatsAppAction,
+    resolveAuthorizedWhatsAppOutboundTarget: hoisted.resolveAuthorizedWhatsAppOutboundTarget,
+    resolveWhatsAppAccount: hoisted.resolveWhatsAppAccount,
+    resolveWhatsAppMediaMaxBytes: hoisted.resolveWhatsAppMediaMaxBytes,
     sendMessageWhatsApp: hoisted.sendMessageWhatsApp,
     resolveReactionMessageId: ({
       args,
@@ -78,6 +95,11 @@ describe("whatsapp react action messageId resolution", () => {
 
   beforeEach(() => {
     hoisted.handleWhatsAppAction.mockClear();
+    hoisted.resolveAuthorizedWhatsAppOutboundTarget.mockClear();
+    hoisted.resolveWhatsAppAccount.mockClear();
+    hoisted.resolveWhatsAppMediaMaxBytes.mockClear();
+    hoisted.resolveWhatsAppAccount.mockReturnValue({ accountId: "default", mediaMaxMb: 50 });
+    hoisted.resolveWhatsAppMediaMaxBytes.mockReturnValue(50 * 1024 * 1024);
     hoisted.sendMessageWhatsApp.mockClear();
   });
 
@@ -90,6 +112,9 @@ describe("whatsapp react action messageId resolution", () => {
         to: "+1555",
         filePath: "/tmp/pic.png",
         caption: "picture caption",
+        forceDocument: "true",
+        gifPlayback: true,
+        asVoice: "true",
       },
       cfg: baseCfg,
       accountId: "default",
@@ -97,6 +122,12 @@ describe("whatsapp react action messageId resolution", () => {
       mediaReadFile,
     });
 
+    expect(hoisted.resolveAuthorizedWhatsAppOutboundTarget).toHaveBeenCalledWith({
+      cfg: baseCfg,
+      chatJid: "+1555",
+      accountId: "default",
+      actionLabel: "upload-file",
+    });
     expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith("+1555", "picture caption", {
       verbose: false,
       cfg: baseCfg,
@@ -104,6 +135,9 @@ describe("whatsapp react action messageId resolution", () => {
       mediaAccess: undefined,
       mediaLocalRoots: ["/tmp"],
       mediaReadFile,
+      gifPlayback: true,
+      audioAsVoice: true,
+      forceDocument: true,
       accountId: "default",
     });
     expect(result.details).toMatchObject({
@@ -115,19 +149,75 @@ describe("whatsapp react action messageId resolution", () => {
     });
   });
 
-  it("rejects upload-file buffer payloads without a media path", async () => {
+  it("does not send upload-file when target authorization fails", async () => {
+    hoisted.resolveAuthorizedWhatsAppOutboundTarget.mockImplementationOnce(() => {
+      throw new Error("WhatsApp upload-file blocked");
+    });
+
+    await expect(
+      handleWhatsAppReactAction({
+        action: "upload-file",
+        params: {
+          to: "+1555",
+          filePath: "/tmp/pic.png",
+        },
+        cfg: baseCfg,
+        accountId: "default",
+      }),
+    ).rejects.toThrow("WhatsApp upload-file blocked");
+    expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("sends upload-file from the hydrated buffer payload", async () => {
+    await handleWhatsAppReactAction({
+      action: "upload-file",
+      params: {
+        to: "+1555",
+        buffer: Buffer.from("hello").toString("base64"),
+        contentType: "text/plain",
+        filename: "hello.txt",
+        filePath: "/tmp/hello.txt",
+        forceDocument: true,
+        message: "file caption",
+      },
+      cfg: baseCfg,
+      accountId: "default",
+    });
+
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith("+1555", "file caption", {
+      verbose: false,
+      cfg: baseCfg,
+      mediaPayload: {
+        buffer: Buffer.from("hello"),
+        contentType: "text/plain",
+        fileName: "hello.txt",
+      },
+      mediaAccess: undefined,
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
+      gifPlayback: undefined,
+      audioAsVoice: undefined,
+      forceDocument: true,
+      accountId: "default",
+    });
+  });
+
+  it("rejects upload-file buffers above the WhatsApp media limit", async () => {
+    hoisted.resolveWhatsAppMediaMaxBytes.mockReturnValueOnce(4);
+
     await expect(
       handleWhatsAppReactAction({
         action: "upload-file",
         params: {
           to: "+1555",
           buffer: Buffer.from("hello").toString("base64"),
+          contentType: "text/plain",
           filename: "hello.txt",
         },
         cfg: baseCfg,
         accountId: "default",
       }),
-    ).rejects.toThrow("WhatsApp upload-file cannot send buffer payloads");
+    ).rejects.toThrow("WhatsApp upload-file buffer exceeds configured media limit");
     expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
   });
 
