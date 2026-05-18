@@ -4,6 +4,11 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
 
+type MockLoggingConfig = {
+  redactPatterns?: string[];
+  redactSensitive?: "off" | "tools";
+};
+
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const wsConstructorObservers = vi.hoisted((): Array<(url: string, options: unknown) => void> => []);
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
@@ -11,6 +16,9 @@ const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
 const logErrorMock = vi.hoisted(() => vi.fn());
+const readLoggingConfigMock = vi.hoisted(() =>
+  vi.fn<() => MockLoggingConfig | undefined>(() => undefined),
+);
 const {
   installGlobalProxyMock,
   proxylineRegisterBypassMock,
@@ -167,6 +175,15 @@ vi.mock("../logger.js", async () => {
   };
 });
 
+vi.mock("../logging/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../logging/config.js")>("../logging/config.js");
+  return {
+    ...actual,
+    readLoggingConfig: () => readLoggingConfigMock(),
+  };
+});
+
 type GatewayClientModule = typeof import("./client.js");
 type GatewayClientInstance = InstanceType<GatewayClientModule["GatewayClient"]>;
 
@@ -229,6 +246,7 @@ async function expectGatewayRequestError(
 function createClientWithIdentity(
   deviceId: string,
   onClose: (code: number, reason: string) => void,
+  overrides: Partial<ConstructorParameters<typeof GatewayClient>[0]> = {},
 ) {
   const identity: DeviceIdentity = {
     deviceId,
@@ -239,6 +257,7 @@ function createClientWithIdentity(
     url: "ws://127.0.0.1:18789",
     deviceIdentity: identity,
     onClose,
+    ...overrides,
   });
 }
 
@@ -479,8 +498,7 @@ describe("GatewayClient security checks", () => {
     client.stop();
   });
 
-  it("allows ws:// to private addresses only with OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
-    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+  it("allows ws:// to private addresses for trusted LAN and Tailnet configs", () => {
     const onConnectError = vi.fn();
     const client = new GatewayClient({
       url: "ws://192.168.1.100:18789",
@@ -646,7 +664,8 @@ describe("GatewayClient close handling", () => {
 
   it("clears stale token on device token mismatch close", () => {
     const onClose = vi.fn();
-    const client = createClientWithIdentity("dev-1", onClose);
+    const env = { OPENCLAW_HOME: "/tmp/custom-openclaw-home" };
+    const client = createClientWithIdentity("dev-1", onClose, { env });
 
     client.start();
     getLatestWs().emitClose(
@@ -654,7 +673,11 @@ describe("GatewayClient close handling", () => {
       "unauthorized: DEVICE token mismatch (rotate/reissue device token)",
     );
 
-    expect(clearDeviceAuthTokenMock).toHaveBeenCalledWith({ deviceId: "dev-1", role: "operator" });
+    expect(clearDeviceAuthTokenMock).toHaveBeenCalledWith({
+      deviceId: "dev-1",
+      role: "operator",
+      env,
+    });
     expect(logDebugMock).toHaveBeenCalledWith("cleared stale device-auth token for device dev-1");
     expect(onClose).toHaveBeenCalledWith(
       1008,
@@ -820,6 +843,8 @@ describe("GatewayClient connect auth payload", () => {
     clearDeviceAuthTokenMock.mockReset();
     loadDeviceAuthTokenMock.mockReset();
     storeDeviceAuthTokenMock.mockReset();
+    readLoggingConfigMock.mockReset();
+    readLoggingConfigMock.mockReturnValue(undefined);
     logDebugMock.mockClear();
     logErrorMock.mockClear();
   });
@@ -1065,6 +1090,82 @@ describe("GatewayClient connect auth payload", () => {
       "gateway connect failed: Error: gateway client stopped",
     );
     expect(ws.closeCalls).toBe(1);
+  });
+
+  it("redacts secret-bearing connect failure logs", async () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      deviceIdentity: null,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    emitConnectFailure(
+      ws,
+      connect.id,
+      { code: "AUTH_UNAUTHORIZED" },
+      "Authorization: Bearer sk-testsecret1234567890abcd wss://user:pass@gateway.example/ws?token=secret-token", // pragma: allowlist secret
+    );
+
+    await vi.waitFor(() => {
+      expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
+    });
+    const logged = String(logErrorMock.mock.calls.at(-1)?.[0] ?? "");
+    expect(logged).toContain("Authorization: Bearer");
+    expect(logged).not.toContain("sk-testsecret1234567890abcd");
+    expect(logged).not.toContain("user:pass");
+    expect(logged).not.toContain("secret-token");
+    client.stop();
+  });
+
+  it("preserves trailing diagnostics after redacted connect failure URL query params", async () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      deviceIdentity: null,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    emitConnectFailure(
+      ws,
+      connect.id,
+      { code: "AUTH_UNAUTHORIZED" },
+      "wss://gateway.example/ws?token=secret-token failed with 401 from remote gateway", // pragma: allowlist secret
+    );
+
+    await vi.waitFor(() => {
+      expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
+    });
+    const logged = String(logErrorMock.mock.calls.at(-1)?.[0] ?? "");
+    expect(logged).toContain("wss://gateway.example/ws?token=*** failed with 401");
+    expect(logged).toContain("from remote gateway");
+    expect(logged).not.toContain("secret-token");
+    client.stop();
+  });
+
+  it("forces secret redaction for connect failure logs when general log redaction is off", async () => {
+    readLoggingConfigMock.mockReturnValue({ redactSensitive: "off" });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      deviceIdentity: null,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    emitConnectFailure(
+      ws,
+      connect.id,
+      { code: "AUTH_UNAUTHORIZED" },
+      "Authorization: Bearer sk-disabledredaction1234567890abcd", // pragma: allowlist secret
+    );
+
+    await vi.waitFor(() => {
+      expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
+    });
+    const logged = String(logErrorMock.mock.calls.at(-1)?.[0] ?? "");
+    expect(logged).toContain("Authorization: Bearer");
+    expect(logged).not.toContain("sk-disabledredaction1234567890abcd");
+    client.stop();
   });
 
   it("uses explicit shared password and does not inject stored device token", () => {
@@ -1399,7 +1500,7 @@ describe("GatewayClient connect auth payload", () => {
     });
     const clearTokenParams = expectRecordFields(
       firstMockArg(clearDeviceAuthTokenMock, "clear device token params"),
-      { role: "operator" },
+      { role: "operator", env: undefined },
       "clear device token params",
     );
     expect(clearTokenParams.deviceId).toBeTypeOf("string");
@@ -1408,6 +1509,38 @@ describe("GatewayClient connect auth payload", () => {
       reason: "connect failed",
       detailCode: "AUTH_DEVICE_TOKEN_MISMATCH",
     });
+  });
+
+  it("clears stale stored device tokens from the configured environment store", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: ["operator.read"],
+    });
+    const env = { OPENCLAW_HOME: "/tmp/custom-openclaw-home" };
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      env,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    expect(firstConnect.params?.auth?.token).toBe("stored-device-token");
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+    });
+
+    expect(
+      expectRecordFields(
+        firstMockArg(clearDeviceAuthTokenMock, "clear device token params"),
+        {
+          role: "operator",
+          env,
+        },
+        "clear device token params",
+      ),
+    ).toHaveProperty("deviceId");
   });
 
   it("does not clear stored device tokens or reconnect on AUTH_SCOPE_MISMATCH", async () => {

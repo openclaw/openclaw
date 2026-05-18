@@ -66,6 +66,8 @@ function createQueueOutcomeMock(
           sessionId,
           target: "embedded_run",
           gatewayHealth: "live",
+          enqueuedAtMs: 4_100,
+          deliveredAtMs: 4_200,
         }
       : {
           queued: false,
@@ -434,6 +436,112 @@ describe("resolveSubagentCompletionOrigin", () => {
       to: "channel:parent-main",
     });
   });
+
+  it("prefers requester binding when child and requester share the same channel and accountId", async () => {
+    registerSessionBindingAdapter({
+      channel: "telegram",
+      accountId: "bot-1",
+      listBySession: (targetSessionKey: string) => {
+        if (targetSessionKey === "agent:main:telegram:default:direct:123") {
+          return [
+            {
+              bindingId: "telegram:bot-1:child-dm",
+              targetSessionKey,
+              targetKind: "subagent",
+              conversation: {
+                channel: "telegram",
+                accountId: "bot-1",
+                conversationId: "direct:123",
+              },
+              status: "active",
+              boundAt: 1,
+            },
+          ];
+        }
+        if (targetSessionKey === "agent:main:main") {
+          return [
+            {
+              bindingId: "telegram:bot-1:parent-main",
+              targetSessionKey,
+              targetKind: "session",
+              conversation: {
+                channel: "telegram",
+                accountId: "bot-1",
+                conversationId: "direct:789",
+              },
+              status: "active",
+              boundAt: 1,
+            },
+          ];
+        }
+        return [];
+      },
+      resolveByConversation: () => null,
+    });
+
+    const origin = await resolveSubagentCompletionOrigin({
+      childSessionKey: "agent:main:telegram:default:direct:123",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: {
+        channel: "telegram",
+        accountId: "bot-1",
+        to: "telegram:direct:789",
+      },
+      spawnMode: "run",
+      expectsCompletionMessage: true,
+    });
+
+    expect(origin).toEqual({
+      channel: "telegram",
+      accountId: "bot-1",
+      to: "telegram:direct:789",
+    });
+  });
+
+  it("falls back to child binding when requester has no binding", async () => {
+    registerSessionBindingAdapter({
+      channel: "telegram",
+      accountId: "bot-1",
+      listBySession: (targetSessionKey: string) => {
+        if (targetSessionKey === "agent:main:telegram:default:direct:123") {
+          return [
+            {
+              bindingId: "telegram:bot-1:child-dm",
+              targetSessionKey,
+              targetKind: "subagent",
+              conversation: {
+                channel: "telegram",
+                accountId: "bot-1",
+                conversationId: "direct:123",
+              },
+              status: "active",
+              boundAt: 1,
+            },
+          ];
+        }
+        return [];
+      },
+      resolveByConversation: () => null,
+    });
+
+    const origin = await resolveSubagentCompletionOrigin({
+      childSessionKey: "agent:main:telegram:default:direct:123",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: {
+        channel: "telegram",
+        accountId: "bot-1",
+        to: "telegram:direct:123",
+      },
+      spawnMode: "run",
+      expectsCompletionMessage: true,
+    });
+
+    expect(origin).toEqual({
+      channel: "telegram",
+      accountId: "bot-1",
+      to: "telegram:direct:123",
+    });
+  });
 });
 
 describe("deliverSubagentAnnouncement active requester steering", () => {
@@ -546,6 +654,56 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     },
   );
 
+  it("preserves best-effort steering for active runtimes without transcript wait support", async () => {
+    const queueEmbeddedPiMessageWithOutcome = vi
+      .fn<QueueEmbeddedPiMessageWithOutcome>()
+      .mockImplementationOnce((sessionId: string) => ({
+        queued: false,
+        sessionId,
+        reason: "transcript_commit_wait_unsupported",
+        gatewayHealth: "live",
+      }))
+      .mockImplementationOnce((sessionId: string) => ({
+        queued: true,
+        sessionId,
+        target: "embedded_run",
+        gatewayHealth: "live",
+        enqueuedAtMs: 4_100,
+      }));
+    const callGateway = await deliverSteeredAnnouncement({
+      queueEmbeddedPiMessageWithOutcome,
+      requesterOrigin: {
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "acct-1",
+      },
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
+      1,
+      "paperclip-session",
+      "child done",
+      {
+        steeringMode: "all",
+        debounceMs: 0,
+        waitForTranscriptCommit: true,
+        deliveryTimeoutMs: 120_000,
+      },
+    );
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
+      2,
+      "paperclip-session",
+      "child done",
+      {
+        steeringMode: "all",
+        debounceMs: 0,
+        deliveryTimeoutMs: 120_000,
+      },
+    );
+  });
+
   it("does not report delivery when active requester steering is rejected", async () => {
     const queueEmbeddedPiMessageWithOutcome = vi.fn(async (sessionId: string) => ({
       queued: false as const,
@@ -590,6 +748,60 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     });
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  it("falls through to direct delivery when requester ends during awaited steering failure", async () => {
+    const queueEmbeddedPiMessageWithOutcome = vi.fn(async (sessionId: string) => ({
+      queued: false as const,
+      sessionId,
+      reason: "runtime_rejected" as const,
+      gatewayHealth: "live" as const,
+      errorMessage: "active session ended before queued steering message was committed",
+    }));
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "child completion output" }],
+      },
+    });
+    let activityChecks = 0;
+    __testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "paperclip-session",
+        isActive: activityChecks++ === 0,
+      }),
+      queueEmbeddedPiMessageWithOutcome,
+      getRuntimeConfig: () =>
+        ({
+          messages: {
+            queue: {
+              mode: "steer",
+              debounceMs: 0,
+            },
+          },
+        }) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:eng:paperclip:issue:123",
+      targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-recheck-after-steer-failure",
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+      phases: [
+        { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+        { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
+      ],
+    });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("deliverSubagentAnnouncement completion delivery", () => {
@@ -608,6 +820,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: true,
       path: "steered",
+      enqueuedAt: 4_100,
+      deliveredAt: 4_200,
     });
     expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
       "requester-session-1",
@@ -615,6 +829,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       {
         steeringMode: "all",
         debounceMs: 500,
+        waitForTranscriptCommit: true,
+        deliveryTimeoutMs: 120_000,
       },
     );
     expect(callGateway).not.toHaveBeenCalled();
@@ -1083,8 +1299,12 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("does not queue when an active Telegram requester cannot be woken directly", async () => {
-    const callGateway = createGatewayMock();
+  it("falls back to requester-agent handoff when an active Telegram requester cannot be woken", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "child completion output" }],
+      },
+    });
     const sendMessage = createSendMessageMock();
     const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(false);
     const result = await deliverTelegramDirectMessageCompletion({
@@ -1109,45 +1329,95 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: false,
+      delivered: true,
       path: "direct",
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: true,
+          path: "direct",
+          error: undefined,
+        },
+      ],
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(1);
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
+      "requester-session-telegram",
+      "child done",
+      {
+        steeringMode: "all",
+        debounceMs: 500,
+        waitForTranscriptCommit: true,
+        deliveryTimeoutMs: 120_000,
+      },
+    );
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("uses steer fallback when a completion handoff has no visible output", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const queueEmbeddedPiMessageWithOutcome = vi
+      .fn<QueueEmbeddedPiMessageWithOutcome>()
+      .mockImplementationOnce((sessionId: string) => ({
+        queued: false,
+        sessionId,
+        reason: "not_streaming",
+        gatewayHealth: "live",
+      }))
+      .mockImplementationOnce((sessionId: string) => ({
+        queued: true,
+        sessionId,
+        target: "embedded_run",
+        gatewayHealth: "live",
+      }));
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-empty-direct-steer-fallback",
+      queueEmbeddedPiMessageWithOutcome,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "channel completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "steered",
       phases: [
         {
           phase: "direct-primary",
           delivered: false,
           path: "direct",
-          error:
-            "active requester session could not be woken: queue_message_failed reason=not_streaming sessionId=requester-session-telegram gatewayHealth=live",
+          error: "completion agent did not produce a visible reply",
         },
         {
           phase: "steer-fallback",
-          delivered: false,
-          path: "none",
+          delivered: true,
+          path: "steered",
           error: undefined,
         },
       ],
     });
     expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(2);
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
-      1,
-      "requester-session-telegram",
-      "child done",
-      {
-        steeringMode: "all",
-        debounceMs: 500,
-      },
-    );
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
-      2,
-      "requester-session-telegram",
-      "child done",
-      {
-        steeringMode: "all",
-        debounceMs: 500,
-      },
-    );
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
   it("reports failure when announce-agent returns no visible output", async () => {
@@ -1199,6 +1469,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const result = await deliverDiscordDirectMessageCompletion({
       callGateway,
       sendMessage,
+      sourceTool: "music_generate",
       internalEvents: [
         {
           type: "task_completion",
@@ -1219,14 +1490,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "completion agent did not produce a visible reply",
+      error: "completion agent did not deliver through the message tool",
     });
     expectGatewayAgentParams(callGateway, {
-      deliver: true,
+      deliver: false,
       channel: "discord",
       accountId: "acct-1",
       to: "dm:U123",
       threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -1243,6 +1515,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const result = await deliverDiscordDirectMessageCompletion({
       callGateway,
       sendMessage,
+      sourceTool: "music_generate",
       internalEvents: [
         {
           type: "task_completion",
@@ -1265,14 +1538,27 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
     });
     expect(callGateway).toHaveBeenCalledTimes(1);
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("delivers generated media completions through the announce agent in automatic DMs", async () => {
+  it("requires generated media completion DMs to use the message tool", async () => {
     const callGateway = createGatewayMock({
       result: {
-        payloads: [
+        payloads: [],
+        messagingToolSentTargets: [
           {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "dm:U123",
             text: "The track is ready.",
             mediaUrls: ["/tmp/generated-night-drive.mp3"],
           },
@@ -1298,6 +1584,111 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           mediaUrls: ["/tmp/generated-night-drive.mp3"],
           replyInstruction:
             "Tell the user the music is ready. If visible source delivery requires the message tool, send it there with the generated media attached.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("requires generated image completion DMs to use the message tool", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "dm:U123",
+            text: "The image is ready.",
+            mediaUrls: ["/tmp/generated-robot.png"],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "small watercolor robot",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-robot.png",
+          mediaUrls: ["/tmp/generated-robot.png"],
+          replyInstruction:
+            "Tell the user the image is ready and send it through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("accepts failed generated media completion notices without requiring message-tool delivery", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            accountId: "acct-1",
+            to: "dm:U123",
+            text: "Music generation failed: provider failed.",
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "error",
+          statusLabel: "failed",
+          result: "provider failed",
+          replyInstruction: "Deliver the failure through the message tool.",
         },
       ],
     });
@@ -1358,9 +1749,47 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "completion agent did not deliver generated media",
+      error: "completion agent did not deliver through the message tool",
     });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows visible direct delivery for media generation failure summaries without generated media", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "Music generation failed. Provider timed out." }],
+      },
+    });
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "error",
+          statusLabel: "failed",
+          result: "All music generation models failed.",
+          replyInstruction: "Tell the user music generation failed.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+    });
   });
 
   it("reports generated media group completions that miss required message-tool delivery", async () => {
@@ -1685,6 +2114,88 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("requires message-tool delivery for channel subagent completions", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The subagent is done." }],
+      },
+    });
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-subagent-message-tool",
+      sourceTool: "subagent_announce",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "channel completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not deliver through the message tool",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+  });
+
+  it("keeps automatic final delivery for direct subagent completions", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The subagent is done." }],
+      },
+    });
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sourceTool: "subagent_announce",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "direct completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+    });
   });
 
   it("falls back to the external requester route when completion origin is internal", async () => {

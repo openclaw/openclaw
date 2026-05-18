@@ -250,9 +250,9 @@ Once DMs are working, you can set up your Discord server as a full workspace whe
   <Step title="Allow responses without @mention">
     By default, your agent only responds in guild channels when @mentioned. For a private server, you probably want it to respond to every message.
 
-    In guild channels, normal assistant final replies stay private by default. Visible Discord output must be sent explicitly with the `message` tool, so the agent can lurk by default and only post when it decides a channel reply is useful.
+    In guild channels, visible Discord output should use the `message` tool by default, so the agent can lurk and only post when it decides a channel reply is useful. Ambient room events stay quiet unless the tool sends. See [Ambient room events](/channels/ambient-room-events) for the full lurk-mode config.
 
-    This means the selected model must reliably call tools. If Discord shows typing and the logs show token usage but no posted message, check the session log for assistant text with `didSendViaMessagingTool: false`. That means the model produced a private final answer instead of calling `message(action=send)`. Switch to a stronger tool-calling model, or use the config below to restore legacy automatic final replies.
+    This means the selected model should reliably call tools. If Discord shows typing and the logs show token usage but no posted message, check whether the turn was configured as an ambient room event or use the config below to restore legacy automatic final replies for normal group requests.
 
     <Tabs>
       <Tab title="Ask your agent">
@@ -653,7 +653,7 @@ Default slash command settings:
     Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
     `first` always attaches the implicit native reply reference to the first outbound Discord message for the turn.
     `batched` only attaches Discord's implicit native reply reference when the
-    inbound turn was a debounced batch of multiple messages. This is useful
+    inbound event was a debounced batch of multiple messages. This is useful
     when you want native replies mainly for ambiguous bursty chats, not every
     single-message turn.
 
@@ -692,6 +692,7 @@ Default slash command settings:
         progress: {
           label: "auto",
           maxLines: 8,
+          maxLineChars: 120,
           toolProgress: true,
         },
       },
@@ -705,6 +706,7 @@ Default slash command settings:
     - Media, error, and explicit-reply finals cancel pending preview edits.
     - `streaming.preview.toolProgress` (default `true`) controls whether tool/progress updates reuse the preview message.
     - Tool/progress rows render as compact emoji + title + detail when available, for example `🛠️ Bash: run tests` or `🔎 Web Search: for "query"`.
+    - `streaming.progress.maxLineChars` controls the per-line progress preview budget. Prose is shortened on word boundaries; command and path details keep useful suffixes.
     - `streaming.preview.commandText` / `streaming.progress.commandText` controls command/exec detail in compact progress lines: `raw` (default) or `status` (tool label only).
 
     Hide raw command/exec text while keeping compact progress lines:
@@ -1629,7 +1631,7 @@ openclaw logs --follow
           // Molty listens to all bot-authored Discord messages.
           allowBots: true,
           mentionAliases: {
-            // Lets Molty write "@Mantis" and send a real Discord mention.
+            // Lets Molty write a Mantis Discord mention with the configured user id.
             Mantis: "MANTIS_DISCORD_USER_ID",
           },
           botLoopProtection: {

@@ -467,6 +467,7 @@ describe("resolveDeliveryTarget", () => {
       accountId: undefined,
       mode: "explicit",
       allowFrom: undefined,
+      allowBootstrap: true,
     });
   });
 

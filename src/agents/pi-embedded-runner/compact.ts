@@ -63,6 +63,7 @@ import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-promp
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
+  formatMissingAuthError,
   getApiKeyForModel,
   resolveModelAuthMode,
 } from "../model-auth.js";
@@ -98,7 +99,7 @@ import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
-  resolveSessionWriteLockAcquireTimeoutMs,
+  resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import {
@@ -537,9 +538,7 @@ async function compactEmbeddedPiSessionDirectOnce(
 
     if (!apiKeyInfo.apiKey) {
       if (apiKeyInfo.mode !== "aws-sdk") {
-        throw new Error(
-          `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
-        );
+        throw new Error(formatMissingAuthError(apiKeyInfo, runtimeModel.provider));
       }
     } else {
       const preparedAuth = await prepareProviderRuntimeAuth({
@@ -733,6 +732,7 @@ async function compactEmbeddedPiSessionDirectOnce(
       modelCompat: extractModelCompat(effectiveModel),
       modelApi: model.api,
       modelContextWindowTokens: ctxInfo.tokens,
+      skillsSnapshot: skillsSnapshotForRun,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config, undefined, {
         workspaceDir: effectiveWorkspace,
       }),
@@ -956,9 +956,10 @@ async function compactEmbeddedPiSessionDirectOnce(
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
-      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
-      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: compactionTimeoutMs,
+      ...resolveSessionWriteLockOptions(params.config, {
+        maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
+          timeoutMs: compactionTimeoutMs,
+        }),
       }),
     });
     try {

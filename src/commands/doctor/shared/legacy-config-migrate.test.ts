@@ -133,6 +133,75 @@ describe("legacy session parent fork migrate", () => {
   });
 });
 
+describe("legacy diagnostics memory pressure snapshot migrate", () => {
+  it("renames the boolean toggle", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        enabled: true,
+        memoryPressureBundle: false,
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      enabled: true,
+      memoryPressureSnapshot: false,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+    ]);
+  });
+
+  it("preserves the renamed toggle when both keys are present", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        memoryPressureBundle: false,
+        memoryPressureSnapshot: true,
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      memoryPressureSnapshot: true,
+    });
+    expect(res.changes).toStrictEqual([
+      "Removed diagnostics.memoryPressureBundle (memoryPressureSnapshot already set).",
+    ]);
+  });
+
+  it("moves nested enabled to the renamed boolean", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        enabled: true,
+        memoryPressureBundle: {
+          enabled: false,
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      enabled: true,
+      memoryPressureSnapshot: false,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+    ]);
+  });
+
+  it("moves empty object form to the renamed default boolean", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        memoryPressureBundle: {},
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      memoryPressureSnapshot: true,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+    ]);
+  });
+});
+
 describe("legacy thread binding spawn migrate", () => {
   it("moves matching split spawn flags to unified spawnSessions", () => {
     const res = migrateLegacyConfigForTest({
@@ -875,5 +944,35 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
+  });
+
+  it("seeds allowedOrigins for non-loopback host aliases before normalizing bind", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        bind: "0.0.0.0",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    expect(res.config?.gateway?.bind).toBe("lan");
+    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+    ]);
+    expect(res.changes).toStrictEqual([
+      'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.',
+      'Normalized gateway.bind "0.0.0.0" → "lan".',
+    ]);
+  });
+
+  it("does not seed allowedOrigins for loopback host aliases", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        bind: "localhost",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    expect(res.config?.gateway?.bind).toBe("loopback");
+    expect(res.config?.gateway?.controlUi).toBeUndefined();
+    expect(res.changes).toStrictEqual(['Normalized gateway.bind "localhost" → "loopback".']);
   });
 });

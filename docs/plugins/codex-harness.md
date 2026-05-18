@@ -536,18 +536,18 @@ eventually finish the native turn with `turn/completed`. If the app-server goes
 quiet for `appServer.turnCompletionIdleTimeoutMs`, OpenClaw best-effort
 interrupts the Codex turn, records a diagnostic timeout, and releases the
 OpenClaw session lane so follow-up chat messages are not queued behind a stale
-native turn. Most non-terminal notifications for the same turn, including raw
-assistant `rawResponseItem/completed` items, disarm that short watchdog because
-Codex has proven the turn is still alive; raw `custom_tool_call_output`
-completions keep the short post-tool watchdog armed because they are the
-turn-scoped tool-result handoff. The longer terminal watchdog continues to
-protect genuinely stuck turns. Global app-server notifications, such as
-rate-limit updates, do not reset turn-idle progress. When Codex emits a completed
-`agentMessage` item and then goes quiet without `turn/completed`, OpenClaw treats
-the assistant output as effectively complete, best-effort interrupts the native
-Codex turn, and releases the session lane. Timeout diagnostics include the last
-app-server notification method and, for raw assistant response items, the item
-type, role, id, and a bounded assistant text preview.
+native turn. Most non-terminal notifications for the same turn disarm that short
+watchdog because Codex has proven the turn is still alive; raw
+`custom_tool_call_output` completions keep the short post-tool watchdog armed
+because they are the turn-scoped tool-result handoff. Global app-server
+notifications, such as rate-limit updates, do not reset turn-idle progress.
+Completed `agentMessage` items and pre-tool raw assistant
+`rawResponseItem/completed` items arm the assistant-output release: if Codex then
+goes quiet without `turn/completed`, OpenClaw best-effort interrupts the native
+turn and releases the session lane. Post-tool raw assistant progress keeps
+waiting for `turn/completed` or the terminal watchdog. Timeout diagnostics
+include the last app-server notification method and, for raw assistant response
+items, the item type, role, id, and a bounded assistant text preview.
 
 Environment overrides remain available for local testing:
 
@@ -657,6 +657,36 @@ new configs. Select an `openai/gpt-*` model, enable
 installed and enabled. If you need strict proof while testing, set provider or
 model `agentRuntime.id: "codex"`. A forced Codex runtime fails instead of
 falling back to PI.
+
+**OpenAI Codex runtime falls back to the API-key path:** collect a redacted
+gateway excerpt that shows the model, runtime, selected provider, and failure.
+Ask affected collaborators to run this read-only command on their OpenClaw host:
+
+```bash
+(
+  pattern='openai/gpt-5\.[45]|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|openai-codex|resolveSelectedOpenAIPiRuntimeProvider|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
+
+  if ls /tmp/openclaw/openclaw-*.log >/dev/null 2>&1; then
+    grep -E -i -n "$pattern" /tmp/openclaw/openclaw-*.log 2>/dev/null || true
+  else
+    journalctl --user -u openclaw-gateway --since today --no-pager 2>/dev/null \
+      | grep -E -i "$pattern" || true
+  fi
+) | sed -E \
+    -e 's/(Authorization: Bearer )[A-Za-z0-9._~+\/-]+/\1[REDACTED]/Ig' \
+    -e 's/(Bearer )[A-Za-z0-9._~+\/-]+/\1[REDACTED]/Ig' \
+    -e 's/(api[_ -]?key[=: ]+)[^ ,}"]+/\1[REDACTED]/Ig' \
+    -e 's/(OPENAI_API_KEY[=: ]+)[^ ,}"]+/\1[REDACTED]/Ig' \
+    -e 's/sk-[A-Za-z0-9_-]{12,}/sk-[REDACTED]/g' \
+    -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[EMAIL-REDACTED]/g' \
+  | tail -200
+```
+
+Useful excerpts usually include `openai/gpt-5.5` or `openai/gpt-5.4`,
+`Runtime: OpenAI Codex`, `agentRuntime.id` or `harnessRuntime`,
+`candidateProvider: "openai"`, and a `401`, `Incorrect API key`, or
+`No API key` result. A corrected run should show the `openai-codex` OAuth
+path instead of a plain OpenAI API-key failure.
 
 **Legacy `openai-codex/*` config remains:** run `openclaw doctor --fix`.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and

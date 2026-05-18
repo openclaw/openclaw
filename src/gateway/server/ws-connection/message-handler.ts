@@ -99,6 +99,9 @@ import {
 } from "../../protocol/index.js";
 import {
   gatewayStartupUnavailableDetails,
+  GATEWAY_STARTUP_CLOSE_CODE,
+  GATEWAY_STARTUP_CLOSE_REASON,
+  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../protocol/startup-unavailable.js";
 import { parseGatewayRole } from "../../role-policy.js";
@@ -514,7 +517,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         };
 
         if (isStartupPending?.()) {
-          markHandshakeFailure("startup-sidecars-pending");
+          markHandshakeFailure(GATEWAY_STARTUP_PENDING_CLOSE_CAUSE);
           await sendFrame({
             type: "res",
             id: frame.id,
@@ -525,7 +528,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               details: gatewayStartupUnavailableDetails(),
             }),
           }).catch(() => {});
-          queueMicrotask(() => close(1013, "gateway starting"));
+          queueMicrotask(() => close(GATEWAY_STARTUP_CLOSE_CODE, GATEWAY_STARTUP_CLOSE_REASON));
           return;
         }
 
@@ -545,10 +548,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
           });
           logWsControl.warn(
-            `protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
+            `protocol mismatch conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} remotePort=${remotePort ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} expected=${PROTOCOL_VERSION} probeMin=${MIN_PROBE_PROTOCOL_VERSION} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")}`,
           );
           sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
             details: {
+              code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+              clientMinProtocol: minProtocol,
+              clientMaxProtocol: maxProtocol,
               expectedProtocol: PROTOCOL_VERSION,
               minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
             },

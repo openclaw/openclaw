@@ -4,6 +4,7 @@ import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/open
 import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -326,6 +327,21 @@ function resolveCronToolPolicy(params: { deliveryMode: "announce" | "webhook" | 
   };
 }
 
+function resolveCronSourceReplyDeliveryMode(params: {
+  deliveryPlan: CronDeliveryPlan;
+  resolvedDelivery: ResolvedCronDeliveryTarget;
+  toolPolicy: ReturnType<typeof resolveCronToolPolicy>;
+}): SourceReplyDeliveryMode | undefined {
+  if (
+    params.deliveryPlan.mode !== "announce" ||
+    params.toolPolicy.disableMessageTool ||
+    !params.resolvedDelivery.ok
+  ) {
+    return undefined;
+  }
+  return "message_tool_only";
+}
+
 function canPromptForMessageTool(params: {
   disableMessageTool: boolean;
   toolsAllow?: string[];
@@ -459,6 +475,7 @@ type PreparedCronRunContext = {
   agentDir: string;
   agentSessionKey: string;
   runSessionId: string;
+  currentRunSessionId: () => string;
   runSessionKey: string;
   workspaceDir: string;
   commandBody: string;
@@ -469,6 +486,7 @@ type PreparedCronRunContext = {
   deliveryPlan: CronDeliveryPlan;
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   suppressExecNotifyOnExit: boolean;
   senderIsOwner: boolean;
   toolPolicy: ReturnType<typeof resolveCronToolPolicy>;
@@ -565,6 +583,7 @@ async function prepareCronRunContext(params: {
     forceNew: input.job.sessionTarget === "isolated",
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
+  const currentRunSessionId = () => cronSession.sessionEntry.sessionId ?? runSessionId;
   if (!cronSession.sessionEntry.sessionFile?.trim()) {
     cronSession.sessionEntry.sessionFile = resolveSessionTranscriptPath(runSessionId, agentId);
   }
@@ -582,7 +601,7 @@ async function prepareCronRunContext(params: {
   });
   const withRunSession: WithRunSession = (result) => ({
     ...result,
-    sessionId: cronSession.sessionEntry.sessionId ?? runSessionId,
+    sessionId: currentRunSessionId(),
     sessionKey: runSessionKey,
   });
   if (!cronSession.sessionEntry.label?.trim() && baseSessionKey.startsWith("cron:")) {
@@ -699,6 +718,11 @@ async function prepareCronRunContext(params: {
       job: input.job,
       agentId,
     });
+  const sourceReplyDeliveryMode = resolveCronSourceReplyDeliveryMode({
+    deliveryPlan,
+    resolvedDelivery,
+    toolPolicy,
+  });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
   const base = `[cron:${input.job.id} ${input.job.name}] ${input.message}`.trim();
@@ -792,6 +816,7 @@ async function prepareCronRunContext(params: {
               agentId,
               sessionKey: agentSessionKey,
             }).runtime,
+            config: cfgWithAgentDefaults,
           }),
           agentDir,
           sessionEntry: cronSession.sessionEntry,
@@ -819,6 +844,7 @@ async function prepareCronRunContext(params: {
       agentDir,
       agentSessionKey,
       runSessionId,
+      currentRunSessionId,
       runSessionKey,
       workspaceDir,
       commandBody,
@@ -829,6 +855,7 @@ async function prepareCronRunContext(params: {
       deliveryPlan,
       resolvedDelivery,
       deliveryRequested,
+      sourceReplyDeliveryMode,
       suppressExecNotifyOnExit: deliveryPlan.mode === "none",
       senderIsOwner: !isExternalHook,
       toolPolicy,
@@ -1040,7 +1067,7 @@ async function finalizeCronRun(params: {
     agentId: prepared.agentId,
     agentSessionKey: prepared.agentSessionKey,
     runSessionKey: prepared.runSessionKey,
-    sessionId: prepared.runSessionId,
+    sessionId: prepared.currentRunSessionId(),
     runStartedAt: execution.runStartedAt,
     runEndedAt: execution.runEndedAt,
     timeoutMs: prepared.timeoutMs,
@@ -1136,7 +1163,7 @@ export async function runCronIsolatedAgentTurn(params: {
     params.onExecutionStarted?.({
       jobId: params.job.id,
       agentId: prepared.context.agentId,
-      sessionId: prepared.context.runSessionId,
+      sessionId: prepared.context.currentRunSessionId(),
       sessionKey: prepared.context.runSessionKey,
       phase: "runner_entered",
       provider: prepared.context.liveSelection.provider,
@@ -1149,7 +1176,7 @@ export async function runCronIsolatedAgentTurn(params: {
     params.onExecutionPhase?.({
       jobId: params.job.id,
       agentId: prepared.context.agentId,
-      sessionId: prepared.context.runSessionId,
+      sessionId: prepared.context.currentRunSessionId(),
       sessionKey: prepared.context.runSessionKey,
       provider: prepared.context.liveSelection.provider,
       model: prepared.context.liveSelection.model,
@@ -1175,6 +1202,7 @@ export async function runCronIsolatedAgentTurn(params: {
         accountId: prepared.context.resolvedDelivery.accountId,
         threadId: prepared.context.resolvedDelivery.threadId,
       },
+      sourceReplyDeliveryMode: prepared.context.sourceReplyDeliveryMode,
       toolPolicy: prepared.context.toolPolicy,
       skillsSnapshot: prepared.context.skillsSnapshot,
       agentPayload: prepared.context.agentPayload,

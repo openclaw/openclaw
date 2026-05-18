@@ -206,6 +206,7 @@ const ModelCompatSchema = z
         z.literal("openai"),
         z.literal("openrouter"),
         z.literal("deepseek"),
+        z.literal("together"),
         z.literal("qwen"),
         z.literal("qwen-chat-template"),
         z.literal("zai"),
@@ -413,7 +414,7 @@ export const ModelsConfigSchema = z
   .optional();
 
 const VisibleRepliesValueSchema = z.enum(["automatic", "message_tool"]);
-const AmbientGroupTurnsSchema = z.enum(["user_request", "room_event"]);
+const AmbientGroupInboundSchema = z.enum(["user_request", "room_event"]);
 
 export const VisibleRepliesSchema = z
   .union([VisibleRepliesValueSchema, z.boolean()])
@@ -431,7 +432,7 @@ export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().positive().optional(),
-    ambientTurns: AmbientGroupTurnsSchema.optional(),
+    unmentionedInbound: AmbientGroupInboundSchema.optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
   })
   .strict()

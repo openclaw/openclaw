@@ -33,7 +33,10 @@ export {
   upsertAuthProfileWithLock,
 } from "../agents/auth-profiles/profiles.js";
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
-export { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
+export {
+  readClaudeCliCredentialsCached,
+  readCodexCliCredentialsCached,
+} from "../agents/cli-credentials.js";
 export { suggestOAuthProfileIdForLegacyDefault } from "../agents/auth-profiles/repair.js";
 export {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -122,6 +125,7 @@ export function buildCopilotIdeHeaders(
   } = {},
 ): Record<string, string> {
   return {
+    "Accept-Encoding": "identity",
     "Editor-Version": COPILOT_EDITOR_VERSION,
     "Editor-Plugin-Version": COPILOT_EDITOR_PLUGIN_VERSION,
     "User-Agent": COPILOT_USER_AGENT,

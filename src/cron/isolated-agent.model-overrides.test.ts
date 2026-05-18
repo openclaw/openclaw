@@ -38,6 +38,21 @@ function installThinkingTestProviders() {
   setActivePluginRegistry(registry);
 }
 
+function mockDeterministicModelCatalog() {
+  vi.mocked(loadModelCatalog).mockResolvedValue([
+    {
+      id: "gpt-4.1-mini",
+      name: "GPT-4.1 Mini",
+      provider: "openai",
+    },
+    {
+      id: "claude-opus-4-6",
+      name: "Claude Opus 4.5",
+      provider: "anthropic",
+    },
+  ]);
+}
+
 describe("runCronIsolatedAgentTurn model overrides", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
@@ -58,23 +73,10 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
     });
   });
 
-  it("applies model overrides with correct precedence", async () => {
+  it("applies direct cron model overrides", async () => {
     await withTempHome(async (home) => {
-      const deterministicCatalog = [
-        {
-          id: "gpt-4.1-mini",
-          name: "GPT-4.1 Mini",
-          provider: "openai",
-        },
-        {
-          id: "claude-opus-4-6",
-          name: "Claude Opus 4.5",
-          provider: "anthropic",
-        },
-      ];
-      vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
-
-      let res = (
+      mockDeterministicModelCatalog();
+      const res = (
         await runCronTurn(home, {
           jobPayload: {
             kind: "agentTurn",
@@ -89,16 +91,26 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
         model: "gpt-4.1-mini",
       });
       directModel.assert();
+    });
+  });
 
-      res = (await runTurnWithStoredModelOverride(home, DEFAULT_AGENT_TURN_PAYLOAD)).res;
+  it("uses stored model overrides when cron payload omits a model", async () => {
+    await withTempHome(async (home) => {
+      mockDeterministicModelCatalog();
+      const res = (await runTurnWithStoredModelOverride(home, DEFAULT_AGENT_TURN_PAYLOAD)).res;
       expect(res.status).toBe("ok");
       const storedOverride = expectEmbeddedProviderModel({
         provider: "openai",
         model: "gpt-4.1-mini",
       });
       storedOverride.assert();
+    });
+  });
 
-      res = (
+  it("lets explicit cron model override stored session overrides", async () => {
+    await withTempHome(async (home) => {
+      mockDeterministicModelCatalog();
+      const res = (
         await runTurnWithStoredModelOverride(home, {
           kind: "agentTurn",
           message: DEFAULT_MESSAGE,

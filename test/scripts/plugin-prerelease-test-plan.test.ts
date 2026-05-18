@@ -317,7 +317,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(workflow.jobs["check-shard"].strategy.matrix.include[3]).toEqual({
       check_name: "check-dependencies",
       task: "dependencies",
-      runner: "ubuntu-24.04",
+      runner: "blacksmith-8vcpu-ubuntu-2404",
     });
     expect(
       workflow.jobs["check-shard"].steps.find((step) => step.name === "Run check shard").run,
@@ -488,6 +488,45 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ]) {
       expect(fullReleaseWorkflow.jobs[jobName]["runs-on"]).toBe("ubuntu-24.04");
     }
+  });
+
+  it("keeps runtime tool coverage blocking in release checks", () => {
+    const releaseChecksSource = readFileSync(
+      ".github/workflows/openclaw-release-checks.yml",
+      "utf8",
+    );
+    const releaseChecksWorkflow = parse(releaseChecksSource);
+    const runtimeToolCoverage = releaseChecksWorkflow.jobs.runtime_tool_coverage_release_checks;
+
+    expect(runtimeToolCoverage["continue-on-error"]).toBeUndefined();
+    expect(runtimeToolCoverage.needs).toEqual([
+      "resolve_target",
+      "qa_lab_runtime_parity_release_checks",
+    ]);
+    expect(runtimeToolCoverage.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Enforce standard runtime tool coverage",
+          run: expect.stringContaining("pnpm openclaw qa coverage"),
+        }),
+      ]),
+    );
+    expect(runtimeToolCoverage.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Enforce standard runtime tool coverage",
+          run: expect.stringContaining(
+            "--summary .artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json",
+          ),
+        }),
+      ]),
+    );
+    expect(releaseChecksWorkflow.jobs.summary.needs).toContain(
+      "runtime_tool_coverage_release_checks",
+    );
+    expect(releaseChecksSource).toContain(
+      '"runtime_tool_coverage_release_checks=${{ needs.runtime_tool_coverage_release_checks.result }}"',
+    );
   });
 
   it("keeps the live-ish availability check redacted", () => {

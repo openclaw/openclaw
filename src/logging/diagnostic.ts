@@ -1,5 +1,6 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   areDiagnosticsEnabledForProcess,
@@ -126,6 +127,22 @@ type StartDiagnosticHeartbeatOptions = {
   startupGraceMs?: number;
 };
 
+function resolveDiagnosticSessionStorePaths(config?: OpenClawConfig): string[] | undefined {
+  if (!config) {
+    return undefined;
+  }
+  try {
+    const paths = resolveAllAgentSessionStoreTargetsSync(config).map((target) => target.storePath);
+    return paths.length > 0 ? paths : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function shouldWriteCriticalMemoryPressureBundle(config?: OpenClawConfig): boolean {
+  return config?.diagnostics?.memoryPressureSnapshot === true;
+}
+
 let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;
 let lastDiagnosticLivenessWallAt = 0;
 let lastDiagnosticLivenessCpuUsage: CpuUsage | null = null;
@@ -163,6 +180,7 @@ function formatDiagnosticWorkLabel(
     sessionKey?: string;
     state: SessionStateValue;
     queueDepth: number;
+    activeQueuedTurn?: boolean;
     lastActivity: number;
   },
   now: number,
@@ -200,10 +218,14 @@ function getDiagnosticWorkSnapshot(now = Date.now()): DiagnosticWorkSnapshot {
       waitingCount += 1;
       pushLimitedDiagnosticLabel(waitingLabels, formatDiagnosticWorkLabel(state, now));
     }
-    if (state.queueDepth > 0) {
+    const queuedBacklog = Math.max(
+      0,
+      state.queueDepth - (state.state === "processing" && state.activeQueuedTurn ? 1 : 0),
+    );
+    if (queuedBacklog > 0) {
       pushLimitedDiagnosticLabel(queuedLabels, formatDiagnosticWorkLabel(state, now));
     }
-    queuedCount += state.queueDepth;
+    queuedCount += queuedBacklog;
   }
 
   return { activeCount, waitingCount, queuedCount, activeLabels, waitingLabels, queuedLabels };
@@ -669,8 +691,12 @@ export function logSessionStateChange(
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
+  if (params.state === "processing" && prevState !== "processing") {
+    state.activeQueuedTurn = state.queueDepth > 0;
+  }
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);
+    state.activeQueuedTurn = false;
   }
   if (!isProbeSession && diag.isEnabled("debug")) {
     diag.debug(
@@ -995,9 +1021,15 @@ export function startDiagnosticHeartbeat(
     const shouldEmitLivenessReport = shouldEmitLivenessEvent || shouldEmitLivenessWarning;
     const shouldRecordMemorySample =
       shouldEmitLivenessReport || hasRecentDiagnosticActivity(now) || hasOpenDiagnosticWork(work);
-    (opts?.emitMemorySample ?? emitDiagnosticMemorySample)({
-      emitSample: shouldRecordMemorySample,
-    });
+    if (opts?.emitMemorySample) {
+      opts.emitMemorySample({ emitSample: shouldRecordMemorySample });
+    } else {
+      emitDiagnosticMemorySample({
+        emitSample: shouldRecordMemorySample,
+        writeCriticalBundle: shouldWriteCriticalMemoryPressureBundle(heartbeatConfig),
+        resolveSessionStorePaths: () => resolveDiagnosticSessionStorePaths(heartbeatConfig),
+      });
+    }
 
     if (!shouldRecordMemorySample) {
       return;

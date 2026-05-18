@@ -1105,6 +1105,7 @@
                   "channels/access-groups",
                   "channels/group-messages",
                   "channels/groups",
+                  "channels/ambient-room-events",
                   "channels/broadcast-groups",
                   "channels/channel-routing",
                   "channels/location",
@@ -1133,6 +1134,7 @@
                   "start/bootstrapping",
                   "concepts/experimental-features",
                   "concepts/qa-e2e-automation",
+                  "concepts/personal-agent-benchmark-pack",
                   "concepts/qa-matrix"
                 ]
               },
@@ -1218,6 +1220,7 @@
                 "group": "Building plugins",
                 "pages": [
                   "plugins/building-plugins",
+                  "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",
                   "plugins/sdk-provider-plugins",
                   "plugins/cli-backend-plugins",

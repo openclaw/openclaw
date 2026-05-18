@@ -29,7 +29,6 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -85,7 +84,11 @@ import {
   resolveCommandTurnTargetSessionKey,
 } from "../command-turn-context.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadAsTtsSupplement,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
@@ -105,6 +108,7 @@ import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import {
   isExplicitSourceReplyCommand,
@@ -147,9 +151,35 @@ function loadReplyMediaPathsRuntime() {
   return replyMediaPathsRuntimeLoader.load();
 }
 
+function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
+  const metadata = getReplyPayloadMetadata(reply);
+  const text = normalizeOptionalString(reply.text);
+  const textPreview = text ? text.replace(/\s+/g, " ").slice(0, 160) : undefined;
+  const sendableParts = resolveSendableOutboundReplyParts(reply);
+  const richParts = [
+    reply.presentation ? "presentation" : undefined,
+    reply.interactive ? "interactive" : undefined,
+    reply.channelData ? "channelData" : undefined,
+  ].filter(Boolean);
+  return [
+    `textChars=${text?.length ?? 0}`,
+    `media=${sendableParts.mediaCount}`,
+    `rich=${richParts.length ? richParts.join("|") : "none"}`,
+    `error=${reply.isError === true}`,
+    `beforeAgentRunBlocked=${metadata?.beforeAgentRunBlocked === true}`,
+    `deliverDespiteSuppression=${metadata?.deliverDespiteSourceReplySuppression === true}`,
+    textPreview ? `textPreview=${JSON.stringify(textPreview)}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
+  if (params.payload.isCompactionNotice || params.payload.isFallbackNotice) {
+    return params.payload;
+  }
   if (
     !shouldAttemptTtsPayload({
       cfg: params.cfg,
@@ -495,8 +525,10 @@ export async function dispatchReplyFromConfig(
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
   // stale route after thread delivery was intentionally cleared.
-  const routeThreadId =
-    ctx.MessageThreadId ?? parseSessionThreadInfoFast(acpDispatchSessionKey).threadId;
+  const routeThreadId = resolveRoutedDeliveryThreadId({
+    ctx,
+    sessionKey: acpDispatchSessionKey,
+  });
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
@@ -801,7 +833,7 @@ export async function dispatchReplyFromConfig(
     cfg,
     ctx,
     requested: params.replyOptions?.sourceReplyDeliveryMode,
-    strictMessageToolOnly: ctx.InboundTurnKind === "room_event",
+    strictMessageToolOnly: ctx.InboundEventKind === "room_event",
     sendPolicy,
     suppressAcpChildUserDelivery,
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
@@ -1011,7 +1043,14 @@ export async function dispatchReplyFromConfig(
     const shouldSendVerboseProgressMessages =
       !isSlackNonDirectSurface && (ctx.ChatType !== "group" || ctx.IsForum === true);
     const shouldSendToolSummaries = shouldSendVerboseProgressMessages;
-    const shouldSendToolStartStatuses = shouldSendVerboseProgressMessages;
+    const shouldSendToolStartStatuses = false;
+    const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
+      suppressAutomaticSourceDelivery &&
+      sourceReplyDeliveryMode === "message_tool_only" &&
+      ctx.InboundEventKind !== "room_event" &&
+      !sendPolicyDenied &&
+      shouldEmitVerboseProgress() &&
+      shouldSendVerboseProgressMessages;
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
@@ -1175,7 +1214,7 @@ export async function dispatchReplyFromConfig(
       return parts.join("\n\n").trim() || "Planning next steps.";
     };
     const maybeSendWorkingStatus = async (label: string): Promise<void> => {
-      if (suppressDelivery) {
+      if (shouldSuppressProgressDelivery()) {
         return;
       }
       const normalizedLabel = normalizeWorkingLabel(label);
@@ -1204,7 +1243,11 @@ export async function dispatchReplyFromConfig(
       explanation?: string;
       steps?: string[];
     }): Promise<void> => {
-      if (suppressDelivery || !shouldEmitVerboseProgress() || !shouldSendVerboseProgressMessages) {
+      if (
+        shouldSuppressProgressDelivery() ||
+        !shouldEmitVerboseProgress() ||
+        !shouldSendVerboseProgressMessages
+      ) {
         return;
       }
       const replyPayload: ReplyPayload = {
@@ -1306,6 +1349,9 @@ export async function dispatchReplyFromConfig(
       params.replyOptions?.suppressDefaultToolProgressMessages === true;
     const shouldSuppressDefaultToolProgressMessages = () =>
       suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
+    const shouldSuppressProgressDelivery = () =>
+      sendPolicyDenied ||
+      (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -1377,7 +1423,7 @@ export async function dispatchReplyFromConfig(
               if (!suppressAutomaticSourceDelivery) {
                 await onToolResultFromReplyOptions?.(payload);
               }
-              if (suppressDelivery) {
+              if (shouldSuppressProgressDelivery()) {
                 return;
               }
               const ttsPayload = await maybeApplyTtsToReplyPayload({
@@ -1482,9 +1528,10 @@ export async function dispatchReplyFromConfig(
                 return;
               }
               // Accumulate block text for TTS generation after streaming.
-              // Exclude compaction status notices — they are informational UI
-              // signals and must not be synthesised into the spoken reply.
-              if (payload.text && !payload.isCompactionNotice) {
+              // Exclude status notices — they are informational UI signals
+              // and must not be synthesised into the spoken reply.
+              const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
+              if (payload.text && !isStatusNotice) {
                 const joinsBufferedTtsDirective =
                   cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
                 if (accumulatedBlockText.length > 0) {
@@ -1498,7 +1545,7 @@ export async function dispatchReplyFromConfig(
                 blockCount++;
               }
               const visiblePayload =
-                payload.text && cleanBlockTtsDirectiveText && !payload.isCompactionNotice
+                payload.text && cleanBlockTtsDirectiveText && !isStatusNotice
                   ? (() => {
                       const text = cleanBlockTtsDirectiveText.push(payload.text);
                       return { ...payload, text: text.trim() ? text : undefined };
@@ -1599,7 +1646,7 @@ export async function dispatchReplyFromConfig(
     let finalDeliveryFailed = false;
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
-      ctx.InboundTurnKind !== "room_event" &&
+      ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
     for (const reply of replies) {
@@ -1609,6 +1656,20 @@ export async function dispatchReplyFromConfig(
         continue;
       }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
+        if (hasOutboundReplyContent(reply, { trimText: true })) {
+          logVerbose(
+            [
+              `dispatch-from-config: final reply suppressed by ${deliverySuppressionReason || "source delivery policy"}`,
+              `(session=${acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
+              `provider=${ctx.Provider ?? "unknown"}`,
+              `surface=${ctx.Surface ?? "unknown"}`,
+              `chatType=${chatType ?? "unknown"}`,
+              `inboundEventKind=${ctx.InboundEventKind ?? "unknown"}`,
+              `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"}`,
+              `${formatSuppressedReplyPayloadForLog(reply)})`,
+            ].join(" "),
+          );
+        }
         continue;
       }
       attemptedFinalDelivery = true;
@@ -1657,11 +1718,16 @@ export async function dispatchReplyFromConfig(
           if (ttsSyntheticReply.mediaUrl) {
             // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content.
             // Keep the spoken text only for hooks/archive consumers.
-            const ttsOnlyPayload: ReplyPayload = {
-              mediaUrl: ttsSyntheticReply.mediaUrl,
-              audioAsVoice: ttsSyntheticReply.audioAsVoice,
-              spokenText: accumulatedBlockTtsText,
-            };
+            const ttsOnlyPayload = markReplyPayloadAsTtsSupplement(
+              {
+                mediaUrl: ttsSyntheticReply.mediaUrl,
+                audioAsVoice: ttsSyntheticReply.audioAsVoice,
+                spokenText: accumulatedBlockTtsText,
+                trustedLocalMedia: true,
+              },
+              accumulatedBlockTtsText,
+              { visibleTextAlreadyDelivered: true },
+            );
             const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
             const result = await routeReplyToOriginating(normalizedTtsOnlyPayload);
             if (result) {

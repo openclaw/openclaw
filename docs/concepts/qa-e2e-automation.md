@@ -34,7 +34,7 @@ script aliases; both forms are supported.
 | `qa run`                                            | Bundled QA self-check; writes a Markdown report.                                                                                                                                                                                                                        |
 | `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                                                                                                                  |
 | `qa coverage`                                       | Print the markdown scenario-coverage inventory (`--json` for machine output).                                                                                                                                                                                           |
-| `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report.                                                                                                                                                                                          |
+| `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report, or use `--runtime-axis --token-efficiency` to write Codex-vs-Pi runtime parity and token-efficiency reports from one runtime-pair summary.                                               |
 | `qa character-eval`                                 | Run the character QA scenario across multiple live models with a judged report. See [Reporting](#reporting).                                                                                                                                                            |
 | `qa manual`                                         | Run a one-off prompt against the selected provider/model lane.                                                                                                                                                                                                          |
 | `qa ui`                                             | Start the QA debugger UI and local QA bus (alias: `pnpm qa:lab:ui`).                                                                                                                                                                                                    |
@@ -175,7 +175,7 @@ For an agent/CV style desktop task, run:
 pnpm openclaw qa mantis visual-task \
   --browser-url https://example.net \
   --expect-text "Example Domain" \
-  --vision-model openai/gpt-5.4
+  --vision-model openai/gpt-5.5
 ```
 
 `visual-task` leases or reuses a Crabbox desktop/browser machine, starts
@@ -231,6 +231,9 @@ Host and Multipass suite runs execute multiple selected scenarios in parallel
 with isolated gateway workers by default. `qa-channel` defaults to concurrency
 4, capped by the selected scenario count. Use `--concurrency <count>` to tune
 the worker count, or `--concurrency 1` for serial execution.
+Use `--pack personal-agent` to run the personal assistant benchmark pack. The
+pack selector is additive with repeated `--scenario` flags: explicit scenarios
+run first, then pack scenarios run in pack order with duplicates removed.
 The command exits non-zero when any scenario fails. Use `--allow-failures` when
 you want artifacts without a failing exit code.
 Live runs forward the supported QA auth inputs that are practical for the
@@ -305,6 +308,25 @@ Output artifacts:
 - `telegram-qa-summary.json` - includes per-reply RTT (driver send → observed SUT reply) starting with the canary.
 - `telegram-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1`.
 
+Package RTT comparison uses the same Telegram credential contract while keeping
+its RTT sample controls on the RTT harness path:
+
+```bash
+pnpm rtt openclaw@beta \
+  --credential-source convex \
+  --credential-role maintainer \
+  --samples 20 \
+  --sample-timeout-ms 30000
+```
+
+When `--credential-source convex` is set, the RTT Docker wrapper leases a
+`kind: "telegram"` credential, exports the leased group/driver/SUT bot env into
+the installed-package run, heartbeats the lease, and releases it on shutdown.
+`--samples` and `--sample-timeout-ms` still feed
+`OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES` and
+`OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS`, so `result.json` remains comparable
+across env-backed and Convex-backed RTT runs.
+
 ### Discord QA
 
 ```bash
@@ -348,8 +370,8 @@ Run the Mantis status-reaction scenario explicitly:
 pnpm openclaw qa discord \
   --scenario discord-status-reactions-tool-only \
   --provider-mode live-frontier \
-  --model openai/gpt-5.4 \
-  --alt-model openai/gpt-5.4 \
+  --model openai/gpt-5.5 \
+  --alt-model openai/gpt-5.5 \
   --fast
 ```
 
@@ -758,13 +780,13 @@ pnpm openclaw qa character-eval \
   --model openai/gpt-5.5,thinking=medium,fast \
   --model openai/gpt-5.2,thinking=xhigh \
   --model openai/gpt-5,thinking=xhigh \
-  --model anthropic/claude-opus-4-6,thinking=high \
+  --model anthropic/claude-opus-4-7,thinking=high \
   --model anthropic/claude-sonnet-4-6,thinking=high \
   --model zai/glm-5.1,thinking=high \
   --model moonshot/kimi-k2.5,thinking=high \
   --model google/gemini-3.1-pro-preview,thinking=high \
   --judge-model openai/gpt-5.5,thinking=xhigh,fast \
-  --judge-model anthropic/claude-opus-4-6,thinking=high \
+  --judge-model anthropic/claude-opus-4-7,thinking=high \
   --blind-judge-models \
   --concurrency 16 \
   --judge-concurrency 16
@@ -795,17 +817,18 @@ Candidate and judge model runs both default to concurrency 16. Lower
 `--concurrency` or `--judge-concurrency` when provider limits or local gateway
 pressure make a run too noisy.
 When no candidate `--model` is passed, the character eval defaults to
-`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-6`,
+`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-7`,
 `anthropic/claude-sonnet-4-6`, `zai/glm-5.1`,
 `moonshot/kimi-k2.5`, and
 `google/gemini-3.1-pro-preview` when no `--model` is passed.
 When no `--judge-model` is passed, the judges default to
 `openai/gpt-5.5,thinking=xhigh,fast` and
-`anthropic/claude-opus-4-6,thinking=high`.
+`anthropic/claude-opus-4-7,thinking=high`.
 
 ## Related docs
 
 - [Matrix QA](/concepts/qa-matrix)
+- [Personal agent benchmark pack](/concepts/personal-agent-benchmark-pack)
 - [QA Channel](/channels/qa-channel)
 - [Testing](/help/testing)
 - [Dashboard](/web/dashboard)

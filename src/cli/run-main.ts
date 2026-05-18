@@ -162,7 +162,7 @@ async function tryRunGatewayRunFastPath(
   ] = await startupTrace.measure("gateway-run-imports", () =>
     Promise.all([
       import("commander"),
-      import("./gateway-cli/run.js"),
+      import("./gateway-cli/run-command.js"),
       import("../version.js"),
       import("./banner.js"),
       import("./command-startup-policy.js"),
@@ -633,7 +633,6 @@ export async function runCli(argv: string[] = process.argv) {
       label: "Loading OpenClaw CLI…",
       indeterminate: true,
       delayMs: 0,
-      fallback: "none",
     });
     let startupProgressStopped = false;
     const stopStartupProgress = () => {

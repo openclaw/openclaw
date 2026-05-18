@@ -98,7 +98,7 @@ vi.mock("./route.js", () => ({
   tryRouteCli: tryRouteCliMock,
 }));
 
-vi.mock("./gateway-cli/run.js", () => ({
+vi.mock("./gateway-cli/run-command.js", () => ({
   addGatewayRunCommand: addGatewayRunCommandMock,
 }));
 
@@ -290,6 +290,24 @@ describe("runCli exit behavior", () => {
 
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "agent", "--local"]);
     expect(disposeRegisteredAgentHarnessesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the standard spinner while loading the full CLI", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "config", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "config"]);
+
+    expect(createCliProgressMock).toHaveBeenCalledWith({
+      label: "Loading OpenClaw CLI…",
+      indeterminate: true,
+      delayMs: 0,
+    });
+    expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
 
   it("pauses non-tty stdin after full CLI command completion", async () => {
