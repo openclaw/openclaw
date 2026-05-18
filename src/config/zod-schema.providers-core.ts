@@ -85,6 +85,8 @@ const ChannelStreamingPreviewSchema = z
     chunk: BlockStreamingChunkSchema.optional(),
     toolProgress: z.boolean().optional(),
     commandText: z.enum(["raw", "status"]).optional(),
+    nativeToolProgress: z.boolean().optional(),
+    nativeToolProgressAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   })
   .strict();
 const ChannelStreamingProgressSchema = z

@@ -25,6 +25,8 @@ import {
   mergeChannelProgressDraftLine,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingPreviewNativeToolProgress,
+  resolveChannelStreamingPreviewNativeToolProgressAllowFrom,
   resolveChannelStreamingPreviewToolProgress,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-streaming";
@@ -52,6 +54,7 @@ import {
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
+import { normalizeAllowFrom } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import {
@@ -184,6 +187,21 @@ function canUseNativeToolProgressDraft(params: {
     !hasExecApprovalPayload(params.payload) &&
     params.buttons === undefined
   );
+}
+
+function canUseNativeToolProgressDraftForChat(params: {
+  telegramCfg: TelegramAccountConfig;
+  chatId: number | string;
+}): boolean {
+  if (!resolveChannelStreamingPreviewNativeToolProgress(params.telegramCfg)) {
+    return false;
+  }
+  const allowFrom = resolveChannelStreamingPreviewNativeToolProgressAllowFrom(params.telegramCfg);
+  if (!allowFrom || allowFrom.length === 0) {
+    return true;
+  }
+  const normalized = normalizeAllowFrom(allowFrom);
+  return normalized.hasWildcard || normalized.entries.includes(String(params.chatId));
 }
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
@@ -585,7 +603,11 @@ export const dispatchTelegramMessage = async ({
   const streamToolProgressEnabled =
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
   const nativeToolProgressDraft =
-    streamToolProgressEnabled && !isRoomEvent && !isGroup && threadSpec.scope === "dm"
+    streamToolProgressEnabled &&
+    !isRoomEvent &&
+    !isGroup &&
+    threadSpec.scope === "dm" &&
+    canUseNativeToolProgressDraftForChat({ telegramCfg, chatId })
       ? (
           telegramDeps.createNativeTelegramToolProgressDraft ??
           createNativeTelegramToolProgressDraft
