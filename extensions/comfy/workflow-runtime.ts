@@ -271,16 +271,16 @@ function setWorkflowDimensionInput(
   width: number,
   height: number,
 ): void {
-  if (!config) return;
+  if (!config) {
+    return;
+  }
   const wNode = workflow[config.widthNodeId];
   if (!isRecord(wNode)) {
     throw new Error(`Comfy workflow missing node "${config.widthNodeId}" for dimensions`);
   }
   const wInputs = wNode.inputs;
   if (!isRecord(wInputs)) {
-    throw new Error(
-      `Comfy workflow node "${config.widthNodeId}" is missing an inputs object`,
-    );
+    throw new Error(`Comfy workflow node "${config.widthNodeId}" is missing an inputs object`);
   }
   const wName = config.widthInputName ?? "width";
   wInputs[wName] = width;
@@ -296,9 +296,7 @@ function setWorkflowDimensionInput(
     }
     const hInputs = hNode.inputs;
     if (!isRecord(hInputs)) {
-      throw new Error(
-        `Comfy workflow node "${config.heightNodeId}" is missing an inputs object`,
-      );
+      throw new Error(`Comfy workflow node "${config.heightNodeId}" is missing an inputs object`);
     }
     const hName = config.heightInputName ?? "height";
     hInputs[hName] = height;
@@ -316,20 +314,28 @@ function calculateDimensions(params: {
   if (size) {
     const match = size.trim().match(/^(\d+)x(\d+)$/);
     if (match) {
-      const w = parseInt(match[1], 10);
-      const h = parseInt(match[2], 10);
-      if (w > 0 && h > 0) return { width: w, height: h };
+      const w = Number.parseInt(match[1], 10);
+      const h = Number.parseInt(match[2], 10);
+      if (w > 0 && h > 0) {
+        return { width: w, height: h };
+      }
     }
   }
 
   // If aspect ratio is given, calculate from a base resolution
-  if (!aspectRatio) return null;
+  if (!aspectRatio) {
+    return null;
+  }
 
   const parts = aspectRatio.split(":");
-  if (parts.length !== 2) return null;
-  const arW = parseInt(parts[0], 10);
-  const arH = parseInt(parts[1], 10);
-  if (!arW || !arH || arW <= 0 || arH <= 0) return null;
+  if (parts.length !== 2) {
+    return null;
+  }
+  const arW = Number.parseInt(parts[0], 10);
+  const arH = Number.parseInt(parts[1], 10);
+  if (!arW || !arH || arW <= 0 || arH <= 0) {
+    return null;
+  }
 
   // Use a configurable base resolution (default 1024px) for the shorter side, then scale up
   const baseSize = params.baseConfig?.baseSize ?? 1024;
@@ -703,6 +709,14 @@ export function isComfyCapabilityConfigured(params: {
   });
 }
 
+export function isComfyDimensionsConfigured(params: { cfg?: OpenClawConfig }): boolean {
+  const config = getComfyConfig(params.cfg);
+  if (config.widthNodeId && config.heightNodeId) {
+    return true;
+  }
+  return false;
+}
+
 export async function runComfyWorkflow(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -729,7 +743,6 @@ export async function runComfyWorkflow(params: {
   const outputNodeId = normalizeOptionalString(capabilityConfig.outputNodeId);
 
   // Calculate and inject dimensions from aspectRatio/size if configured
-  let appliedDimensions: { width: number; height: number } | null = null;
   if (params.aspectRatio || params.size) {
     const dims = calculateDimensions({
       aspectRatio: params.aspectRatio,
@@ -737,7 +750,6 @@ export async function runComfyWorkflow(params: {
       baseConfig: capabilityConfig.dimensions,
     });
     if (dims) {
-      appliedDimensions = dims;
       setWorkflowDimensionInput(workflow, capabilityConfig.dimensions, dims.width, dims.height);
     }
   }

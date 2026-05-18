@@ -7,7 +7,7 @@ read_when:
   - You need the bundled comfy plugin config keys
 ---
 
-OpenClaw ships a bundled `comfy` plugin for workflow-driven ComfyUI runs. The plugin is entirely workflow-driven, so OpenClaw does not try to map generic `size`, `aspectRatio`, `resolution`, `durationSeconds`, or TTS-style controls onto your graph.
+OpenClaw ships a bundled `comfy` plugin for workflow-driven ComfyUI runs. The plugin is entirely workflow-driven, and OpenClaw can optionally map `size` and `aspectRatio` to specific nodes in image workflows. OpenClaw will not try to map generic `size`, `aspectRatio`, `resolution`, `durationSeconds`, or TTS-style controls onto your graph.
 
 | Property        | Detail                                                                           |
 | --------------- | -------------------------------------------------------------------------------- |
@@ -56,6 +56,11 @@ Choose between running ComfyUI on your own machine or using Comfy Cloud.
                     workflowPath: "./workflows/flux-api.json",
                     promptNodeId: "6",
                     outputNodeId: "9",
+                    dimensions: {
+                      widthNodeId: "10",
+                      heightNodeId: "10",
+                      baseSize: 1024
+                    }
                   },
                 },
               },
@@ -177,6 +182,11 @@ Comfy supports shared top-level connection settings plus per-capability workflow
             workflowPath: "./workflows/flux-api.json",
             promptNodeId: "6",
             outputNodeId: "9",
+            dimensions: {
+              widthNodeId: "10",
+              heightNodeId: "10",
+              baseSize: 1024,
+            },
           },
           video: {
             workflowPath: "./workflows/video-api.json",
@@ -219,10 +229,15 @@ These keys apply inside the `image`, `video`, or `music` sections:
 
 The `image` and `video` sections also support:
 
-| Key                   | Required                             | Default   | Description                                         |
-| --------------------- | ------------------------------------ | --------- | --------------------------------------------------- |
-| `inputImageNodeId`    | Yes (when passing a reference image) | --        | Node ID that receives the uploaded reference image. |
-| `inputImageInputName` | No                                   | `"image"` | Input name on the image node.                       |
+| Key                   | Required                             | Default    | Description                                         |
+| --------------------- | ------------------------------------ | ---------- | --------------------------------------------------- |
+| `inputImageNodeId`    | Yes (when passing a reference image) | --         | Node ID that receives the uploaded reference image. |
+| `inputImageInputName` | No                                   | `"image"`  | Input name on the image node.                       |
+| `widthNodeId`         | No                                   | --         | Node ID that receives the width value.              |
+| `heightNodeId`        | No                                   | --         | Node ID that receives the height value.             |
+| `widthInputName`      | No                                   | `"width"`  | Input field within the width node.                  |
+| `heightInputName`     | No                                   | `"height"` | Input value within the height node.                 |
+| `baseSize`            | No                                   | `1024`     | Default size or minimum dimension for output image. |
 
 ## Workflow details
 

@@ -1,12 +1,13 @@
 import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
+  ImageGenerationRequest,
 } from "openclaw/plugin-sdk/image-generation";
-import type { ImageGenerationRequest } from "openclaw/plugin-sdk/image-generation/types";
 import {
   DEFAULT_COMFY_MODEL,
   setComfyFetchGuardForTesting,
   isComfyCapabilityConfigured,
+  isComfyDimensionsConfigured,
   runComfyWorkflow,
 } from "./workflow-runtime.js";
 
@@ -27,8 +28,8 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
     capabilities: {
       generate: {
         maxCount: 1,
-        supportsSize: true,
-        supportsAspectRatio: true,
+        supportsSize: isComfyDimensionsConfigured(cfg),
+        supportsAspectRatio: isComfyDimensionsConfigured(cfg),
         supportsResolution: false,
       },
       edit: {
