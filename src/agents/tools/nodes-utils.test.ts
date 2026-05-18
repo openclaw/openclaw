@@ -8,9 +8,7 @@ vi.mock("./gateway.js", () => ({
 }));
 
 import type { NodeListNode } from "./nodes-utils.js";
-
-let listNodes: typeof import("./nodes-utils.js").listNodes;
-let resolveNodeIdFromList: typeof import("./nodes-utils.js").resolveNodeIdFromList;
+import { listNodes, resolveNodeIdFromList } from "./nodes-utils.js";
 
 function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string }): NodeListNode {
   return {
@@ -21,10 +19,8 @@ function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string
   };
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   gatewayMocks.callGatewayTool.mockReset();
-  ({ listNodes, resolveNodeIdFromList } = await import("./nodes-utils.js"));
 });
 
 describe("resolveNodeIdFromList defaults", () => {

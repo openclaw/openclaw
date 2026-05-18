@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/browser-support";
+export { safeEqualSecret } from "../sdk-security-runtime.js";

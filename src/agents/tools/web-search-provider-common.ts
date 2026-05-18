@@ -1,7 +1,8 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -13,6 +14,27 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "./web-shared.js";
+
+type WebGuardedFetchModule = Pick<
+  typeof import("./web-guarded-fetch.js"),
+  "withSelfHostedWebToolsEndpoint" | "withTrustedWebToolsEndpoint"
+>;
+
+const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
+  () => import("./web-guarded-fetch.js"),
+);
+
+async function loadTrustedWebToolsEndpoint(): Promise<
+  WebGuardedFetchModule["withTrustedWebToolsEndpoint"]
+> {
+  return (await webGuardedFetchLoader.load()).withTrustedWebToolsEndpoint;
+}
+
+async function loadSelfHostedWebToolsEndpoint(): Promise<
+  WebGuardedFetchModule["withSelfHostedWebToolsEndpoint"]
+> {
+  return (await webGuardedFetchLoader.load()).withSelfHostedWebToolsEndpoint;
+}
 
 export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
   ? Web extends { search?: infer Search }
@@ -30,21 +52,7 @@ type UnsupportedWebSearchFilterName =
 
 export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;
-
-const SEARCH_CACHE_KEY = Symbol.for("openclaw.web-search.cache");
-
-function getSharedSearchCache(): Map<string, CacheEntry<Record<string, unknown>>> {
-  const root = globalThis as Record<PropertyKey, unknown>;
-  const existing = root[SEARCH_CACHE_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, CacheEntry<Record<string, unknown>>>;
-  }
-  const next = new Map<string, CacheEntry<Record<string, unknown>>>();
-  root[SEARCH_CACHE_KEY] = next;
-  return next;
-}
-
-export const SEARCH_CACHE = getSharedSearchCache();
+export const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
 export function resolveSearchTimeoutSeconds(searchConfig?: SearchConfigRecord): number {
   return resolveTimeoutSeconds(searchConfig?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
@@ -79,14 +87,38 @@ export async function withTrustedWebSearchEndpoint<T>(
     url: string;
     timeoutSeconds: number;
     init: RequestInit;
+    signal?: AbortSignal;
   },
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
+  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
   return withTrustedWebToolsEndpoint(
     {
       url: params.url,
       init: params.init,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
+    },
+    async ({ response }) => run(response),
+  );
+}
+
+export async function withSelfHostedWebSearchEndpoint<T>(
+  params: {
+    url: string;
+    timeoutSeconds: number;
+    init: RequestInit;
+    signal?: AbortSignal;
+  },
+  run: (response: Response) => Promise<T>,
+): Promise<T> {
+  const withSelfHostedWebToolsEndpoint = await loadSelfHostedWebToolsEndpoint();
+  return withSelfHostedWebToolsEndpoint(
+    {
+      url: params.url,
+      init: params.init,
+      timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
     },
     async ({ response }) => run(response),
   );
@@ -100,16 +132,21 @@ export async function postTrustedWebToolsJson<T>(
     body: Record<string, unknown>;
     errorLabel: string;
     maxErrorBytes?: number;
+    extraHeaders?: Record<string, string>;
+    signal?: AbortSignal;
   },
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
+  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
   return withTrustedWebToolsEndpoint(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: {
+          ...params.extraHeaders,
           Accept: "application/json",
           Authorization: `Bearer ${params.apiKey}`,
           "Content-Type": "application/json",
@@ -158,7 +195,7 @@ export const FRESHNESS_TO_RECENCY: Record<string, string> = {
   pm: "month",
   py: "year",
 };
-export const RECENCY_TO_FRESHNESS: Record<string, string> = {
+const RECENCY_TO_FRESHNESS: Record<string, string> = {
   day: "pd",
   week: "pw",
   month: "pm",
@@ -189,7 +226,7 @@ export function isoToPerplexityDate(iso: string): string | undefined {
     return undefined;
   }
   const [, year, month, day] = match;
-  return `${parseInt(month, 10)}/${parseInt(day, 10)}/${year}`;
+  return `${Number.parseInt(month, 10)}/${Number.parseInt(day, 10)}/${year}`;
 }
 
 export function normalizeToIsoDate(value: string): string | undefined {
@@ -262,7 +299,7 @@ export function normalizeFreshness(
     return undefined;
   }
 
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (BRAVE_FRESHNESS_SHORTCUTS.has(lower)) {
     return provider === "brave" ? lower : FRESHNESS_TO_RECENCY[lower];
   }
@@ -326,6 +363,7 @@ function describeUnsupportedSearchFilter(name: UnsupportedWebSearchFilterName): 
     case "date_before":
       return "date_after/date_before filtering";
   }
+  throw new Error("Unsupported web search filter");
 }
 
 export function buildUnsupportedSearchFilterResponse(

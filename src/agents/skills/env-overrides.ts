@@ -1,6 +1,9 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
-import { isDangerousHostEnvVarName } from "../../infra/host-env-security.js";
+import {
+  isDangerousHostEnvOverrideVarName,
+  isDangerousHostEnvVarName,
+} from "../../infra/host-env-security.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeEnvVars, validateEnvVarValue } from "../sandbox/sanitize-env-vars.js";
 import { resolveSkillConfig } from "./config.js";
@@ -86,7 +89,9 @@ function matchesAnyPattern(value: string, patterns: readonly RegExp[]): boolean 
 
 function isAlwaysBlockedSkillEnvKey(key: string): boolean {
   return (
-    isDangerousHostEnvVarName(key) || matchesAnyPattern(key, SKILL_ALWAYS_BLOCKED_ENV_PATTERNS)
+    isDangerousHostEnvVarName(key) ||
+    isDangerousHostEnvOverrideVarName(key) ||
+    matchesAnyPattern(key, SKILL_ALWAYS_BLOCKED_ENV_PATTERNS)
   );
 }
 
@@ -167,17 +172,17 @@ function applySkillConfigEnvOverrides(params: {
     }
   }
 
-  const resolvedApiKey =
-    normalizeResolvedSecretInputString({
-      value: skillConfig.apiKey,
-      path: `skills.entries.${skillKey}.apiKey`,
-    }) ?? "";
   const canInjectPrimaryEnv =
     normalizedPrimaryEnv &&
     (process.env[normalizedPrimaryEnv] === undefined ||
       activeSkillEnvEntries.has(normalizedPrimaryEnv));
-  if (canInjectPrimaryEnv && resolvedApiKey) {
-    if (!pendingOverrides[normalizedPrimaryEnv]) {
+  if (canInjectPrimaryEnv && !pendingOverrides[normalizedPrimaryEnv]) {
+    const resolvedApiKey =
+      normalizeResolvedSecretInputString({
+        value: skillConfig.apiKey,
+        path: `skills.entries.${skillKey}.apiKey`,
+      }) ?? "";
+    if (resolvedApiKey) {
       pendingOverrides[normalizedPrimaryEnv] = resolvedApiKey;
     }
   }

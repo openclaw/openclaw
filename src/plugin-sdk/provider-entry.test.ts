@@ -35,6 +35,24 @@ function createCatalogContext(
   };
 }
 
+async function captureProviderEntry(params: {
+  entry: ReturnType<typeof defineSingleProviderPluginEntry>;
+  config?: ProviderCatalogContext["config"];
+}) {
+  const captured = capturePluginRegistration(params.entry);
+  const provider = captured.providers[0];
+  const modelCatalogProvider = captured.modelCatalogProviders[0];
+  const catalog = await provider?.catalog?.run(createCatalogContext(params.config));
+  const staticCatalog = await provider?.staticCatalog?.run(createCatalogContext(params.config));
+  const unifiedCatalog = await modelCatalogProvider?.liveCatalog?.(
+    createCatalogContext(params.config),
+  );
+  const unifiedStaticCatalog = await modelCatalogProvider?.staticCatalog?.(
+    createCatalogContext(params.config),
+  );
+  return { captured, provider, catalog, staticCatalog, unifiedCatalog, unifiedStaticCatalog };
+}
+
 describe("defineSingleProviderPluginEntry", () => {
   it("registers a single provider with default wizard metadata", async () => {
     const entry = defineSingleProviderPluginEntry({
@@ -62,35 +80,34 @@ describe("defineSingleProviderPluginEntry", () => {
             baseUrl: "https://api.demo.test/v1",
             models: [createModel("default", "Default")],
           }),
+          buildStaticProvider: () => ({
+            api: "openai-completions",
+            baseUrl: "https://api.demo.test/v1",
+            models: [createModel("default", "Default")],
+          }),
         },
       },
     });
 
-    const captured = capturePluginRegistration(entry);
+    const { captured, provider, catalog, staticCatalog, unifiedCatalog, unifiedStaticCatalog } =
+      await captureProviderEntry({ entry });
     expect(captured.providers).toHaveLength(1);
-    const provider = captured.providers[0];
-    expect(provider).toMatchObject({
-      id: "demo",
-      label: "Demo",
-      docsPath: "/providers/demo",
-      envVars: ["DEMO_API_KEY"],
-    });
+    expect(captured.modelCatalogProviders).toHaveLength(1);
+    expect(provider?.id).toBe("demo");
+    expect(provider?.label).toBe("Demo");
+    expect(provider?.docsPath).toBe("/providers/demo");
+    expect(provider?.envVars).toEqual(["DEMO_API_KEY"]);
     expect(provider?.auth).toHaveLength(1);
-    expect(provider?.auth[0]).toMatchObject({
-      id: "api-key",
-      label: "Demo API key",
-      hint: "Shared key",
-    });
-    expect(provider?.auth[0]?.wizard).toMatchObject({
-      choiceId: "demo-api-key",
-      choiceLabel: "Demo API key",
-      groupId: "demo",
-      groupLabel: "Demo",
-      groupHint: "Shared key",
-      methodId: "api-key",
-    });
+    expect(provider?.auth[0]?.id).toBe("api-key");
+    expect(provider?.auth[0]?.label).toBe("Demo API key");
+    expect(provider?.auth[0]?.hint).toBe("Shared key");
+    expect(provider?.auth[0]?.wizard?.choiceId).toBe("demo-api-key");
+    expect(provider?.auth[0]?.wizard?.choiceLabel).toBe("Demo API key");
+    expect(provider?.auth[0]?.wizard?.groupId).toBe("demo");
+    expect(provider?.auth[0]?.wizard?.groupLabel).toBe("Demo");
+    expect(provider?.auth[0]?.wizard?.groupHint).toBe("Shared key");
+    expect(provider?.auth[0]?.wizard?.methodId).toBe("api-key");
 
-    const catalog = await provider?.catalog?.run(createCatalogContext());
     expect(catalog).toEqual({
       provider: {
         api: "openai-completions",
@@ -99,6 +116,31 @@ describe("defineSingleProviderPluginEntry", () => {
         models: [createModel("default", "Default")],
       },
     });
+    expect(staticCatalog).toEqual({
+      provider: {
+        api: "openai-completions",
+        baseUrl: "https://api.demo.test/v1",
+        models: [createModel("default", "Default")],
+      },
+    });
+    expect(unifiedCatalog).toEqual([
+      {
+        kind: "text",
+        provider: "demo",
+        model: "default",
+        label: "Default",
+        source: "live",
+      },
+    ]);
+    expect(unifiedStaticCatalog).toEqual([
+      {
+        kind: "text",
+        provider: "demo",
+        model: "default",
+        label: "Default",
+        source: "static",
+      },
+    ]);
   });
 
   it("supports provider overrides, explicit env vars, and extra registration", async () => {
@@ -159,29 +201,9 @@ describe("defineSingleProviderPluginEntry", () => {
       },
     });
 
-    const captured = capturePluginRegistration(entry);
-    expect(captured.providers).toHaveLength(1);
-    expect(captured.webSearchProviders).toHaveLength(1);
-
-    const provider = captured.providers[0];
-    expect(provider).toMatchObject({
-      id: "gateway",
-      label: "Gateway",
-      aliases: ["gw"],
-      envVars: ["GATEWAY_KEY", "SECONDARY_KEY"],
-      capabilities: {
-        transcriptToolCallIdMode: "strict9",
-      },
-    });
-    expect(provider?.auth[0]?.wizard).toMatchObject({
-      choiceId: "gateway-api-key",
-      groupId: "shared-gateway",
-      groupLabel: "Shared Gateway",
-      groupHint: "Primary key",
-    });
-
-    const catalog = await provider?.catalog?.run(
-      createCatalogContext({
+    const { captured, provider, catalog } = await captureProviderEntry({
+      entry,
+      config: {
         models: {
           providers: {
             gateway: {
@@ -190,8 +212,22 @@ describe("defineSingleProviderPluginEntry", () => {
             },
           },
         },
-      }),
-    );
+      },
+    });
+    expect(captured.providers).toHaveLength(1);
+    expect(captured.modelCatalogProviders).toHaveLength(1);
+    expect(captured.webSearchProviders).toHaveLength(1);
+
+    expect(provider?.id).toBe("gateway");
+    expect(provider?.label).toBe("Gateway");
+    expect(provider?.aliases).toEqual(["gw"]);
+    expect(provider?.envVars).toEqual(["GATEWAY_KEY", "SECONDARY_KEY"]);
+    expect(provider?.capabilities?.transcriptToolCallIdMode).toBe("strict9");
+    expect(provider?.auth[0]?.wizard?.choiceId).toBe("gateway-api-key");
+    expect(provider?.auth[0]?.wizard?.groupId).toBe("shared-gateway");
+    expect(provider?.auth[0]?.wizard?.groupLabel).toBe("Shared Gateway");
+    expect(provider?.auth[0]?.wizard?.groupHint).toBe("Primary key");
+
     expect(catalog).toEqual({
       provider: {
         api: "openai-completions",
@@ -200,5 +236,56 @@ describe("defineSingleProviderPluginEntry", () => {
         models: [createModel("router", "Router")],
       },
     });
+  });
+
+  it("registers extra non-api-key auth methods", async () => {
+    const entry = defineSingleProviderPluginEntry({
+      id: "demo",
+      name: "Demo Provider",
+      description: "Demo provider plugin",
+      provider: {
+        label: "Demo",
+        docsPath: "/providers/demo",
+        auth: [
+          {
+            methodId: "api-key",
+            label: "Demo API key",
+            hint: "Shared key",
+            optionKey: "demoApiKey",
+            flagName: "--demo-api-key",
+            envVar: "DEMO_API_KEY",
+            promptMessage: "Enter Demo API key",
+            defaultModel: "demo/default",
+          },
+        ],
+        extraAuth: [
+          {
+            id: "oauth",
+            label: "Demo OAuth",
+            hint: "OAuth",
+            kind: "oauth",
+            wizard: {
+              choiceId: "demo-oauth",
+              choiceLabel: "Demo OAuth",
+              groupId: "demo",
+              groupLabel: "Demo",
+              methodId: "oauth",
+            },
+            run: async () => ({ profiles: [] }),
+          },
+        ],
+        catalog: {
+          buildProvider: () => ({
+            api: "openai-completions",
+            baseUrl: "https://api.demo.test/v1",
+            models: [createModel("default", "Default")],
+          }),
+        },
+      },
+    });
+
+    const { provider } = await captureProviderEntry({ entry });
+    expect(provider?.auth.map((method) => method.id)).toEqual(["api-key", "oauth"]);
+    expect(provider?.auth[1]?.wizard?.choiceId).toBe("demo-oauth");
   });
 });

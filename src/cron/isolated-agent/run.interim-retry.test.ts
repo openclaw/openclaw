@@ -5,15 +5,42 @@ import {
 } from "./run.suite-helpers.js";
 import {
   countActiveDescendantRunsMock,
+  dispatchCronDeliveryMock,
+  isHeartbeatOnlyResponseMock,
   listDescendantRunsForRequesterMock,
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
   pickLastNonEmptyTextFromPayloadsMock,
+  resolveCronDeliveryPlanMock,
   runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+
+function requireEmbeddedAgentCall(index: number): { prompt?: string } {
+  const call = runEmbeddedPiAgentMock.mock.calls[index]?.[0] as { prompt?: string } | undefined;
+  if (!call) {
+    throw new Error(`Expected embedded PI agent call ${index}`);
+  }
+  return call;
+}
+
+function requireDeliveryRequest(): {
+  skipHeartbeatDelivery?: boolean;
+  deliveryPayloads?: unknown;
+} {
+  const request = dispatchCronDeliveryMock.mock.calls[0]?.[0] as
+    | {
+        skipHeartbeatDelivery?: boolean;
+        deliveryPayloads?: unknown;
+      }
+    | undefined;
+  if (!request) {
+    throw new Error("Expected cron delivery request");
+  }
+  return request;
+}
 
 describe("runCronIsolatedAgentTurn — interim ack retry", () => {
   setupRunCronIsolatedAgentTurnSuite();
@@ -58,7 +85,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
 
     mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(2, 2);
-    expect(runEmbeddedPiAgentMock.mock.calls[1]?.[0]?.prompt).toContain(
+    expect(requireEmbeddedAgentCall(1).prompt).toContain(
       "previous response was only an acknowledgement",
     );
   });
@@ -72,6 +99,68 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
 
     mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(1, 1);
+  });
+
+  it("does not retry over a fatal structured failure signal", async () => {
+    usePayloadTextExtraction();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "On it, retrying now." }],
+      meta: {
+        agentMeta: { usage: { input: 10, output: 20 } },
+        failureSignal: {
+          kind: "execution_denied",
+          source: "tool",
+          toolName: "exec",
+          code: "SYSTEM_RUN_DENIED",
+          message: "SYSTEM_RUN_DENIED: approval required",
+          fatalForCron: true,
+        },
+      },
+    });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("SYSTEM_RUN_DENIED: approval required");
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers synthesized fatal failure signals even when the original payloads are empty", async () => {
+    usePayloadTextExtraction();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+    isHeartbeatOnlyResponseMock.mockReturnValue(true);
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        agentMeta: { usage: { input: 10, output: 20 } },
+        failureSignal: {
+          kind: "execution_denied",
+          source: "tool",
+          toolName: "exec",
+          code: "SYSTEM_RUN_DENIED",
+          message: "SYSTEM_RUN_DENIED: approval required",
+          fatalForCron: true,
+        },
+      },
+    });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("SYSTEM_RUN_DENIED: approval required");
+    const deliveryRequest = requireDeliveryRequest();
+    expect(deliveryRequest.skipHeartbeatDelivery).toBe(false);
+    expect(deliveryRequest.deliveryPayloads).toEqual([
+      { text: "SYSTEM_RUN_DENIED: approval required", isError: true },
+    ]);
   });
 
   it("does not retry when descendants were spawned in this run even if they already settled", async () => {
@@ -89,5 +178,11 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
 
     mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(1, 1);
+    expect(listDescendantRunsForRequesterMock).toHaveBeenCalledWith(
+      "agent:default:cron:test:run:test-session-id",
+    );
+    expect(countActiveDescendantRunsMock).toHaveBeenCalledWith(
+      "agent:default:cron:test:run:test-session-id",
+    );
   });
 });

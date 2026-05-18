@@ -3,13 +3,14 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
+  applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModelPreset,
   applyProviderConfigWithModelCatalogPreset,
   applyProviderConfigWithDefaultModel,
   applyProviderConfigWithDefaultModels,
   applyProviderConfigWithModelCatalog,
   withAgentModelAliases,
-} from "../plugins/provider-onboarding-config.js";
+} from "../plugin-sdk/provider-onboard.js";
 
 function makeModel(id: string): ModelDefinitionConfig {
   return {
@@ -59,6 +60,77 @@ describe("onboard auth provider config merges", () => {
     expect(next.agents?.defaults?.models).toEqual(agentModels);
   });
 
+  it("preserves existing agent model entries when adding provider models", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": { alias: "GPT" },
+          },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            api: "openai-completions",
+            baseUrl: "https://old.example.com/v1",
+            models: [makeModel("model-a")],
+          },
+        },
+      },
+    };
+
+    const next = applyProviderConfigWithDefaultModels(cfg, {
+      agentModels,
+      providerId: "custom",
+      api: "openai-completions",
+      baseUrl: "https://new.example.com/v1",
+      defaultModels: [makeModel("model-b")],
+      defaultModelId: "model-b",
+    });
+
+    expect(next.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { alias: "GPT" },
+      ...agentModels,
+    });
+  });
+
+  it("normalizes retired Google agent model keys when adding provider models", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3-pro-preview": {
+              alias: "Gemini",
+              params: { thinkingLevel: "high" },
+            },
+          },
+        },
+      },
+    };
+
+    const next = applyProviderConfigWithDefaultModels(cfg, {
+      agentModels: {
+        "google/gemini-3.1-pro-preview": {
+          params: { serviceTier: "standard" },
+        },
+      },
+      providerId: "custom",
+      api: "openai-completions",
+      baseUrl: "https://new.example.com/v1",
+      defaultModels: [makeModel("model-b")],
+      defaultModelId: "model-b",
+    });
+
+    expect(next.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {
+        alias: "Gemini",
+        params: { thinkingLevel: "high", serviceTier: "standard" },
+      },
+    });
+    expect(next.agents?.defaults?.models).not.toHaveProperty("google/gemini-3-pro-preview");
+  });
+
   it("merges model catalogs without duplicating existing model ids", () => {
     const cfg: OpenClawConfig = {
       models: {
@@ -84,6 +156,63 @@ describe("onboard auth provider config merges", () => {
       "model-a",
       "model-c",
     ]);
+  });
+
+  it("normalizes retired Google model ids before emitting provider catalog config", () => {
+    const next = applyProviderConfigWithModelCatalog(
+      {
+        models: {
+          providers: {
+            kilocode: {
+              api: "openai-completions",
+              baseUrl: "https://example.com/v1",
+              models: [makeModel("google/gemini-3-pro-preview")],
+            },
+          },
+        },
+      },
+      {
+        agentModels,
+        providerId: "kilocode",
+        api: "openai-completions",
+        baseUrl: "https://example.com/v1",
+        catalogModels: [makeModel("google/gemini-3.1-pro-preview")],
+      },
+    );
+
+    expect(next.models?.providers?.kilocode?.models?.map((m) => m.id)).toEqual([
+      "google/gemini-3.1-pro-preview",
+    ]);
+  });
+
+  it("normalizes retired Google provider catalog ids when applying only an agent default", () => {
+    const next = applyAgentDefaultModelPrimary(
+      {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              models: [makeModel("google/gemini-3-pro-preview")],
+            },
+            kilocode: {
+              api: "openai-completions",
+              baseUrl: "https://kilocode.example.com/v1",
+              models: [makeModel("google/gemini-3-pro-preview")],
+            },
+          },
+        },
+      },
+      "google/gemini-3.1-pro-preview",
+    );
+
+    expect(next.models?.providers?.google?.models?.map((m) => m.id)).toEqual([
+      "google/gemini-3.1-pro-preview",
+    ]);
+    expect(next.models?.providers?.kilocode?.models?.map((m) => m.id)).toEqual([
+      "google/gemini-3.1-pro-preview",
+    ]);
+    expect(next.agents?.defaults?.model).toEqual({ primary: "google/gemini-3.1-pro-preview" });
   });
 
   it("supports single default model convenience wrapper", () => {
@@ -112,6 +241,19 @@ describe("onboard auth provider config merges", () => {
     ).toEqual({
       "custom/model-a": { alias: "Pinned" },
       "custom/model-b": {},
+    });
+  });
+
+  it("normalizes retired Google alias presets before emitting config", () => {
+    expect(
+      withAgentModelAliases(
+        {
+          "google/gemini-3-pro-preview": { alias: "Pinned" },
+        },
+        [{ modelRef: "google/gemini-3-pro-preview", alias: "Preset" }],
+      ),
+    ).toEqual({
+      "google/gemini-3.1-pro-preview": { alias: "Pinned" },
     });
   });
 

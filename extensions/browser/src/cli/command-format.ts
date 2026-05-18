@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/browser-support";
+export { formatCliCommand } from "../sdk-setup-tools.js";

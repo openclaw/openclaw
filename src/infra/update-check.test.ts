@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   checkDepsStatus,
   checkUpdateStatus,
   compareSemverStrings,
   fetchNpmLatestVersion,
   fetchNpmPackageTargetStatus,
+  fetchNpmRegistryVersionForChannel,
   fetchNpmTagVersion,
   formatGitInstallLabel,
   resolveNpmChannelTag,
@@ -25,6 +27,12 @@ describe("compareSemverStrings", () => {
     expect(compareSemverStrings("1.0.0-1", "1.0.0-beta.1")).toBe(-1);
     expect(compareSemverStrings("1.0.0.beta.2", "1.0.0-beta.1")).toBe(1);
     expect(compareSemverStrings("1.0.0", "1.0.0.beta.1")).toBe(1);
+  });
+
+  it("treats OpenClaw stable correction releases as newer than their base release", () => {
+    expect(compareSemverStrings("2026.5.3", "2026.5.3-1")).toBe(-1);
+    expect(compareSemverStrings("2026.5.3-1", "2026.5.3")).toBe(1);
+    expect(compareSemverStrings("2026.5.3-2", "2026.5.3-1")).toBe(1);
   });
 
   it("returns null for invalid inputs", () => {
@@ -50,7 +58,7 @@ describe("resolveNpmChannelTag", () => {
           status: version != null ? 200 : 404,
           json: async () => ({
             version,
-            engines: version != null ? { node: ">=22.14.0" } : undefined,
+            engines: version != null ? { node: ">=22.19.0" } : undefined,
           }),
         } as Response;
       }),
@@ -105,7 +113,7 @@ describe("resolveNpmChannelTag", () => {
     ).resolves.toEqual({
       target: "latest",
       version: "1.0.4",
-      nodeEngine: ">=22.14.0",
+      nodeEngine: ">=22.19.0",
     });
     await expect(fetchNpmTagVersion({ tag: "latest", timeoutMs: 1000 })).resolves.toEqual({
       tag: "latest",
@@ -115,8 +123,20 @@ describe("resolveNpmChannelTag", () => {
       latestVersion: "1.0.4",
       error: undefined,
     });
+    versionByTag.beta = "1.0.5-beta.1";
+    await expect(
+      fetchNpmRegistryVersionForChannel({ channel: "beta", timeoutMs: 1000 }),
+    ).resolves.toEqual({
+      latestVersion: "1.0.5-beta.1",
+      tag: "beta",
+    });
     await expect(fetchNpmTagVersion({ tag: "beta", timeoutMs: 1000 })).resolves.toEqual({
       tag: "beta",
+      version: "1.0.5-beta.1",
+      error: undefined,
+    });
+    await expect(fetchNpmTagVersion({ tag: "missing", timeoutMs: 1000 })).resolves.toEqual({
+      tag: "missing",
       version: null,
       error: "HTTP 404",
     });
@@ -175,42 +195,39 @@ describe("formatGitInstallLabel", () => {
 
 describe("checkDepsStatus", () => {
   it("reports unknown, missing, stale, and ok states from lockfile markers", async () => {
-    const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-check-"));
+    await withTempDir({ prefix: "openclaw-update-check-" }, async (base) => {
+      await expect(checkDepsStatus({ root: base, manager: "unknown" })).resolves.toEqual({
+        manager: "unknown",
+        status: "unknown",
+        lockfilePath: null,
+        markerPath: null,
+        reason: "unknown package manager",
+      });
 
-    await expect(checkDepsStatus({ root: base, manager: "unknown" })).resolves.toEqual({
-      manager: "unknown",
-      status: "unknown",
-      lockfilePath: null,
-      markerPath: null,
-      reason: "unknown package manager",
-    });
+      await fs.writeFile(path.join(base, "pnpm-lock.yaml"), "lock", "utf8");
+      const missingDeps = await checkDepsStatus({ root: base, manager: "pnpm" });
+      expect(missingDeps.manager).toBe("pnpm");
+      expect(missingDeps.status).toBe("missing");
+      expect(missingDeps.reason).toBe("node_modules marker missing");
 
-    await fs.writeFile(path.join(base, "pnpm-lock.yaml"), "lock", "utf8");
-    await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
-      manager: "pnpm",
-      status: "missing",
-      reason: "node_modules marker missing",
-    });
+      const markerPath = path.join(base, "node_modules", ".modules.yaml");
+      await fs.mkdir(path.dirname(markerPath), { recursive: true });
+      await fs.writeFile(markerPath, "marker", "utf8");
+      const staleDate = new Date(Date.now() - 10_000);
+      const freshDate = new Date();
+      await fs.utimes(markerPath, staleDate, staleDate);
+      await fs.utimes(path.join(base, "pnpm-lock.yaml"), freshDate, freshDate);
 
-    const markerPath = path.join(base, "node_modules", ".modules.yaml");
-    await fs.mkdir(path.dirname(markerPath), { recursive: true });
-    await fs.writeFile(markerPath, "marker", "utf8");
-    const staleDate = new Date(Date.now() - 10_000);
-    const freshDate = new Date();
-    await fs.utimes(markerPath, staleDate, staleDate);
-    await fs.utimes(path.join(base, "pnpm-lock.yaml"), freshDate, freshDate);
+      const staleDeps = await checkDepsStatus({ root: base, manager: "pnpm" });
+      expect(staleDeps.manager).toBe("pnpm");
+      expect(staleDeps.status).toBe("stale");
+      expect(staleDeps.reason).toBe("lockfile newer than install marker");
 
-    await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
-      manager: "pnpm",
-      status: "stale",
-      reason: "lockfile newer than install marker",
-    });
-
-    const newerMarker = new Date(Date.now() + 2_000);
-    await fs.utimes(markerPath, newerMarker, newerMarker);
-    await expect(checkDepsStatus({ root: base, manager: "pnpm" })).resolves.toMatchObject({
-      manager: "pnpm",
-      status: "ok",
+      const newerMarker = new Date(Date.now() + 2_000);
+      await fs.utimes(markerPath, newerMarker, newerMarker);
+      const okDeps = await checkDepsStatus({ root: base, manager: "pnpm" });
+      expect(okDeps.manager).toBe("pnpm");
+      expect(okDeps.status).toBe("ok");
     });
   });
 });
@@ -228,26 +245,52 @@ describe("checkUpdateStatus", () => {
   });
 
   it("detects package installs for non-git roots", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-check-"));
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ packageManager: "npm@10.0.0" }),
-      "utf8",
-    );
-    await fs.writeFile(path.join(root, "package-lock.json"), "lock", "utf8");
-    await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+    await withTempDir({ prefix: "openclaw-update-check-" }, async (root) => {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ packageManager: "npm@10.0.0" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "package-lock.json"), "lock", "utf8");
+      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
 
-    await expect(
-      checkUpdateStatus({ root, includeRegistry: false, fetchGit: false, timeoutMs: 1000 }),
-    ).resolves.toMatchObject({
-      root,
-      installKind: "package",
-      packageManager: "npm",
-      git: undefined,
-      registry: undefined,
-      deps: {
-        manager: "npm",
-      },
+      const status = await checkUpdateStatus({
+        root,
+        includeRegistry: false,
+        fetchGit: false,
+        timeoutMs: 1000,
+      });
+      expect(status.root).toBe(root);
+      expect(status.installKind).toBe("package");
+      expect(status.packageManager).toBe("npm");
+      expect(status.git).toBeUndefined();
+      expect(status.registry).toBeUndefined();
+      expect(status.deps?.manager).toBe("npm");
+    });
+  });
+
+  it("treats symlinked git installs as git roots", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-git-" }, async (base) => {
+      const repoRoot = path.join(base, "repo");
+      const linkedRoot = path.join(base, "linked-openclaw");
+      await fs.mkdir(repoRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(repoRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", packageManager: "pnpm@10.0.0" }),
+        "utf8",
+      );
+      await runCommandWithTimeout(["git", "init"], { cwd: repoRoot, timeoutMs: 1000 });
+      await fs.symlink(repoRoot, linkedRoot);
+
+      const status = await checkUpdateStatus({
+        root: linkedRoot,
+        includeRegistry: false,
+        fetchGit: false,
+        timeoutMs: 1000,
+      });
+      expect(status.root).toBe(linkedRoot);
+      expect(status.installKind).toBe("git");
+      expect(status.git?.root).toBe(linkedRoot);
     });
   });
 });

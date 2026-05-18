@@ -1,9 +1,14 @@
 import { z } from "zod";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import {
+  isSensitiveUrlConfigPath,
+  SENSITIVE_URL_HINT_TAG,
+} from "../shared/net/redact-sensitive-url.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
@@ -106,48 +111,7 @@ export function isPluginOwnedChannelHintPath(path: string): boolean {
   return !isKernelOwnedChannelHintPath(path);
 }
 
-/**
- * Non-sensitive field names that happen to match sensitive patterns.
- * These are explicitly excluded from redaction (plugin config) and
- * warnings about not being marked sensitive (base config).
- */
-const SENSITIVE_KEY_WHITELIST_SUFFIXES = [
-  "maxtokens",
-  "maxoutputtokens",
-  "maxinputtokens",
-  "maxcompletiontokens",
-  "contexttokens",
-  "totaltokens",
-  "tokencount",
-  "tokenlimit",
-  "tokenbudget",
-  "passwordFile",
-] as const;
-const NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES = SENSITIVE_KEY_WHITELIST_SUFFIXES.map((suffix) =>
-  suffix.toLowerCase(),
-);
-
-const SENSITIVE_PATTERNS = [
-  /token$/i,
-  /password/i,
-  /secret/i,
-  /api.?key/i,
-  /encrypt.?key/i,
-  /serviceaccount(?:ref)?$/i,
-];
-
-function isWhitelistedSensitivePath(path: string): boolean {
-  const lowerPath = path.toLowerCase();
-  return NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix));
-}
-
-function matchesSensitivePattern(path: string): boolean {
-  return SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
-}
-
-export function isSensitiveConfigPath(path: string): boolean {
-  return !isWhitelistedSensitivePath(path) && matchesSensitivePattern(path);
-}
+export { isSensitiveConfigPath };
 
 export function buildBaseHints(): ConfigUiHints {
   const hints: ConfigUiHints = {};
@@ -198,6 +162,80 @@ export function applySensitiveHints(
     }
   }
   return next;
+}
+
+export function applySensitiveUrlHints(
+  hints: ConfigUiHints,
+  allowedKeys?: ReadonlySet<string>,
+): ConfigUiHints {
+  const next = { ...hints };
+  const keys = allowedKeys ? [...allowedKeys] : Object.keys(next);
+  for (const key of keys) {
+    if (!isSensitiveUrlConfigPath(key)) {
+      continue;
+    }
+    const current = next[key];
+    const tags = new Set(current?.tags ?? []);
+    tags.add(SENSITIVE_URL_HINT_TAG);
+    next[key] = {
+      ...current,
+      tags: [...tags],
+    };
+  }
+  return next;
+}
+
+export function collectMatchingSchemaPaths(
+  schema: z.ZodType,
+  path: string,
+  matchesPath: (path: string) => boolean,
+  paths: Set<string> = new Set(),
+): Set<string> {
+  let currentSchema = schema;
+
+  while (isUnwrappable(currentSchema)) {
+    currentSchema = currentSchema.unwrap();
+  }
+
+  if (path && matchesPath(path)) {
+    paths.add(path);
+  }
+
+  if (currentSchema instanceof z.ZodObject) {
+    const shape = currentSchema.shape;
+    for (const key in shape) {
+      const nextPath = path ? `${path}.${key}` : key;
+      collectMatchingSchemaPaths(shape[key], nextPath, matchesPath, paths);
+    }
+    const catchallSchema = currentSchema._def.catchall as z.ZodType | undefined;
+    if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
+      const nextPath = path ? `${path}.*` : "*";
+      collectMatchingSchemaPaths(catchallSchema, nextPath, matchesPath, paths);
+    }
+  } else if (currentSchema instanceof z.ZodArray) {
+    const nextPath = path ? `${path}[]` : "[]";
+    collectMatchingSchemaPaths(currentSchema.element as z.ZodType, nextPath, matchesPath, paths);
+  } else if (currentSchema instanceof z.ZodRecord) {
+    const nextPath = path ? `${path}.*` : "*";
+    collectMatchingSchemaPaths(
+      currentSchema._def.valueType as z.ZodType,
+      nextPath,
+      matchesPath,
+      paths,
+    );
+  } else if (
+    currentSchema instanceof z.ZodUnion ||
+    currentSchema instanceof z.ZodDiscriminatedUnion
+  ) {
+    for (const option of currentSchema.options) {
+      collectMatchingSchemaPaths(option as z.ZodType, path, matchesPath, paths);
+    }
+  } else if (currentSchema instanceof z.ZodIntersection) {
+    collectMatchingSchemaPaths(currentSchema._def.left as z.ZodType, path, matchesPath, paths);
+    collectMatchingSchemaPaths(currentSchema._def.right as z.ZodType, path, matchesPath, paths);
+  }
+
+  return paths;
 }
 
 // Seems to be the only way tsgo accepts us to check if we have a ZodClass
@@ -270,5 +308,6 @@ export function mapSensitivePaths(
 
 /** @internal */
 export const __test__ = {
+  collectMatchingSchemaPaths,
   mapSensitivePaths,
 };

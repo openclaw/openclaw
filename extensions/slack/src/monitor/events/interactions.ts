@@ -1,18 +1,12 @@
 import { truncateSlackText } from "../../truncate.js";
 import type { SlackMonitorContext } from "../context.js";
-import {
-  registerSlackBlockActionHandler,
-  summarizeAction,
-  type InteractionSummary,
-} from "./interactions.block-actions.js";
+import { registerSlackBlockActionHandler, summarizeAction } from "./interactions.block-actions.js";
 import {
   registerModalLifecycleHandler,
-  type ModalInputSummary,
   type RegisterSlackModalHandler,
 } from "./interactions.modal.js";
+import type { ModalInputSummary } from "./modal-input-summary.js";
 
-// Prefix for OpenClaw-generated action IDs to scope our handler
-const OPENCLAW_ACTION_PREFIX = "openclaw:";
 const SLACK_INTERACTION_EVENT_PREFIX = "Slack interaction: ";
 const REDACTED_INTERACTION_VALUE = "[redacted]";
 const SLACK_INTERACTION_EVENT_MAX_CHARS = 2400;
@@ -118,6 +112,10 @@ function buildCompactSlackInteractionPayload(
     selectedDateTime: payload.selectedDateTime,
     workflowId: payload.workflowId,
     routedChannelType: payload.routedChannelType,
+    pluginHandled: payload.pluginHandled,
+    pluginNamespace: payload.pluginNamespace,
+    pluginDuplicate: payload.pluginDuplicate,
+    pluginSystemEvent: payload.pluginSystemEvent,
     inputs: compactInputs.length > 0 ? compactInputs : undefined,
     inputsOmitted:
       rawInputs.length > SLACK_INTERACTION_COMPACT_INPUTS_MAX_ITEMS
@@ -179,23 +177,28 @@ function summarizeViewState(values: unknown): ModalInputSummary[] {
   return entries;
 }
 
-export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContext }) {
-  const { ctx } = params;
+export function registerSlackInteractionEvents(params: {
+  ctx: SlackMonitorContext;
+  trackEvent?: () => void;
+}) {
+  const { ctx, trackEvent } = params;
   registerSlackBlockActionHandler({
     ctx,
+    trackEvent,
     formatSystemEvent: formatSlackInteractionSystemEvent,
   });
 
   if (typeof ctx.app.view !== "function") {
     return;
   }
-  const modalMatcher = new RegExp(`^${OPENCLAW_ACTION_PREFIX}`);
+  const modalMatcher = /.*/;
 
-  // Handle OpenClaw modal submissions with callback_ids scoped by our prefix.
+  // Handle OpenClaw-routed modals; metadata/auth checks below drop unrelated payloads.
   registerModalLifecycleHandler({
     register: (matcher, handler) => ctx.app.view(matcher, handler),
     matcher: modalMatcher,
     ctx,
+    trackEvent,
     interactionType: "view_submission",
     contextPrefix: "slack:interaction:view",
     summarizeViewState,
@@ -216,6 +219,7 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
     register: viewClosed,
     matcher: modalMatcher,
     ctx,
+    trackEvent,
     interactionType: "view_closed",
     contextPrefix: "slack:interaction:view-closed",
     summarizeViewState,

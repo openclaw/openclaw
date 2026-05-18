@@ -7,7 +7,11 @@ export type FailoverReason =
   | "rate_limit"
   | "overloaded"
   | "billing"
+  | "server_error"
   | "timeout"
   | "model_not_found"
   | "session_expired"
+  | "empty_response"
+  | "no_error_details"
+  | "unclassified"
   | "unknown";

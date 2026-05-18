@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/browser-support";
+export { hasProxyEnvConfigured } from "../../sdk-security-runtime.js";

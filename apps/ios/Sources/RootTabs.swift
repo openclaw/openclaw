@@ -1,14 +1,17 @@
+import OpenClawKit
 import SwiftUI
 
 struct RootTabs: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
+    @Environment(GatewayConnectionController.self) private var gatewayController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
     @State private var selectedTab: Int = 0
     @State private var voiceWakeToastText: String?
     @State private var toastDismissTask: Task<Void, Never>?
     @State private var showGatewayActions: Bool = false
+    @State private var showGatewayProblemDetails: Bool = false
 
     var body: some View {
         TabView(selection: self.$selectedTab) {
@@ -32,6 +35,8 @@ struct RootTabs: View {
                 onTap: {
                     if self.gatewayStatus == .connected {
                         self.showGatewayActions = true
+                    } else if self.appModel.lastGatewayProblem != nil {
+                        self.showGatewayProblemDetails = true
                     } else {
                         self.selectedTab = 2
                     }
@@ -39,11 +44,29 @@ struct RootTabs: View {
                 .padding(.leading, 10)
                 .safeAreaPadding(.top, 10)
         }
+        .overlay(alignment: .top) {
+            if let gatewayProblem = self.appModel.lastGatewayProblem,
+               self.gatewayStatus != .connected
+            {
+                GatewayProblemBanner(
+                    problem: gatewayProblem,
+                    primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
+                    onPrimaryAction: {
+                        self.handleGatewayProblemPrimaryAction(gatewayProblem)
+                    },
+                    onShowDetails: {
+                        self.showGatewayProblemDetails = true
+                    })
+                    .padding(.horizontal, 12)
+                    .safeAreaPadding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
         .overlay(alignment: .topLeading) {
             if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
                 VoiceWakeToast(command: voiceWakeToastText)
                     .padding(.leading, 10)
-                    .safeAreaPadding(.top, 58)
+                    .safeAreaPadding(.top, self.appModel.lastGatewayProblem == nil ? 58 : 132)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
@@ -74,6 +97,16 @@ struct RootTabs: View {
             isPresented: self.$showGatewayActions,
             onDisconnect: { self.appModel.disconnectGateway() },
             onOpenSettings: { self.selectedTab = 2 })
+        .sheet(isPresented: self.$showGatewayProblemDetails) {
+            if let gatewayProblem = self.appModel.lastGatewayProblem {
+                GatewayProblemDetailsSheet(
+                    problem: gatewayProblem,
+                    primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
+                    onPrimaryAction: {
+                        self.handleGatewayProblemPrimaryAction(gatewayProblem)
+                    })
+            }
+        }
     }
 
     private var gatewayStatus: StatusPill.GatewayState {
@@ -86,5 +119,17 @@ struct RootTabs: View {
             voiceWakeEnabled: self.voiceWakeEnabled,
             cameraHUDText: self.appModel.cameraHUDText,
             cameraHUDKind: self.appModel.cameraHUDKind)
+    }
+
+    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
+        problem.canTrustRotatedCertificate ? "Trust certificate" : "Open Settings"
+    }
+
+    private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) {
+        if problem.canTrustRotatedCertificate {
+            Task { await self.gatewayController.trustRotatedGatewayCertificate(from: problem) }
+        } else {
+            self.selectedTab = 2
+        }
     }
 }

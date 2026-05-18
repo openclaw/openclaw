@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { resolveDiscordGroupRequireMention } from "../../extensions/discord/src/group-policy.js";
-import { resolveSlackGroupRequireMention } from "../../extensions/slack/src/group-policy.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createInboundDebouncer } from "./inbound-debounce.js";
+import { installGroupRequireMentionTestPlugins } from "./inbound.group-require-mention-test-plugins.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
@@ -118,8 +118,79 @@ describe("finalizeInboundContext", () => {
     expect(out.BodyForAgent).toBe("raw\nline");
     expect(out.BodyForCommands).toBe("raw\nline");
     expect(out.CommandAuthorized).toBe(false);
+    expect(out.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
     expect(out.ChatType).toBe("channel");
     expect(out.ConversationLabel).toContain("Test");
+  });
+
+  it("normalizes structured command turn context and legacy command fields together", () => {
+    const out = finalizeInboundContext({
+      Body: "/status",
+      CommandBody: "/status",
+      CommandAuthorized: false,
+      CommandTurn: {
+        kind: "text-slash" as const,
+        source: "text" as const,
+        authorized: true,
+      },
+    });
+
+    expect(out.CommandTurn).toMatchObject({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+      commandName: "status",
+      body: "/status",
+    });
+    expect(out.CommandSource).toBe("text");
+    expect(out.CommandAuthorized).toBe(true);
+  });
+
+  it("clears stale legacy command source without dropping normal-turn command auth", () => {
+    const out = finalizeInboundContext({
+      Body: "hello",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false,
+      },
+    });
+
+    expect(out.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
+    expect(out.CommandSource).toBeUndefined();
+    expect(out.CommandAuthorized).toBe(true);
+  });
+
+  it("keeps normal command authorization stable across repeated finalization", () => {
+    const out = finalizeInboundContext({
+      Body: "please inspect `/tmp/foo`",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false,
+      },
+    });
+
+    const refinalized = finalizeInboundContext(out);
+
+    expect(refinalized.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
+    expect(refinalized.CommandSource).toBeUndefined();
+    expect(refinalized.CommandAuthorized).toBe(true);
   });
 
   it("sanitizes spoofed system markers in user-controlled text fields", () => {
@@ -210,7 +281,16 @@ describe("inbound dedupe", () => {
       OriginatingTo: "telegram:123",
       MessageSid: "42",
     };
-    expect(buildInboundDedupeKey(ctx)).toBe("telegram|telegram:123|42");
+    expect(buildInboundDedupeKey(ctx)).toBe(
+      JSON.stringify([
+        "",
+        channelRouteDedupeKey({
+          channel: "telegram",
+          to: "telegram:123",
+        }),
+        "42",
+      ]),
+    );
   });
 
   it("skips duplicates with the same key", () => {
@@ -300,7 +380,7 @@ describe("createInboundDebouncer", () => {
     await debouncer.enqueue({ key: "a", id: "1" });
     await debouncer.enqueue({ key: "a", id: "2" });
 
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
     await vi.advanceTimersByTimeAsync(10);
     expect(calls).toEqual([["1", "2"]]);
 
@@ -344,7 +424,7 @@ describe("createInboundDebouncer", () => {
     await debouncer.enqueue({ key: "forward", id: "1", windowMs: 30 });
     await debouncer.enqueue({ key: "forward", id: "2", windowMs: 30 });
 
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
     await vi.advanceTimersByTimeAsync(30);
     expect(calls).toEqual([["1", "2"]]);
 
@@ -354,7 +434,7 @@ describe("createInboundDebouncer", () => {
   it("keeps later same-key work behind a timer-backed flush that already started", async () => {
     const started: string[] = [];
     const finished: string[] = [];
-    let releaseFirst!: () => void;
+    let releaseFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
@@ -393,8 +473,11 @@ describe("createInboundDebouncer", () => {
       await Promise.resolve();
 
       expect(started).toEqual(["1"]);
-      expect(finished).toEqual([]);
+      expect(finished).toStrictEqual([]);
 
+      if (!releaseFirst) {
+        throw new Error("Expected first inbound debounce release callback to be initialized");
+      }
       releaseFirst();
       await Promise.all([firstFlush, secondEnqueue]);
 
@@ -408,7 +491,7 @@ describe("createInboundDebouncer", () => {
   it("keeps fire-and-forget keyed work ahead of a later buffered item", async () => {
     const started: string[] = [];
     const finished: string[] = [];
-    let releaseFirst!: () => void;
+    let releaseFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
@@ -461,8 +544,11 @@ describe("createInboundDebouncer", () => {
       await Promise.resolve();
 
       expect(started).toEqual(["1"]);
-      expect(finished).toEqual([]);
+      expect(finished).toStrictEqual([]);
 
+      if (!releaseFirst) {
+        throw new Error("Expected first inbound debounce release callback to be initialized");
+      }
       releaseFirst();
       await Promise.all([firstFlush, secondEnqueue, thirdFlush, thirdEnqueue]);
 
@@ -473,9 +559,9 @@ describe("createInboundDebouncer", () => {
     }
   });
 
-  it("does not serialize keyed turns when debounce is disabled and no keyed chain exists", async () => {
+  it("does not serialize keyed turns by default when debounce is disabled", async () => {
     const started: string[] = [];
-    let releaseFirst!: () => void;
+    let releaseFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
@@ -499,8 +585,46 @@ describe("createInboundDebouncer", () => {
 
     expect(started).toEqual(["1", "2"]);
 
+    if (!releaseFirst) {
+      throw new Error("Expected first inbound debounce release callback to be initialized");
+    }
     releaseFirst();
     await Promise.all([first, second]);
+  });
+
+  it("serializes keyed turns when immediate serialization is enabled", async () => {
+    const started: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      serializeImmediate: true,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        if (id === "1") {
+          await firstGate;
+        }
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "1" });
+    await Promise.resolve();
+    const second = debouncer.enqueue({ key: "a", id: "2" });
+    await Promise.resolve();
+
+    expect(started).toEqual(["1"]);
+
+    if (!releaseFirst) {
+      throw new Error("Expected first inbound debounce release callback to be initialized");
+    }
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(started).toEqual(["1", "2"]);
   });
 
   it("swallows onError failures so keyed chains still complete", async () => {
@@ -521,6 +645,29 @@ describe("createInboundDebouncer", () => {
     await expect(debouncer.enqueue({ key: "a", id: "2" })).resolves.toBeUndefined();
 
     expect(calls).toEqual(["1", "2"]);
+  });
+
+  it("does not leak unhandled rejections when a keyed flush failure is awaited", async () => {
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: async () => {
+        throw new Error("flush failed");
+      },
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      await expect(debouncer.enqueue({ key: "a", id: "1" })).resolves.toBeUndefined();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
   });
 
   it("bypasses debouncing for new keys once the tracked-key cap is reached", async () => {
@@ -550,7 +697,7 @@ describe("createInboundDebouncer", () => {
   it("keeps same-key overflow work ordered after falling back to immediate flushes", async () => {
     const started: string[] = [];
     const finished: string[] = [];
-    let releaseOverflow!: () => void;
+    let releaseOverflow: (() => void) | undefined;
     const overflowGate = new Promise<void>((resolve) => {
       releaseOverflow = resolve;
     });
@@ -598,8 +745,11 @@ describe("createInboundDebouncer", () => {
 
       await Promise.resolve();
       expect(started).toEqual(["2"]);
-      expect(finished).toEqual([]);
+      expect(finished).toStrictEqual([]);
 
+      if (!releaseOverflow) {
+        throw new Error("Expected inbound overflow release callback to be initialized");
+      }
       releaseOverflow();
       await Promise.all([overflowEnqueue, bufferedEnqueue, bufferedFlush]);
 
@@ -613,7 +763,7 @@ describe("createInboundDebouncer", () => {
   it("counts tracked debounce keys by union of buffers and active chains", async () => {
     const started: string[] = [];
     const finished: string[] = [];
-    let releaseChainOnly!: () => void;
+    let releaseChainOnly: (() => void) | undefined;
     const chainOnlyGate = new Promise<void>((resolve) => {
       releaseChainOnly = resolve;
     });
@@ -675,6 +825,9 @@ describe("createInboundDebouncer", () => {
         expect(finished).toEqual(["4"]);
       });
 
+      if (!releaseChainOnly) {
+        throw new Error("Expected inbound chain-only release callback to be initialized");
+      }
       releaseChainOnly();
       await Promise.all([secondFlush, overflowEnqueue]);
       expect(finished).toEqual(["4", "2"]);
@@ -751,6 +904,18 @@ describe("mention helpers", () => {
     expect(matchesMentionPatterns("OPENCLAW: hi", regexes)).toBe(true);
   });
 
+  it("lets catch-all mention patterns match empty text", () => {
+    const catchAllRegexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: [".*"] } },
+    });
+    const specificRegexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
+    });
+
+    expect(matchesMentionPatterns("", catchAllRegexes)).toBe(true);
+    expect(matchesMentionPatterns("", specificRegexes)).toBe(false);
+  });
+
   it("uses per-agent mention patterns when configured", () => {
     const regexes = buildMentionRegexes(
       {
@@ -783,13 +948,17 @@ describe("mention helpers", () => {
 
   it("strips provider mention regexes without config compilation", () => {
     const stripped = stripMentions("<@12345> hello", { Provider: "discord" } as MsgContext, {});
-    expect(stripped).toBe("hello");
+    expect(stripped).toBe("< > hello");
   });
 });
 
 describe("resolveGroupRequireMention", () => {
-  it("respects Discord guild/channel requireMention settings", async () => {
+  beforeEach(() => {
     resetPluginRuntimeStateForTest();
+    installGroupRequireMentionTestPlugins();
+  });
+
+  it("respects Discord guild/channel requireMention settings", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         discord: {
@@ -820,7 +989,6 @@ describe("resolveGroupRequireMention", () => {
   });
 
   it("respects Slack channel requireMention settings", async () => {
-    resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
         slack: {
@@ -846,7 +1014,6 @@ describe("resolveGroupRequireMention", () => {
   });
 
   it("uses Slack fallback resolver semantics for default-account wildcard channels", async () => {
-    resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
         slack: {
@@ -876,8 +1043,7 @@ describe("resolveGroupRequireMention", () => {
     await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
-  it("matches the Slack plugin resolver for default-account wildcard fallbacks", async () => {
-    resetPluginRuntimeStateForTest();
+  it("keeps core reply-stage resolution aligned for Slack default-account wildcard fallbacks", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         slack: {
@@ -904,17 +1070,10 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(
-      resolveSlackGroupRequireMention({
-        cfg,
-        groupId: groupResolution.id,
-        groupChannel: ctx.GroupSubject,
-      }),
-    );
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
   it("uses Discord fallback resolver semantics for guild slug matches", async () => {
-    resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
         discord: {
@@ -943,8 +1102,7 @@ describe("resolveGroupRequireMention", () => {
     await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
-  it("matches the Discord plugin resolver for slug + wildcard guild fallbacks", async () => {
-    resetPluginRuntimeStateForTest();
+  it("keeps core reply-stage resolution aligned for Discord slug + wildcard guild fallbacks", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         discord: {
@@ -972,18 +1130,10 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(
-      resolveDiscordGroupRequireMention({
-        cfg,
-        groupId: groupResolution.id,
-        groupChannel: ctx.GroupChannel,
-        groupSpace: ctx.GroupSpace,
-      }),
-    );
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(true);
   });
 
   it("respects LINE prefixed group keys in reply-stage requireMention resolution", async () => {
-    resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
         line: {
@@ -1008,10 +1158,9 @@ describe("resolveGroupRequireMention", () => {
   });
 
   it("preserves plugin-backed channel requireMention resolution", async () => {
-    resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
-        bluebubbles: {
+        imessage: {
           groups: {
             "chat:primary": { requireMention: false },
           },
@@ -1019,12 +1168,12 @@ describe("resolveGroupRequireMention", () => {
       },
     };
     const ctx: TemplateContext = {
-      Provider: "bluebubbles",
-      From: "bluebubbles:group:chat:primary",
+      Provider: "imessage",
+      From: "imessage:group:chat:primary",
     };
     const groupResolution: GroupKeyResolution = {
-      key: "bluebubbles:group:chat:primary",
-      channel: "bluebubbles",
+      key: "imessage:group:chat:primary",
+      channel: "imessage",
       id: "chat:primary",
       chatType: "group",
     };

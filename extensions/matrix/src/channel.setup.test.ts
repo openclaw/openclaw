@@ -9,7 +9,9 @@ vi.mock("./matrix/actions/verification.js", () => ({
   bootstrapMatrixVerification: verificationMocks.bootstrapMatrixVerification,
 }));
 
-import { matrixPlugin } from "./channel.js";
+import { matrixConfigAdapter } from "./config-adapter.js";
+import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
+import { matrixSetupAdapter } from "./setup-core.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -46,7 +48,7 @@ describe("matrix setup post-write bootstrap", () => {
       previousCfg: params.previousCfg,
       accountId: params.accountId,
       input: params.input,
-      nextCfg: matrixPlugin.setup!.applyAccountConfig({
+      nextCfg: matrixSetupAdapter.applyAccountConfig({
         cfg: params.previousCfg,
         accountId: params.accountId,
         input: params.input,
@@ -85,11 +87,10 @@ describe("matrix setup post-write bootstrap", () => {
     accountId: string;
     input: Record<string, unknown>;
   }) {
-    await matrixPlugin.setup!.afterAccountConfigWritten?.({
+    await runMatrixSetupBootstrapAfterConfigWrite({
       previousCfg: params.previousCfg,
       cfg: params.nextCfg,
       accountId: params.accountId,
-      input: params.input,
       runtime,
     });
   }
@@ -137,6 +138,7 @@ describe("matrix setup post-write bootstrap", () => {
 
     expect(verificationMocks.bootstrapMatrixVerification).toHaveBeenCalledWith({
       accountId: "default",
+      cfg: nextCfg,
     });
     expect(log).toHaveBeenCalledWith('Matrix verification bootstrap: complete for "default".');
     expect(log).toHaveBeenCalledWith('Matrix backup version for "default": 7');
@@ -176,6 +178,44 @@ describe("matrix setup post-write bootstrap", () => {
     expect(error).not.toHaveBeenCalled();
   });
 
+  it("bootstraps verification when setup enables encryption for an existing account", async () => {
+    const previousCfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@flurry:example.org",
+          accessToken: "token",
+          encryption: false,
+        },
+      },
+    } as CoreConfig;
+    const nextCfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@flurry:example.org",
+          accessToken: "token",
+          encryption: true,
+        },
+      },
+    } as CoreConfig;
+    mockBootstrapResult({ success: true, backupVersion: "8" });
+
+    await runAfterAccountConfigWritten({
+      previousCfg,
+      nextCfg,
+      accountId: "default",
+      input: {},
+    });
+
+    expect(verificationMocks.bootstrapMatrixVerification).toHaveBeenCalledWith({
+      accountId: "default",
+      cfg: nextCfg,
+    });
+    expect(log).toHaveBeenCalledWith('Matrix verification bootstrap: complete for "default".');
+    expect(log).toHaveBeenCalledWith('Matrix backup version for "default": 8');
+  });
+
   it("logs a warning when verification bootstrap fails", async () => {
     const { previousCfg, nextCfg, accountId, input } = applyDefaultAccountConfig();
     mockBootstrapResult({
@@ -206,6 +246,7 @@ describe("matrix setup post-write bootstrap", () => {
 
         expect(verificationMocks.bootstrapMatrixVerification).toHaveBeenCalledWith({
           accountId: "default",
+          cfg: nextCfg,
         });
         expect(log).toHaveBeenCalledWith('Matrix verification bootstrap: complete for "default".');
       },
@@ -226,7 +267,7 @@ describe("matrix setup post-write bootstrap", () => {
       },
       () => {
         expect(
-          matrixPlugin.setup!.validateInput?.({
+          matrixSetupAdapter.validateInput?.({
             cfg: {} as CoreConfig,
             accountId: "default",
             input: { useEnv: true },
@@ -236,13 +277,16 @@ describe("matrix setup post-write bootstrap", () => {
     );
   });
 
-  it("clears allowPrivateNetwork when deleting the default Matrix account config", () => {
-    const updated = matrixPlugin.config.deleteAccount?.({
+  it("clears allowPrivateNetwork and proxy when deleting the default Matrix account config", () => {
+    const updated = matrixConfigAdapter.deleteAccount?.({
       cfg: {
         channels: {
           matrix: {
             homeserver: "http://localhost.localdomain:8008",
-            allowPrivateNetwork: true,
+            network: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
+            proxy: "http://127.0.0.1:7890",
             accounts: {
               ops: {
                 enabled: true,

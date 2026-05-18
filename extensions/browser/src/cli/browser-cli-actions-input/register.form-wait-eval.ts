@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserParentOpts } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
 import {
@@ -7,6 +8,8 @@ import {
   readFields,
   resolveBrowserActionContext,
 } from "./shared.js";
+
+const DEFAULT_WAIT_CONDITION_TIMEOUT_MS = 20000;
 
 export function registerBrowserFormWaitEvalCommands(
   browser: Command,
@@ -31,7 +34,7 @@ export function registerBrowserFormWaitEvalCommands(
           body: {
             kind: "fill",
             fields,
-            targetId: opts.targetId?.trim() || undefined,
+            targetId: normalizeOptionalString(opts.targetId),
           },
         });
         logBrowserActionResult(parent, result, `filled ${fields.length} field(s)`);
@@ -60,28 +63,37 @@ export function registerBrowserFormWaitEvalCommands(
     .action(async (selector: string | undefined, opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
-        const sel = selector?.trim() || undefined;
+        const sel = normalizeOptionalString(selector);
         const load =
           opts.load === "load" || opts.load === "domcontentloaded" || opts.load === "networkidle"
             ? (opts.load as "load" | "domcontentloaded" | "networkidle")
             : undefined;
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
+        const timeMs = Number.isFinite(opts.time) ? opts.time : undefined;
+        const text = normalizeOptionalString(opts.text);
+        const textGone = normalizeOptionalString(opts.textGone);
+        const url = normalizeOptionalString(opts.url);
+        const fn = normalizeOptionalString(opts.fn);
+        const waitConditionCount = [text, textGone, sel, url, load, fn].filter(Boolean).length;
+        const outerTimeoutBaseMs =
+          (timeMs ?? 0) + waitConditionCount * (timeoutMs ?? DEFAULT_WAIT_CONDITION_TIMEOUT_MS) ||
+          undefined;
         const result = await callBrowserAct<{ result?: unknown }>({
           parent,
           profile,
           body: {
             kind: "wait",
-            timeMs: Number.isFinite(opts.time) ? opts.time : undefined,
-            text: opts.text?.trim() || undefined,
-            textGone: opts.textGone?.trim() || undefined,
+            timeMs,
+            text,
+            textGone,
             selector: sel,
-            url: opts.url?.trim() || undefined,
+            url,
             loadState: load,
-            fn: opts.fn?.trim() || undefined,
-            targetId: opts.targetId?.trim() || undefined,
+            fn,
+            targetId: normalizeOptionalString(opts.targetId),
             timeoutMs,
           },
-          timeoutMs,
+          timeoutMs: outerTimeoutBaseMs,
         });
         logBrowserActionResult(parent, result, "wait complete");
       } catch (err) {
@@ -110,8 +122,8 @@ export function registerBrowserFormWaitEvalCommands(
           body: {
             kind: "evaluate",
             fn: opts.fn,
-            ref: opts.ref?.trim() || undefined,
-            targetId: opts.targetId?.trim() || undefined,
+            ref: normalizeOptionalString(opts.ref),
+            targetId: normalizeOptionalString(opts.targetId),
           },
         });
         if (parent?.json) {

@@ -1,31 +1,46 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerBrowserStateCommands } from "./browser-cli-state.js";
-import {
-  createBrowserProgram as createBrowserProgramShared,
-  getBrowserCliRuntime,
-  getBrowserCliRuntimeCapture,
-} from "./browser-cli.test-support.js";
+import * as parentCoreApiModule from "../core-api.js";
+import * as browserCliResizeModule from "./browser-cli-resize.js";
+import * as browserCliSharedModule from "./browser-cli-shared.js";
+import * as cliCoreApiModule from "./core-api.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
   runBrowserResizeWithOutput: vi.fn(async (_params: unknown) => {}),
 }));
 
-vi.mock("./browser-cli-shared.js", () => ({
-  callBrowserRequest: mocks.callBrowserRequest,
-}));
+vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
+vi.spyOn(browserCliResizeModule, "runBrowserResizeWithOutput").mockImplementation(
+  mocks.runBrowserResizeWithOutput,
+);
+vi.spyOn(parentCoreApiModule, "runCommandWithRuntime").mockImplementation(
+  async (_runtime, action, onError) => {
+    try {
+      await action();
+    } catch (err) {
+      onError?.(err);
+    }
+  },
+);
+const {
+  createBrowserProgram: createBrowserProgramShared,
+  getBrowserCliRuntime,
+  getBrowserCliRuntimeCapture,
+} = await import("./browser-cli.test-support.js");
+const browserCliRuntime = getBrowserCliRuntime();
+vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
+vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
+  browserCliRuntime.writeJson,
+);
+vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
+vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
 
-vi.mock("./browser-cli-resize.js", () => ({
-  runBrowserResizeWithOutput: mocks.runBrowserResizeWithOutput,
-}));
-
-vi.mock("../core-api.js", async () => ({
-  ...(await vi.importActual<object>("../core-api.js")),
-  ...(await (await import("./browser-cli.test-support.js")).createBrowserCliRuntimeMockModule()),
-  ...(await (await import("./browser-cli.test-support.js")).createBrowserCliUtilsMockModule()),
-}));
+const { registerBrowserStateCommands } = await import("./browser-cli-state.js");
 
 describe("browser state option collisions", () => {
+  const ansiPattern = new RegExp(String.raw`\u001b\[[0-9;]*m`, "g");
+  const stripAnsi = (value: string) => value.replace(ansiPattern, "");
+
   const createStateProgram = ({ withGatewayUrl = false } = {}) => {
     const { program, browser, parentOpts } = createBrowserProgramShared({ withGatewayUrl });
     registerBrowserStateCommands(browser, parentOpts);
@@ -34,7 +49,6 @@ describe("browser state option collisions", () => {
 
   const getLastRequest = () => {
     const call = mocks.callBrowserRequest.mock.calls.at(-1);
-    expect(call).toBeDefined();
     if (!call) {
       throw new Error("expected browser request call");
     }
@@ -49,6 +63,13 @@ describe("browser state option collisions", () => {
   const runBrowserCommandAndGetRequest = async (argv: string[]) => {
     await runBrowserCommand(argv);
     return getLastRequest();
+  };
+
+  const expectErrorMessage = (expected: string) => {
+    const calls = getBrowserCliRuntime().error.mock.calls;
+    const lastCall = calls.at(-1);
+    expect(lastCall).toHaveLength(1);
+    expect(stripAnsi(String(lastCall?.[0]))).toBe(expected);
   };
 
   beforeEach(() => {
@@ -89,9 +110,7 @@ describe("browser state option collisions", () => {
       ],
       { from: "user" },
     );
-    const call = mocks.callBrowserRequest.mock.calls.at(-1);
-    expect(call).toBeDefined();
-    const request = call![1] as { body?: { cookie?: { url?: string } } };
+    const request = getLastRequest() as { body?: { cookie?: { url?: string } } };
     expect(request.body?.cookie?.url).toBe("https://example.com");
   });
 
@@ -101,9 +120,7 @@ describe("browser state option collisions", () => {
       ["browser", "--url", "https://inherited.example.com", "cookies", "set", "session", "abc"],
       { from: "user" },
     );
-    const call = mocks.callBrowserRequest.mock.calls.at(-1);
-    expect(call).toBeDefined();
-    const request = call![1] as { body?: { cookie?: { url?: string } } };
+    const request = getLastRequest() as { body?: { cookie?: { url?: string } } };
     expect(request.body?.cookie?.url).toBe("https://inherited.example.com");
   });
 
@@ -135,9 +152,7 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "offline", "maybe"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
-      expect.stringContaining("Expected on|off"),
-    );
+    expectErrorMessage("Expected on|off");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
@@ -145,9 +160,7 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "media", "sepia"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
-      expect.stringContaining("Expected dark|light|none"),
-    );
+    expectErrorMessage("Expected dark|light|none");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
@@ -155,8 +168,8 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "headers"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
-      expect.stringContaining("Missing headers JSON"),
+    expectErrorMessage(
+      "Error: Missing headers JSON (pass --headers-json or positional JSON argument)",
     );
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
@@ -165,9 +178,7 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "headers", "--json", "[]"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
-      expect.stringContaining("Headers JSON must be a JSON object"),
-    );
+    expectErrorMessage("Error: Headers JSON must be a JSON object");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 });

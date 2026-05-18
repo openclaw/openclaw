@@ -1,12 +1,25 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectVitestFileDurations,
   normalizeTrackedRepoPath,
+  runVitestJsonReport,
   tryReadJsonFile,
 } from "../../scripts/test-report-utils.mjs";
+
+const { spawnSyncMock } = vi.hoisted(() => ({
+  spawnSyncMock: vi.fn(),
+}));
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    spawnSync: spawnSyncMock,
+  };
+});
 
 describe("scripts/test-report-utils normalizeTrackedRepoPath", () => {
   it("normalizes repo-local absolute paths to repo-relative slash paths", () => {
@@ -67,5 +80,41 @@ describe("scripts/test-report-utils tryReadJsonFile", () => {
     } finally {
       fs.unlinkSync(tempPath);
     }
+  });
+});
+
+describe("scripts/test-report-utils runVitestJsonReport", () => {
+  beforeEach(() => {
+    spawnSyncMock.mockReset();
+  });
+
+  it("launches Vitest through pnpm exec", async () => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    const reportPath = path.join(os.tmpdir(), `openclaw-vitest-json-${Date.now()}.json`);
+
+    expect(
+      runVitestJsonReport({
+        config: "test/vitest/vitest.unit.config.ts",
+        reportPath,
+      }),
+    ).toBe(reportPath);
+
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "pnpm",
+      [
+        "exec",
+        "vitest",
+        "run",
+        "--config",
+        "test/vitest/vitest.unit.config.ts",
+        "--reporter=json",
+        "--outputFile",
+        reportPath,
+      ],
+      {
+        stdio: "inherit",
+        env: process.env,
+      },
+    );
   });
 });

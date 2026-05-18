@@ -1,12 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearMaxDurationTimer,
-  clearTranscriptWaiter,
-  rejectTranscriptWaiter,
-  resolveTranscriptWaiter,
-  startMaxDurationTimer,
-  waitForFinalTranscript,
-} from "./timers.js";
 
 const { persistCallRecordMock } = vi.hoisted(() => ({
   persistCallRecordMock: vi.fn(),
@@ -15,6 +7,15 @@ const { persistCallRecordMock } = vi.hoisted(() => ({
 vi.mock("./store.js", () => ({
   persistCallRecord: persistCallRecordMock,
 }));
+
+import {
+  clearMaxDurationTimer,
+  clearTranscriptWaiter,
+  rejectTranscriptWaiter,
+  resolveTranscriptWaiter,
+  startMaxDurationTimer,
+  waitForFinalTranscript,
+} from "./timers.js";
 
 describe("voice-call manager timers", () => {
   beforeEach(() => {
@@ -26,13 +27,13 @@ describe("voice-call manager timers", () => {
     vi.useRealTimers();
   });
 
-  it("starts and clears max duration timers, persisting timed out active calls", async () => {
+  it("starts and clears max duration timers, persisting timeout metadata before delegation", async () => {
     const call = { id: "call-1", state: "active" };
     const ctx = {
       activeCalls: new Map([["call-1", call]]),
       maxDurationTimers: new Map(),
       config: { maxDurationSeconds: 5 },
-      storePath: "/tmp/voice-call.json",
+      storePath: "/tmp/voice-call",
     };
     const onTimeout = vi.fn(async () => {});
 
@@ -47,7 +48,7 @@ describe("voice-call manager timers", () => {
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(call).toEqual({ id: "call-1", state: "active", endReason: "timeout" });
-    expect(persistCallRecordMock).toHaveBeenCalledWith("/tmp/voice-call.json", call);
+    expect(persistCallRecordMock).toHaveBeenCalledWith("/tmp/voice-call", call);
     expect(onTimeout).toHaveBeenCalledWith("call-1");
     expect(ctx.maxDurationTimers.has("call-1")).toBe(false);
 
@@ -65,7 +66,7 @@ describe("voice-call manager timers", () => {
       activeCalls: new Map([["call-1", { id: "call-1", state: "completed" }]]),
       maxDurationTimers: new Map(),
       config: { maxDurationSeconds: 5 },
-      storePath: "/tmp/voice-call.json",
+      storePath: "/tmp/voice-call",
     };
     const onTimeout = vi.fn(async () => {});
 
@@ -100,11 +101,9 @@ describe("voice-call manager timers", () => {
 
     const timedOut = waitForFinalTranscript(ctx as never, "call-3").catch((error) => error);
     await vi.advanceTimersByTimeAsync(1_000);
-    await expect(timedOut).resolves.toEqual(
-      expect.objectContaining({
-        message: "Timed out waiting for transcript after 1000ms",
-      }),
-    );
+    const timeoutError = await timedOut;
+    expect(timeoutError).toBeInstanceOf(Error);
+    expect((timeoutError as Error).message).toBe("Timed out waiting for transcript after 1000ms");
 
     const toClear = waitForFinalTranscript(ctx as never, "call-4");
     clearTranscriptWaiter(ctx as never, "call-4");

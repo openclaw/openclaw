@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
+  isDangerousNameMatchingEnabled,
   keepHttpServerTaskAlive,
   mergeAllowlist,
   summarizeMapping,
@@ -24,13 +25,12 @@ import {
   createMSTeamsTokenProvider,
   loadMSTeamsSdkWithAuth,
 } from "./sdk.js";
+import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
+import type { MSTeamsSsoDeps } from "./sso.js";
 import { resolveMSTeamsCredentials } from "./token.js";
-import {
-  applyMSTeamsWebhookTimeouts,
-  type ApplyMSTeamsWebhookTimeoutsOpts,
-} from "./webhook-timeouts.js";
+import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
-export type MonitorMSTeamsOpts = {
+type MonitorMSTeamsOpts = {
   cfg: OpenClawConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
@@ -38,7 +38,7 @@ export type MonitorMSTeamsOpts = {
   pollStore?: MSTeamsPollStore;
 };
 
-export type MonitorMSTeamsResult = {
+type MonitorMSTeamsResult = {
   app: unknown;
   shutdown: () => Promise<void>;
 };
@@ -74,12 +74,20 @@ export async function monitorMSTeamsProvider(
   let allowFrom = msteamsCfg.allowFrom;
   let groupAllowFrom = msteamsCfg.groupAllowFrom;
   let teamsConfig = msteamsCfg.teams;
+  const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
 
   const cleanAllowEntry = (entry: string) =>
     entry
       .replace(/^(msteams|teams):/i, "")
       .replace(/^user:/i, "")
       .trim();
+  const isStableUserId = (entry: string) => /^[0-9a-fA-F-]{16,}$/.test(entry);
+  const cleanAllowEntries = (entries?: string[]) =>
+    entries?.map((entry) => cleanAllowEntry(entry)).filter((entry) => entry && entry !== "*") ?? [];
+  const mergeStableUserIds = (entries?: string[]) => {
+    const additions = cleanAllowEntries(entries).filter((entry) => isStableUserId(entry));
+    return additions.length > 0 ? mergeAllowlist({ existing: entries, additions }) : entries;
+  };
 
   const resolveAllowlistUsers = async (label: string, entries: string[]) => {
     if (entries.length === 0) {
@@ -103,22 +111,26 @@ export async function monitorMSTeamsProvider(
   };
 
   try {
-    const allowEntries =
-      allowFrom
-        ?.map((entry) => cleanAllowEntry(String(entry)))
-        .filter((entry) => entry && entry !== "*") ?? [];
-    if (allowEntries.length > 0) {
-      const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
-      allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+    allowFrom = mergeStableUserIds(allowFrom);
+    if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
+      groupAllowFrom = mergeStableUserIds(groupAllowFrom);
     }
 
-    if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
-      const groupEntries = groupAllowFrom
-        .map((entry) => cleanAllowEntry(String(entry)))
-        .filter((entry) => entry && entry !== "*");
-      if (groupEntries.length > 0) {
-        const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
-        groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions });
+    if (allowNameMatching) {
+      const allowEntries = cleanAllowEntries(allowFrom).filter((entry) => !isStableUserId(entry));
+      if (allowEntries.length > 0) {
+        const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
+        allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+      }
+
+      if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
+        const groupEntries = cleanAllowEntries(groupAllowFrom).filter(
+          (entry) => !isStableUserId(entry),
+        );
+        if (groupEntries.length > 0) {
+          const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
+          groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions });
+        }
       }
     }
 
@@ -196,7 +208,11 @@ export async function monitorMSTeamsProvider(
       }
     }
   } catch (err) {
-    runtime.log?.(`msteams resolve failed; using config entries. ${String(err)}`);
+    // Log at error (not log) — allowlist resolution failures leave the bot in a
+    // degraded state where Graph-resolved IDs are missing (#77674).
+    runtime?.error(
+      `msteams resolve failed; falling back to raw config entries — allowlist members resolved via Graph may be missing. ${formatUnknownError(err)}`,
+    );
   }
 
   msteamsCfg = {
@@ -236,6 +252,22 @@ export async function monitorMSTeamsProvider(
 
   const adapter = createMSTeamsAdapter(app, sdk);
 
+  // Build SSO deps when the operator has opted in and a connection name
+  // is configured. Leaving `sso` undefined matches the pre-SSO behavior
+  // (the plugin will still ack signin invokes, but will not attempt a
+  // Bot Framework token exchange or persist anything).
+  let ssoDeps: MSTeamsSsoDeps | undefined;
+  if (msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName) {
+    ssoDeps = {
+      tokenProvider,
+      tokenStore: createMSTeamsSsoTokenStoreFs(),
+      connectionName: msteamsCfg.sso.connectionName,
+    };
+    log.debug?.("msteams sso enabled", {
+      connectionName: msteamsCfg.sso.connectionName,
+    });
+  }
+
   // Build a simple ActivityHandler-compatible object
   const handler = buildActivityHandler();
   registerMSTeamsHandlers(handler, {
@@ -249,6 +281,7 @@ export async function monitorMSTeamsProvider(
     conversationStore,
     pollStore,
     log,
+    sso: ssoDeps,
   });
 
   // Create Express server
@@ -266,24 +299,16 @@ export async function monitorMSTeamsProvider(
     next();
   });
 
-  expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
-  expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
-    if (err && typeof err === "object" && "status" in err && err.status === 413) {
-      res.status(413).json({ error: "Payload too large" });
-      return;
-    }
-    next(err);
-  });
-
   // JWT validation — verify Bot Framework tokens using the Teams SDK's
   // JwtValidator (validates signature via JWKS, audience, issuer, expiration).
   const jwtValidator = await createBotFrameworkJwtValidator(creds);
   expressApp.use((req: Request, res: Response, next: (err?: unknown) => void) => {
     // Authorization header is guaranteed by the pre-parse auth gate above.
+    // `serviceUrl` is optional, so authenticate from headers alone before body
+    // I/O to avoid spending memory and CPU on unauthenticated requests.
     const authHeader = req.headers.authorization!;
-    const serviceUrl = (req.body as Record<string, unknown>)?.serviceUrl as string | undefined;
     jwtValidator
-      .validate(authHeader, serviceUrl)
+      .validate(authHeader)
       .then((valid) => {
         if (!valid) {
           log.debug?.("JWT validation failed");
@@ -293,9 +318,34 @@ export async function monitorMSTeamsProvider(
         next();
       })
       .catch((err) => {
-        log.debug?.(`JWT validation error: ${String(err)}`);
+        // Network-level failures (DNS, firewall, TLS toward login.botframework.com)
+        // are rethrown by the validator so we can log them visibly. Without this,
+        // they look identical to a bad credential at default log levels (#77674).
+        const isNetworkFailure =
+          err instanceof Error &&
+          /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|ECONNRESET/i.test(
+            (err as NodeJS.ErrnoException).code ?? err.message,
+          );
+        if (isNetworkFailure) {
+          // Network failure fetching JWKS keys — log visibly so operators can
+          // identify egress blocks to login.botframework.com (#77674).
+          runtime?.error(
+            `msteams: JWKS key fetch failed — check egress to login.botframework.com:443 (firewall or DNS may be blocking it). Bot will 401 all inbound requests until this is resolved. Error: ${formatUnknownError(err)}`,
+          );
+        } else {
+          log.debug?.(`JWT validation error: ${formatUnknownError(err)}`);
+        }
         res.status(401).json({ error: "Unauthorized" });
       });
+  });
+
+  expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
+  expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
+    if (err && typeof err === "object" && "status" in err && err.status === 413) {
+      res.status(413).json({ error: "Payload too large" });
+      return;
+    }
+    next(err);
   });
 
   // Set up the messages endpoint - use configured path and /api/messages as fallback
@@ -329,7 +379,7 @@ export async function monitorMSTeamsProvider(
     };
     const onError = (err: unknown) => {
       httpServer.off("listening", onListening);
-      log.error("msteams server error", { error: String(err) });
+      log.error("msteams server error", { error: formatUnknownError(err) });
       reject(err);
     };
     httpServer.once("listening", onListening);
@@ -338,7 +388,7 @@ export async function monitorMSTeamsProvider(
   applyMSTeamsWebhookTimeouts(httpServer);
 
   httpServer.on("error", (err) => {
-    log.error("msteams server error", { error: String(err) });
+    log.error("msteams server error", { error: formatUnknownError(err) });
   });
 
   const shutdown = async () => {
@@ -346,7 +396,7 @@ export async function monitorMSTeamsProvider(
     return new Promise<void>((resolve) => {
       httpServer.close((err) => {
         if (err) {
-          log.debug?.("msteams server close error", { error: String(err) });
+          log.debug?.("msteams server close error", { error: formatUnknownError(err) });
         }
         resolve();
       });

@@ -54,10 +54,15 @@ function registerAutoJoinHarness(params: {
   return harness;
 }
 
-async function triggerInvite(getInviteHandler: () => InviteHandler | null) {
+async function triggerInvite(
+  getInviteHandler: () => InviteHandler | null,
+  inviteEvent: unknown = {},
+) {
   const inviteHandler = getInviteHandler();
-  expect(inviteHandler).toBeTruthy();
-  await inviteHandler!("!room:example.org", {});
+  if (!inviteHandler) {
+    throw new Error("expected Matrix invite handler");
+  }
+  await inviteHandler("!room:example.org", inviteEvent);
 }
 
 describe("registerMatrixAutoJoin", () => {
@@ -80,7 +85,7 @@ describe("registerMatrixAutoJoin", () => {
     expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
   });
 
-  it("does not auto-join invites by default", async () => {
+  it("does not auto-join invites by default", () => {
     const { getInviteHandler, joinRoom } = registerAutoJoinHarness({});
 
     expect(getInviteHandler()).toBeNull();
@@ -141,12 +146,14 @@ describe("registerMatrixAutoJoin", () => {
     resolveRoom.mockRejectedValue(new Error("temporary homeserver failure"));
 
     const inviteHandler = getInviteHandler();
-    expect(inviteHandler).toBeTruthy();
-    await expect(inviteHandler!("!room:example.org", {})).resolves.toBeUndefined();
+    if (!inviteHandler) {
+      throw new Error("expected Matrix invite handler");
+    }
+    await expect(inviteHandler("!room:example.org", {})).resolves.toBeUndefined();
 
     expect(joinRoom).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(
-      expect.stringContaining("matrix: failed resolving allowlisted alias #allowed:example.org:"),
+      "matrix: failed resolving allowlisted alias #allowed:example.org: Error: temporary homeserver failure",
     );
   });
 
@@ -174,5 +181,27 @@ describe("registerMatrixAutoJoin", () => {
 
     await triggerInvite(getInviteHandler);
     expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
+  });
+
+  it("joins sender-scoped invites without eager direct repair", async () => {
+    const { getInviteHandler, joinRoom } = registerAutoJoinHarness({
+      accountConfig: {
+        autoJoin: "always",
+      },
+    });
+
+    await triggerInvite(getInviteHandler, { sender: "@alice:example.org" });
+
+    expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
+  });
+
+  it("still joins invites when the sender is unavailable", async () => {
+    const { getInviteHandler } = registerAutoJoinHarness({
+      accountConfig: {
+        autoJoin: "always",
+      },
+    });
+
+    await expect(triggerInvite(getInviteHandler, {})).resolves.toBeUndefined();
   });
 });

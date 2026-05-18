@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/infra-runtime";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
+import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 
 export type MiniMaxRegion = "cn" | "global";
 
@@ -28,7 +28,7 @@ function getOAuthEndpoints(region: MiniMaxRegion) {
   };
 }
 
-export type MiniMaxOAuthAuthorization = {
+type MiniMaxOAuthAuthorization = {
   user_code: string;
   verification_uri: string;
   expired_in: number;
@@ -36,7 +36,7 @@ export type MiniMaxOAuthAuthorization = {
   state: string;
 };
 
-export type MiniMaxOAuthToken = {
+type MiniMaxOAuthToken = {
   access: string;
   refresh: string;
   expires: number;

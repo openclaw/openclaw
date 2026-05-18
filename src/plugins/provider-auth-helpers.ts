@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import type { OAuthCredentials } from "@earendil-works/pi-ai";
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
-import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
-import { normalizeProviderIdForAuth } from "../agents/provider-id.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { upsertAuthProfile, upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   coerceSecretRef,
   DEFAULT_SECRET_PROVIDER_ALIAS,
@@ -18,11 +18,14 @@ import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
 const ENV_REF_PATTERN = /^\$\{([A-Z][A-Z0-9_]*)\}$/;
+type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
-const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
+const resolveAuthAgentDir = (agentDir?: string, config?: OpenClawConfig) =>
+  agentDir ?? resolveDefaultAgentDir(config ?? {});
 
 export type ApiKeyStorageOptions = {
   secretInputMode?: SecretInputMode;
+  config?: OpenClawConfig;
 };
 
 export type WriteOAuthCredentialsOptions = {
@@ -43,8 +46,11 @@ function parseEnvSecretRef(value: string): SecretRef | null {
   return buildEnvSecretRef(match[1]);
 }
 
-function resolveProviderDefaultEnvSecretRef(provider: string): SecretRef {
-  const envVars = getProviderEnvVars(provider);
+function resolveProviderDefaultEnvSecretRef(provider: string, config?: OpenClawConfig): SecretRef {
+  const envVars = getProviderEnvVars(provider, {
+    ...(config ? { config } : {}),
+    includeUntrustedWorkspacePlugins: false,
+  });
   const envVar = envVars?.find((candidate) => candidate.trim().length > 0);
   if (!envVar) {
     throw new Error(
@@ -59,6 +65,9 @@ function resolveApiKeySecretInput(
   input: SecretInput,
   options?: ApiKeyStorageOptions,
 ): SecretInput {
+  if (options?.secretInputMode === "plaintext") {
+    return normalizeSecretInput(input);
+  }
   const coercedRef = coerceSecretRef(input);
   if (coercedRef) {
     return coercedRef;
@@ -69,7 +78,7 @@ function resolveApiKeySecretInput(
     return inlineEnvRef;
   }
   if (options?.secretInputMode === "ref") {
-    return resolveProviderDefaultEnvSecretRef(provider);
+    return resolveProviderDefaultEnvSecretRef(provider, options.config);
   }
   return normalized;
 }
@@ -103,18 +112,49 @@ export function buildApiKeyCredential(
   };
 }
 
+export function upsertApiKeyProfile(params: {
+  provider: string;
+  input: SecretInput;
+  agentDir?: string;
+  options?: ApiKeyStorageOptions;
+  profileId?: string;
+  metadata?: Record<string, string>;
+}): string {
+  const profileId = params.profileId ?? buildAuthProfileId({ providerId: params.provider });
+  upsertAuthProfile({
+    profileId,
+    credential: buildApiKeyCredential(
+      params.provider,
+      params.input,
+      params.metadata,
+      params.options,
+    ),
+    agentDir: resolveAuthAgentDir(params.agentDir, params.options?.config),
+  });
+  return profileId;
+}
+
+async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
+  const updated = await upsertAuthProfileWithLock(params);
+  if (!updated) {
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
+  }
+}
+
 export function applyAuthProfileConfig(
   cfg: OpenClawConfig,
   params: {
     profileId: string;
     provider: string;
-    mode: "api_key" | "oauth" | "token";
+    mode: "api_key" | "aws-sdk" | "oauth" | "token";
     email?: string;
     displayName?: string;
     preferProfileFirst?: boolean;
   },
 ): OpenClawConfig {
-  const normalizedProvider = normalizeProviderIdForAuth(params.provider);
+  const normalizedProvider = resolveProviderIdForAuth(params.provider, { config: cfg });
   const profiles = {
     ...cfg.auth?.profiles,
     [params.profileId]: {
@@ -126,12 +166,21 @@ export function applyAuthProfileConfig(
   };
 
   const configuredProviderProfiles = Object.entries(cfg.auth?.profiles ?? {})
-    .filter(([, profile]) => normalizeProviderIdForAuth(profile.provider) === normalizedProvider)
+    .filter(
+      ([, profile]) =>
+        resolveProviderIdForAuth(profile.provider, { config: cfg }) === normalizedProvider,
+    )
     .map(([profileId, profile]) => ({ profileId, mode: profile.mode }));
 
   // Maintain `auth.order` when it already exists. Additionally, if we detect
   // mixed auth modes for the same provider, keep the newly selected profile first.
-  const existingProviderOrder = cfg.auth?.order?.[params.provider];
+  const matchingProviderOrderEntries = Object.entries(cfg.auth?.order ?? {}).filter(
+    ([providerId]) => resolveProviderIdForAuth(providerId, { config: cfg }) === normalizedProvider,
+  );
+  const existingProviderOrder =
+    matchingProviderOrderEntries.length > 0
+      ? [...new Set(matchingProviderOrderEntries.flatMap(([, order]) => order))]
+      : undefined;
   const preferProfileFirst = params.preferProfileFirst ?? true;
   const reorderedProviderOrder =
     existingProviderOrder && preferProfileFirst
@@ -152,20 +201,29 @@ export function applyAuthProfileConfig(
             .filter((profileId) => profileId !== params.profileId),
         ]
       : undefined;
+  const baseOrder =
+    matchingProviderOrderEntries.length > 0
+      ? Object.fromEntries(
+          Object.entries(cfg.auth?.order ?? {}).filter(
+            ([providerId]) =>
+              resolveProviderIdForAuth(providerId, { config: cfg }) !== normalizedProvider,
+          ),
+        )
+      : cfg.auth?.order;
   const order =
     existingProviderOrder !== undefined
       ? {
-          ...cfg.auth?.order,
-          [params.provider]: reorderedProviderOrder?.includes(params.profileId)
+          ...baseOrder,
+          [normalizedProvider]: reorderedProviderOrder?.includes(params.profileId)
             ? reorderedProviderOrder
             : [...(reorderedProviderOrder ?? []), params.profileId],
         }
       : derivedProviderOrder
         ? {
-            ...cfg.auth?.order,
-            [params.provider]: derivedProviderOrder,
+            ...baseOrder,
+            [normalizedProvider]: derivedProviderOrder,
           }
-        : cfg.auth?.order;
+        : baseOrder;
   return {
     ...cfg,
     auth: {
@@ -243,7 +301,7 @@ export async function writeOAuthCredentials(
     ...(options?.displayName ? { displayName: options.displayName } : {}),
   };
 
-  upsertAuthProfile({
+  await upsertAuthProfileWithLockOrThrow({
     profileId,
     credential,
     agentDir: resolvedAgentDir,
@@ -257,7 +315,7 @@ export async function writeOAuthCredentials(
         continue;
       }
       try {
-        upsertAuthProfile({
+        await upsertAuthProfileWithLock({
           profileId,
           credential,
           agentDir: targetAgentDir,

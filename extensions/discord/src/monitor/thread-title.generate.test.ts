@@ -1,6 +1,7 @@
-import * as agentRuntimeModule from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import * as agentRuntimeModule from "openclaw/plugin-sdk/simple-completion-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 
 const completeWithPreparedSimpleCompletionModelMock =
   vi.fn<typeof agentRuntimeModule.completeWithPreparedSimpleCompletionModel>();
@@ -9,6 +10,16 @@ const prepareSimpleCompletionModelForAgentMock =
 const extractAssistantTextMock = vi.fn<typeof agentRuntimeModule.extractAssistantText>();
 
 let generateThreadTitle: typeof import("./thread-title.js").generateThreadTitle;
+
+function firstCompletionArgs(): Parameters<
+  typeof agentRuntimeModule.completeWithPreparedSimpleCompletionModel
+>[0] {
+  const firstCall = completeWithPreparedSimpleCompletionModelMock.mock.calls.at(0);
+  if (!firstCall) {
+    throw new Error("expected completion call");
+  }
+  return firstCall[0];
+}
 
 beforeAll(async () => {
   ({ generateThreadTitle } = await import("./thread-title.js"));
@@ -23,12 +34,12 @@ beforeEach(() => {
   prepareSimpleCompletionModelForAgentMock.mockResolvedValue({
     selection: {
       provider: "anthropic",
-      modelId: "claude-opus-4-6",
+      modelId: "claude-sonnet-4-6",
       agentDir: "/tmp/openclaw-agent",
     },
     model: {
       provider: "anthropic",
-      id: "claude-opus-4-6",
+      id: "claude-sonnet-4-6",
     },
     auth: {
       apiKey: "sk-test",
@@ -92,7 +103,7 @@ describe("generateThreadTitle", () => {
   });
 
   it("passes model override refs into shared model prep", async () => {
-    const cfg = {} as OpenClawConfig;
+    const cfg = EMPTY_DISCORD_TEST_CONFIG;
     await generateThreadTitle({
       cfg,
       agentId: "main",
@@ -114,7 +125,7 @@ describe("generateThreadTitle", () => {
     } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
 
     const result = await generateThreadTitle({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       agentId: "main",
       messageText: "Need a thread title.",
     });
@@ -128,13 +139,13 @@ describe("generateThreadTitle", () => {
       error: 'No API key resolved for provider "anthropic" (auth mode: api-key).',
       selection: {
         provider: "anthropic",
-        modelId: "claude-opus-4-6",
+        modelId: "claude-sonnet-4-6",
         agentDir: "/tmp/openclaw-agent",
       },
     } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
 
     const result = await generateThreadTitle({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       agentId: "main",
       messageText: "Need a thread title.",
     });
@@ -144,38 +155,42 @@ describe("generateThreadTitle", () => {
   });
 
   it("builds contextual prompt and forwards completion options", async () => {
-    const result = await generateThreadTitle({
-      cfg: {} as OpenClawConfig,
-      agentId: "main",
-      messageText: "Summarize deployment blockers and owner follow-ups.",
-      channelName: "release-status",
-      channelDescription: "Deploy updates and incident notes",
-    });
+    const now = 1_700_000_000_000;
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    let result: string | null;
+    try {
+      result = await generateThreadTitle({
+        cfg: EMPTY_DISCORD_TEST_CONFIG,
+        agentId: "main",
+        messageText: "Summarize deployment blockers and owner follow-ups.",
+        channelName: "release-status",
+        channelDescription: "Deploy updates and incident notes",
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
 
     expect(result).toBe("Generated title");
     expect(completeWithPreparedSimpleCompletionModelMock).toHaveBeenCalledTimes(1);
-    expect(completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.context).toEqual(
-      expect.objectContaining({
-        systemPrompt:
-          "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.",
-        messages: [
-          expect.objectContaining({
-            role: "user",
-            content: expect.stringContaining("Channel: release-status"),
-          }),
-        ],
-      }),
-    );
-    expect(
-      completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.context?.messages?.[0]
-        ?.content,
-    ).toContain("Channel description: Deploy updates and incident notes");
-    expect(completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.options).toEqual(
-      expect.objectContaining({
-        maxTokens: 24,
-        temperature: 0.2,
-      }),
-    );
+    const completionArgs = firstCompletionArgs();
+    expect(completionArgs.context).toEqual({
+      systemPrompt:
+        "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.",
+      messages: [
+        {
+          role: "user",
+          content:
+            "Channel: release-status\n\nChannel description: Deploy updates and incident notes\n\nMessage:\nSummarize deployment blockers and owner follow-ups.",
+          timestamp: now,
+        },
+      ],
+    });
+    expect(completionArgs.options).toEqual({
+      maxTokens: 512,
+      signal: completionArgs.options?.signal,
+    });
+    expect(completionArgs.options?.signal).toBeInstanceOf(AbortSignal);
+    expect(completionArgs.options).not.toHaveProperty("temperature");
   });
 
   it("returns null when completion throws", async () => {
@@ -184,7 +199,7 @@ describe("generateThreadTitle", () => {
     );
 
     const result = await generateThreadTitle({
-      cfg: {} as OpenClawConfig,
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       agentId: "main",
       messageText: "Generate title.",
     });

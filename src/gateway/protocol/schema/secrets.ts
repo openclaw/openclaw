@@ -1,4 +1,4 @@
-import { Type, type Static } from "@sinclair/typebox";
+import { Type, type Static } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
 export const SecretsReloadParamsSchema = Type.Object({}, { additionalProperties: false });
@@ -7,6 +7,18 @@ export const SecretsResolveParamsSchema = Type.Object(
   {
     commandName: NonEmptyString,
     targetIds: Type.Array(NonEmptyString),
+    allowedPaths: Type.Optional(Type.Array(NonEmptyString)),
+    forcedActivePaths: Type.Optional(Type.Array(NonEmptyString)),
+    optionalActivePaths: Type.Optional(Type.Array(NonEmptyString)),
+    providerOverrides: Type.Optional(
+      Type.Object(
+        {
+          webSearch: Type.Optional(NonEmptyString),
+          webFetch: Type.Optional(NonEmptyString),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

@@ -1,28 +1,18 @@
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildVitestProfileCommand,
   parseArgs,
   resolveVitestProfileDir,
 } from "../../scripts/run-vitest-profile.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
 
 describe("scripts/run-vitest-profile", () => {
-  const tempDirs: string[] = [];
-
-  afterEach(() => {
-    while (tempDirs.length > 0) {
-      const dir = tempDirs.pop();
-      if (dir) {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-    }
-  });
+  const { trackTempDir } = createScriptTestHarness();
 
   it("defaults profile output outside the repo", () => {
-    const outputDir = resolveVitestProfileDir({ mode: "main", outputDir: "" });
-    tempDirs.push(outputDir);
+    const outputDir = trackTempDir(resolveVitestProfileDir({ mode: "main", outputDir: "" }));
 
     expect(outputDir.startsWith(os.tmpdir())).toBe(true);
     expect(outputDir.startsWith(process.cwd())).toBe(false);
@@ -43,7 +33,7 @@ describe("scripts/run-vitest-profile", () => {
         "./node_modules/vitest/vitest.mjs",
         "run",
         "--config",
-        "vitest.unit.config.ts",
+        "test/vitest/vitest.unit.config.ts",
         "--no-file-parallelism",
       ],
     });
@@ -57,7 +47,7 @@ describe("scripts/run-vitest-profile", () => {
           "vitest",
           "run",
           "--config",
-          "vitest.unit.config.ts",
+          "test/vitest/vitest.unit.config.ts",
           "--no-file-parallelism",
           "--execArgv=--cpu-prof",
           "--execArgv=--cpu-prof-dir=/tmp/profile-runner",

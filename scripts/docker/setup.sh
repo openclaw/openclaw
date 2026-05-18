@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
@@ -11,6 +12,8 @@ RAW_SANDBOX_SETTING="${OPENCLAW_SANDBOX:-}"
 SANDBOX_ENABLED=""
 DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
+RAW_SKIP_ONBOARDING="${OPENCLAW_SKIP_ONBOARDING:-}"
+SKIP_ONBOARDING=""
 
 fail() {
   echo "ERROR: $*" >&2
@@ -22,6 +25,12 @@ require_cmd() {
     echo "Missing dependency: $1" >&2
     exit 1
   fi
+}
+
+run_docker_build() {
+  # Dockerfile uses BuildKit-only syntax (RUN --mount=type=cache). Force
+  # BuildKit so hosts defaulting to the legacy builder do not fail.
+  docker_build_exec "$@"
 }
 
 is_truthy_value() {
@@ -99,33 +108,36 @@ read_env_gateway_token() {
   fi
 }
 
-ensure_control_ui_allowed_origins() {
-  if [[ "${OPENCLAW_GATEWAY_BIND}" == "loopback" ]]; then
-    return 0
+sync_gateway_config() {
+  local allowed_origin_json=""
+  local current_allowed_origins=""
+  local batch_json=""
+
+  if [[ "${OPENCLAW_GATEWAY_BIND}" != "loopback" ]]; then
+    allowed_origin_json="$(printf '["http://localhost:%s","http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT" "$OPENCLAW_GATEWAY_PORT")"
+    current_allowed_origins="$(
+      run_prestart_cli config get gateway.controlUi.allowedOrigins 2>/dev/null || true
+    )"
+    current_allowed_origins="${current_allowed_origins//$'\r'/}"
   fi
 
-  local allowed_origin_json
-  local current_allowed_origins
-  allowed_origin_json="$(printf '["http://localhost:%s","http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT" "$OPENCLAW_GATEWAY_PORT")"
-  current_allowed_origins="$(
-    run_prestart_cli config get gateway.controlUi.allowedOrigins 2>/dev/null || true
-  )"
-  current_allowed_origins="${current_allowed_origins//$'\r'/}"
-
-  if [[ -n "$current_allowed_origins" && "$current_allowed_origins" != "null" && "$current_allowed_origins" != "[]" ]]; then
-    echo "Control UI allowlist already configured; leaving gateway.controlUi.allowedOrigins unchanged."
-    return 0
+  batch_json="$(printf '[{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"%s"}' "$OPENCLAW_GATEWAY_BIND")"
+  if [[ -n "$allowed_origin_json" ]]; then
+    if [[ -n "$current_allowed_origins" && "$current_allowed_origins" != "null" && "$current_allowed_origins" != "[]" ]]; then
+      echo "Control UI allowlist already configured; leaving gateway.controlUi.allowedOrigins unchanged."
+    else
+      batch_json+=",{\"path\":\"gateway.controlUi.allowedOrigins\",\"value\":$allowed_origin_json}"
+    fi
   fi
+  batch_json+="]"
 
-  run_prestart_cli config set gateway.controlUi.allowedOrigins "$allowed_origin_json" --strict-json \
-    >/dev/null
-  echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
-}
-
-sync_gateway_mode_and_bind() {
-  run_prestart_cli config set gateway.mode local >/dev/null
-  run_prestart_cli config set gateway.bind "$OPENCLAW_GATEWAY_BIND" >/dev/null
+  run_prestart_cli config set --batch-json "$batch_json" >/dev/null
   echo "Pinned gateway.mode=local and gateway.bind=$OPENCLAW_GATEWAY_BIND for Docker setup."
+  if [[ -n "$allowed_origin_json" ]]; then
+    if [[ -z "$current_allowed_origins" || "$current_allowed_origins" == "null" || "$current_allowed_origins" == "[]" ]]; then
+      echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
+    fi
+  fi
 }
 
 run_prestart_gateway() {
@@ -137,7 +149,16 @@ run_prestart_cli() {
   # requires the gateway container's network namespace to already exist. That
   # creates a circular dependency for config writes that are needed before the
   # gateway can start cleanly.
-  run_prestart_gateway --entrypoint node openclaw-gateway \
+  # Host OPENCLAW_* paths are Compose bind-mount sources. Setup-time CLI writes
+  # must still resolve state/config paths inside the container.
+  run_prestart_gateway \
+    -e HOME=/home/node \
+    -e OPENCLAW_HOME=/home/node \
+    -e OPENCLAW_STATE_DIR=/home/node/.openclaw \
+    -e OPENCLAW_CONFIG_PATH=/home/node/.openclaw/openclaw.json \
+    -e OPENCLAW_CONFIG_DIR=/home/node/.openclaw \
+    -e OPENCLAW_WORKSPACE_DIR=/home/node/.openclaw/workspace \
+    --entrypoint node openclaw-gateway \
     dist/index.js "$@"
 }
 
@@ -222,12 +243,17 @@ fi
 if is_truthy_value "$RAW_SANDBOX_SETTING"; then
   SANDBOX_ENABLED="1"
 fi
+if is_truthy_value "$RAW_SKIP_ONBOARDING"; then
+  SKIP_ONBOARDING="1"
+fi
 
 OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
+OPENCLAW_AUTH_PROFILE_SECRET_DIR="${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-$HOME/.openclaw-auth-profile-secrets}"
 
 validate_mount_path_value "OPENCLAW_CONFIG_DIR" "$OPENCLAW_CONFIG_DIR"
 validate_mount_path_value "OPENCLAW_WORKSPACE_DIR" "$OPENCLAW_WORKSPACE_DIR"
+validate_mount_path_value "OPENCLAW_AUTH_PROFILE_SECRET_DIR" "$OPENCLAW_AUTH_PROFILE_SECRET_DIR"
 if [[ -n "$HOME_VOLUME_NAME" ]]; then
   if [[ "$HOME_VOLUME_NAME" == *"/"* ]]; then
     validate_mount_path_value "OPENCLAW_HOME_VOLUME" "$HOME_VOLUME_NAME"
@@ -255,6 +281,7 @@ fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
+mkdir -p "$OPENCLAW_AUTH_PROFILE_SECRET_DIR"
 # Seed directory tree eagerly so bind mounts work even on Docker Desktop/Windows
 # where the container (even as root) cannot create new host subdirectories.
 mkdir -p "$OPENCLAW_CONFIG_DIR/identity"
@@ -263,18 +290,31 @@ mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/sessions"
 
 export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR
+export OPENCLAW_AUTH_PROFILE_SECRET_DIR
 export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 export OPENCLAW_BRIDGE_PORT="${OPENCLAW_BRIDGE_PORT:-18790}"
 export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
+export OPENCLAW_DISABLE_BONJOUR="${OPENCLAW_DISABLE_BONJOUR:-}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
-export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
+export OPENCLAW_IMAGE_APT_PACKAGES="${OPENCLAW_IMAGE_APT_PACKAGES-${OPENCLAW_DOCKER_APT_PACKAGES:-}}"
 export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
+export OPENCLAW_INSTALL_BROWSER="${OPENCLAW_INSTALL_BROWSER:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
 export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}"
 export OPENCLAW_SANDBOX="$SANDBOX_ENABLED"
 export OPENCLAW_DOCKER_SOCKET="$DOCKER_SOCKET_PATH"
+export OPENCLAW_DOCKER_SETUP=1
 export OPENCLAW_TZ="$TIMEZONE"
+export OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}"
+export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT="${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-}"
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-}"
+export OTEL_EXPORTER_OTLP_PROTOCOL="${OTEL_EXPORTER_OTLP_PROTOCOL:-}"
+export OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-}"
+export OTEL_SEMCONV_STABILITY_OPT_IN="${OTEL_SEMCONV_STABILITY_OPT_IN:-}"
+export OPENCLAW_OTEL_PRELOADED="${OPENCLAW_OTEL_PRELOADED:-}"
+export OPENCLAW_SKIP_ONBOARDING="$SKIP_ONBOARDING"
 
 # Detect Docker socket GID for sandbox group_add.
 DOCKER_GID=""
@@ -316,6 +356,7 @@ write_extra_compose() {
   local gateway_home_mount
   local gateway_config_mount
   local gateway_workspace_mount
+  local gateway_auth_profile_secret_mount
 
   cat >"$EXTRA_COMPOSE_FILE" <<'YAML'
 services:
@@ -327,12 +368,15 @@ YAML
     gateway_home_mount="${home_volume}:/home/node"
     gateway_config_mount="${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw"
     gateway_workspace_mount="${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace"
+    gateway_auth_profile_secret_mount="${OPENCLAW_AUTH_PROFILE_SECRET_DIR}:/home/node/.config/openclaw"
     validate_mount_spec "$gateway_home_mount"
     validate_mount_spec "$gateway_config_mount"
     validate_mount_spec "$gateway_workspace_mount"
+    validate_mount_spec "$gateway_auth_profile_secret_mount"
     printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
     printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
     printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$gateway_auth_profile_secret_mount" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "$@"; do
@@ -349,6 +393,7 @@ YAML
     printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
     printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
     printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$gateway_auth_profile_secret_mount" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "$@"; do
@@ -446,27 +491,40 @@ upsert_env() {
 upsert_env "$ENV_FILE" \
   OPENCLAW_CONFIG_DIR \
   OPENCLAW_WORKSPACE_DIR \
+  OPENCLAW_AUTH_PROFILE_SECRET_DIR \
   OPENCLAW_GATEWAY_PORT \
   OPENCLAW_BRIDGE_PORT \
   OPENCLAW_GATEWAY_BIND \
+  OPENCLAW_DISABLE_BONJOUR \
   OPENCLAW_GATEWAY_TOKEN \
   OPENCLAW_IMAGE \
   OPENCLAW_EXTRA_MOUNTS \
   OPENCLAW_HOME_VOLUME \
-  OPENCLAW_DOCKER_APT_PACKAGES \
+  OPENCLAW_IMAGE_APT_PACKAGES \
   OPENCLAW_EXTENSIONS \
+  OPENCLAW_INSTALL_BROWSER \
   OPENCLAW_SANDBOX \
   OPENCLAW_DOCKER_SOCKET \
   DOCKER_GID \
   OPENCLAW_INSTALL_DOCKER_CLI \
   OPENCLAW_ALLOW_INSECURE_PRIVATE_WS \
-  OPENCLAW_TZ
+  OPENCLAW_TZ \
+  OTEL_EXPORTER_OTLP_ENDPOINT \
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT \
+  OTEL_EXPORTER_OTLP_METRICS_ENDPOINT \
+  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT \
+  OTEL_EXPORTER_OTLP_PROTOCOL \
+  OTEL_SERVICE_NAME \
+  OTEL_SEMCONV_STABILITY_OPT_IN \
+  OPENCLAW_OTEL_PRELOADED \
+  OPENCLAW_SKIP_ONBOARDING
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
-  docker build \
-    --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
+  run_docker_build \
+    --build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
+    --build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
     -t "$IMAGE_NAME" \
     -f "$ROOT_DIR/Dockerfile" \
@@ -493,26 +551,34 @@ echo "==> Fixing data-directory permissions"
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
   'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
+   find /home/node/.config/openclaw -xdev -exec chown node:node {} +; \
    [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
 
 echo ""
-echo "==> Onboarding (interactive)"
-echo "Docker setup pins Gateway mode to local."
-echo "Gateway runtime bind comes from OPENCLAW_GATEWAY_BIND (default: lan)."
-echo "Current runtime bind: $OPENCLAW_GATEWAY_BIND"
-echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
-echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
-echo "Install Gateway daemon: No (managed by Docker Compose)"
-echo ""
-run_prestart_cli onboard --mode local --no-install-daemon
+if [[ -n "$SKIP_ONBOARDING" ]]; then
+  echo "==> Skipping onboarding (OPENCLAW_SKIP_ONBOARDING is set)"
+else
+  echo "==> Onboarding (interactive)"
+  echo "Docker setup pins Gateway mode to local."
+  echo "Gateway runtime bind comes from OPENCLAW_GATEWAY_BIND (default: lan)."
+  echo "Current runtime bind: $OPENCLAW_GATEWAY_BIND"
+  if is_truthy_value "$OPENCLAW_DISABLE_BONJOUR"; then
+    echo "Bonjour/mDNS advertising: force disabled (OPENCLAW_DISABLE_BONJOUR=$OPENCLAW_DISABLE_BONJOUR)."
+  elif [[ -z "$OPENCLAW_DISABLE_BONJOUR" ]]; then
+    echo "Bonjour/mDNS advertising: auto (disabled inside the Gateway container unless explicitly enabled)."
+  else
+    echo "Bonjour/mDNS advertising: explicitly enabled (OPENCLAW_DISABLE_BONJOUR=$OPENCLAW_DISABLE_BONJOUR)."
+  fi
+  echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
+  echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
+  echo "Install Gateway daemon: No (managed by Docker Compose)"
+  echo ""
+  run_prestart_cli onboard --mode local --no-install-daemon
+fi
 
 echo ""
 echo "==> Docker gateway defaults"
-sync_gateway_mode_and_bind
-
-echo ""
-echo "==> Control UI origin allowlist"
-ensure_control_ui_allowed_origins
+sync_gateway_config
 
 echo ""
 echo "==> Provider setup (optional)"
@@ -533,15 +599,15 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   echo ""
   echo "==> Sandbox setup"
 
-  # Build sandbox image if Dockerfile.sandbox exists.
-  if [[ -f "$ROOT_DIR/Dockerfile.sandbox" ]]; then
+  sandbox_dockerfile="$ROOT_DIR/scripts/docker/sandbox/Dockerfile"
+  if [[ -f "$sandbox_dockerfile" ]]; then
     echo "Building sandbox image: openclaw-sandbox:bookworm-slim"
-    docker build \
+    run_docker_build \
       -t "openclaw-sandbox:bookworm-slim" \
-      -f "$ROOT_DIR/Dockerfile.sandbox" \
+      -f "$sandbox_dockerfile" \
       "$ROOT_DIR"
   else
-    echo "WARNING: Dockerfile.sandbox not found in $ROOT_DIR" >&2
+    echo "WARNING: sandbox Dockerfile not found at $sandbox_dockerfile" >&2
     echo "  Sandbox config will be applied but no sandbox image will be built." >&2
     echo "  Agent exec may fail if the configured sandbox image does not exist." >&2
   fi

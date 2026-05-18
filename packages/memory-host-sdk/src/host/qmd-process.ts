@@ -1,14 +1,16 @@
 import { spawn } from "node:child_process";
-import {
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgram,
-} from "../../../../src/plugin-sdk/windows-spawn.js";
+import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
 
 export type CliSpawnInvocation = {
   command: string;
   argv: string[];
   shell?: boolean;
   windowsHide?: boolean;
+};
+
+export type QmdBinaryAvailability = {
+  available: boolean;
+  error?: string;
 };
 
 export function resolveCliSpawnInvocation(params: {
@@ -26,6 +28,70 @@ export function resolveCliSpawnInvocation(params: {
     allowShellFallback: false,
   });
   return materializeWindowsSpawnProgram(program, params.args);
+}
+
+export async function checkQmdBinaryAvailability(params: {
+  command: string;
+  env: NodeJS.ProcessEnv;
+  cwd?: string;
+  timeoutMs?: number;
+}): Promise<QmdBinaryAvailability> {
+  let spawnInvocation: CliSpawnInvocation;
+  try {
+    spawnInvocation = resolveCliSpawnInvocation({
+      command: params.command,
+      args: [],
+      env: params.env,
+      packageName: "qmd",
+    });
+  } catch (err) {
+    return { available: false, error: formatQmdAvailabilityError(err) };
+  }
+
+  return await new Promise((resolve) => {
+    let settled = false;
+    let didSpawn = false;
+    const finish = (result: QmdBinaryAvailability) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      resolve(result);
+    };
+
+    const child = spawn(spawnInvocation.command, spawnInvocation.argv, {
+      env: params.env,
+      cwd: params.cwd ?? process.cwd(),
+      shell: spawnInvocation.shell,
+      windowsHide: spawnInvocation.windowsHide,
+      stdio: "ignore",
+    });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish({
+        available: false,
+        error: `spawn ${params.command} timed out after ${params.timeoutMs ?? 2_000}ms`,
+      });
+    }, params.timeoutMs ?? 2_000);
+
+    child.once("error", (err) => {
+      finish({ available: false, error: formatQmdAvailabilityError(err) });
+    });
+    child.once("spawn", () => {
+      didSpawn = true;
+      child.kill();
+      finish({ available: true });
+    });
+    child.once("close", () => {
+      if (!didSpawn) {
+        return;
+      }
+      finish({ available: true });
+    });
+  });
 }
 
 export async function runCliCommand(params: {
@@ -105,4 +171,11 @@ function appendOutputWithCap(
     return { text: appended, truncated: false };
   }
   return { text: appended.slice(-maxChars), truncated: true };
+}
+
+function formatQmdAvailabilityError(err: unknown): string {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+  return String(err);
 }

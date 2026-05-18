@@ -54,7 +54,9 @@ export async function pairDeviceIdentity(params: {
     clientId: params.clientId,
     clientMode: params.clientMode,
   });
-  await approveDevicePairing(request.request.requestId);
+  await approveDevicePairing(request.request.requestId, {
+    callerScopes: params.scopes,
+  });
   return loaded;
 }
 
@@ -84,7 +86,9 @@ export async function issueOperatorToken(params: {
     });
     expect(rotated.ok).toBe(true);
     const token = rotated.ok ? rotated.entry.token : "";
-    expect(token).toBeTruthy();
+    if (!token) {
+      throw new Error(`expected rotated operator token for device ${paired.identity.deviceId}`);
+    }
     return {
       deviceId: paired.identity.deviceId,
       identityPath: paired.identityPath,
@@ -94,7 +98,9 @@ export async function issueOperatorToken(params: {
 
   const device = await getPairedDevice(paired.identity.deviceId);
   const token = device?.tokens?.operator?.token ?? "";
-  expect(token).toBeTruthy();
+  if (!token) {
+    throw new Error(`expected operator token for paired device ${paired.identity.deviceId}`);
+  }
   expect(device?.approvedScopes).toEqual(params.approvedScopes);
   return {
     deviceId: paired.identity.deviceId,

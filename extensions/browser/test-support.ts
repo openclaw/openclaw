@@ -1,11 +1,15 @@
-export { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 export {
   createCliRuntimeCapture,
+  expectGeneratedTokenPersistedToGatewayAuth,
   type CliMockOutputRuntime,
   type CliRuntimeCapture,
-} from "../../src/cli/test-runtime-capture.js";
-export type { OpenClawConfig } from "openclaw/plugin-sdk/browser-support";
-export { expectGeneratedTokenPersistedToGatewayAuth } from "../../test/helpers/extensions/auth-token-assertions.ts";
-export { withEnv, withEnvAsync } from "../../test/helpers/extensions/env.ts";
-export { withFetchPreconnect, type FetchMock } from "../../test/helpers/extensions/fetch-mock.ts";
-export { createTempHomeEnv, type TempHomeEnv } from "../../test/helpers/extensions/temp-home.ts";
+} from "openclaw/plugin-sdk/test-fixtures";
+export {
+  createTempHomeEnv,
+  withEnv,
+  withEnvAsync,
+  withFetchPreconnect,
+  isLiveTestEnabled,
+} from "openclaw/plugin-sdk/test-env";
+export type { FetchMock, TempHomeEnv } from "openclaw/plugin-sdk/test-env";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

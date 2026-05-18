@@ -5,7 +5,9 @@ import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 export type TestSnapshot<TConfig extends Record<string, unknown>> = ConfigFileSnapshot & {
   parsed: TConfig;
+  sourceConfig: TConfig;
   resolved: TConfig;
+  runtimeConfig: TConfig;
   config: TConfig;
 };
 
@@ -18,8 +20,10 @@ export function makeSnapshot<TConfig extends Record<string, unknown>>(
     exists: true,
     raw: raw ?? JSON.stringify(config),
     parsed: config,
+    sourceConfig: config as ConfigFileSnapshot["sourceConfig"],
     resolved: config as ConfigFileSnapshot["resolved"],
     valid: true,
+    runtimeConfig: config as ConfigFileSnapshot["runtimeConfig"],
     config: config as ConfigFileSnapshot["config"],
     hash: "abc123",
     issues: [],

@@ -1,11 +1,15 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
-import { hasExplicitPluginConfig } from "./config-state.js";
-import type { PluginLoadOptions } from "./loader.js";
+import { hasExplicitPluginConfig } from "./config-policy.js";
+import { normalizePluginId } from "./config-state.js";
 
 export function withBundledPluginAllowlistCompat(params: {
-  config: PluginLoadOptions["config"];
+  config: OpenClawConfig | undefined;
   pluginIds: readonly string[];
-}): PluginLoadOptions["config"] {
+}): OpenClawConfig | undefined {
+  if (params.config?.plugins?.bundledDiscovery !== "compat") {
+    return params.config;
+  }
   const allow = params.config?.plugins?.allow;
   if (!Array.isArray(allow) || allow.length === 0) {
     return params.config;
@@ -34,14 +38,26 @@ export function withBundledPluginAllowlistCompat(params: {
 }
 
 export function withBundledPluginEnablementCompat(params: {
-  config: PluginLoadOptions["config"];
+  config: OpenClawConfig | undefined;
   pluginIds: readonly string[];
-}): PluginLoadOptions["config"] {
+}): OpenClawConfig | undefined {
   const existingEntries = params.config?.plugins?.entries ?? {};
+  const forcePluginsEnabled = params.config?.plugins?.enabled === false;
+  const useCompatDiscovery = params.config?.plugins?.bundledDiscovery === "compat";
+  const allow = params.config?.plugins?.allow;
+  const allowSet =
+    !useCompatDiscovery && Array.isArray(allow) && allow.length > 0
+      ? new Set(allow.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean))
+      : undefined;
+  let hasEligiblePlugin = false;
   let changed = false;
   const nextEntries: Record<string, PluginEntryConfig> = { ...existingEntries };
 
   for (const pluginId of params.pluginIds) {
+    if (allowSet && !allowSet.has(pluginId)) {
+      continue;
+    }
+    hasEligiblePlugin = true;
     if (existingEntries[pluginId] !== undefined) {
       continue;
     }
@@ -50,13 +66,16 @@ export function withBundledPluginEnablementCompat(params: {
   }
 
   if (!changed) {
-    return params.config;
+    if (!forcePluginsEnabled || !hasEligiblePlugin) {
+      return params.config;
+    }
   }
 
   return {
     ...params.config,
     plugins: {
       ...params.config?.plugins,
+      ...(forcePluginsEnabled ? { enabled: true } : {}),
       entries: {
         ...existingEntries,
         ...nextEntries,
@@ -66,12 +85,12 @@ export function withBundledPluginEnablementCompat(params: {
 }
 
 export function withBundledPluginVitestCompat(params: {
-  config: PluginLoadOptions["config"];
+  config: OpenClawConfig | undefined;
   pluginIds: readonly string[];
-  env?: PluginLoadOptions["env"];
-}): PluginLoadOptions["config"] {
+  env?: NodeJS.ProcessEnv;
+}): OpenClawConfig | undefined {
   const env = params.env ?? process.env;
-  const isVitest = Boolean(env.VITEST || process.env.VITEST);
+  const isVitest = Boolean(env.VITEST);
   if (
     !isVitest ||
     hasExplicitPluginConfig(params.config?.plugins) ||
@@ -80,12 +99,20 @@ export function withBundledPluginVitestCompat(params: {
     return params.config;
   }
 
+  const entries = Object.fromEntries(
+    params.pluginIds.map((pluginId) => [pluginId, { enabled: true } satisfies PluginEntryConfig]),
+  );
+
   return {
     ...params.config,
     plugins: {
       ...params.config?.plugins,
       enabled: true,
       allow: [...params.pluginIds],
+      entries: {
+        ...entries,
+        ...params.config?.plugins?.entries,
+      },
       slots: {
         ...params.config?.plugins?.slots,
         memory: "none",

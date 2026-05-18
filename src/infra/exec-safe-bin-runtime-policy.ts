@@ -14,7 +14,7 @@ import {
   type WritableTrustedSafeBinDir,
 } from "./exec-safe-bin-trust.js";
 
-export type ExecSafeBinConfigScope = {
+type ExecSafeBinConfigScope = {
   safeBins?: string[] | null;
   safeBinProfiles?: SafeBinProfileFixtures | null;
   safeBinTrustedDirs?: string[] | null;
@@ -22,6 +22,7 @@ export type ExecSafeBinConfigScope = {
 
 const INTERPRETER_LIKE_SAFE_BINS = new Set([
   "ash",
+  "awk",
   "bash",
   "busybox",
   "bun",
@@ -31,8 +32,12 @@ const INTERPRETER_LIKE_SAFE_BINS = new Set([
   "dash",
   "deno",
   "fish",
+  "gawk",
+  "gsed",
   "ksh",
   "lua",
+  "mawk",
+  "nawk",
   "node",
   "nodejs",
   "perl",
@@ -46,6 +51,7 @@ const INTERPRETER_LIKE_SAFE_BINS = new Set([
   "python2",
   "python3",
   "ruby",
+  "sed",
   "sh",
   "toybox",
   "wscript",
@@ -121,6 +127,7 @@ export function resolveExecSafeBinRuntimePolicy(params: {
   ];
   const trustedSafeBinDirs = getTrustedSafeBinDirs({
     extraDirs: explicitTrustedSafeBinDirs,
+    safeBins: Array.from(safeBins),
   });
   const writableTrustedSafeBinDirs = listWritableExplicitTrustedSafeBinDirs(
     explicitTrustedSafeBinDirs,

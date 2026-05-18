@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildProviderAuthDoctorHintWithPlugin } from "../../plugins/provider-runtime.runtime.js";
-import { normalizeProviderId } from "../model-selection.js";
+import { normalizeProviderId } from "../provider-id.js";
 import type { AuthProfileStore } from "./types.js";
 
 /**
@@ -9,7 +9,7 @@ import type { AuthProfileStore } from "./types.js";
  */
 const DEPRECATED_PROVIDER_MIGRATION_HINTS: Record<string, string> = {
   "qwen-portal":
-    "Qwen OAuth via portal.qwen.ai has been deprecated. Please migrate to Model Studio (Alibaba Cloud Coding Plan). Run: openclaw onboard --auth-choice modelstudio-api-key (or modelstudio-api-key-cn for the China endpoint).",
+    "Qwen OAuth via portal.qwen.ai has been deprecated. Please migrate to Qwen Cloud Coding Plan. Run: openclaw onboard --auth-choice qwen-api-key (or qwen-api-key-cn for the China endpoint). Legacy modelstudio auth-choice ids still work.",
 };
 
 export async function formatAuthDoctorHint(params: {

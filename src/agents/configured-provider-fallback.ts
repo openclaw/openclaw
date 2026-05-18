@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.js";
 
-export type ProviderModelRef = {
+type ProviderModelRef = {
   provider: string;
   model: string;
 };
@@ -8,12 +8,20 @@ export type ProviderModelRef = {
 export function resolveConfiguredProviderFallback(params: {
   cfg: Pick<OpenClawConfig, "models">;
   defaultProvider: string;
+  defaultModel?: string;
 }): ProviderModelRef | null {
   const configuredProviders = params.cfg.models?.providers;
   if (!configuredProviders || typeof configuredProviders !== "object") {
     return null;
   }
-  if (configuredProviders[params.defaultProvider]) {
+  const defaultProviderConfig = configuredProviders[params.defaultProvider];
+  const defaultModel = params.defaultModel?.trim();
+  const defaultProviderHasDefaultModel =
+    !!defaultProviderConfig &&
+    !!defaultModel &&
+    Array.isArray(defaultProviderConfig.models) &&
+    defaultProviderConfig.models.some((model) => model?.id === defaultModel);
+  if (defaultProviderConfig && (!defaultModel || defaultProviderHasDefaultModel)) {
     return null;
   }
   const availableProvider = Object.entries(configuredProviders).find(

@@ -4,10 +4,8 @@ read_when:
   - You are changing markdown formatting or chunking for outbound channels
   - You are adding a new channel formatter or style mapping
   - You are debugging formatting regressions across channels
-title: "Markdown Formatting"
+title: "Markdown formatting"
 ---
-
-# Markdown formatting
 
 OpenClaw formats outbound Markdown by converting it into a shared intermediate
 representation (IR) before rendering channel-specific output. The IR keeps the
@@ -41,14 +39,14 @@ stay consistent across channels.
 Input Markdown:
 
 ```markdown
-Hello **world** — see [docs](https://docs.openclaw.ai).
+Hello **world** - see [docs](https://docs.openclaw.ai).
 ```
 
 IR (schematic):
 
 ```json
 {
-  "text": "Hello world — see docs.",
+  "text": "Hello world - see docs.",
   "styles": [{ "start": 6, "end": 11, "style": "bold" }],
   "links": [{ "start": 19, "end": 23, "href": "https://docs.openclaw.ai" }]
 }
@@ -67,7 +65,7 @@ Markdown tables are not consistently supported across chat clients. Use
 `markdown.tables` to control conversion per channel (and per account).
 
 - `code`: render tables as code blocks (default for most channels).
-- `bullets`: convert each row into bullet points (default for Signal + WhatsApp).
+- `bullets`: convert each row into bullet points (default for Matrix, Signal, and WhatsApp).
 - `off`: disable table parsing and conversion; raw table text passes through.
 
 Config keys:
@@ -128,3 +126,14 @@ SPOILER style ranges. Other channels treat them as plain text.
 - Signal style ranges depend on UTF-16 offsets; do not use code point offsets.
 - Preserve trailing newlines for fenced code blocks so closing markers land on
   their own line.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Streaming and chunking" href="/concepts/streaming" icon="bars-staggered">
+    Outbound streaming behavior, chunk boundaries, and channel-specific delivery.
+  </Card>
+  <Card title="System prompt" href="/concepts/system-prompt" icon="message-lines">
+    What the model sees before the conversation, including injected workspace files.
+  </Card>
+</CardGroup>

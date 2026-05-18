@@ -1,6 +1,8 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { onboardCommand, setupWizardCommand } from "./onboard.js";
 
 const mocks = vi.hoisted(() => ({
   runInteractiveSetup: vi.fn(async () => {}),
@@ -26,14 +28,27 @@ vi.mock("./onboard-helpers.js", () => ({
   handleReset: mocks.handleReset,
 }));
 
-const { onboardCommand, setupWizardCommand } = await import("./onboard.js");
-
 function makeRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn() as unknown as RuntimeEnv["exit"],
   };
+}
+
+function expectResetCall(params: { scope: string; runtime: RuntimeEnv; workspace?: string }): void {
+  const calls = mocks.handleReset.mock.calls as unknown as Array<[string, string, RuntimeEnv]>;
+  const call = calls[0];
+  if (!call) {
+    throw new Error("expected handleReset call");
+  }
+  expect(call[0]).toBe(params.scope);
+  if (params.workspace) {
+    expect(call[1]).toBe(params.workspace);
+  } else {
+    expect(typeof call[1]).toBe("string");
+  }
+  expect(call[2]).toBe(params.runtime);
 }
 
 describe("setupWizardCommand", () => {
@@ -52,8 +67,9 @@ describe("setupWizardCommand", () => {
       runtime,
     );
 
+    expect(runtime.error).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
-      'Invalid --secret-input-mode. Use "plaintext" or "ref".',
+      `Invalid --secret-input-mode. Use "plaintext" or "ref", or run ${formatCliCommand("openclaw onboard")} for the interactive setup.`,
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
@@ -90,11 +106,7 @@ describe("setupWizardCommand", () => {
       runtime,
     );
 
-    expect(mocks.handleReset).toHaveBeenCalledWith(
-      "config+creds+sessions",
-      expect.any(String),
-      runtime,
-    );
+    expectResetCall({ scope: "config+creds+sessions", runtime });
   });
 
   it("uses configured default workspace for --reset when --workspace is not provided", async () => {
@@ -136,7 +148,7 @@ describe("setupWizardCommand", () => {
       runtime,
     );
 
-    expect(mocks.handleReset).toHaveBeenCalledWith("full", expect.any(String), runtime);
+    expectResetCall({ scope: "full", runtime });
   });
 
   it("fails fast for invalid --reset-scope", async () => {
@@ -150,8 +162,9 @@ describe("setupWizardCommand", () => {
       runtime,
     );
 
+    expect(runtime.error).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
-      'Invalid --reset-scope. Use "config", "config+creds+sessions", or "full".',
+      `Invalid --reset-scope. Use "config", "config+creds+sessions", or "full". Run ${formatCliCommand("openclaw onboard --reset --reset-scope config")} for a config-only reset.`,
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.handleReset).not.toHaveBeenCalled();

@@ -1,4 +1,4 @@
-import { createConfigIO, getRuntimeConfigSnapshot } from "../config/config.js";
+import { loadBrowserConfigForRuntimeRefresh } from "./config-refresh-source.js";
 import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import type { BrowserServerState } from "./server-context.types.js";
 
@@ -7,6 +7,10 @@ function changedProfileInvariants(
   next: ResolvedBrowserProfile,
 ): string[] {
   const changed: string[] = [];
+  const currentUsesLocalManagedLaunch =
+    current.driver === "openclaw" && !current.attachOnly && current.cdpIsLoopback;
+  const nextUsesLocalManagedLaunch =
+    next.driver === "openclaw" && !next.attachOnly && next.cdpIsLoopback;
   if (current.cdpUrl !== next.cdpUrl) {
     changed.push("cdpUrl");
   }
@@ -15,6 +19,20 @@ function changedProfileInvariants(
   }
   if (current.driver !== next.driver) {
     changed.push("driver");
+  }
+  if (
+    currentUsesLocalManagedLaunch &&
+    nextUsesLocalManagedLaunch &&
+    current.headless !== next.headless
+  ) {
+    changed.push("headless");
+  }
+  if (
+    currentUsesLocalManagedLaunch &&
+    nextUsesLocalManagedLaunch &&
+    current.executablePath !== next.executablePath
+  ) {
+    changed.push("executablePath");
   }
   if (current.attachOnly !== next.attachOnly) {
     changed.push("attachOnly");
@@ -73,10 +91,9 @@ export function refreshResolvedBrowserConfigFromDisk(params: {
     return;
   }
 
-  // Route-level browser config hot reload should observe on-disk changes immediately.
-  // The shared loadConfig() helper may return a cached snapshot for the configured TTL,
-  // which can leave request-time browser guards stale (for example evaluateEnabled).
-  const cfg = getRuntimeConfigSnapshot() ?? createConfigIO().loadConfig();
+  // Route-level refresh should use the shared runtime config. Config mutations
+  // refresh that snapshot and decide whether the wider runtime should restart.
+  const cfg = loadBrowserConfigForRuntimeRefresh();
   const freshResolved = resolveBrowserConfig(cfg.browser, cfg);
   applyResolvedConfig(params.current, freshResolved);
 }

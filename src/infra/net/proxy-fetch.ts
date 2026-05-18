@@ -1,21 +1,84 @@
-import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { logWarn } from "../../logger.js";
-import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
+import { formatErrorMessage } from "../errors.js";
+import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
+import {
+  addActiveManagedProxyTlsOptions,
+  resolveManagedEnvHttpProxyAgentOptions,
+} from "./proxy/managed-proxy-undici.js";
+import { loadUndiciRuntimeDeps, type UndiciRuntimeDeps } from "./undici-runtime.js";
 
 export const PROXY_FETCH_PROXY_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
 type ProxyFetchWithMetadata = typeof fetch & {
   [PROXY_FETCH_PROXY_URL]?: string;
 };
 
+function isFormDataLike(value: unknown): value is FormData {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as FormData).entries === "function" &&
+    (value as { [Symbol.toStringTag]?: unknown })[Symbol.toStringTag] === "FormData"
+  );
+}
+
+type UndiciFormDataCtor = NonNullable<UndiciRuntimeDeps["FormData"]>;
+type UndiciFormDataInstance = InstanceType<UndiciFormDataCtor>;
+
+function appendFormDataEntry(
+  target: UndiciFormDataInstance,
+  key: string,
+  value: FormDataEntryValue,
+): void {
+  if (typeof value === "string") {
+    target.append(key, value);
+    return;
+  }
+  const fileName = typeof value.name === "string" && value.name.trim() ? value.name : undefined;
+  if (fileName) {
+    target.append(key, value, fileName);
+    return;
+  }
+  target.append(key, value);
+}
+
+function normalizeInitForUndici(
+  init: RequestInit | undefined,
+  UndiciFormData: UndiciFormDataCtor,
+): RequestInit | undefined {
+  if (!init) {
+    return init;
+  }
+  const normalizedHeaders = normalizeHeadersInitForFetch(init.headers);
+  const initWithNormalizedHeaders =
+    normalizedHeaders === init.headers ? init : { ...init, headers: normalizedHeaders };
+  const body = init.body;
+  if (!isFormDataLike(body) || body instanceof UndiciFormData) {
+    return initWithNormalizedHeaders;
+  }
+  const form = new UndiciFormData();
+  for (const [key, value] of body.entries()) {
+    appendFormDataEntry(form, key, value);
+  }
+  const headers = new Headers(normalizedHeaders);
+  headers.delete("content-length");
+  headers.delete("content-type");
+  return { ...initWithNormalizedHeaders, headers, body: form as unknown as BodyInit };
+}
+
 /**
  * Create a fetch function that routes requests through the given HTTP proxy.
  * Uses undici's ProxyAgent under the hood.
  */
 export function makeProxyFetch(proxyUrl: string): typeof fetch {
-  let agent: ProxyAgent | null = null;
-  const resolveAgent = (): ProxyAgent => {
+  const {
+    ProxyAgent,
+    FormData: UndiciFormData = globalThis.FormData as unknown as UndiciFormDataCtor,
+    fetch: undiciFetch,
+  } = loadUndiciRuntimeDeps();
+  let agent: InstanceType<UndiciRuntimeDeps["ProxyAgent"]> | null = null;
+  const resolveAgent = (): InstanceType<UndiciRuntimeDeps["ProxyAgent"]> => {
     if (!agent) {
-      agent = new ProxyAgent(proxyUrl);
+      agent = new ProxyAgent(addActiveManagedProxyTlsOptions({ uri: proxyUrl }));
     }
     return agent;
   };
@@ -23,7 +86,7 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
   // on stream/body internals. Single cast at the boundary keeps the rest type-safe.
   const proxyFetch = ((input: RequestInfo | URL, init?: RequestInit) =>
     undiciFetch(input as string | URL, {
-      ...(init as Record<string, unknown>),
+      ...(normalizeInitForUndici(init, UndiciFormData) as Record<string, unknown>),
       dispatcher: resolveAgent(),
     }) as unknown as Promise<Response>) as ProxyFetchWithMetadata;
   Object.defineProperty(proxyFetch, PROXY_FETCH_PROXY_URL, {
@@ -45,8 +108,7 @@ export function getProxyUrlFromFetch(fetchImpl?: typeof fetch): string | undefin
 }
 
 /**
- * Resolve a proxy-aware fetch from standard environment variables
- * (HTTPS_PROXY, HTTP_PROXY, https_proxy, http_proxy).
+ * Resolve a proxy-aware fetch from standard environment variables.
  * Respects NO_PROXY / no_proxy exclusions via undici's EnvHttpProxyAgent.
  * Returns undefined when no proxy is configured.
  * Gracefully returns undefined if the proxy URL is malformed.
@@ -54,19 +116,25 @@ export function getProxyUrlFromFetch(fetchImpl?: typeof fetch): string | undefin
 export function resolveProxyFetchFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): typeof fetch | undefined {
-  if (!hasEnvHttpProxyConfigured("https", env)) {
+  const proxyOptions = resolveManagedEnvHttpProxyAgentOptions(env);
+  if (!proxyOptions) {
     return undefined;
   }
   try {
-    const agent = new EnvHttpProxyAgent();
+    const {
+      EnvHttpProxyAgent,
+      FormData: UndiciFormData = globalThis.FormData as unknown as UndiciFormDataCtor,
+      fetch: undiciFetch,
+    } = loadUndiciRuntimeDeps();
+    const agent = new EnvHttpProxyAgent(proxyOptions);
     return ((input: RequestInfo | URL, init?: RequestInit) =>
       undiciFetch(input as string | URL, {
-        ...(init as Record<string, unknown>),
+        ...(normalizeInitForUndici(init, UndiciFormData) as Record<string, unknown>),
         dispatcher: agent,
       }) as unknown as Promise<Response>) as typeof fetch;
   } catch (err) {
     logWarn(
-      `Proxy env var set but agent creation failed — falling back to direct fetch: ${err instanceof Error ? err.message : String(err)}`,
+      `Proxy env var set but agent creation failed — falling back to direct fetch: ${formatErrorMessage(err)}`,
     );
     return undefined;
   }

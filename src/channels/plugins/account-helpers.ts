@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveAccountEntry,
   resolveNormalizedAccountEntry,
@@ -8,6 +8,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ChannelAccountSnapshot } from "./types.core.js";
 
 export function createAccountListHelpers(
@@ -15,8 +16,31 @@ export function createAccountListHelpers(
   options?: {
     normalizeAccountId?: (id: string) => string;
     allowUnlistedDefaultAccount?: boolean;
+    implicitDefaultAccount?: {
+      channelKeys?: readonly string[];
+      envVars?: readonly string[];
+    };
+    hasImplicitDefaultAccount?: (cfg: OpenClawConfig) => boolean;
   },
 ) {
+  function hasImplicitDefaultAccount(cfg: OpenClawConfig): boolean {
+    if (options?.hasImplicitDefaultAccount?.(cfg)) {
+      return true;
+    }
+    const channel = cfg.channels?.[channelKey] as Record<string, unknown> | undefined;
+    for (const key of options?.implicitDefaultAccount?.channelKeys ?? []) {
+      if (hasConfiguredAccountValue(channel?.[key])) {
+        return true;
+      }
+    }
+    for (const key of options?.implicitDefaultAccount?.envVars ?? []) {
+      if (hasConfiguredAccountValue(process.env[key])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function resolveConfiguredDefaultAccountId(cfg: OpenClawConfig): string | undefined {
     const channel = cfg.channels?.[channelKey] as Record<string, unknown> | undefined;
     const preferred = normalizeOptionalAccountId(
@@ -52,6 +76,7 @@ export function createAccountListHelpers(
   function listAccountIds(cfg: OpenClawConfig): string[] {
     return listCombinedAccountIds({
       configuredAccountIds: listConfiguredAccountIds(cfg),
+      implicitAccountId: hasImplicitDefaultAccount(cfg) ? DEFAULT_ACCOUNT_ID : undefined,
       fallbackAccountIdWhenEmpty: DEFAULT_ACCOUNT_ID,
     });
   }
@@ -65,6 +90,13 @@ export function createAccountListHelpers(
   }
 
   return { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId };
+}
+
+export function hasConfiguredAccountValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  return value !== undefined && value !== null;
 }
 
 export function listCombinedAccountIds(params: {
@@ -175,25 +207,38 @@ export function resolveMergedAccountConfig<TConfig extends Record<string, unknow
   });
 }
 
-export function describeAccountSnapshot<
-  TAccount extends {
-    accountId?: string | null;
-    enabled?: boolean | null;
-    name?: string | null | undefined;
-  },
->(params: {
-  account: TAccount;
+type AccountSnapshotInput = {
+  accountId?: string | null;
+  enabled?: boolean | null;
+  name?: string | null | undefined;
+};
+
+export function describeAccountSnapshot(params: {
+  account: AccountSnapshotInput;
   configured?: boolean | undefined;
   extra?: Record<string, unknown> | undefined;
 }): ChannelAccountSnapshot {
   return {
-    accountId: String(params.account.accountId ?? DEFAULT_ACCOUNT_ID),
-    name:
-      typeof params.account.name === "string" && params.account.name.trim()
-        ? params.account.name
-        : undefined,
+    accountId: params.account.accountId ?? DEFAULT_ACCOUNT_ID,
+    name: normalizeOptionalString(params.account.name),
     enabled: params.account.enabled !== false,
     configured: params.configured,
     ...params.extra,
   };
+}
+
+export function describeWebhookAccountSnapshot(params: {
+  account: AccountSnapshotInput;
+  configured?: boolean | undefined;
+  mode?: string | undefined;
+  extra?: Record<string, unknown> | undefined;
+}): ChannelAccountSnapshot {
+  return describeAccountSnapshot({
+    account: params.account,
+    configured: params.configured,
+    extra: {
+      mode: params.mode ?? "webhook",
+      ...params.extra,
+    },
+  });
 }

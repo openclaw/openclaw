@@ -42,15 +42,14 @@ describe("channel tools", () => {
 
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
-    errorSpy.mockClear();
   });
 
   it("skips crashing plugins and logs once", () => {
     const cfg = {} as OpenClawConfig;
-    expect(listAllChannelSupportedActions({ cfg })).toEqual([]);
+    expect(listAllChannelSupportedActions({ cfg })).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
 
-    expect(listAllChannelSupportedActions({ cfg })).toEqual([]);
+    expect(listAllChannelSupportedActions({ cfg })).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -81,8 +80,8 @@ describe("channel tools", () => {
     setActivePluginRegistry(createTestRegistry([{ pluginId: "polltest", source: "test", plugin }]));
 
     const cfg = {} as OpenClawConfig;
-    expect(listChannelSupportedActions({ cfg, channel: "polltest" })).toEqual([]);
-    expect(listAllChannelSupportedActions({ cfg })).toEqual([]);
+    expect(listChannelSupportedActions({ cfg, channel: "polltest" })).toStrictEqual([]);
+    expect(listAllChannelSupportedActions({ cfg })).toStrictEqual([]);
   });
 
   it("normalizes channel aliases before listing supported actions", () => {

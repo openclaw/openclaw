@@ -1,30 +1,35 @@
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
-import { resolveFreshSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
+import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveCronStorePath } from "../cron/store.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
-let channelSummaryModulePromise: Promise<typeof import("../infra/channel-summary.js")> | undefined;
-let linkChannelModulePromise: Promise<typeof import("./status.link-channel.js")> | undefined;
-let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
+const channelSummaryModuleLoader = createLazyImportLoader(
+  () => import("../infra/channel-summary.js"),
+);
+const linkChannelModuleLoader = createLazyImportLoader(() => import("./status.link-channel.js"));
+const taskRegistryMaintenanceModuleLoader = createLazyImportLoader(
+  () => import("../tasks/task-registry.maintenance.js"),
+);
 
 function loadChannelSummaryModule() {
-  channelSummaryModulePromise ??= import("../infra/channel-summary.js");
-  return channelSummaryModulePromise;
+  return channelSummaryModuleLoader.load();
 }
 
 function loadLinkChannelModule() {
-  linkChannelModulePromise ??= import("./status.link-channel.js");
-  return linkChannelModulePromise;
+  return linkChannelModuleLoader.load();
 }
 
 const loadStatusSummaryRuntimeModule = createLazyRuntimeSurface(
@@ -32,9 +37,8 @@ const loadStatusSummaryRuntimeModule = createLazyRuntimeSurface(
   ({ statusSummaryRuntime }) => statusSummaryRuntime,
 );
 
-function loadConfigIoModule() {
-  configIoModulePromise ??= import("../config/io.js");
-  return configIoModulePromise;
+function loadTaskRegistryMaintenanceModule() {
+  return taskRegistryMaintenanceModuleLoader.load();
 }
 
 const buildFlags = (entry?: SessionEntry): string[] => {
@@ -97,22 +101,29 @@ export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSumm
 export async function getStatusSummary(
   options: {
     includeSensitive?: boolean;
+    includeChannelSummary?: boolean;
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
   } = {},
 ): Promise<StatusSummary> {
-  const { includeSensitive = true } = options;
+  const { includeSensitive = true, includeChannelSummary = true } = options;
   const {
     classifySessionKey,
     resolveConfiguredStatusModelRef,
     resolveContextTokensForModel,
+    resolveSessionRuntimeLabel,
     resolveSessionModelRef,
   } = await loadStatusSummaryRuntimeModule();
-  const cfg = options.config ?? (await loadConfigIoModule()).loadConfig();
-  const needsChannelPlugins = hasPotentialConfiguredChannels(cfg);
+  const cfg = options.config ?? getRuntimeConfig();
+  const channelScopeConfig =
+    options.sourceConfig === undefined
+      ? { config: cfg }
+      : { config: cfg, activationSourceConfig: options.sourceConfig };
+  const needsChannelPlugins =
+    includeChannelSummary && hasConfiguredChannelsForReadOnlyScope(channelScopeConfig);
   const linkContext = needsChannelPlugins
     ? await loadLinkChannelModule().then(({ resolveLinkChannelContext }) =>
-        resolveLinkChannelContext(cfg),
+        resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
       )
     : null;
   const agentList = listGatewayAgentsBasic(cfg);
@@ -136,6 +147,12 @@ export async function getStatusSummary(
     : [];
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
+  const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
+  taskMaintenanceModule.configureTaskRegistryMaintenance({
+    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+  });
+  const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
+  const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary();
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,
@@ -175,6 +192,8 @@ export async function getStatusSummary(
       .map(([key, entry]) => {
         const updatedAt = entry?.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
+        const parsedAgentId = parseAgentSessionKey(key)?.agentId;
+        const agentId = opts.agentIdOverride ?? parsedAgentId;
         const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
         const model = resolvedModel.model ?? configModel ?? null;
         const contextTokens =
@@ -186,7 +205,7 @@ export async function getStatusSummary(
             fallbackContextTokens: configContextTokens ?? undefined,
             allowAsyncLoad: false,
           }) ?? null;
-        const total = resolveFreshSessionTotalTokens(entry);
+        const total = resolveSessionTotalTokens(entry);
         const totalTokensFresh =
           typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
         const remaining =
@@ -195,8 +214,14 @@ export async function getStatusSummary(
           contextTokens && contextTokens > 0 && total !== undefined
             ? Math.min(999, Math.round((total / contextTokens) * 100))
             : null;
-        const parsedAgentId = parseAgentSessionKey(key)?.agentId;
-        const agentId = opts.agentIdOverride ?? parsedAgentId;
+        const runtime = resolveSessionRuntimeLabel({
+          cfg,
+          entry,
+          provider: resolvedModel.provider,
+          model: model ?? "",
+          agentId,
+          sessionKey: key,
+        });
 
         return {
           agentId,
@@ -208,6 +233,7 @@ export async function getStatusSummary(
           thinkingLevel: entry?.thinkingLevel,
           fastMode: entry?.fastMode,
           verboseLevel: entry?.verboseLevel,
+          traceLevel: entry?.traceLevel,
           reasoningLevel: entry?.reasoningLevel,
           elevatedLevel: entry?.elevatedLevel,
           systemSent: entry?.systemSent,
@@ -221,6 +247,7 @@ export async function getStatusSummary(
           remainingTokens: remaining,
           percentUsed: pct,
           model,
+          runtime,
           contextTokens,
           flags: buildFlags(entry),
         } satisfies SessionStatus;
@@ -263,6 +290,8 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
+    tasks,
+    taskAudit,
     sessions: {
       paths: Array.from(paths),
       count: totalSessions,

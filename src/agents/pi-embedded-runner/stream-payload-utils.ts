@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 
 export function streamWithPayloadPatch(
   underlying: StreamFn,
@@ -6,7 +6,7 @@ export function streamWithPayloadPatch(
   context: Parameters<StreamFn>[1],
   options: Parameters<StreamFn>[2],
   patchPayload: (payload: Record<string, unknown>) => void,
-) {
+): ReturnType<StreamFn> {
   const originalOnPayload = options?.onPayload;
   return underlying(model, context, {
     ...options,

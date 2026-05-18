@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const fileState = vi.hoisted(() => ({
+  hasCliDotEnv: false,
+}));
+
 const dotenvState = vi.hoisted(() => {
   const state = {
     profileAtDotenvLoad: undefined as string | undefined,
@@ -18,11 +22,27 @@ const maybeRunCliInContainerMock = vi.hoisted(() =>
   vi.fn((argv: string[]) => ({ handled: false, argv })),
 );
 
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  type ExistsSyncPath = Parameters<typeof actual.existsSync>[0];
+  return {
+    ...actual,
+    existsSync: vi.fn((target: ExistsSyncPath) => {
+      if (typeof target === "string" && target.endsWith(".env")) {
+        return fileState.hasCliDotEnv;
+      }
+      return actual.existsSync(target);
+    }),
+  };
+});
+
 vi.mock("./dotenv.js", () => ({
   loadCliDotEnv: dotenvState.loadDotEnv,
 }));
 
 vi.mock("../infra/env.js", () => ({
+  isTruthyEnvValue: (value?: string) =>
+    typeof value === "string" && ["1", "on", "true", "yes"].includes(value.trim().toLowerCase()),
   normalizeEnv: vi.fn(),
 }));
 
@@ -42,8 +62,9 @@ vi.mock("./windows-argv.js", () => ({
   normalizeWindowsArgv: (argv: string[]) => argv,
 }));
 
-vi.mock("./container-target.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./container-target.js")>();
+vi.mock("./container-target.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./container-target.js")>("./container-target.js");
   return {
     ...actual,
     maybeRunCliInContainer: maybeRunCliInContainerMock,
@@ -75,6 +96,7 @@ describe("runCli profile env bootstrap", () => {
     dotenvState.state.containerAtDotenvLoad = undefined;
     dotenvState.loadDotEnv.mockClear();
     maybeRunCliInContainerMock.mockClear();
+    fileState.hasCliDotEnv = false;
   });
 
   afterEach(() => {
@@ -121,6 +143,7 @@ describe("runCli profile env bootstrap", () => {
   });
 
   it("applies --profile before dotenv loading", async () => {
+    fileState.hasCliDotEnv = true;
     await runCli(["node", "openclaw", "--profile", "rawdog", "status"]);
 
     expect(dotenvState.loadDotEnv).toHaveBeenCalledOnce();
@@ -150,6 +173,7 @@ describe("runCli profile env bootstrap", () => {
   });
 
   it("does not let dotenv change container target resolution", async () => {
+    fileState.hasCliDotEnv = true;
     dotenvState.loadDotEnv.mockImplementationOnce(() => {
       process.env.OPENCLAW_CONTAINER = "demo";
       dotenvState.state.profileAtDotenvLoad = process.env.OPENCLAW_PROFILE;

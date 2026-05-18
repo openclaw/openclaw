@@ -1,43 +1,82 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
-  ensureContextEnginesInitialized,
   resolveContextEngine,
-} from "../../context-engine/index.js";
-import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
+  resolveContextEngineOwnerPluginId,
+} from "../../context-engine/registry.js";
+import { emitAgentPlanEvent } from "../../infra/agent-events.js";
+import { sleepWithAbort } from "../../infra/backoff.js";
+import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { sanitizeForLog } from "../../terminal/ansi.js";
+import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
-import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { hasConfiguredModelFallbacks } from "../agent-scope.js";
+import {
+  resolveAgentExecutionContract,
+  resolveAgentDir,
+  resolveSessionAgentIds,
+  resolveAgentWorkspaceDir,
+} from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
+  type AuthProfileStore,
+  isProfileInCooldown,
   markAuthProfileFailure,
-  markAuthProfileGood,
-  markAuthProfileUsed,
+  markAuthProfileSuccess,
+  resolveAuthProfileEligibility,
 } from "../auth-profiles.js";
+import { listActiveProcessSessionReferences } from "../bash-process-references.js";
+import {
+  resolveSessionKeyForRequest,
+  resolveStoredSessionKeyForSessionId,
+} from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import {
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
+import { selectAgentHarness } from "../harness/selection.js";
+import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
+import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
 import {
+  applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
   type ResolvedProviderAuth,
   resolveAuthProfileOrder,
+  shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
-import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  listOpenAIAuthProfileProvidersForAgentRuntime,
+  resolveContextConfigProviderForRuntime,
+  resolveSelectedOpenAIPiRuntimeProvider,
+} from "../openai-codex-routing.js";
+import {
+  retireSessionMcpRuntime,
+  retireSessionMcpRuntimeForSessionKey,
+} from "../pi-bundle-mcp-tools.js";
 import {
   classifyFailoverReason,
   extractObservedOverflowTokenCount,
   type FailoverReason,
   formatAssistantErrorText,
-  formatBillingErrorMessage,
   isAuthAssistantError,
   isBillingAssistantError,
   isCompactionFailureError,
@@ -45,56 +84,354 @@ import {
   isFailoverErrorMessage,
   isLikelyContextOverflowError,
   isRateLimitAssistantError,
-  isTimeoutErrorMessage,
   parseImageDimensionError,
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
+import { resolveProcessToolScopeKey } from "../pi-tools.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
+import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
+import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
-import { isLikelyMutatingToolName } from "../tool-mutation.js";
+import { resolveSessionSuspensionReason, suspendSession } from "../session-suspension.js";
+import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
-import { runPostCompactionSideEffects } from "./compact.js";
+import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
+import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
+import { hasMessagingToolDeliveryEvidence } from "./delivery-evidence.js";
+import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
-import { runEmbeddedAttempt } from "./run/attempt.js";
+import {
+  createPostCompactionLoopGuard,
+  PostCompactionLoopPersistedError,
+  type PostCompactionGuardObservation,
+} from "./post-compaction-loop-guard.js";
+import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
+import { handleAssistantFailover } from "./run/assistant-failover.js";
+import {
+  createEmbeddedRunStageTracker,
+  EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE,
+  formatEmbeddedRunStageSummary,
+  shouldWarnEmbeddedRunStageSummary,
+} from "./run/attempt-stage-timing.js";
+import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
+import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
+import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
+import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
+import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
 import {
   buildErrorAgentMeta,
   buildUsageAgentMetaFields,
   createCompactionDiagId,
-  OVERLOAD_FAILOVER_BACKOFF_POLICY,
   resolveActiveErrorContext,
+  resolveFinalAssistantRawText,
+  resolveFinalAssistantVisibleText,
   resolveMaxRunRetryIterations,
+  resolveReportedModelRef,
+  resolveOverloadFailoverBackoffMs,
+  resolveOverloadProfileRotationLimit,
+  resolveRateLimitProfileRotationLimit,
   type RuntimeAuthState,
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
+import {
+  MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT,
+  createIdleTimeoutBreakerState,
+  stepIdleTimeoutBreaker,
+} from "./run/idle-timeout-breaker.js";
+import {
+  DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
+  DEFAULT_REASONING_ONLY_RETRY_LIMIT,
+  resolveAckExecutionFastPathInstruction,
+  resolveAttemptReplayMetadata,
+  extractPlanningOnlyPlanDetails,
+  resolveEmptyResponseRetryInstruction,
+  resolveIncompleteTurnPayloadText,
+  resolvePlanningOnlyRetryLimit,
+  resolvePlanningOnlyRetryInstruction,
+  resolveReasoningOnlyRetryInstruction,
+  resolveSilentToolResultReplyPayload,
+  STRICT_AGENTIC_BLOCKED_TEXT,
+  resolveReplayInvalidFlag,
+  resolveRunLivenessState,
+  shouldTreatEmptyAssistantReplyAsSilent,
+} from "./run/incomplete-turn.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
-import { resolveEffectiveRuntimeModel, resolveHookModelSelection } from "./run/setup.js";
+import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import {
+  buildBeforeModelResolveAttachments,
+  resolveEffectiveRuntimeModel,
+  resolveHookModelSelection,
+} from "./run/setup.js";
+import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
+import {
+  resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInSession,
 } from "./tool-result-truncation.js";
-import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
+import type {
+  EmbeddedPiAgentMeta,
+  EmbeddedPiRunResult,
+  TraceAttempt,
+  ToolSummaryTrace,
+  EmbeddedRunLivenessState,
+} from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
-import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
+
+const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
+const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
+const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
+  "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
+const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
+  "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
+type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+
+function resolveAttemptDispatchApiKey(params: {
+  apiKeyInfo: ApiKeyInfo | null;
+  runtimeAuthState: RuntimeAuthState | null;
+}): string | undefined {
+  if (params.runtimeAuthState) {
+    return undefined;
+  }
+  return params.apiKeyInfo?.apiKey;
+}
+
+function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number | undefined {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined;
+  }
+  return Math.floor(timeoutMs) + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS;
+}
+
+function withEmbeddedRunLaneTimeout(
+  opts: CommandQueueEnqueueOptions | undefined,
+  laneTaskTimeoutMs: number | undefined,
+): CommandQueueEnqueueOptions | undefined {
+  if (laneTaskTimeoutMs === undefined || opts?.taskTimeoutMs !== undefined) {
+    return opts;
+  }
+  return { ...opts, taskTimeoutMs: laneTaskTimeoutMs };
+}
+
+function resolveEmbeddedRunSessionQueuePriority(
+  trigger: RunEmbeddedPiAgentParams["trigger"],
+): CommandQueueEnqueueOptions["priority"] {
+  switch (trigger) {
+    case "user":
+    case "manual":
+      return "foreground";
+    case "cron":
+    case "heartbeat":
+    case "memory":
+    case "overflow":
+      return "background";
+    default:
+      return "normal";
+  }
+}
+
+function normalizeEmbeddedRunAttemptResult(
+  attempt: EmbeddedRunAttemptForRunner,
+): EmbeddedRunAttemptForRunner {
+  const raw = attempt as EmbeddedRunAttemptForRunner & {
+    assistantTexts?: EmbeddedRunAttemptForRunner["assistantTexts"] | null;
+    toolMetas?: EmbeddedRunAttemptForRunner["toolMetas"] | null;
+    messagesSnapshot?: EmbeddedRunAttemptForRunner["messagesSnapshot"] | null;
+    messagingToolSentTexts?: EmbeddedRunAttemptForRunner["messagingToolSentTexts"] | null;
+    messagingToolSentMediaUrls?: EmbeddedRunAttemptForRunner["messagingToolSentMediaUrls"] | null;
+    messagingToolSentTargets?: EmbeddedRunAttemptForRunner["messagingToolSentTargets"] | null;
+    messagingToolSourceReplyPayloads?:
+      | EmbeddedRunAttemptForRunner["messagingToolSourceReplyPayloads"]
+      | null;
+    itemLifecycle?: EmbeddedRunAttemptForRunner["itemLifecycle"] | null;
+  };
+  return {
+    ...attempt,
+    assistantTexts: raw.assistantTexts ?? [],
+    toolMetas: raw.toolMetas ?? [],
+    messagesSnapshot: raw.messagesSnapshot ?? [],
+    messagingToolSentTexts: raw.messagingToolSentTexts ?? [],
+    messagingToolSentMediaUrls: raw.messagingToolSentMediaUrls ?? [],
+    messagingToolSentTargets: raw.messagingToolSentTargets ?? [],
+    messagingToolSourceReplyPayloads: raw.messagingToolSourceReplyPayloads ?? [],
+    itemLifecycle: raw.itemLifecycle ?? {
+      startedCount: 0,
+      completedCount: 0,
+      activeCount: 0,
+    },
+    replayMetadata: resolveAttemptReplayMetadata(raw),
+  };
+}
+
+function hasCompletedModelProgressForIdleBreaker(attempt: EmbeddedRunAttemptForRunner): boolean {
+  return (
+    attempt.assistantTexts.some((text) => text.trim().length > 0) ||
+    attempt.toolMetas.length > 0 ||
+    (attempt.clientToolCalls?.length ?? 0) > 0 ||
+    hasMessagingToolDeliveryEvidence(attempt) ||
+    attempt.itemLifecycle.completedCount > 0
+  );
+}
+
+function createEmptyAuthProfileStore(): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {},
+  };
+}
+
+function createScopedAuthProfileStore(
+  store: AuthProfileStore,
+  profileIds: string | undefined | string[],
+): AuthProfileStore {
+  const profiles = store.profiles ?? {};
+  const normalizedProfileIds = (Array.isArray(profileIds) ? profileIds : [profileIds])
+    .map((profileId) => profileId?.trim())
+    .filter((profileId): profileId is string => !!profileId);
+  const scopedProfiles = Object.fromEntries(
+    normalizedProfileIds.flatMap((profileId) => {
+      const credential = profiles[profileId];
+      return credential ? [[profileId, credential] as const] : [];
+    }),
+  );
+  return Object.keys(scopedProfiles).length > 0
+    ? {
+        version: store.version,
+        profiles: scopedProfiles,
+      }
+    : createEmptyAuthProfileStore();
+}
+
+function buildTraceToolSummary(params: {
+  toolMetas?: Array<{ toolName: string; meta?: string }>;
+  hadFailure: boolean;
+}): ToolSummaryTrace | undefined {
+  if (!params.toolMetas?.length) {
+    return undefined;
+  }
+  const tools: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of params.toolMetas) {
+    const toolName = normalizeOptionalString(entry.toolName);
+    if (!toolName || seen.has(toolName)) {
+      continue;
+    }
+    seen.add(toolName);
+    tools.push(toolName);
+  }
+  return {
+    calls: params.toolMetas?.length ?? 0,
+    tools,
+    failures: params.hadFailure ? 1 : 0,
+  };
+}
+
+/**
+ * Best-effort backfill of sessionKey from sessionId when not explicitly provided.
+ * The return value is normalized: whitespace-only inputs collapse to undefined, and
+ * successful resolution returns a trimmed session key. This is a read-only lookup
+ * with no side effects.
+ * See: https://github.com/openclaw/openclaw/issues/60552
+ */
+function backfillSessionKey(params: {
+  config: RunEmbeddedPiAgentParams["config"];
+  sessionId: string;
+  sessionKey?: string;
+  agentId?: string;
+}): string | undefined {
+  const trimmed = normalizeOptionalString(params.sessionKey);
+  if (trimmed) {
+    return trimmed;
+  }
+  if (!params.config || !params.sessionId) {
+    return undefined;
+  }
+  try {
+    const resolved = normalizeOptionalString(params.agentId)
+      ? resolveStoredSessionKeyForSessionId({
+          cfg: params.config,
+          sessionId: params.sessionId,
+          agentId: params.agentId,
+        })
+      : resolveSessionKeyForRequest({
+          cfg: params.config,
+          sessionId: params.sessionId,
+        });
+    return normalizeOptionalString(resolved.sessionKey);
+  } catch (err) {
+    log.warn(
+      `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${redactRunIdentifier(sanitizeForLog(params.sessionId))}: ${formatErrorMessage(err)}`,
+    );
+    return undefined;
+  }
+}
+
+function buildHandledReplyPayloads(reply?: ReplyPayload) {
+  const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
+  return [
+    {
+      text: normalized.text,
+      mediaUrl: normalized.mediaUrl,
+      mediaUrls: normalized.mediaUrls,
+      replyToId: normalized.replyToId,
+      audioAsVoice: normalized.audioAsVoice,
+      isError: normalized.isError,
+      isReasoning: normalized.isReasoning,
+    },
+  ];
+}
 
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
+  // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
+  // receive a non-null key even when callers omit it. See #60552.
+  const effectiveSessionKey = backfillSessionKey({
+    config: params.config,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  if (effectiveSessionKey !== params.sessionKey) {
+    params = { ...params, sessionKey: effectiveSessionKey };
+  }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
-  const enqueueGlobal =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
-  const enqueueSession =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(sessionLane, task, opts));
+  const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(params.trigger);
+  const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
+  let laneTaskProgressAtMs = Date.now();
+  const noteLaneTaskProgress = () => {
+    laneTaskProgressAtMs = Date.now();
+  };
+  const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
+    withEmbeddedRunLaneTimeout(
+      {
+        ...opts,
+        taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
+      },
+      laneTaskTimeoutMs,
+    );
+  const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>
+    params.enqueue
+      ? params.enqueue(task, withLaneTimeout(opts))
+      : enqueueCommandInLane(globalLane, task, withLaneTimeout(opts));
+  const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
+    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
+    return params.enqueue
+      ? params.enqueue(task, sessionOpts)
+      : enqueueCommandInLane(sessionLane, task, sessionOpts);
+  };
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??
@@ -105,9 +442,65 @@ export async function runEmbeddedPiAgent(
       : "markdown");
   const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
 
-  return enqueueSession(() =>
-    enqueueGlobal(async () => {
+  const throwIfAborted = () => {
+    if (!params.abortSignal?.aborted) {
+      return;
+    }
+    const reason = params.abortSignal.reason;
+    if (reason instanceof Error) {
+      throw reason;
+    }
+    const abortErr =
+      reason !== undefined
+        ? new Error("Operation aborted", { cause: reason })
+        : new Error("Operation aborted");
+    abortErr.name = "AbortError";
+    throw abortErr;
+  };
+
+  throwIfAborted();
+
+  return enqueueSession(() => {
+    throwIfAborted();
+    return enqueueGlobal(async () => {
+      throwIfAborted();
       const started = Date.now();
+      const startupStages = createEmbeddedRunStageTracker();
+      let startupStagesEmitted = false;
+      const notifyExecutionPhase = (
+        phase: Parameters<NonNullable<RunEmbeddedPiAgentParams["onExecutionPhase"]>>[0]["phase"],
+        extra?: Omit<
+          Parameters<NonNullable<RunEmbeddedPiAgentParams["onExecutionPhase"]>>[0],
+          "phase"
+        >,
+      ) => {
+        noteLaneTaskProgress();
+        params.onExecutionPhase?.({ phase, ...extra });
+      };
+      const notifyRunProgress = (
+        info: Parameters<NonNullable<RunEmbeddedPiAgentParams["onRunProgress"]>>[0],
+      ) => {
+        noteLaneTaskProgress();
+        params.onRunProgress?.(info);
+      };
+      const emitStartupStageSummary = (phase: string) => {
+        const summary = startupStages.snapshot();
+        const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
+        if (!shouldWarn && !log.isEnabled("trace")) {
+          return;
+        }
+        const message = formatEmbeddedRunStageSummary(
+          `[trace:embedded-run] startup stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
+          summary,
+        );
+        if (shouldWarn) {
+          log.warn(message);
+        } else {
+          log.trace(message);
+        }
+      };
+      params.onExecutionStarted?.();
+      notifyExecutionPhase("runner_entered");
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
@@ -115,6 +508,10 @@ export async function runEmbeddedPiAgent(
         config: params.config,
       });
       const resolvedWorkspace = workspaceResolution.workspaceDir;
+      const canonicalWorkspace = resolveUserPath(
+        resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
+      );
+      const isCanonicalWorkspace = canonicalWorkspace === resolvedWorkspace;
       const redactedSessionId = redactRunIdentifier(params.sessionId);
       const redactedSessionKey = redactRunIdentifier(params.sessionKey);
       const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
@@ -123,34 +520,68 @@ export async function runEmbeddedPiAgent(
           `[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
         );
       }
+      startupStages.mark("workspace");
+      notifyExecutionPhase("workspace");
       ensureRuntimePluginsLoaded({
         config: params.config,
         workspaceDir: resolvedWorkspace,
         allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       });
+      startupStages.mark("runtime-plugins");
+      notifyExecutionPhase("runtime_plugins");
 
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
-      const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-      const fallbackConfigured = hasConfiguredModelFallbacks({
+      const agentDir =
+        params.agentDir ?? resolveAgentDir(params.config ?? {}, workspaceResolution.agentId);
+      const normalizedSessionKey = params.sessionKey?.trim();
+      const fallbackConfigured = hasEmbeddedRunConfiguredModelFallbacks({
         cfg: params.config,
         agentId: params.agentId,
-        sessionKey: params.sessionKey,
+        sessionKey: normalizedSessionKey,
+        modelFallbacksOverride: params.modelFallbacksOverride,
       });
-      await ensureOpenClawModelsJson(params.config, agentDir);
+      const resolvedSessionKey = normalizedSessionKey;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
+        runId: params.runId,
+        jobId: params.jobId,
         agentId: workspaceResolution.agentId,
-        sessionKey: params.sessionKey,
+        sessionKey: resolvedSessionKey,
         sessionId: params.sessionId,
         workspaceDir: resolvedWorkspace,
-        messageProvider: params.messageProvider ?? undefined,
+        modelProviderId: provider,
+        modelId,
         trigger: params.trigger,
-        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+        ...buildAgentHookContextChannelFields(params),
       };
+      if (params.trigger === "cron" && hookRunner?.hasHooks("before_agent_reply")) {
+        notifyExecutionPhase("before_agent_reply", { provider, model: modelId });
+        const hookResult = await hookRunner.runBeforeAgentReply(
+          { cleanedBody: params.prompt },
+          hookCtx,
+        );
+        if (hookResult?.handled) {
+          return {
+            payloads: buildHandledReplyPayloads(hookResult.reply),
+            meta: {
+              durationMs: Date.now() - started,
+              agentMeta: {
+                sessionId: params.sessionId,
+                provider,
+                model: modelId,
+              },
+              finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+              finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+            },
+          };
+        }
+        notifyExecutionPhase("runtime_plugins", { provider, model: modelId });
+      }
 
       const hookSelection = await resolveHookModelSelection({
         prompt: params.prompt,
+        attachments: buildBeforeModelResolveAttachments(params.images),
         provider,
         modelId,
         hookRunner,
@@ -159,18 +590,84 @@ export async function runEmbeddedPiAgent(
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
       const legacyBeforeAgentStartResult = hookSelection.legacyBeforeAgentStartResult;
-
-      const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
+      startupStages.mark("hooks");
+      await ensureSelectedAgentHarnessPlugin({
+        provider,
+        modelId,
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
+        workspaceDir: resolvedWorkspace,
+      });
+      const agentHarness = selectAgentHarness({
+        provider,
+        modelId,
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        agentHarnessId: params.agentHarnessId,
+        agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
+      });
+      const pluginHarnessOwnsTransport = agentHarness.id !== "pi";
+      const modelConfigProvider = provider;
+      const selectedPiRuntimeProvider = resolveSelectedOpenAIPiRuntimeProvider({
+        provider,
+        harnessRuntime: agentHarness.id,
+        agentHarnessId: agentHarness.id,
+        authProfileProvider: params.authProfileId?.split(":", 1)[0],
+        authProfileId: params.authProfileId,
+        config: params.config,
+        workspaceDir: resolvedWorkspace,
+      });
+      const dynamicModelResolution = await resolveModelAsync(
         provider,
         modelId,
         agentDir,
         params.config,
+        {
+          // Plugin dynamic model hooks can resolve explicit model refs without
+          // first generating PI models.json. This keeps one-shot model runs from
+          // blocking on unrelated provider discovery.
+          skipPiDiscovery: true,
+          workspaceDir: resolvedWorkspace,
+        },
       );
+      let modelResolution =
+        dynamicModelResolution.model || pluginHarnessOwnsTransport
+          ? dynamicModelResolution
+          : await (async () => {
+              await ensureOpenClawModelsJson(params.config, agentDir, {
+                workspaceDir: resolvedWorkspace,
+              });
+              return await resolveModelAsync(provider, modelId, agentDir, params.config, {
+                workspaceDir: resolvedWorkspace,
+              });
+            })();
+      if (selectedPiRuntimeProvider !== provider && modelResolution.model) {
+        const runtimeModelResolution = await resolveModelAsync(
+          selectedPiRuntimeProvider,
+          modelId,
+          agentDir,
+          params.config,
+          {
+            skipPiDiscovery: true,
+            workspaceDir: resolvedWorkspace,
+          },
+        );
+        if (runtimeModelResolution.model) {
+          provider = selectedPiRuntimeProvider;
+          modelResolution = runtimeModelResolution;
+        }
+      }
+      const { model, error, authStorage, modelRegistry } = modelResolution;
       if (!model) {
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
           reason: "model_not_found",
           provider,
           model: modelId,
+          sessionId: params.sessionId,
+          lane: globalLane,
         });
       }
       let runtimeModel = model;
@@ -178,41 +675,204 @@ export async function runEmbeddedPiAgent(
       const resolvedRuntimeModel = resolveEffectiveRuntimeModel({
         cfg: params.config,
         provider,
+        contextConfigProvider: resolveContextConfigProviderForRuntime({
+          provider: modelConfigProvider,
+          runtimeId: agentHarness.id,
+        }),
         modelId,
         runtimeModel,
       });
       const ctxInfo = resolvedRuntimeModel.ctxInfo;
       let effectiveModel = resolvedRuntimeModel.effectiveModel;
+      startupStages.mark("model-resolution");
+      notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
-      const authStore = ensureAuthProfileStore(agentDir, {
-        allowKeychainPrompt: false,
-      });
-      const preferredProfileId = params.authProfileId?.trim();
-      let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
+      const pluginHarnessNeedsOpenClawAuthBootstrap =
+        pluginHarnessOwnsTransport &&
+        provider === OPENAI_CODEX_PROVIDER_ID &&
+        effectiveModel.api === "openai-codex-responses";
+      const authStore =
+        pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
+          ? createEmptyAuthProfileStore()
+          : pluginHarnessNeedsOpenClawAuthBootstrap
+            ? ensureAuthProfileStore(agentDir, {
+                externalCliProviderIds: [OPENAI_CODEX_PROVIDER_ID],
+                allowKeychainPrompt: false,
+              })
+            : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+                allowKeychainPrompt: false,
+              });
+      const attemptAuthProfileStore =
+        pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
+          ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+              allowKeychainPrompt: false,
+            })
+          : authStore;
+      const requestedProfileId = params.authProfileId?.trim();
+      const requestedProfileIsUserLocked = params.authProfileIdSource === "user";
+      const isForwardablePluginHarnessAuthProfile = (
+        profileId: string | undefined,
+      ): profileId is string => {
+        if (!pluginHarnessOwnsTransport || !profileId) {
+          return false;
+        }
+        const credential = attemptAuthProfileStore.profiles?.[profileId];
+        const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
+          provider,
+          authProfileProvider: credential?.provider ?? profileId.split(":", 1)[0],
+          authProfileMode: credential?.type,
+          sessionAuthProfileId: profileId,
+          config: params.config,
+          workspaceDir: resolvedWorkspace,
+          harnessId: agentHarness.id,
+          harnessRuntime: agentHarness.id,
+          allowHarnessAuthProfileForwarding: true,
+        });
+        return runtimeAuthPlan.forwardedAuthProfileId === profileId;
+      };
+      const resolvePluginHarnessProfileOrder = (): string[] => {
+        if (requestedProfileId && requestedProfileIsUserLocked) {
+          return isForwardablePluginHarnessAuthProfile(requestedProfileId)
+            ? [requestedProfileId]
+            : [];
+        }
+        if (!pluginHarnessOwnsTransport) {
+          return [];
+        }
+        const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
+          provider,
+          config: params.config,
+          workspaceDir: resolvedWorkspace,
+          harnessId: agentHarness.id,
+          harnessRuntime: agentHarness.id,
+          allowHarnessAuthProfileForwarding: true,
+        });
+        const harnessAuthProvider = runtimeAuthPlan.harnessAuthProvider;
+        if (!harnessAuthProvider) {
+          return [];
+        }
+        const resolvedOrder = resolveAuthProfileOrder({
+          cfg: params.config,
+          store: attemptAuthProfileStore,
+          provider: harnessAuthProvider,
+        }).filter(isForwardablePluginHarnessAuthProfile);
+        if (resolvedOrder.length > 0) {
+          return resolvedOrder;
+        }
+        if (requestedProfileId && isForwardablePluginHarnessAuthProfile(requestedProfileId)) {
+          return [requestedProfileId];
+        }
+        return [];
+      };
+      const pluginHarnessProfileOrder = pluginHarnessOwnsTransport
+        ? resolvePluginHarnessProfileOrder()
+        : [];
+      const resolvePluginHarnessPreferredProfileId = (): string | undefined =>
+        pluginHarnessProfileOrder[0];
+      const preferredProfileId = pluginHarnessOwnsTransport
+        ? resolvePluginHarnessPreferredProfileId()
+        : requestedProfileId;
+      let lockedProfileId = requestedProfileIsUserLocked ? preferredProfileId : undefined;
       if (lockedProfileId) {
-        const lockedProfile = authStore.profiles[lockedProfileId];
-        if (
-          !lockedProfile ||
-          normalizeProviderId(lockedProfile.provider) !== normalizeProviderId(provider)
-        ) {
-          lockedProfileId = undefined;
+        if (pluginHarnessOwnsTransport) {
+          if (!isForwardablePluginHarnessAuthProfile(lockedProfileId)) {
+            lockedProfileId = undefined;
+          }
+        } else {
+          const lockedProfile = authStore.profiles[lockedProfileId];
+          const lockedProfileProvider = lockedProfile
+            ? resolveProviderIdForAuth(lockedProfile.provider, {
+                config: params.config,
+                workspaceDir: resolvedWorkspace,
+              })
+            : undefined;
+          const runProvider = resolveProviderIdForAuth(provider, {
+            config: params.config,
+            workspaceDir: resolvedWorkspace,
+          });
+          if (!lockedProfile || !lockedProfileProvider || lockedProfileProvider !== runProvider) {
+            lockedProfileId = undefined;
+          }
         }
       }
-      const profileOrder = resolveAuthProfileOrder({
-        cfg: params.config,
-        store: authStore,
-        provider,
-        preferredProfile: preferredProfileId,
-      });
-      if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
-        throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
+      const forwardedPluginHarnessProfileId =
+        pluginHarnessOwnsTransport &&
+        !lockedProfileId &&
+        isForwardablePluginHarnessAuthProfile(preferredProfileId)
+          ? preferredProfileId
+          : undefined;
+      if (lockedProfileId && !pluginHarnessOwnsTransport) {
+        const eligibility = resolveAuthProfileEligibility({
+          cfg: params.config,
+          store: authStore,
+          provider,
+          profileId: lockedProfileId,
+        });
+        if (!eligibility.eligible) {
+          throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
+        }
       }
-      const profileCandidates = lockedProfileId
-        ? [lockedProfileId]
-        : profileOrder.length > 0
-          ? profileOrder
-          : [undefined];
+      const profileOrder = shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
+        ? []
+        : [
+            ...new Set(
+              listOpenAIAuthProfileProvidersForAgentRuntime({
+                provider,
+                harnessRuntime: agentHarness.id,
+                agentHarnessId: agentHarness.id,
+                config: params.config,
+              }).flatMap((authProvider) =>
+                resolveAuthProfileOrder({
+                  cfg: params.config,
+                  store: authStore,
+                  provider: authProvider,
+                  preferredProfile: preferredProfileId,
+                }),
+              ),
+            ),
+          ];
+      const providerPreferredProfileId = lockedProfileId
+        ? undefined
+        : resolveProviderAuthProfileId({
+            provider,
+            config: params.config,
+            workspaceDir: resolvedWorkspace,
+            context: {
+              config: params.config,
+              agentDir,
+              workspaceDir: resolvedWorkspace,
+              provider,
+              modelId,
+              preferredProfileId,
+              lockedProfileId,
+              profileOrder,
+              authStore,
+            },
+          });
+      const providerOrderedProfiles =
+        providerPreferredProfileId && profileOrder.includes(providerPreferredProfileId)
+          ? [
+              providerPreferredProfileId,
+              ...profileOrder.filter((profileId) => profileId !== providerPreferredProfileId),
+            ]
+          : profileOrder;
+      const profileCandidates = pluginHarnessOwnsTransport
+        ? lockedProfileId
+          ? [lockedProfileId]
+          : pluginHarnessProfileOrder.length > 0
+            ? pluginHarnessProfileOrder
+            : [undefined]
+        : lockedProfileId
+          ? [lockedProfileId]
+          : providerOrderedProfiles.length > 0
+            ? providerOrderedProfiles
+            : [undefined];
+      const pluginHarnessForwardedProfileCandidates = pluginHarnessOwnsTransport
+        ? profileCandidates.filter(isForwardablePluginHarnessAuthProfile)
+        : [];
+      const profileFailureStore = pluginHarnessOwnsTransport ? attemptAuthProfileStore : authStore;
       let profileIndex = 0;
+      const traceAttempts: TraceAttempt[] = [];
 
       const initialThinkLevel = params.thinkLevel ?? "off";
       let thinkLevel = initialThinkLevel;
@@ -273,12 +933,90 @@ export async function runEmbeddedPiAgent(
         },
         log,
       });
+      const advancePluginHarnessAuthProfile = async (): Promise<boolean> => {
+        if (!pluginHarnessOwnsTransport || lockedProfileId) {
+          return false;
+        }
+        let nextIndex = profileIndex + 1;
+        while (nextIndex < profileCandidates.length) {
+          const candidate = profileCandidates[nextIndex];
+          if (!candidate || !isForwardablePluginHarnessAuthProfile(candidate)) {
+            nextIndex += 1;
+            continue;
+          }
+          if (isProfileInCooldown(attemptAuthProfileStore, candidate, undefined, modelId)) {
+            nextIndex += 1;
+            continue;
+          }
+          profileIndex = nextIndex;
+          lastProfileId = candidate;
+          thinkLevel = initialThinkLevel;
+          attemptedThinking.clear();
+          return true;
+        }
+        return false;
+      };
+      const advanceAttemptAuthProfile =
+        pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
+          ? advancePluginHarnessAuthProfile
+          : advanceAuthProfile;
 
-      await initializeAuthProfile();
+      // Plugin harnesses own their model transport/auth. Running PI's generic
+      // auth bootstrap here can turn synthetic provider markers into real
+      // vendor-token refresh attempts before the plugin gets control.
+      if (!pluginHarnessOwnsTransport || pluginHarnessNeedsOpenClawAuthBootstrap) {
+        await initializeAuthProfile();
+      } else if (lockedProfileId) {
+        lastProfileId = lockedProfileId;
+      } else if (forwardedPluginHarnessProfileId) {
+        lastProfileId = forwardedPluginHarnessProfileId;
+      }
+      startupStages.mark("auth");
+      notifyExecutionPhase("auth", { provider, model: modelId });
+      const runAttemptAuthProfileStore = pluginHarnessOwnsTransport
+        ? createScopedAuthProfileStore(
+            attemptAuthProfileStore,
+            pluginHarnessForwardedProfileCandidates.length > 0
+              ? pluginHarnessForwardedProfileCandidates
+              : lastProfileId,
+          )
+        : attemptAuthProfileStore;
+      const { sessionAgentId } = resolveSessionAgentIds({
+        sessionKey: params.sessionKey,
+        config: params.config,
+        agentId: params.agentId,
+      });
+      const configuredExecutionContract = resolveAgentExecutionContract(
+        params.config,
+        sessionAgentId,
+      );
+      const strictAgenticActive = isStrictAgenticExecutionContractActive({
+        config: params.config,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        provider,
+        modelId,
+      });
+      const executionContract = strictAgenticActive ? "strict-agentic" : "default";
+      const configuredExecutionContractForLog = configuredExecutionContract ?? "default";
+      if (strictAgenticActive) {
+        log.info(
+          `strict-agentic execution contract active: runId=${params.runId} sessionId=${params.sessionId} ` +
+            `provider=${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} harness=${sanitizeForLog(agentHarness.id)} ` +
+            `configured=${configuredExecutionContract ?? "unspecified"}`,
+        );
+      }
+      const maxPlanningOnlyRetryAttempts = resolvePlanningOnlyRetryLimit(executionContract);
+      const maxReasoningOnlyRetryAttempts = DEFAULT_REASONING_ONLY_RETRY_LIMIT;
+      const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
 
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
-      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
+      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(
+        profileCandidates.length,
+        params.config,
+        sessionAgentId,
+      );
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
       let bootstrapPromptWarningSignaturesSeen =
@@ -287,9 +1025,111 @@ export async function runEmbeddedPiAgent(
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
+      let lastCompactionTokensAfter: number | undefined;
       let runLoopIterations = 0;
-      let overloadFailoverAttempts = 0;
+      let overloadProfileRotations = 0;
+      let planningOnlyRetryAttempts = 0;
+      let reasoningOnlyRetryAttempts = 0;
+      let emptyResponseRetryAttempts = 0;
+      let compactionContinuationRetryAttempts = 0;
+      let sameModelIdleTimeoutRetries = 0;
+      // Cost-runaway breaker for #76293. State lives at the run-loop level
+      // on purpose so it survives across attempt boundaries and across
+      // profile/auth retries within this embedded run (a wrapper-local
+      // counter would reset on every iteration). The helper is pure and
+      // unit-tested in run/idle-timeout-breaker.test.ts; the run loop just
+      // feeds it the outcome of each attempt.
+      const idleTimeoutBreakerState = createIdleTimeoutBreakerState();
+      // Post-compaction loop guard for #77474. Armed at each compaction-success
+      // site below; observed from the live tool-outcome path so it can abort
+      // while the post-compaction prompt is still running.
+      const resolvedLoopDetectionConfig = resolveToolLoopDetectionConfig({
+        cfg: params.config,
+        agentId: sessionAgentId,
+      });
+      const postCompactionGuard = createPostCompactionLoopGuard(
+        resolvedLoopDetectionConfig?.postCompactionGuard,
+        { enabled: resolvedLoopDetectionConfig?.enabled !== false },
+      );
+      let postCompactionAbortController: AbortController | undefined;
+      let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
+      const observePostCompactionToolOutcome = (
+        observation: PostCompactionGuardObservation,
+      ): void => {
+        const verdict = postCompactionGuard.observe(observation);
+        if (verdict.shouldAbort) {
+          postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
+          postCompactionAbortController?.abort(postCompactionAbortError);
+        }
+      };
+      let lastRetryFailoverReason: FailoverReason | null = null;
+      let planningOnlyRetryInstruction: string | null = null;
+      let reasoningOnlyRetryInstruction: string | null = null;
+      let emptyResponseRetryInstruction: string | null = null;
+      let compactionContinuationRetryInstruction: string | null = null;
+      let nextAttemptPromptOverride: string | null = null;
+      const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
+        provider,
+        modelId,
+        prompt: params.prompt,
+      });
+      let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
+      // Silent-error retry: non-strict-agentic models (e.g. ollama/glm-5.1) can
+      // end a turn with stopReason="error" + zero output tokens, producing no
+      // user-visible text. This is an orthogonal, model-agnostic resubmission
+      // for errored turns; stopReason="stop" empty zero-token turns use the
+      // visible-answer retry instruction instead.
+      const MAX_EMPTY_ERROR_RETRIES = 3;
+      let emptyErrorRetries = 0;
+      const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
+      const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
+      const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
+      let activeSessionId = params.sessionId;
+      let activeSessionFile = params.sessionFile;
+      let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
+      // Pi owns JSONL persistence; this marker only lets the outer retry avoid
+      // replaying the same inbound channel message after overflow compaction.
+      let lastPersistedCurrentMessageId: string | number | undefined;
+      const onUserMessagePersisted: RunEmbeddedPiAgentParams["onUserMessagePersisted"] = (
+        message,
+      ) => {
+        if (params.currentMessageId !== undefined) {
+          lastPersistedCurrentMessageId = params.currentMessageId;
+        }
+        params.onUserMessagePersisted?.(message);
+      };
+      const continueFromCurrentTranscript = () => {
+        nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+        suppressNextUserMessagePersistence = true;
+      };
+      const maybeEscalateRateLimitProfileFallback = (params: {
+        failoverProvider: string;
+        failoverModel: string;
+        logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
+      }) => {
+        rateLimitProfileRotations += 1;
+        if (rateLimitProfileRotations <= rateLimitProfileRotationLimit || !fallbackConfigured) {
+          return;
+        }
+        const status = resolveFailoverStatus("rate_limit");
+        log.warn(
+          `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
+        );
+        params.logFallbackDecision("fallback_model", { status });
+        throw new FailoverError(
+          "The AI service is temporarily rate-limited. Please try again in a moment.",
+          {
+            reason: "rate_limit",
+            provider: params.failoverProvider,
+            model: params.failoverModel,
+            profileId: lastProfileId,
+            sessionId: activeSessionId,
+            lane: globalLane,
+            status,
+          },
+        );
+      };
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -302,7 +1142,7 @@ export async function runEmbeddedPiAgent(
           return;
         }
         await markAuthProfileFailure({
-          store: authStore,
+          store: profileFailureStore,
           profileId,
           reason,
           cfg: params.config,
@@ -311,27 +1151,20 @@ export async function runEmbeddedPiAgent(
           modelId: failure.modelId,
         });
       };
-      const resolveAuthProfileFailureReason = (
-        failoverReason: FailoverReason | null,
-      ): AuthProfileFailureReason | null => {
-        // Timeouts are transport/model-path failures, not auth health signals,
-        // so they should not persist auth-profile failure state.
-        if (!failoverReason || failoverReason === "timeout") {
-          return null;
-        }
-        return failoverReason;
-      };
+      const resolveRunAuthProfileFailureReason = (failoverReason: FailoverReason | null) =>
+        resolveAuthProfileFailureReason({
+          failoverReason,
+          policy: params.authProfileFailurePolicy,
+        });
       const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
-        if (reason !== "overloaded") {
+        if (reason !== "overloaded" || overloadFailoverBackoffMs <= 0) {
           return;
         }
-        overloadFailoverAttempts += 1;
-        const delayMs = computeBackoff(OVERLOAD_FAILOVER_BACKOFF_POLICY, overloadFailoverAttempts);
         log.warn(
-          `overload backoff before failover for ${provider}/${modelId}: attempt=${overloadFailoverAttempts} delayMs=${delayMs}`,
+          `overload backoff before failover for ${provider}/${modelId}: delayMs=${overloadFailoverBackoffMs}`,
         );
         try {
-          await sleepWithAbort(delayMs, params.abortSignal);
+          await sleepWithAbort(overloadFailoverBackoffMs, params.abortSignal);
         } catch (err) {
           if (params.abortSignal?.aborted) {
             const abortErr = new Error("Operation aborted", { cause: err });
@@ -344,8 +1177,48 @@ export async function runEmbeddedPiAgent(
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
       ensureContextEnginesInitialized();
-      const contextEngine = await resolveContextEngine(params.config);
+      const contextEngine = await resolveContextEngine(params.config, {
+        agentDir,
+        workspaceDir: resolvedWorkspace,
+      });
+      const contextEnginePluginId = resolveContextEngineOwnerPluginId(contextEngine);
+      startupStages.mark("context-engine");
+      notifyExecutionPhase("context_engine", { provider, model: modelId });
       try {
+        const resolveActiveHookContext = () => ({
+          ...hookCtx,
+          sessionId: activeSessionId,
+        });
+        const adoptCompactionTranscript = (
+          compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
+        ) => {
+          const nextSessionId = compactResult.result?.sessionId;
+          const nextSessionFile = compactResult.result?.sessionFile;
+          if (nextSessionId && nextSessionId !== activeSessionId) {
+            activeSessionId = nextSessionId;
+          }
+          if (nextSessionFile && nextSessionFile !== activeSessionFile) {
+            activeSessionFile = nextSessionFile;
+          }
+        };
+        const onCompactionHookMessages = async (payload: {
+          phase: "before" | "after";
+          messages: string[];
+        }) => {
+          const messages = payload.messages.filter((message) => message.trim().length > 0);
+          if (messages.length === 0) {
+            return;
+          }
+          await params.onAgentEvent?.({
+            stream: "compaction",
+            data: {
+              phase: payload.phase === "before" ? "start" : "end",
+              ...(payload.phase === "after" ? { completed: true } : {}),
+              messages,
+            },
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          });
+        };
         // When the engine owns compaction, compactEmbeddedPiSessionDirect is
         // bypassed. Fire lifecycle hooks here so recovery paths still notify
         // subscribers like memory extensions and usage trackers.
@@ -358,8 +1231,8 @@ export async function runEmbeddedPiAgent(
           }
           try {
             await hookRunner.runBeforeCompaction(
-              { messageCount: -1, sessionFile: params.sessionFile },
-              hookCtx,
+              { messageCount: -1, sessionFile: activeSessionFile },
+              resolveActiveHookContext(),
             );
           } catch (hookErr) {
             log.warn(`before_compaction hook failed during ${reason}: ${String(hookErr)}`);
@@ -383,15 +1256,16 @@ export async function runEmbeddedPiAgent(
                 messageCount: -1,
                 compactedCount: -1,
                 tokenCount: compactResult.result?.tokensAfter,
-                sessionFile: params.sessionFile,
+                sessionFile: compactResult.result?.sessionFile ?? activeSessionFile,
               },
-              hookCtx,
+              resolveActiveHookContext(),
             );
           } catch (hookErr) {
             log.warn(`after_compaction hook failed during ${reason}: ${String(hookErr)}`);
           }
         };
         let authRetryPending = false;
+        let accumulatedReplayState = createEmbeddedRunReplayState();
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
         while (true) {
@@ -404,41 +1278,117 @@ export async function runEmbeddedPiAgent(
                 `provider=${provider}/${modelId} attempts=${runLoopIterations} ` +
                 `maxAttempts=${MAX_RUN_LOOP_ITERATIONS}`,
             );
-            return {
-              payloads: [
-                {
-                  text:
-                    "Request failed after repeated internal retries. " +
-                    "Please try again, or use /new to start a fresh session.",
-                  isError: true,
-                },
-              ],
-              meta: {
-                durationMs: Date.now() - started,
-                agentMeta: buildErrorAgentMeta({
-                  sessionId: params.sessionId,
-                  provider,
-                  model: model.id,
-                  usageAccumulator,
-                  lastRunPromptUsage,
-                  lastTurnTotal,
-                }),
-                error: { kind: "retry_limit", message },
-              },
-            };
+            const retryLimitDecision = resolveRunFailoverDecision({
+              stage: "retry_limit",
+              fallbackConfigured,
+              failoverReason: lastRetryFailoverReason,
+            });
+            return handleRetryLimitExhaustion({
+              message,
+              decision: retryLimitDecision,
+              provider,
+              model: modelId,
+              profileId: lastProfileId,
+              durationMs: Date.now() - started,
+              agentMeta: buildErrorAgentMeta({
+                sessionId: activeSessionId,
+                sessionFile: activeSessionFile,
+                provider,
+                model: model.id,
+                contextTokens: ctxInfo.tokens,
+                usageAccumulator,
+                lastRunPromptUsage,
+                lastTurnTotal,
+              }),
+              replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
+              livenessState: "blocked",
+            });
           }
           runLoopIterations += 1;
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
+          if (!startupStagesEmitted) {
+            startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.workspace);
+          }
 
+          const basePrompt =
+            nextAttemptPromptOverride ??
+            (provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt);
+          nextAttemptPromptOverride = null;
+          const promptAdditions = [
+            ackExecutionFastPathInstruction,
+            planningOnlyRetryInstruction,
+            reasoningOnlyRetryInstruction,
+            emptyResponseRetryInstruction,
+            compactionContinuationRetryInstruction,
+          ].filter(
+            (value): value is string => typeof value === "string" && value.trim().length > 0,
+          );
           const prompt =
-            provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+            promptAdditions.length > 0
+              ? `${basePrompt}\n\n${promptAdditions.join("\n\n")}`
+              : basePrompt;
+          const resolvedStreamApiKey = resolveAttemptDispatchApiKey({
+            apiKeyInfo,
+            runtimeAuthState,
+          });
+          if (!startupStagesEmitted) {
+            startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
+          }
+          const runtimePlan = buildAgentRuntimePlan({
+            provider,
+            modelId,
+            model: effectiveModel,
+            modelApi: effectiveModel.api,
+            harnessId: agentHarness.id,
+            harnessRuntime: agentHarness.id,
+            allowHarnessAuthProfileForwarding: pluginHarnessOwnsTransport,
+            authProfileProvider:
+              (lastProfileId
+                ? attemptAuthProfileStore.profiles?.[lastProfileId]?.provider
+                : undefined) ?? lastProfileId?.split(":", 1)[0],
+            authProfileMode: lastProfileId
+              ? attemptAuthProfileStore.profiles?.[lastProfileId]?.type
+              : undefined,
+            sessionAuthProfileId: lastProfileId,
+            sessionAuthProfileCandidateIds: pluginHarnessOwnsTransport
+              ? pluginHarnessForwardedProfileCandidates
+              : undefined,
+            config: params.config,
+            workspaceDir: resolvedWorkspace,
+            agentDir,
+            agentId: workspaceResolution.agentId,
+            thinkingLevel: thinkLevel,
+            extraParamsOverride: {
+              ...params.streamParams,
+              fastMode: params.fastMode,
+            },
+          });
+          if (!startupStagesEmitted) {
+            startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
+            startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
+            notifyExecutionPhase("attempt_dispatch", { provider, model: modelId });
+            emitStartupStageSummary(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
+            startupStagesEmitted = true;
+          }
 
-          const attempt = await runEmbeddedAttempt({
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
+          const attemptAbortController = new AbortController();
+          postCompactionAbortController = attemptAbortController;
+          const parentAbortSignal = params.abortSignal;
+          const relayParentAbort = (): void => {
+            attemptAbortController.abort(parentAbortSignal?.reason);
+          };
+          if (parentAbortSignal?.aborted) {
+            relayParentAbort();
+          } else {
+            parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
+          }
+          const rawAttempt = await runEmbeddedAttemptWithBackend({
+            sessionId: activeSessionId,
+            sessionKey: resolvedSessionKey,
+            sandboxSessionKey: params.sandboxSessionKey,
             trigger: params.trigger,
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
@@ -449,7 +1399,9 @@ export async function runEmbeddedPiAgent(
             groupId: params.groupId,
             groupChannel: params.groupChannel,
             groupSpace: params.groupSpace,
+            memberRoleIds: params.memberRoleIds,
             spawnedBy: params.spawnedBy,
+            isCanonicalWorkspace,
             senderId: params.senderId,
             senderName: params.senderName,
             senderUsername: params.senderUsername,
@@ -460,37 +1412,63 @@ export async function runEmbeddedPiAgent(
             currentMessageId: params.currentMessageId,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
-            sessionFile: params.sessionFile,
+            sessionFile: activeSessionFile,
             workspaceDir: resolvedWorkspace,
             agentDir,
             config: params.config,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
             contextEngine,
             contextTokenBudget: ctxInfo.tokens,
+            contextWindowInfo: ctxInfo,
             skillsSnapshot: params.skillsSnapshot,
             prompt,
+            transcriptPrompt: params.transcriptPrompt,
+            currentInboundEventKind: params.currentInboundEventKind,
+            currentInboundContext: params.currentInboundContext,
             images: params.images,
+            imageOrder: params.imageOrder,
             clientTools: params.clientTools,
             disableTools: params.disableTools,
             provider,
             modelId,
-            model: applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
+            // Use the harness selected before model/auth setup for the actual
+            // attempt too. Otherwise plugin-owned transports can skip PI auth
+            // bootstrap but drift back to PI when the attempt is created.
+            agentHarnessId: agentHarness.id,
+            runtimePlan,
+            model: applyAuthHeaderOverride(
+              applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
+              // When runtime auth exchange produced a different credential
+              // (runtimeAuthState is set), the exchanged token lives in
+              // authStorage and the SDK will pick it up automatically.
+              // Skip header injection to avoid leaking the pre-exchange key.
+              runtimeAuthState ? null : apiKeyInfo,
+              params.config,
+            ),
+            resolvedApiKey: resolvedStreamApiKey,
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
+            initialReplayState: accumulatedReplayState,
             authStorage,
+            authProfileStore: runAttemptAuthProfileStore,
             modelRegistry,
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
             thinkLevel,
+            onToolOutcome: observePostCompactionToolOutcome,
+            onRunProgress: notifyRunProgress,
             fastMode: params.fastMode,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
+            toolProgressDetail: params.toolProgressDetail,
             execOverrides: params.execOverrides,
             bashElevated: params.bashElevated,
             timeoutMs: params.timeoutMs,
+            runTimeoutOverrideMs: params.runTimeoutOverrideMs,
             runId: params.runId,
-            abortSignal: params.abortSignal,
+            abortSignal: attemptAbortController.signal,
+            replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
             onPartialReply: params.onPartialReply,
@@ -503,24 +1481,70 @@ export async function runEmbeddedPiAgent(
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
+            onExecutionPhase: params.onExecutionPhase,
             extraSystemPrompt: params.extraSystemPrompt,
+            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
+            modelRun: params.modelRun,
+            promptMode: params.promptMode,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
+            silentExpected: params.silentExpected,
+            bootstrapContextMode: params.bootstrapContextMode,
+            bootstrapContextRunKind: params.bootstrapContextRunKind,
+            jobId: params.jobId,
+            toolsAllow: params.toolsAllow,
+            ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
+            disableMessageTool: params.disableMessageTool,
+            forceMessageTool: params.forceMessageTool,
+            enableHeartbeatTool: params.enableHeartbeatTool,
+            forceHeartbeatTool: params.forceHeartbeatTool,
+            requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+            internalEvents: params.internalEvents,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
-          });
+            suppressNextUserMessagePersistence,
+            suppressTranscriptOnlyAssistantPersistence:
+              params.suppressTranscriptOnlyAssistantPersistence,
+            onUserMessagePersisted,
+          })
+            .catch((err: unknown): never => {
+              throw postCompactionAbortError ?? err;
+            })
+            .finally(() => {
+              parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
+              if (postCompactionAbortController === attemptAbortController) {
+                postCompactionAbortController = undefined;
+              }
+            });
+          if (postCompactionAbortError) {
+            throw postCompactionAbortError;
+          }
+          const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
 
           const {
             aborted,
+            externalAbort,
             promptError,
+            promptErrorSource,
+            preflightRecovery,
             timedOut,
+            idleTimedOut,
             timedOutDuringCompaction,
             sessionIdUsed,
-            lastAssistant,
+            sessionFileUsed,
+            lastAssistant: sessionLastAssistant,
+            currentAttemptAssistant,
           } = attempt;
+          const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
+          if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
+            activeSessionId = sessionIdUsed;
+          }
+          if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
+            activeSessionFile = sessionFileUsed;
+          }
           bootstrapPromptWarningSignaturesSeen =
             attempt.bootstrapPromptWarningSignaturesSeen ??
             (attempt.bootstrapPromptWarningSignature
@@ -531,37 +1555,146 @@ export async function runEmbeddedPiAgent(
                   ]),
                 )
               : bootstrapPromptWarningSignaturesSeen);
-          const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
+          const lastAssistantUsage = normalizeUsage(sessionLastAssistant?.usage as UsageLike);
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
           mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
           lastTurnTotal = lastAssistantUsage?.total ?? attemptUsage?.total;
+          // Idle-timeout cost-runaway breaker (#76293). Logic lives in the
+          // pure helper below so it stays unit-testable; the run loop just
+          // feeds it the latest attempt outcome and bails through the
+          // existing retry-limit exhaustion path when the cap is hit.
+          const breakerStep = stepIdleTimeoutBreaker(idleTimeoutBreakerState, {
+            idleTimedOut,
+            completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),
+            outputTokens: attemptUsage?.output,
+          });
+          if (breakerStep.tripped) {
+            const breakerMessage =
+              `Idle-timeout cost-runaway breaker tripped: ` +
+              `${breakerStep.consecutive} consecutive idle timeouts ` +
+              `without completed model progress ` +
+              `(cap=${MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT}). ` +
+              `Halting further attempts to bound paid model calls. ` +
+              `See issue #76293.`;
+            log.error(
+              `[idle-timeout-circuit-breaker-tripped] ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                `provider=${provider}/${modelId} ` +
+                `consecutive=${breakerStep.consecutive} ` +
+                `cap=${MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT}`,
+            );
+            const breakerDecision = resolveRunFailoverDecision({
+              stage: "retry_limit",
+              fallbackConfigured,
+              failoverReason: lastRetryFailoverReason,
+            });
+            return handleRetryLimitExhaustion({
+              message: breakerMessage,
+              decision: breakerDecision,
+              provider,
+              model: modelId,
+              profileId: lastProfileId,
+              durationMs: Date.now() - started,
+              agentMeta: buildErrorAgentMeta({
+                sessionId: activeSessionId,
+                sessionFile: activeSessionFile,
+                provider,
+                model: model.id,
+                contextTokens: ctxInfo.tokens,
+                usageAccumulator,
+                lastRunPromptUsage,
+                lastTurnTotal,
+              }),
+              replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
+              livenessState: "blocked",
+            });
+          }
           const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
           autoCompactionCount += attemptCompactionCount;
+          if (
+            typeof attempt.compactionTokensAfter === "number" &&
+            Number.isFinite(attempt.compactionTokensAfter) &&
+            attempt.compactionTokensAfter > 0
+          ) {
+            lastCompactionTokensAfter = Math.floor(attempt.compactionTokensAfter);
+          }
           const activeErrorContext = resolveActiveErrorContext({
-            lastAssistant,
             provider,
             model: modelId,
+            assistant: currentAttemptAssistant ?? sessionLastAssistant,
           });
-          const formattedAssistantErrorText = lastAssistant
-            ? formatAssistantErrorText(lastAssistant, {
+          const resolveReplayInvalidForAttempt = (incompleteTurnText?: string | null) =>
+            accumulatedReplayState.replayInvalid ||
+            resolveReplayInvalidFlag({
+              attempt,
+              incompleteTurnText,
+            });
+          if (resolveReplayInvalidForAttempt(null)) {
+            accumulatedReplayState.replayInvalid = true;
+          }
+          accumulatedReplayState = observeReplayMetadata(
+            accumulatedReplayState,
+            attempt.replayMetadata,
+          );
+          const formattedAssistantErrorText = sessionLastAssistant
+            ? formatAssistantErrorText(sessionLastAssistant, {
                 cfg: params.config,
-                sessionKey: params.sessionKey ?? params.sessionId,
+                sessionKey: resolvedSessionKey ?? params.sessionId,
                 provider: activeErrorContext.provider,
                 model: activeErrorContext.model,
               })
             : undefined;
           const assistantErrorText =
-            lastAssistant?.stopReason === "error"
-              ? lastAssistant.errorMessage?.trim() || formattedAssistantErrorText
+            sessionLastAssistant?.stopReason === "error"
+              ? sessionLastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
-
+          const canRestartForLiveSwitch =
+            !hasMessagingToolDeliveryEvidence(attempt) &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.lastToolError &&
+            (attempt.toolMetas?.length ?? 0) === 0 &&
+            (attempt.assistantTexts?.length ?? 0) === 0;
+          if (preflightRecovery?.handled) {
+            const retryingFromTranscript = preflightRecovery.source === "mid-turn";
+            log.info(
+              `[context-overflow-precheck] early recovery route=${preflightRecovery.route} ` +
+                `completed for ${provider}/${modelId}; ` +
+                (retryingFromTranscript ? "retrying from current transcript" : "retrying prompt"),
+            );
+            if (retryingFromTranscript) {
+              continueFromCurrentTranscript();
+            }
+            continue;
+          }
+          const requestedSelection = shouldSwitchToLiveModel({
+            cfg: params.config,
+            sessionKey: resolvedSessionKey,
+            agentId: params.agentId,
+            defaultProvider: DEFAULT_PROVIDER,
+            defaultModel: DEFAULT_MODEL,
+            currentProvider: provider,
+            currentModel: modelId,
+            currentAuthProfileId: preferredProfileId,
+            currentAuthProfileIdSource: params.authProfileIdSource,
+          });
+          if (requestedSelection && canRestartForLiveSwitch) {
+            await clearLiveModelSwitchPending({
+              cfg: params.config,
+              sessionKey: resolvedSessionKey,
+              agentId: params.agentId,
+            });
+            log.info(
+              `live session model switch requested during active attempt for ${params.sessionId}: ${provider}/${modelId} -> ${requestedSelection.provider}/${requestedSelection.model}`,
+            );
+            throw new LiveSessionModelSwitchError(requestedSelection);
+          }
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before
           // retrying to break the death spiral of repeated timeouts.
-          if (timedOut && !timedOutDuringCompaction) {
+          if (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution) {
             // Only consider prompt-side tokens here. API totals include output
             // tokens, which can make a long generation look like high context
             // pressure even when the prompt itself was small.
@@ -602,12 +1735,30 @@ export async function runEmbeddedPiAgent(
                     senderId: params.senderId,
                     provider,
                     modelId,
+                    modelFallbacksOverride: params.modelFallbacksOverride,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
                     extraSystemPrompt: params.extraSystemPrompt,
+                    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
+                    activeProcessSessions: listActiveProcessSessionReferences({
+                      scopeKey: resolveProcessToolScopeKey({
+                        sessionKey: params.sandboxSessionKey?.trim() || params.sessionKey,
+                        sessionId: activeSessionId,
+                        agentId: sessionAgentId,
+                      }),
+                    }),
                   }),
+                  ...resolveContextEngineCapabilities({
+                    config: params.config,
+                    sessionKey: params.sessionKey,
+                    agentId: sessionAgentId,
+                    contextEnginePluginId,
+                    purpose: "context-engine.timeout-compaction",
+                  }),
+                  onCompactionHookMessages,
+                  ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
                   trigger: "timeout_recovery",
                   diagId: timeoutDiagId,
@@ -615,9 +1766,9 @@ export async function runEmbeddedPiAgent(
                   maxAttempts: MAX_TIMEOUT_COMPACTION_ATTEMPTS,
                 };
                 timeoutCompactResult = await contextEngine.compact({
-                  sessionId: params.sessionId,
+                  sessionId: activeSessionId,
                   sessionKey: params.sessionKey,
-                  sessionFile: params.sessionFile,
+                  sessionFile: activeSessionFile,
                   tokenBudget: ctxInfo.tokens,
                   force: true,
                   compactionTarget: "budget",
@@ -633,19 +1784,30 @@ export async function runEmbeddedPiAgent(
                   reason: String(compactErr),
                 };
               }
+              if (timeoutCompactResult.compacted) {
+                adoptCompactionTranscript(timeoutCompactResult);
+              }
               await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
               if (timeoutCompactResult.compacted) {
                 autoCompactionCount += 1;
+                if (
+                  typeof timeoutCompactResult.result?.tokensAfter === "number" &&
+                  Number.isFinite(timeoutCompactResult.result.tokensAfter) &&
+                  timeoutCompactResult.result.tokensAfter > 0
+                ) {
+                  lastCompactionTokensAfter = Math.floor(timeoutCompactResult.result.tokensAfter);
+                }
                 if (contextEngine.info.ownsCompaction === true) {
                   await runPostCompactionSideEffects({
                     config: params.config,
                     sessionKey: params.sessionKey,
-                    sessionFile: params.sessionFile,
+                    sessionFile: activeSessionFile,
                   });
                 }
                 log.info(
                   `[timeout-compaction] compaction succeeded for ${provider}/${modelId}; retrying prompt`,
                 );
+                postCompactionGuard.armPostCompaction();
                 continue;
               } else {
                 log.warn(
@@ -658,7 +1820,7 @@ export async function runEmbeddedPiAgent(
           const contextOverflowError = !aborted
             ? (() => {
                 if (promptError) {
-                  const errorText = describeUnknownError(promptError);
+                  const errorText = formatErrorMessage(promptError);
                   if (isLikelyContextOverflowError(errorText)) {
                     return { text: errorText, source: "promptError" as const };
                   }
@@ -684,7 +1846,7 @@ export async function runEmbeddedPiAgent(
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `provider=${provider}/${modelId} source=${contextOverflowError.source} ` +
-                `messages=${msgCount} sessionFile=${params.sessionFile} ` +
+                `messages=${msgCount} sessionFile=${activeSessionFile} ` +
                 `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
                 `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
                 `error=${errorText.slice(0, 200)}`,
@@ -702,6 +1864,9 @@ export async function runEmbeddedPiAgent(
               log.warn(
                 `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
               );
+              if (preflightRecovery?.source === "mid-turn") {
+                continueFromCurrentTranscript();
+              }
               continue;
             }
             // Attempt explicit overflow compaction only when this attempt did not
@@ -747,8 +1912,25 @@ export async function runEmbeddedPiAgent(
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
                     extraSystemPrompt: params.extraSystemPrompt,
+                    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
+                    activeProcessSessions: listActiveProcessSessionReferences({
+                      scopeKey: resolveProcessToolScopeKey({
+                        sessionKey: params.sandboxSessionKey?.trim() || params.sessionKey,
+                        sessionId: activeSessionId,
+                        agentId: sessionAgentId,
+                      }),
+                    }),
                   }),
+                  ...resolveContextEngineCapabilities({
+                    config: params.config,
+                    sessionKey: params.sessionKey,
+                    agentId: sessionAgentId,
+                    contextEnginePluginId,
+                    purpose: "context-engine.overflow-compaction",
+                  }),
+                  onCompactionHookMessages,
+                  ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
                   trigger: "overflow",
                   ...(observedOverflowTokens !== undefined
@@ -759,9 +1941,9 @@ export async function runEmbeddedPiAgent(
                   maxAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
                 };
                 compactResult = await contextEngine.compact({
-                  sessionId: params.sessionId,
+                  sessionId: activeSessionId,
                   sessionKey: params.sessionKey,
-                  sessionFile: params.sessionFile,
+                  sessionFile: activeSessionFile,
                   tokenBudget: ctxInfo.tokens,
                   ...(observedOverflowTokens !== undefined
                     ? { currentTokenCount: observedOverflowTokens }
@@ -771,13 +1953,16 @@ export async function runEmbeddedPiAgent(
                   runtimeContext: overflowCompactionRuntimeContext,
                 });
                 if (compactResult.ok && compactResult.compacted) {
+                  adoptCompactionTranscript(compactResult);
                   await runContextEngineMaintenance({
                     contextEngine,
-                    sessionId: params.sessionId,
+                    sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
-                    sessionFile: params.sessionFile,
+                    sessionFile: activeSessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,
+                    config: params.config,
+                    agentId: sessionAgentId,
                   });
                 }
               } catch (compactErr) {
@@ -792,68 +1977,106 @@ export async function runEmbeddedPiAgent(
               }
               await runOwnsCompactionAfterHook("overflow recovery", compactResult);
               if (compactResult.compacted) {
+                adoptCompactionTranscript(compactResult);
+                if (
+                  typeof compactResult.result?.tokensAfter === "number" &&
+                  Number.isFinite(compactResult.result.tokensAfter) &&
+                  compactResult.result.tokensAfter > 0
+                ) {
+                  lastCompactionTokensAfter = Math.floor(compactResult.result.tokensAfter);
+                }
+                if (preflightRecovery?.route === "compact_then_truncate") {
+                  const truncResult = await truncateOversizedToolResultsInSession({
+                    sessionFile: activeSessionFile,
+                    contextWindowTokens: ctxInfo.tokens,
+                    maxCharsOverride: resolveLiveToolResultMaxChars({
+                      contextWindowTokens: ctxInfo.tokens,
+                      cfg: params.config,
+                      agentId: sessionAgentId,
+                    }),
+                    sessionId: activeSessionId,
+                    sessionKey: params.sessionKey,
+                    config: params.config,
+                  });
+                  if (truncResult.truncated) {
+                    log.info(
+                      `[context-overflow-precheck] post-compaction tool-result truncation succeeded for ` +
+                        `${provider}/${modelId}; truncated ${truncResult.truncatedCount} tool result(s)`,
+                    );
+                  } else {
+                    log.warn(
+                      `[context-overflow-precheck] post-compaction tool-result truncation did not help for ` +
+                        `${provider}/${modelId}: ${truncResult.reason ?? "unknown"}`,
+                    );
+                  }
+                }
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
+                postCompactionGuard.armPostCompaction();
+                if (preflightRecovery?.source === "mid-turn") {
+                  continueFromCurrentTranscript();
+                } else if (
+                  params.currentMessageId !== undefined &&
+                  params.currentMessageId === lastPersistedCurrentMessageId
+                ) {
+                  // The first attempt reached Pi far enough to persist this user turn.
+                  // Retrying the original prompt would replay it, so resume from the
+                  // compacted transcript and suppress the next user append.
+                  nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                  suppressNextUserMessagePersistence = true;
+                }
                 continue;
               }
               log.warn(
                 `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
               );
             }
-            // Fallback: try truncating oversized tool results in the session.
-            // This handles the case where a single tool result exceeds the
-            // context window and compaction cannot reduce it further.
             if (!toolResultTruncationAttempted) {
               const contextWindowTokens = ctxInfo.tokens;
+              const toolResultMaxChars = resolveLiveToolResultMaxChars({
+                contextWindowTokens,
+                cfg: params.config,
+                agentId: sessionAgentId,
+              });
               const hasOversized = attempt.messagesSnapshot
                 ? sessionLikelyHasOversizedToolResults({
                     messages: attempt.messagesSnapshot,
                     contextWindowTokens,
+                    maxCharsOverride: toolResultMaxChars,
                   })
                 : false;
 
               if (hasOversized) {
-                if (log.isEnabled("debug")) {
-                  log.debug(
-                    `[compaction-diag] decision diagId=${overflowDiagId} branch=truncate_tool_results ` +
-                      `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
-                      `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
-                  );
-                }
                 toolResultTruncationAttempted = true;
                 log.warn(
                   `[context-overflow-recovery] Attempting tool result truncation for ${provider}/${modelId} ` +
                     `(contextWindow=${contextWindowTokens} tokens)`,
                 );
                 const truncResult = await truncateOversizedToolResultsInSession({
-                  sessionFile: params.sessionFile,
+                  sessionFile: activeSessionFile,
                   contextWindowTokens,
-                  sessionId: params.sessionId,
+                  maxCharsOverride: toolResultMaxChars,
+                  sessionId: activeSessionId,
                   sessionKey: params.sessionKey,
+                  config: params.config,
                 });
                 if (truncResult.truncated) {
                   log.info(
                     `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
                   );
-                  // Do NOT reset overflowCompactionAttempts here — the global cap must remain
-                  // enforced across all iterations to prevent unbounded compaction cycles (OC-65).
+                  if (preflightRecovery?.source === "mid-turn") {
+                    continueFromCurrentTranscript();
+                  }
                   continue;
                 }
                 log.warn(
                   `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
                 );
-              } else if (log.isEnabled("debug")) {
-                log.debug(
-                  `[compaction-diag] decision diagId=${overflowDiagId} branch=give_up ` +
-                    `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
-                    `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
-                );
               }
             }
             if (
               (isCompactionFailure ||
-                overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS ||
-                toolResultTruncationAttempted) &&
+                overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS) &&
               log.isEnabled("debug")
             ) {
               log.debug(
@@ -863,6 +2086,10 @@ export async function runEmbeddedPiAgent(
               );
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid: resolveReplayInvalidForAttempt(),
+              livenessState: "blocked",
+            });
             return {
               payloads: [
                 {
@@ -876,37 +2103,96 @@ export async function runEmbeddedPiAgent(
                 durationMs: Date.now() - started,
                 agentMeta: buildErrorAgentMeta({
                   sessionId: sessionIdUsed,
+                  sessionFile: activeSessionFile,
                   provider,
                   model: model.id,
+                  contextTokens: ctxInfo.tokens,
                   usageAccumulator,
                   lastRunPromptUsage,
-                  lastAssistant,
+                  lastAssistant: sessionLastAssistant,
                   lastTurnTotal,
                 }),
                 systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                replayInvalid: resolveReplayInvalidForAttempt(),
+                livenessState: "blocked",
                 error: { kind, message: errorText },
               },
             };
           }
 
-          if (promptError && !aborted) {
+          if (promptErrorSource === "hook:before_agent_run" && !aborted) {
+            const errorText = formatErrorMessage(promptError);
+            const replayInvalid = resolveReplayInvalidForAttempt();
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState: "blocked",
+            });
+            return {
+              payloads: [{ text: errorText, isError: true }],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta: buildErrorAgentMeta({
+                  sessionId: sessionIdUsed,
+                  sessionFile: activeSessionFile,
+                  provider,
+                  model: model.id,
+                  contextTokens: ctxInfo.tokens,
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastAssistant: sessionLastAssistant,
+                  lastTurnTotal,
+                }),
+                systemPromptReport: attempt.systemPromptReport,
+                finalAssistantVisibleText: errorText,
+                finalAssistantRawText: errorText,
+                finalPromptText: undefined,
+                replayInvalid,
+                livenessState: "blocked",
+                error: { kind: "hook_block", message: errorText },
+              },
+            };
+          }
+
+          if (promptError && !aborted && promptErrorSource !== "compaction") {
             // Normalize wrapped errors (e.g. abort-wrapped RESOURCE_EXHAUSTED) into
             // FailoverError so rate-limit classification works even for nested shapes.
+            //
+            // promptErrorSource === "compaction" means the model call already completed and the
+            // abort happened only while waiting for compaction/retry cleanup. Retrying from here
+            // would replay that completed tool turn as a fresh prompt attempt.
             const normalizedPromptFailover = coerceToFailoverError(promptError, {
               provider: activeErrorContext.provider,
               model: activeErrorContext.model,
               profileId: lastProfileId,
+              sessionId: sessionIdUsed,
+              lane: globalLane,
             });
             const promptErrorDetails = normalizedPromptFailover
               ? describeFailoverError(normalizedPromptFailover)
               : describeFailoverError(promptError);
-            const errorText = promptErrorDetails.message || describeUnknownError(promptError);
+            if (normalizedPromptFailover?.suspend) {
+              void suspendSession({
+                cfg: params.config,
+                agentDir,
+                sessionId: activeSessionId ?? params.sessionId,
+                laneId: globalLane,
+                reason: resolveSessionSuspensionReason(normalizedPromptFailover.reason),
+                failedProvider: normalizedPromptFailover.provider ?? provider,
+                failedModel: normalizedPromptFailover.model ?? modelId,
+              });
+            }
+            const errorText = promptErrorDetails.message || formatErrorMessage(promptError);
             if (await maybeRefreshRuntimeAuthForAuthError(errorText, runtimeAuthRetry)) {
               authRetryPending = true;
               continue;
             }
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
+              attempt.setTerminalLifecycleMeta?.({
+                replayInvalid: resolveReplayInvalidForAttempt(),
+                livenessState: "blocked",
+              });
               return {
                 payloads: [
                   {
@@ -920,14 +2206,19 @@ export async function runEmbeddedPiAgent(
                   durationMs: Date.now() - started,
                   agentMeta: buildErrorAgentMeta({
                     sessionId: sessionIdUsed,
+                    sessionFile: activeSessionFile,
                     provider,
                     model: model.id,
+                    contextTokens: ctxInfo.tokens,
                     usageAccumulator,
                     lastRunPromptUsage,
-                    lastAssistant,
+                    lastAssistant: sessionLastAssistant,
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
+                  finalPromptText: attempt.finalPromptText,
+                  replayInvalid: resolveReplayInvalidForAttempt(),
+                  livenessState: "blocked",
                   error: { kind: "role_ordering", message: errorText },
                 },
               };
@@ -939,6 +2230,10 @@ export async function runEmbeddedPiAgent(
               const maxMbLabel =
                 typeof maxMb === "number" && Number.isFinite(maxMb) ? `${maxMb}` : null;
               const maxBytesHint = maxMbLabel ? ` (max ${maxMbLabel}MB)` : "";
+              attempt.setTerminalLifecycleMeta?.({
+                replayInvalid: resolveReplayInvalidForAttempt(),
+                livenessState: "blocked",
+              });
               return {
                 payloads: [
                   {
@@ -952,29 +2247,29 @@ export async function runEmbeddedPiAgent(
                   durationMs: Date.now() - started,
                   agentMeta: buildErrorAgentMeta({
                     sessionId: sessionIdUsed,
+                    sessionFile: activeSessionFile,
                     provider,
                     model: model.id,
+                    contextTokens: ctxInfo.tokens,
                     usageAccumulator,
                     lastRunPromptUsage,
-                    lastAssistant,
+                    lastAssistant: sessionLastAssistant,
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
+                  finalPromptText: attempt.finalPromptText,
+                  replayInvalid: resolveReplayInvalidForAttempt(),
+                  livenessState: "blocked",
                   error: { kind: "image_size", message: errorText },
                 },
               };
             }
             const promptFailoverReason =
-              promptErrorDetails.reason ?? classifyFailoverReason(errorText);
+              promptErrorDetails.reason ?? classifyFailoverReason(errorText, { provider });
             const promptProfileFailureReason =
-              resolveAuthProfileFailureReason(promptFailoverReason);
-            await maybeMarkAuthProfileFailure({
-              profileId: lastProfileId,
-              reason: promptProfileFailureReason,
-              modelId,
-            });
+              resolveRunAuthProfileFailureReason(promptFailoverReason);
             const promptFailoverFailure =
-              promptFailoverReason !== null || isFailoverErrorMessage(errorText);
+              promptFailoverReason !== null || isFailoverErrorMessage(errorText, { provider });
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
             const failedPromptProfileId = lastProfileId;
             const logPromptFailoverDecision = createFailoverDecisionLogger({
@@ -985,18 +2280,77 @@ export async function runEmbeddedPiAgent(
               profileFailureReason: promptProfileFailureReason,
               provider,
               model: modelId,
+              sourceProvider: provider,
+              sourceModel: modelId,
               profileId: failedPromptProfileId,
               fallbackConfigured,
               aborted,
             });
+            if (promptFailoverReason === "rate_limit") {
+              maybeEscalateRateLimitProfileFallback({
+                failoverProvider: provider,
+                failoverModel: modelId,
+                logFallbackDecision: logPromptFailoverDecision,
+              });
+            }
+            let promptFailoverDecision = resolveRunFailoverDecision({
+              stage: "prompt",
+              aborted,
+              externalAbort,
+              fallbackConfigured,
+              failoverFailure: promptFailoverFailure,
+              failoverReason: promptFailoverReason,
+              profileRotated: false,
+            });
             if (
-              promptFailoverFailure &&
-              promptFailoverReason !== "timeout" &&
-              (await advanceAuthProfile())
+              promptFailoverDecision.action === "rotate_profile" &&
+              (await advanceAttemptAuthProfile())
             ) {
+              if (failedPromptProfileId && promptProfileFailureReason) {
+                void maybeMarkAuthProfileFailure({
+                  profileId: failedPromptProfileId,
+                  reason: promptProfileFailureReason,
+                  modelId,
+                }).catch((err) => {
+                  log.warn(`prompt profile failure mark failed: ${String(err)}`);
+                });
+              }
+              traceAttempts.push({
+                provider,
+                model: modelId,
+                result: promptFailoverReason === "timeout" ? "timeout" : "rotate_profile",
+                ...(promptFailoverReason ? { reason: promptFailoverReason } : {}),
+                stage: "prompt",
+              });
+              lastRetryFailoverReason = mergeRetryFailoverReason({
+                previous: lastRetryFailoverReason,
+                failoverReason: promptFailoverReason,
+              });
               logPromptFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               continue;
+            }
+            if (promptFailoverDecision.action === "rotate_profile") {
+              promptFailoverDecision = resolveRunFailoverDecision({
+                stage: "prompt",
+                aborted,
+                externalAbort,
+                fallbackConfigured,
+                failoverFailure: promptFailoverFailure,
+                failoverReason: promptFailoverReason,
+                profileRotated: true,
+              });
+            }
+            if (failedPromptProfileId && promptProfileFailureReason) {
+              try {
+                await maybeMarkAuthProfileFailure({
+                  profileId: failedPromptProfileId,
+                  reason: promptProfileFailureReason,
+                  modelId,
+                });
+              } catch (err) {
+                log.warn(`prompt profile failure mark failed: ${String(err)}`);
+              }
             }
             const fallbackThinking = pickFallbackThinkingLevel({
               message: errorText,
@@ -1012,29 +2366,48 @@ export async function runEmbeddedPiAgent(
             // Throw FailoverError for prompt-side failover reasons when fallbacks
             // are configured so outer model fallback can continue on overload,
             // rate-limit, auth, or billing failures.
-            if (fallbackConfigured && promptFailoverFailure) {
-              const status = resolveFailoverStatus(promptFailoverReason ?? "unknown");
+            if (promptFailoverDecision.action === "fallback_model") {
+              const fallbackReason = promptFailoverDecision.reason ?? "unknown";
+              const status = resolveFailoverStatus(fallbackReason);
+              traceAttempts.push({
+                provider,
+                model: modelId,
+                result: promptFailoverReason === "timeout" ? "timeout" : "fallback_model",
+                reason: fallbackReason,
+                stage: "prompt",
+                ...(typeof status === "number" ? { status } : {}),
+              });
               logPromptFailoverDecision("fallback_model", { status });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               throw (
                 normalizedPromptFailover ??
                 new FailoverError(errorText, {
-                  reason: promptFailoverReason ?? "unknown",
+                  reason: fallbackReason,
                   provider,
                   model: modelId,
                   profileId: lastProfileId,
-                  status: resolveFailoverStatus(promptFailoverReason ?? "unknown"),
+                  sessionId: sessionIdUsed,
+                  lane: globalLane,
+                  status,
                 })
               );
             }
-            if (promptFailoverFailure || promptFailoverReason) {
+            if (promptFailoverDecision.action === "surface_error") {
+              traceAttempts.push({
+                provider,
+                model: modelId,
+                result: promptFailoverReason === "timeout" ? "timeout" : "surface_error",
+                ...(promptFailoverReason ? { reason: promptFailoverReason } : {}),
+                stage: "prompt",
+              });
               logPromptFailoverDecision("surface_error");
             }
             throw promptError;
           }
 
+          const assistantForFailover = currentAttemptAssistant ?? sessionLastAssistant;
           const fallbackThinking = pickFallbackThinkingLevel({
-            message: lastAssistant?.errorMessage,
+            message: assistantForFailover?.errorMessage,
             attempted: attemptedThinking,
           });
           if (fallbackThinking && !aborted) {
@@ -1045,25 +2418,34 @@ export async function runEmbeddedPiAgent(
             continue;
           }
 
-          const authFailure = isAuthAssistantError(lastAssistant);
-          const rateLimitFailure = isRateLimitAssistantError(lastAssistant);
-          const billingFailure = isBillingAssistantError(lastAssistant);
-          const failoverFailure = isFailoverAssistantError(lastAssistant);
-          const assistantFailoverReason = classifyFailoverReason(lastAssistant?.errorMessage ?? "");
+          const authFailure = isAuthAssistantError(assistantForFailover);
+          const rateLimitFailure = isRateLimitAssistantError(assistantForFailover);
+          const billingFailure = isBillingAssistantError(assistantForFailover);
+          const failoverFailure = isFailoverAssistantError(assistantForFailover);
+          const assistantFailoverReason = classifyFailoverReason(
+            assistantForFailover?.errorMessage ?? "",
+            {
+              provider: assistantForFailover?.provider,
+            },
+          );
           const assistantProfileFailureReason =
-            resolveAuthProfileFailureReason(assistantFailoverReason);
+            resolveRunAuthProfileFailureReason(assistantFailoverReason);
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
-          const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
+          const imageDimensionError = parseImageDimensionError(
+            assistantForFailover?.errorMessage ?? "",
+          );
           // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
           const failedAssistantProfileId = lastProfileId;
           const logAssistantFailoverDecision = createFailoverDecisionLogger({
             stage: "assistant",
             runId: params.runId,
-            rawError: lastAssistant?.errorMessage?.trim(),
+            rawError: assistantForFailover?.errorMessage?.trim(),
             failoverReason: assistantFailoverReason,
             profileFailureReason: assistantProfileFailureReason,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
+            sourceProvider: assistantForFailover?.provider ?? provider,
+            sourceModel: assistantForFailover?.model ?? modelId,
             profileId: failedAssistantProfileId,
             fallbackConfigured,
             timedOut,
@@ -1073,7 +2455,7 @@ export async function runEmbeddedPiAgent(
           if (
             authFailure &&
             (await maybeRefreshRuntimeAuthForAuthError(
-              lastAssistant?.errorMessage ?? "",
+              assistantForFailover?.errorMessage ?? "",
               runtimeAuthRetry,
             ))
           ) {
@@ -1099,123 +2481,216 @@ export async function runEmbeddedPiAgent(
             );
           }
 
-          // Rotate on timeout to try another account/model path in this turn,
-          // but exclude post-prompt compaction timeouts (model succeeded; no profile issue).
-          const shouldRotate =
-            (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
-
-          if (shouldRotate) {
-            if (lastProfileId) {
-              const reason = timedOut ? "timeout" : assistantProfileFailureReason;
-              // Skip cooldown for timeouts: a timeout is model/network-specific,
-              // not an auth issue. Marking the profile would poison fallback models
-              // on the same provider (e.g. gpt-5.3 timeout blocks gpt-5.2).
-              await maybeMarkAuthProfileFailure({
-                profileId: lastProfileId,
-                reason,
-                modelId,
-              });
-              if (timedOut && !isProbeSession) {
-                log.warn(`Profile ${lastProfileId} timed out. Trying next account...`);
-              }
-              if (cloudCodeAssistFormatError) {
-                log.warn(
-                  `Profile ${lastProfileId} hit Cloud Code Assist format error. Tool calls will be sanitized on retry.`,
-                );
-              }
+          const assistantFailoverDecision = resolveRunFailoverDecision({
+            stage: "assistant",
+            allowFormatRetry: cloudCodeAssistFormatError,
+            aborted,
+            externalAbort,
+            fallbackConfigured,
+            failoverFailure,
+            failoverReason: assistantFailoverReason,
+            timedOut,
+            idleTimedOut,
+            timedOutDuringCompaction,
+            timedOutDuringToolExecution,
+            profileRotated: false,
+          });
+          const assistantFailoverOutcome = await handleAssistantFailover({
+            initialDecision: assistantFailoverDecision,
+            aborted,
+            externalAbort,
+            fallbackConfigured,
+            failoverFailure,
+            failoverReason: assistantFailoverReason,
+            timedOut,
+            idleTimedOut,
+            timedOutDuringCompaction,
+            timedOutDuringToolExecution,
+            allowSameModelIdleTimeoutRetry:
+              timedOut &&
+              idleTimedOut &&
+              !timedOutDuringCompaction &&
+              !fallbackConfigured &&
+              canRestartForLiveSwitch &&
+              sameModelIdleTimeoutRetries < MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES,
+            assistantProfileFailureReason,
+            lastProfileId,
+            modelId,
+            provider,
+            activeErrorContext,
+            lastAssistant: assistantForFailover,
+            config: params.config,
+            sessionKey: params.sessionKey ?? params.sessionId,
+            authFailure,
+            rateLimitFailure,
+            billingFailure,
+            cloudCodeAssistFormatError,
+            isProbeSession,
+            overloadProfileRotations,
+            overloadProfileRotationLimit,
+            previousRetryFailoverReason: lastRetryFailoverReason,
+            logAssistantFailoverDecision,
+            warn: (message) => log.warn(message),
+            maybeMarkAuthProfileFailure,
+            maybeEscalateRateLimitProfileFallback,
+            maybeBackoffBeforeOverloadFailover,
+            advanceAuthProfile: advanceAttemptAuthProfile,
+          });
+          overloadProfileRotations = assistantFailoverOutcome.overloadProfileRotations;
+          if (assistantFailoverOutcome.action === "retry") {
+            traceAttempts.push({
+              provider: activeErrorContext.provider,
+              model: activeErrorContext.model,
+              result:
+                assistantFailoverOutcome.retryKind === "same_model_idle_timeout" ||
+                assistantFailoverReason === "timeout"
+                  ? "timeout"
+                  : "rotate_profile",
+              ...(assistantFailoverReason ? { reason: assistantFailoverReason } : {}),
+              stage: "assistant",
+            });
+            if (assistantFailoverOutcome.retryKind === "same_model_idle_timeout") {
+              sameModelIdleTimeoutRetries += 1;
             }
-
-            const rotated = await advanceAuthProfile();
-            if (rotated) {
-              logAssistantFailoverDecision("rotate_profile");
-              await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
-              continue;
-            }
-
-            if (fallbackConfigured) {
-              await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
-              // Prefer formatted error message (user-friendly) over raw errorMessage
-              const message =
-                (lastAssistant
-                  ? formatAssistantErrorText(lastAssistant, {
-                      cfg: params.config,
-                      sessionKey: params.sessionKey ?? params.sessionId,
-                      provider: activeErrorContext.provider,
-                      model: activeErrorContext.model,
-                    })
-                  : undefined) ||
-                lastAssistant?.errorMessage?.trim() ||
-                (timedOut
-                  ? "LLM request timed out."
-                  : rateLimitFailure
-                    ? "LLM request rate limited."
-                    : billingFailure
-                      ? formatBillingErrorMessage(
-                          activeErrorContext.provider,
-                          activeErrorContext.model,
-                        )
-                      : authFailure
-                        ? "LLM request unauthorized."
-                        : "LLM request failed.");
-              const status =
-                resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
-                (isTimeoutErrorMessage(message) ? 408 : undefined);
-              logAssistantFailoverDecision("fallback_model", { status });
-              throw new FailoverError(message, {
-                reason: assistantFailoverReason ?? "unknown",
-                provider: activeErrorContext.provider,
-                model: activeErrorContext.model,
-                profileId: lastProfileId,
-                status,
-              });
-            }
-            logAssistantFailoverDecision("surface_error");
+            lastRetryFailoverReason = assistantFailoverOutcome.lastRetryFailoverReason;
+            continue;
           }
-
+          if (assistantFailoverOutcome.action === "throw") {
+            traceAttempts.push({
+              provider: activeErrorContext.provider,
+              model: activeErrorContext.model,
+              result:
+                assistantFailoverReason === "timeout"
+                  ? "timeout"
+                  : assistantFailoverDecision.action === "fallback_model"
+                    ? "fallback_model"
+                    : "error",
+              ...(assistantFailoverReason ? { reason: assistantFailoverReason } : {}),
+              stage: "assistant",
+              ...(typeof assistantFailoverOutcome.error.status === "number"
+                ? { status: assistantFailoverOutcome.error.status }
+                : {}),
+            });
+            if (assistantFailoverOutcome.error.suspend) {
+              void suspendSession({
+                cfg: params.config,
+                agentDir,
+                sessionId: activeSessionId ?? params.sessionId,
+                laneId: globalLane,
+                reason: resolveSessionSuspensionReason(assistantFailoverOutcome.error.reason),
+                failedProvider: assistantFailoverOutcome.error.provider ?? provider,
+                failedModel: assistantFailoverOutcome.error.model ?? modelId,
+              });
+            }
+            throw assistantFailoverOutcome.error;
+          }
           const usageMeta = buildUsageAgentMetaFields({
             usageAccumulator,
-            lastAssistantUsage: lastAssistant?.usage as UsageLike | undefined,
+            lastAssistantUsage: sessionLastAssistant?.usage as UsageLike | undefined,
             lastRunPromptUsage,
             lastTurnTotal,
           });
+          const reportedModelRef = resolveReportedModelRef({
+            provider,
+            model: model.id,
+            assistant: sessionLastAssistant,
+          });
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
-            provider: lastAssistant?.provider ?? provider,
-            model: lastAssistant?.model ?? model.id,
+            sessionFile: sessionFileUsed,
+            provider: reportedModelRef.provider,
+            model: reportedModelRef.model,
+            contextTokens: ctxInfo.tokens,
+            agentHarnessId: attempt.agentHarnessId,
             usage: usageMeta.usage,
             lastCallUsage: usageMeta.lastCallUsage,
             promptTokens: usageMeta.promptTokens,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
+            compactionTokensAfter: lastCompactionTokensAfter,
           };
+          const finalAssistantVisibleText = resolveFinalAssistantVisibleText(sessionLastAssistant);
+          const finalAssistantRawText = resolveFinalAssistantRawText(sessionLastAssistant);
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
+            currentAssistant: currentAttemptAssistant ?? null,
             lastToolError: attempt.lastToolError,
             config: params.config,
+            isCronTrigger: params.trigger === "cron",
             sessionKey: params.sessionKey ?? params.sessionId,
             provider: activeErrorContext.provider,
             model: activeErrorContext.model,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
+            thinkingLevel: params.thinkLevel,
             toolResultFormat: resolvedToolResultFormat,
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            agentId: params.agentId,
+            runId: params.runId,
+            runAborted: aborted,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+            heartbeatToolResponse: attempt.heartbeatToolResponse,
+          });
+          const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
+            payloads,
+            toolMediaUrls: attempt.toolMediaUrls,
+            toolAudioAsVoice: attempt.toolAudioAsVoice,
+            toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
+            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          });
+          const timedOutDuringPrompt =
+            timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
+          const hasPartialAssistantTextAfterPromptTimeout =
+            timedOutDuringPrompt &&
+            (attempt.assistantTexts ?? []).some((text) => text.trim().length > 0) &&
+            !attempt.clientToolCalls &&
+            !attempt.yieldDetected &&
+            !attempt.didSendViaMessagingTool &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.lastToolError &&
+            (attempt.toolMetas?.length ?? 0) === 0;
+          const attemptToolSummary = buildTraceToolSummary({
+            toolMetas: attempt.toolMetas,
+            hadFailure: Boolean(attempt.lastToolError),
+          });
+          const failureSignal = resolveEmbeddedRunFailureSignal({
+            trigger: params.trigger,
+            lastToolError: attempt.lastToolError,
           });
 
-          // Timeout aborts can leave the run without any assistant payloads.
-          // Emit an explicit timeout error instead of silently completing, so
-          // callers do not lose the turn as an orphaned user message.
-          if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
+          // Timeout aborts can leave the run without payloads or with only a
+          // partial assistant fragment. Emit an explicit timeout error instead,
+          // preserving any tool payloads that succeeded before the timeout.
+          if (timedOutDuringPrompt && !hasMessagingToolDeliveryEvidence(attempt)) {
+            const timeoutText = idleTimedOut
+              ? "The model did not produce a response before the model idle timeout. " +
+                "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers. " +
+                "If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend the whole agent run."
+              : "Request timed out before a response was generated. " +
+                "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
+            const replayInvalid = resolveReplayInvalidForAttempt(null);
+            const livenessState = resolveRunLivenessState({
+              payloadCount: hasPartialAssistantTextAfterPromptTimeout ? 0 : payloads.length,
+              aborted,
+              timedOut,
+              attempt,
+              incompleteTurnText: null,
+            });
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState,
+            });
             return {
               payloads: [
+                ...(hasPartialAssistantTextAfterPromptTimeout ? [] : payloadsWithToolMedia || []),
                 {
-                  text:
-                    "Request timed out before a response was generated. " +
-                    "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+                  text: timeoutText,
                   isError: true,
                 },
               ],
@@ -1224,145 +2699,575 @@ export async function runEmbeddedPiAgent(
                 agentMeta,
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                finalAssistantVisibleText,
+                finalAssistantRawText,
+                replayInvalid,
+                livenessState,
+                toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
             };
           }
 
-          // Detect incomplete turns where prompt() resolved prematurely due to
-          // pi-agent-core's auto-retry timing issue: when a mid-turn 429/overload
-          // triggers an internal retry, waitForRetry() resolves on the next
-          // assistant message *before* tool execution completes in the retried
-          // loop (see #8643). The captured lastAssistant has a non-terminal
-          // stopReason (e.g. "toolUse") with no text content, producing empty
-          // payloads. Surface an error instead of silently dropping the reply.
-          //
-          // Exclusions:
-          //  - didSendDeterministicApprovalPrompt: approval-prompt turns
-          //    intentionally produce empty payloads with stopReason=toolUse
-          //  - lastToolError: suppressed/recoverable tool failures also produce
-          //    empty payloads with stopReason=toolUse; those are handled by
-          //    buildEmbeddedRunPayloads' own warning policy
+          const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
+            isCronTrigger: params.trigger === "cron",
+            payloadCount: payloadsWithToolMedia?.length ?? 0,
+            aborted,
+            timedOut,
+            attempt,
+          });
+          const payloadsForTerminalPath = payloadsWithToolMedia?.length
+            ? payloadsWithToolMedia
+            : silentToolResultReplyPayload
+              ? [silentToolResultReplyPayload]
+              : payloadsWithToolMedia;
+          const payloadCount = payloadsForTerminalPath?.length ?? 0;
+          const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
+            allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
+            payloadCount,
+            aborted,
+            timedOut,
+            attempt,
+          });
+          const nextPlanningOnlyRetryInstruction = emptyAssistantReplyIsSilent
+            ? null
+            : resolvePlanningOnlyRetryInstruction({
+                provider,
+                modelId,
+                executionContract,
+                prompt: params.prompt,
+                aborted,
+                timedOut,
+                attempt,
+              });
+          const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
+            ? null
+            : resolveReasoningOnlyRetryInstruction({
+                provider: activeErrorContext.provider,
+                modelId: activeErrorContext.model,
+                modelApi: effectiveModel.api,
+                executionContract,
+                aborted,
+                timedOut,
+                attempt,
+              });
+          const nextEmptyResponseRetryInstruction = emptyAssistantReplyIsSilent
+            ? null
+            : resolveEmptyResponseRetryInstruction({
+                provider: activeErrorContext.provider,
+                modelId: activeErrorContext.model,
+                modelApi: effectiveModel.api,
+                executionContract,
+                payloadCount,
+                aborted,
+                timedOut,
+                attempt,
+              });
           if (
-            payloads.length === 0 &&
+            nextPlanningOnlyRetryInstruction &&
+            planningOnlyRetryAttempts < maxPlanningOnlyRetryAttempts
+          ) {
+            const planningOnlyText = (attempt.assistantTexts ?? []).join("\n\n").trim();
+            const planDetails = extractPlanningOnlyPlanDetails(planningOnlyText);
+            if (planDetails) {
+              emitAgentPlanEvent({
+                runId: params.runId,
+                ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                data: {
+                  phase: "update",
+                  title: "Assistant proposed a plan",
+                  explanation: planDetails.explanation,
+                  steps: planDetails.steps,
+                  source: "planning_only_retry",
+                },
+              });
+              void params.onAgentEvent?.({
+                stream: "plan",
+                data: {
+                  phase: "update",
+                  title: "Assistant proposed a plan",
+                  explanation: planDetails.explanation,
+                  steps: planDetails.steps,
+                  source: "planning_only_retry",
+                },
+              });
+            }
+            planningOnlyRetryAttempts += 1;
+            planningOnlyRetryInstruction = nextPlanningOnlyRetryInstruction;
+            log.warn(
+              `planning-only turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} contract=${executionContract} configured=${configuredExecutionContractForLog} — retrying ` +
+                `${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} with act-now steer`,
+            );
+            continue;
+          }
+          if (
+            !nextPlanningOnlyRetryInstruction &&
+            nextReasoningOnlyRetryInstruction &&
+            reasoningOnlyRetryAttempts < maxReasoningOnlyRetryAttempts
+          ) {
+            reasoningOnlyRetryAttempts += 1;
+            reasoningOnlyRetryInstruction = nextReasoningOnlyRetryInstruction;
+            log.warn(
+              `reasoning-only assistant turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
+                `with visible-answer continuation`,
+            );
+            continue;
+          }
+          const reasoningOnlyRetriesExhausted =
+            !nextPlanningOnlyRetryInstruction &&
+            nextReasoningOnlyRetryInstruction &&
+            reasoningOnlyRetryAttempts >= maxReasoningOnlyRetryAttempts;
+          if (
+            !nextPlanningOnlyRetryInstruction &&
+            !nextReasoningOnlyRetryInstruction &&
+            nextEmptyResponseRetryInstruction &&
+            emptyResponseRetryAttempts < maxEmptyResponseRetryAttempts
+          ) {
+            emptyResponseRetryAttempts += 1;
+            emptyResponseRetryInstruction = nextEmptyResponseRetryInstruction;
+            log.warn(
+              `empty response detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} ` +
+                `with visible-answer continuation`,
+            );
+            continue;
+          }
+          const incompleteTurnText = emptyAssistantReplyIsSilent
+            ? null
+            : resolveIncompleteTurnPayloadText({
+                payloadCount,
+                aborted,
+                timedOut,
+                attempt,
+              });
+          if (
+            !emptyAssistantReplyIsSilent &&
+            attemptCompactionCount > 0 &&
+            payloadCount === 0 &&
             !aborted &&
+            !promptError &&
             !timedOut &&
-            !attempt.clientToolCall &&
+            !attempt.clientToolCalls &&
             !attempt.yieldDetected &&
             !attempt.didSendDeterministicApprovalPrompt &&
-            !attempt.lastToolError
+            !attempt.lastToolError &&
+            !resolveAttemptReplayMetadata(attempt).hadPotentialSideEffects &&
+            compactionContinuationRetryAttempts < 1
           ) {
-            const incompleteStopReason = lastAssistant?.stopReason;
-            // Only trigger for non-terminal stop reasons (toolUse, etc.) to
-            // avoid false positives when the model legitimately produces no text.
-            // StopReason union: "aborted" | "error" | "length" | "toolUse"
-            // "toolUse" is the key signal that prompt() resolved mid-turn.
-            if (incompleteStopReason === "toolUse" || incompleteStopReason === "error") {
-              log.warn(
-                `incomplete turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
-                  `stopReason=${incompleteStopReason} payloads=0 — surfacing error to user`,
-              );
-
-              // Mark the failing profile for cooldown so multi-profile setups
-              // rotate away from the exhausted credential on the next turn.
-              if (lastProfileId) {
-                const failoverReason = classifyFailoverReason(lastAssistant?.errorMessage ?? "");
-                await maybeMarkAuthProfileFailure({
-                  profileId: lastProfileId,
-                  reason: resolveAuthProfileFailureReason(failoverReason),
-                });
-              }
-
-              // Warn about potential side-effects when mutating tools executed
-              // before the turn was interrupted, so users don't blindly retry.
-              const hadMutatingTools = attempt.toolMetas.some((t) =>
-                isLikelyMutatingToolName(t.toolName),
-              );
-              const errorText = hadMutatingTools
-                ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
-                : "⚠️ Agent couldn't generate a response. Please try again.";
-
-              return {
-                payloads: [
-                  {
-                    text: errorText,
-                    isError: true,
-                  },
-                ],
-                meta: {
-                  durationMs: Date.now() - started,
-                  agentMeta,
-                  aborted,
-                  systemPromptReport: attempt.systemPromptReport,
+            compactionContinuationRetryAttempts += 1;
+            compactionContinuationRetryInstruction = COMPACTION_CONTINUATION_RETRY_INSTRUCTION;
+            log.warn(
+              `compaction interrupted visible final answer: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `compactions=${attemptCompactionCount} — retrying ${compactionContinuationRetryAttempts}/1 with compacted-transcript continuation`,
+            );
+            postCompactionGuard.armPostCompaction();
+            continue;
+          }
+          compactionContinuationRetryInstruction = null;
+          if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
+            log.warn(
+              `reasoning-only retries exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} attempts=${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} — surfacing incomplete-turn error`,
+            );
+          }
+          if (!incompleteTurnText && nextPlanningOnlyRetryInstruction && strictAgenticActive) {
+            log.warn(
+              `strict-agentic run exhausted planning-only retries: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} configured=${configuredExecutionContractForLog} — surfacing blocked state`,
+            );
+            // Criterion 4 of the GPT-5.4 parity gate requires every terminal
+            // exit path to emit an explicit livenessState + replayInvalid so
+            // downstream observers never see "silent disappearance". Every
+            // other hard-error terminal branch in this file uses "blocked"
+            // for its livenessState (role ordering, image size, schema
+            // error, compaction timeout, aborted-with-no-payloads). Match
+            // that convention here so lifecycle consumers treat an
+            // isError:true strict-agentic-blocked payload the same way they
+            // treat any other error-terminal payload. Replay validity is
+            // delegated to the shared resolver because the plan-only
+            // transcript itself is replay-safe even though the run is
+            // terminal.
+            const replayInvalid = resolveReplayInvalidForAttempt(null);
+            const livenessState: EmbeddedRunLivenessState = "blocked";
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState,
+            });
+            return {
+              payloads: [
+                {
+                  text: STRICT_AGENTIC_BLOCKED_TEXT,
+                  isError: true,
                 },
-                didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-                didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-                messagingToolSentTexts: attempt.messagingToolSentTexts,
-                messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-                messagingToolSentTargets: attempt.messagingToolSentTargets,
-                successfulCronAdds: attempt.successfulCronAdds,
-              };
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                finalAssistantVisibleText,
+                finalAssistantRawText,
+                replayInvalid,
+                livenessState,
+                toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
+          }
+          if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
+            const replayInvalid = resolveReplayInvalidForAttempt(
+              "⚠️ Agent couldn't generate a response. Please try again.",
+            );
+            const livenessState = resolveRunLivenessState({
+              payloadCount: 0,
+              aborted,
+              timedOut,
+              attempt,
+              incompleteTurnText: "⚠️ Agent couldn't generate a response. Please try again.",
+            });
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState,
+            });
+            if (lastProfileId) {
+              await maybeMarkAuthProfileFailure({
+                profileId: lastProfileId,
+                reason: resolveRunAuthProfileFailureReason(assistantFailoverReason),
+              });
             }
+            return {
+              payloads: [
+                {
+                  text: "⚠️ Agent couldn't generate a response. Please try again.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                finalAssistantVisibleText,
+                finalAssistantRawText,
+                replayInvalid,
+                livenessState,
+                toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
+          }
+          if (
+            !nextPlanningOnlyRetryInstruction &&
+            !nextReasoningOnlyRetryInstruction &&
+            nextEmptyResponseRetryInstruction &&
+            emptyResponseRetryAttempts >= maxEmptyResponseRetryAttempts
+          ) {
+            log.warn(
+              `empty response retries exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} attempts=${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} — surfacing incomplete-turn error`,
+            );
+          }
+          // ── silent-error retry ────────────────────────────────────────────
+          // Observed with ollama/glm-5.1: a turn can end with stopReason="error"
+          // and zero output tokens AND empty content after a successful
+          // tool-call sequence, producing no user-visible text at all. This
+          // path is narrower than the empty-response continuation retry:
+          // same prompt, same session transcript (tool results already
+          // captured), no instruction injection. Placed before the
+          // incompleteTurnText return so it actually gets a chance to fire.
+          //
+          // Content-empty guard: a reasoning-only error (content has thinking
+          // blocks) is a distinct failure mode handled elsewhere; only retry
+          // when the assistant truly produced nothing.
+          //
+          // Side-effect guard: if the failed attempt already recorded potential
+          // side effects (messaging tool sent, cron add, mutating tool
+          // call that wasn't round-tripped as replay-safe), resubmission can
+          // duplicate those actions. Mirror the gate the other retry resolvers
+          // use (resolveEmptyResponseRetryInstruction, reasoning-only, planning-
+          // only), which short-circuit on attempt.replayMetadata.hadPotentialSideEffects.
+          const silentErrorContent = sessionLastAssistant?.content as Array<unknown> | undefined;
+          if (
+            incompleteTurnText &&
+            !aborted &&
+            !promptError &&
+            !timedOut &&
+            sessionLastAssistant?.stopReason === "error" &&
+            ((sessionLastAssistant?.usage as { output?: number } | undefined)?.output ?? 0) === 0 &&
+            (silentErrorContent?.length ?? 0) === 0 &&
+            (attempt.replayMetadata ? !attempt.replayMetadata.hadPotentialSideEffects : false) &&
+            emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES
+          ) {
+            emptyErrorRetries += 1;
+            log.warn(
+              `[empty-error-retry] stopReason=error output=0; resubmitting ` +
+                `attempt=${emptyErrorRetries}/${MAX_EMPTY_ERROR_RETRIES} ` +
+                `provider=${sessionLastAssistant?.provider ?? provider} ` +
+                `model=${sessionLastAssistant?.model ?? model.id} ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId}`,
+            );
+            continue;
+          }
+          if (incompleteTurnText) {
+            const replayInvalid = resolveReplayInvalidForAttempt(incompleteTurnText);
+            const livenessState = resolveRunLivenessState({
+              payloadCount,
+              aborted,
+              timedOut,
+              attempt,
+              incompleteTurnText,
+            });
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState,
+            });
+            const incompleteStopReason = attempt.lastAssistant?.stopReason;
+            log.warn(
+              `incomplete turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `stopReason=${incompleteStopReason} payloads=${payloadCount} — surfacing error to user`,
+            );
+
+            // Mark the failing profile for cooldown so multi-profile setups
+            // rotate away from the exhausted credential on the next turn.
+            if (lastProfileId) {
+              await maybeMarkAuthProfileFailure({
+                profileId: lastProfileId,
+                reason: resolveRunAuthProfileFailureReason(assistantFailoverReason),
+              });
+            }
+
+            return {
+              payloads: [
+                {
+                  text: incompleteTurnText,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                finalAssistantVisibleText,
+                finalAssistantRawText,
+                replayInvalid,
+                livenessState,
+                toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
           }
 
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
           if (lastProfileId) {
-            await markAuthProfileGood({
-              store: authStore,
-              provider,
-              profileId: lastProfileId,
-              agentDir: params.agentDir,
-            });
-            await markAuthProfileUsed({
-              store: authStore,
+            await markAuthProfileSuccess({
+              store: profileFailureStore,
+              provider: resolveAuthProfileStateProvider(
+                profileFailureStore,
+                lastProfileId,
+                provider,
+              ),
               profileId: lastProfileId,
               agentDir: params.agentDir,
             });
           }
+          const replayInvalid = resolveReplayInvalidForAttempt(null);
+          const livenessState = attempt.yieldDetected
+            ? "paused"
+            : resolveRunLivenessState({
+                payloadCount,
+                aborted,
+                timedOut,
+                attempt,
+                incompleteTurnText: null,
+              });
+          const stopReason = attempt.clientToolCalls
+            ? "tool_calls"
+            : attempt.yieldDetected
+              ? "end_turn"
+              : (sessionLastAssistant?.stopReason as string | undefined);
+          const terminalPayloads = emptyAssistantReplyIsSilent
+            ? [{ text: SILENT_REPLY_TOKEN }]
+            : payloadsForTerminalPath;
+          attempt.setTerminalLifecycleMeta?.({
+            replayInvalid,
+            livenessState,
+            stopReason,
+            yielded: attempt.yieldDetected === true,
+          });
           return {
-            payloads: payloads.length ? payloads : undefined,
+            payloads: terminalPayloads?.length ? terminalPayloads : undefined,
+            ...(attempt.diagnosticTrace
+              ? { diagnosticTrace: freezeDiagnosticTraceContext(attempt.diagnosticTrace) }
+              : {}),
             meta: {
               durationMs: Date.now() - started,
               agentMeta,
               aborted,
               systemPromptReport: attempt.systemPromptReport,
+              finalPromptText: attempt.finalPromptText,
+              finalAssistantVisibleText,
+              finalAssistantRawText,
+              replayInvalid,
+              livenessState,
+              agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+              ...(attempt.yieldDetected ? { yielded: true } : {}),
+              ...(emptyAssistantReplyIsSilent
+                ? { terminalReplyKind: "silent-empty" as const }
+                : {}),
               // Handle client tool calls (OpenResponses hosted tools)
               // Propagate the LLM stop reason so callers (lifecycle events,
               // ACP bridge) can distinguish end_turn from max_tokens.
-              stopReason: attempt.clientToolCall
-                ? "tool_calls"
-                : attempt.yieldDetected
-                  ? "end_turn"
-                  : (lastAssistant?.stopReason as string | undefined),
-              pendingToolCalls: attempt.clientToolCall
-                ? [
-                    {
-                      id: randomBytes(5).toString("hex").slice(0, 9),
-                      name: attempt.clientToolCall.name,
-                      arguments: JSON.stringify(attempt.clientToolCall.params),
-                    },
-                  ]
-                : undefined,
+              stopReason,
+              pendingToolCalls: attempt.clientToolCalls?.map((call) => ({
+                id: randomBytes(5).toString("hex").slice(0, 9),
+                name: call.name,
+                arguments: JSON.stringify(call.params),
+              })),
+              executionTrace: {
+                winnerProvider: reportedModelRef.provider,
+                winnerModel: reportedModelRef.model,
+                attempts:
+                  traceAttempts.length > 0 ||
+                  sessionLastAssistant?.provider ||
+                  sessionLastAssistant?.model
+                    ? [
+                        ...traceAttempts,
+                        {
+                          provider: reportedModelRef.provider,
+                          model: reportedModelRef.model,
+                          result: "success",
+                          stage: "assistant",
+                        },
+                      ]
+                    : undefined,
+                fallbackUsed: traceAttempts.length > 0,
+                runner: "embedded",
+              },
+              requestShaping: {
+                ...(lastProfileId ? { authMode: "auth-profile" } : {}),
+                ...(thinkLevel ? { thinking: thinkLevel } : {}),
+                ...(params.reasoningLevel ? { reasoning: params.reasoningLevel } : {}),
+                ...(params.verboseLevel ? { verbose: params.verboseLevel } : {}),
+                ...(params.blockReplyBreak ? { blockStreaming: params.blockReplyBreak } : {}),
+              },
+              toolSummary: attemptToolSummary,
+              ...(failureSignal ? { failureSignal } : {}),
+              completion: {
+                ...(stopReason ? { stopReason } : {}),
+                ...(stopReason ? { finishReason: stopReason } : {}),
+                ...(stopReason?.toLowerCase().includes("refusal") ? { refusal: true } : {}),
+              },
+              contextManagement:
+                autoCompactionCount > 0 ? { lastTurnCompactions: autoCompactionCount } : undefined,
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
             messagingToolSentTexts: attempt.messagingToolSentTexts,
             messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
             messagingToolSentTargets: attempt.messagingToolSentTargets,
+            messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+            heartbeatToolResponse: attempt.heartbeatToolResponse,
             successfulCronAdds: attempt.successfulCronAdds,
           };
         }
       } finally {
-        await contextEngine.dispose?.();
+        forgetPromptBuildDrainCacheForRun(params.runId);
         stopRuntimeAuthRefreshTimer();
+        await runAgentCleanupStep({
+          runId: params.runId,
+          sessionId: params.sessionId,
+          step: "context-engine-dispose",
+          log,
+          cleanup: async () => {
+            await contextEngine.dispose?.();
+          },
+        });
+        if (params.cleanupBundleMcpOnRunEnd === true) {
+          await runAgentCleanupStep({
+            runId: params.runId,
+            sessionId: params.sessionId,
+            step: "bundle-mcp-retire",
+            log,
+            cleanup: async () => {
+              const onError = (error: unknown, sessionId: string) => {
+                log.warn(
+                  `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(error)}`,
+                );
+              };
+              const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
+                sessionKey: params.sessionKey,
+                reason: "embedded-run-end",
+                onError,
+              });
+              if (!retiredBySessionKey) {
+                await retireSessionMcpRuntime({
+                  sessionId: params.sessionId,
+                  reason: "embedded-run-end",
+                  onError,
+                });
+              }
+            },
+          });
+        }
       }
-    }),
-  );
+    });
+  });
+}
+
+function resolveAuthProfileStateProvider(
+  store: AuthProfileStore,
+  profileId: string,
+  fallbackProvider: string,
+): string {
+  const profileProvider = store.profiles?.[profileId]?.provider?.trim();
+  if (profileProvider) {
+    return profileProvider;
+  }
+  const idProvider = profileId.split(":", 1)[0]?.trim();
+  return idProvider || fallbackProvider;
 }

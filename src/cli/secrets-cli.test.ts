@@ -3,47 +3,62 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import { registerSecretsCli } from "./secrets-cli.js";
 
-const callGatewayFromCli = vi.fn();
-const runSecretsAudit = vi.fn();
-const resolveSecretsAuditExitCode = vi.fn();
-const runSecretsConfigureInteractive = vi.fn();
-const runSecretsApply = vi.fn();
-const confirm = vi.fn();
+const mocks = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  const runtime = createCliRuntimeMock(vi);
+  return {
+    callGatewayFromCli: vi.fn(),
+    runSecretsAudit: vi.fn(),
+    resolveSecretsAuditExitCode: vi.fn(),
+    runSecretsConfigureInteractive: vi.fn(),
+    runSecretsApply: vi.fn(),
+    confirm: vi.fn(),
+    ...runtime,
+  };
+});
 
-const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
-  createCliRuntimeCapture();
+const {
+  callGatewayFromCli,
+  runSecretsAudit,
+  resolveSecretsAuditExitCode,
+  runSecretsConfigureInteractive,
+  runSecretsApply,
+  confirm,
+  defaultRuntime,
+  runtimeLogs,
+  runtimeErrors,
+} = mocks;
 
 vi.mock("./gateway-rpc.js", () => ({
   addGatewayClientOptions: (cmd: Command) => cmd,
   callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
-    callGatewayFromCli(method, opts, params, extra),
+    mocks.callGatewayFromCli(method, opts, params, extra),
 }));
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime,
+  defaultRuntime: mocks.defaultRuntime,
 }));
 
 vi.mock("../secrets/audit.js", () => ({
-  runSecretsAudit: (options: unknown) => runSecretsAudit(options),
+  runSecretsAudit: (options: unknown) => mocks.runSecretsAudit(options),
   resolveSecretsAuditExitCode: (report: unknown, check: boolean) =>
-    resolveSecretsAuditExitCode(report, check),
+    mocks.resolveSecretsAuditExitCode(report, check),
 }));
 
 vi.mock("../secrets/configure.js", () => ({
-  runSecretsConfigureInteractive: (options: unknown) => runSecretsConfigureInteractive(options),
+  runSecretsConfigureInteractive: (options: unknown) =>
+    mocks.runSecretsConfigureInteractive(options),
 }));
 
 vi.mock("../secrets/apply.js", () => ({
-  runSecretsApply: (options: unknown) => runSecretsApply(options),
+  runSecretsApply: (options: unknown) => mocks.runSecretsApply(options),
 }));
 
 vi.mock("@clack/prompts", () => ({
-  confirm: (options: unknown) => confirm(options),
+  confirm: (options: unknown) => mocks.confirm(options),
 }));
-
-const { registerSecretsCli } = await import("./secrets-cli.js");
 
 function createManualSecretsPlan() {
   return {
@@ -104,6 +119,33 @@ function createSecretsApplyResult(options?: {
   };
 }
 
+function mockCall(mock: unknown, index = 0): Array<unknown> {
+  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
+  const call = calls.at(index);
+  if (!call) {
+    throw new Error(`Expected mock call ${index + 1}`);
+  }
+  return call;
+}
+
+function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
+  const [arg] = mockCall(mock);
+  if (!arg || typeof arg !== "object") {
+    throw new Error("expected first mock argument object");
+  }
+  return arg as Record<string, unknown>;
+}
+
+function expectObjectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected object fields");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
 async function withPlanFile(run: (planPath: string) => Promise<void>) {
   const planPath = path.join(
     os.tmpdir(),
@@ -126,24 +168,31 @@ describe("secrets CLI", () => {
   };
 
   beforeEach(() => {
-    resetRuntimeCapture();
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
     callGatewayFromCli.mockReset();
     runSecretsAudit.mockReset();
     resolveSecretsAuditExitCode.mockReset();
     runSecretsConfigureInteractive.mockReset();
     runSecretsApply.mockReset();
     confirm.mockReset();
+    defaultRuntime.log.mockClear();
+    defaultRuntime.error.mockClear();
+    defaultRuntime.writeStdout.mockClear();
+    defaultRuntime.writeJson.mockClear();
+    defaultRuntime.exit.mockClear();
   });
 
   it("calls secrets.reload and prints human output", async () => {
     callGatewayFromCli.mockResolvedValue({ ok: true, warningCount: 1 });
     await createProgram().parseAsync(["secrets", "reload"], { from: "user" });
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "secrets.reload",
-      expect.anything(),
-      undefined,
-      expect.objectContaining({ expectFinal: false }),
-    );
+    const reloadCall = mockCall(callGatewayFromCli);
+    expect(reloadCall[0]).toBe("secrets.reload");
+    if (reloadCall[1] === undefined) {
+      throw new Error("Expected secrets.reload params");
+    }
+    expect(reloadCall[2]).toBeUndefined();
+    expectObjectFields(reloadCall[3], { expectFinal: false });
     expect(runtimeLogs.at(-1)).toBe("Secrets reloaded with 1 warning(s).");
     expect(runtimeErrors).toHaveLength(0);
   });
@@ -152,6 +201,25 @@ describe("secrets CLI", () => {
     callGatewayFromCli.mockResolvedValue({ ok: true, warningCount: 0 });
     await createProgram().parseAsync(["secrets", "reload", "--json"], { from: "user" });
     expect(runtimeLogs.at(-1)).toContain('"ok": true');
+  });
+
+  it("explains Gateway reload failures without duplicate doctor noise", async () => {
+    callGatewayFromCli.mockRejectedValue(
+      new Error(
+        "gateway closed (1006 abnormal closure). Gateway target: ws://127.0.0.1:18789 Source: local loopback Config: /tmp/openclaw.json Bind: loopback Possible causes: - Gateway not yet ready. Run `openclaw doctor` for diagnostics.",
+      ),
+    );
+
+    await expect(
+      createProgram().parseAsync(["secrets", "reload"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.at(-1)).toContain(
+      "Could not reload secrets because the Gateway did not respond: gateway closed (1006 abnormal closure).",
+    );
+    expect(runtimeErrors.at(-1)).toContain("openclaw gateway status --deep");
+    expect(runtimeErrors.at(-1)).not.toContain("Gateway target:");
+    expect(runtimeErrors.at(-1)).not.toContain("diagnostics..");
   });
 
   it("runs secrets audit and exits via check code", async () => {
@@ -176,13 +244,13 @@ describe("secrets CLI", () => {
 
     await expect(
       createProgram().parseAsync(["secrets", "audit", "--check"], { from: "user" }),
-    ).rejects.toBeTruthy();
-    expect(runSecretsAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowExec: false,
-      }),
-    );
-    expect(resolveSecretsAuditExitCode).toHaveBeenCalledWith(expect.anything(), true);
+    ).rejects.toThrow("__exit__:2");
+    expect(mockFirstObjectArg(runSecretsAudit).allowExec).toBe(false);
+    const exitCodeCall = mockCall(resolveSecretsAuditExitCode);
+    if (exitCodeCall[0] === undefined) {
+      throw new Error("Expected secrets audit result for exit-code resolution");
+    }
+    expect(exitCodeCall[1]).toBe(true);
   });
 
   it("forwards --allow-exec to secrets audit", async () => {
@@ -206,11 +274,7 @@ describe("secrets CLI", () => {
     resolveSecretsAuditExitCode.mockReturnValue(0);
 
     await createProgram().parseAsync(["secrets", "audit", "--allow-exec"], { from: "user" });
-    expect(runSecretsAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowExec: true,
-      }),
-    );
+    expect(mockFirstObjectArg(runSecretsAudit).allowExec).toBe(true);
   });
 
   it("runs secrets configure then apply when confirmed", async () => {
@@ -235,20 +299,19 @@ describe("secrets CLI", () => {
     runSecretsApply.mockResolvedValue(createSecretsApplyResult({ mode: "write", changed: true }));
 
     await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
-    expect(runSecretsConfigureInteractive).toHaveBeenCalled();
-    expect(runSecretsApply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        write: true,
-        plan: expect.objectContaining({
-          targets: expect.arrayContaining([
-            expect.objectContaining({
-              type: "skills.entries.apiKey",
-              path: "skills.entries.qa-secret-test.apiKey",
-            }),
-          ]),
-        }),
-      }),
-    );
+    expect(runSecretsConfigureInteractive).toHaveBeenCalledTimes(1);
+    const applyArgs = mockFirstObjectArg(runSecretsApply);
+    expect(applyArgs.write).toBe(true);
+    if (!applyArgs.plan || typeof applyArgs.plan !== "object") {
+      throw new Error("expected apply plan object");
+    }
+    const applyPlan = applyArgs.plan as { targets?: unknown[] };
+    expect(Array.isArray(applyPlan.targets)).toBe(true);
+    const [target] = applyPlan.targets ?? [];
+    expectObjectFields(target, {
+      type: "skills.entries.apiKey",
+      path: "skills.entries.qa-secret-test.apiKey",
+    });
     expect(runtimeLogs.at(-1)).toContain("Secrets applied");
   });
 
@@ -257,12 +320,10 @@ describe("secrets CLI", () => {
     confirm.mockResolvedValue(false);
 
     await createProgram().parseAsync(["secrets", "configure", "--agent", "ops"], { from: "user" });
-    expect(runSecretsConfigureInteractive).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "ops",
-        allowExecInPreflight: false,
-      }),
-    );
+    expectObjectFields(mockFirstObjectArg(runSecretsConfigureInteractive), {
+      agentId: "ops",
+      allowExecInPreflight: false,
+    });
   });
 
   it("forwards --allow-exec to secrets apply dry-run", async () => {
@@ -275,12 +336,10 @@ describe("secrets CLI", () => {
           from: "user",
         },
       );
-      expect(runSecretsApply).toHaveBeenCalledWith(
-        expect.objectContaining({
-          write: false,
-          allowExec: true,
-        }),
-      );
+      expectObjectFields(mockFirstObjectArg(runSecretsApply), {
+        write: false,
+        allowExec: true,
+      });
     });
   });
 
@@ -291,12 +350,10 @@ describe("secrets CLI", () => {
       await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--allow-exec"], {
         from: "user",
       });
-      expect(runSecretsApply).toHaveBeenCalledWith(
-        expect.objectContaining({
-          write: true,
-          allowExec: true,
-        }),
-      );
+      expectObjectFields(mockFirstObjectArg(runSecretsApply), {
+        write: true,
+        allowExec: true,
+      });
     });
   });
 
@@ -307,9 +364,10 @@ describe("secrets CLI", () => {
       await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--dry-run"], {
         from: "user",
       });
-      expect(runtimeLogs.some((line) => line.includes("Secrets apply dry-run note: skipped"))).toBe(
-        false,
+      const skippedExecNotes = runtimeLogs.filter((line) =>
+        line.includes("Secrets apply dry-run note: skipped"),
       );
+      expect(skippedExecNotes).toStrictEqual([]);
     });
   });
 
@@ -320,7 +378,10 @@ describe("secrets CLI", () => {
     confirm.mockResolvedValue(false);
 
     await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
-    expect(runtimeLogs.some((line) => line.includes("Preflight note: skipped"))).toBe(false);
+    const preflightSkippedExecNotes = runtimeLogs.filter((line) =>
+      line.includes("Preflight note: skipped"),
+    );
+    expect(preflightSkippedExecNotes).toStrictEqual([]);
   });
 
   it("forwards --allow-exec to configure preflight and apply", async () => {
@@ -330,16 +391,10 @@ describe("secrets CLI", () => {
     await createProgram().parseAsync(["secrets", "configure", "--apply", "--yes", "--allow-exec"], {
       from: "user",
     });
-    expect(runSecretsConfigureInteractive).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowExecInPreflight: true,
-      }),
-    );
-    expect(runSecretsApply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        write: true,
-        allowExec: true,
-      }),
-    );
+    expect(mockFirstObjectArg(runSecretsConfigureInteractive).allowExecInPreflight).toBe(true);
+    expectObjectFields(mockFirstObjectArg(runSecretsApply), {
+      write: true,
+      allowExec: true,
+    });
   });
 });

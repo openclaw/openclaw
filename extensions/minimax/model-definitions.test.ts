@@ -5,7 +5,10 @@ import {
   DEFAULT_MINIMAX_CONTEXT_WINDOW,
   DEFAULT_MINIMAX_MAX_TOKENS,
   MINIMAX_API_COST,
+  MINIMAX_API_HIGHSPEED_COST,
   MINIMAX_HOSTED_MODEL_ID,
+  MINIMAX_M25_API_COST,
+  MINIMAX_M25_API_HIGHSPEED_COST,
 } from "./model-definitions.js";
 
 describe("minimax model definitions", () => {
@@ -24,30 +27,75 @@ describe("minimax model definitions", () => {
     });
   });
 
-  it("builds catalog model with name and reasoning from catalog", () => {
+  it("builds catalog model with name and reasoning from catalog for M2.7", () => {
     const model = buildMinimaxModelDefinition({
       id: "MiniMax-M2.7",
       cost: MINIMAX_API_COST,
       contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
     });
-    expect(model).toMatchObject({
+    expect(model).toEqual({
+      contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+      cost: MINIMAX_API_COST,
       id: "MiniMax-M2.7",
+      input: ["text"],
+      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
       name: "MiniMax M2.7",
       reasoning: true,
     });
   });
 
-  it("builds API model definition with standard cost", () => {
+  it("builds non-catalog model with generated name and default reasoning", () => {
+    const model = buildMinimaxModelDefinition({
+      id: "MiniMax-M2.5",
+      cost: MINIMAX_API_COST,
+      contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+    });
+    expect(model).toEqual({
+      contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+      cost: MINIMAX_API_COST,
+      id: "MiniMax-M2.5",
+      input: ["text"],
+      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+      name: "MiniMax MiniMax-M2.5",
+      reasoning: false,
+    });
+  });
+
+  it("builds API model definition with standard cost for M2.7", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M2.7");
     expect(model.cost).toEqual(MINIMAX_API_COST);
     expect(model.contextWindow).toBe(DEFAULT_MINIMAX_CONTEXT_WINDOW);
     expect(model.maxTokens).toBe(DEFAULT_MINIMAX_MAX_TOKENS);
+    expect(model.input).toEqual(["text"]);
   });
 
   it("falls back to generated name for unknown model id", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-Future");
     expect(model.name).toBe("MiniMax MiniMax-Future");
     expect(model.reasoning).toBe(false);
+  });
+
+  it("keeps M2.7 text-only on the Anthropic-compatible chat path", () => {
+    const model = buildMinimaxApiModelDefinition("MiniMax-M2.7");
+    expect(model.input).toEqual(["text"]);
+  });
+
+  it("keeps M2.7-highspeed text-only on the Anthropic-compatible chat path", () => {
+    const model = buildMinimaxApiModelDefinition("MiniMax-M2.7-highspeed");
+    expect(model.input).toEqual(["text"]);
+    expect(model.cost).toEqual(MINIMAX_API_HIGHSPEED_COST);
+  });
+
+  it("M2.5 model remains text-only", () => {
+    const model = buildMinimaxApiModelDefinition("MiniMax-M2.5");
+    expect(model.input).toEqual(["text"]);
+    expect(model.cost).toEqual(MINIMAX_M25_API_COST);
+  });
+
+  it("M2.5-highspeed keeps the M2.5 cache-read pricing", () => {
+    const model = buildMinimaxApiModelDefinition("MiniMax-M2.5-highspeed");
+    expect(model.cost).toEqual(MINIMAX_M25_API_HIGHSPEED_COST);
   });
 });

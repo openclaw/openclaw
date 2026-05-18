@@ -1,20 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-
-const loadOpenClawPluginsMock = vi.fn();
-
-vi.mock("../plugins/loader.js", () => ({
-  loadOpenClawPlugins: (...args: Parameters<typeof loadOpenClawPluginsMock>) =>
-    loadOpenClawPluginsMock(...args),
-}));
-
-let getSpeechProvider: typeof import("./provider-registry.js").getSpeechProvider;
-let listSpeechProviders: typeof import("./provider-registry.js").listSpeechProviders;
-let canonicalizeSpeechProviderId: typeof import("./provider-registry.js").canonicalizeSpeechProviderId;
-let normalizeSpeechProviderId: typeof import("./provider-registry.js").normalizeSpeechProviderId;
+import {
+  createSpeechProviderRegistry,
+  normalizeSpeechProviderId,
+} from "./provider-registry-core.js";
 
 function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlugin {
   return {
@@ -32,78 +22,57 @@ function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlu
 }
 
 describe("speech provider registry", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    resetPluginRuntimeStateForTest();
-    loadOpenClawPluginsMock.mockReset();
-    loadOpenClawPluginsMock.mockReturnValue(createEmptyPluginRegistry());
-    ({
-      getSpeechProvider,
-      listSpeechProviders,
-      canonicalizeSpeechProviderId,
-      normalizeSpeechProviderId,
-    } = await import("./provider-registry.js"));
-  });
+  const getProviderCalls: Array<{ providerId: string; cfg?: OpenClawConfig }> = [];
+  const listProvidersCalls: Array<{ cfg?: OpenClawConfig }> = [];
+  let providers: SpeechProviderPlugin[] = [];
+  let directProvider: SpeechProviderPlugin | undefined;
+  let registry: ReturnType<typeof createSpeechProviderRegistry>;
 
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-  });
-
-  it("uses active plugin speech providers without reloading plugins", () => {
-    setActivePluginRegistry({
-      ...createEmptyPluginRegistry(),
-      speechProviders: [
-        {
-          pluginId: "test-openai",
-          source: "test",
-          provider: createSpeechProvider("openai"),
-        },
-      ],
+  beforeEach(() => {
+    providers = [];
+    directProvider = undefined;
+    getProviderCalls.length = 0;
+    listProvidersCalls.length = 0;
+    registry = createSpeechProviderRegistry({
+      getProvider: (providerId, cfg) => {
+        getProviderCalls.push({ providerId, cfg });
+        return directProvider;
+      },
+      listProviders: (cfg) => {
+        listProvidersCalls.push({ cfg });
+        return providers;
+      },
     });
-
-    const providers = listSpeechProviders();
-
-    expect(providers.map((provider) => provider.id)).toEqual(["openai"]);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("loads speech providers from plugins when config is provided", () => {
-    loadOpenClawPluginsMock.mockReturnValue({
-      ...createEmptyPluginRegistry(),
-      speechProviders: [
-        {
-          pluginId: "test-microsoft",
-          source: "test",
-          provider: createSpeechProvider("microsoft", ["edge"]),
-        },
-      ],
-    });
-
+  it("lists providers from the speech capability runtime", () => {
     const cfg = {} as OpenClawConfig;
+    providers = [createSpeechProvider("demo-speech")];
 
-    expect(listSpeechProviders(cfg).map((provider) => provider.id)).toEqual(["microsoft"]);
-    expect(getSpeechProvider("edge", cfg)?.id).toBe("microsoft");
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith({ config: cfg });
+    expect(registry.listSpeechProviders(cfg).map((provider) => provider.id)).toEqual([
+      "demo-speech",
+    ]);
+    expect(listProvidersCalls).toEqual([{ cfg }]);
   });
 
-  it("returns no providers when neither plugins nor active registry provide speech support", () => {
-    expect(listSpeechProviders()).toEqual([]);
-    expect(getSpeechProvider("openai")).toBeUndefined();
+  it("gets providers by normalized id through the capability runtime", () => {
+    const cfg = {} as OpenClawConfig;
+    directProvider = createSpeechProvider("microsoft", ["edge"]);
+
+    expect(registry.getSpeechProvider(" MICROSOFT ", cfg)).toBe(directProvider);
+    expect(getProviderCalls).toEqual([{ providerId: "microsoft", cfg }]);
   });
 
-  it("canonicalizes the legacy edge alias to microsoft", () => {
-    setActivePluginRegistry({
-      ...createEmptyPluginRegistry(),
-      speechProviders: [
-        {
-          pluginId: "test-microsoft",
-          source: "test",
-          provider: createSpeechProvider("microsoft", ["edge"]),
-        },
-      ],
-    });
+  it("canonicalizes aliases from listed providers when direct lookup misses", () => {
+    providers = [createSpeechProvider("microsoft", ["edge"])];
 
     expect(normalizeSpeechProviderId("edge")).toBe("edge");
-    expect(canonicalizeSpeechProviderId("edge")).toBe("microsoft");
+    expect(registry.canonicalizeSpeechProviderId("edge")).toBe("microsoft");
+  });
+
+  it("returns empty results when the capability runtime has no speech providers", () => {
+    expect(registry.listSpeechProviders()).toStrictEqual([]);
+    expect(registry.getSpeechProvider("demo-speech")).toBeUndefined();
+    expect(registry.canonicalizeSpeechProviderId("demo-speech")).toBe("demo-speech");
   });
 });

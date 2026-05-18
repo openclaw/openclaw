@@ -1,99 +1,272 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryIndexManager } from "./index.js";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  moveMemoryIndexFiles,
+  removeMemoryIndexFiles,
+  runMemoryAtomicReindex,
+} from "./manager-atomic-reindex.js";
 
-let shouldFail = false;
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expectRejectCode(fs.access(targetPath), "ENOENT");
+}
 
-type EmbeddingTestMocksModule = typeof import("./embedding.test-mocks.js");
-type TestManagerHelpersModule = typeof import("./test-manager-helpers.js");
-type MemoryIndexModule = typeof import("./index.js");
+async function expectRejectCode(promise: Promise<unknown>, code: string): Promise<void> {
+  try {
+    await promise;
+  } catch (error) {
+    expect((error as { code?: unknown }).code).toBe(code);
+    return;
+  }
+  throw new Error(`Expected rejection with code ${code}`);
+}
 
 describe("memory manager atomic reindex", () => {
   let fixtureRoot = "";
   let caseId = 0;
-  let workspaceDir: string;
   let indexPath: string;
-  let manager: MemoryIndexManager | null = null;
-  let embedBatch: ReturnType<EmbeddingTestMocksModule["getEmbedBatchMock"]>;
-  let resetEmbeddingMocks: EmbeddingTestMocksModule["resetEmbeddingMocks"];
-  let getRequiredMemoryIndexManager: TestManagerHelpersModule["getRequiredMemoryIndexManager"];
-  let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
+  let tempIndexPath: string;
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-atomic-"));
   });
 
   beforeEach(async () => {
-    vi.resetModules();
-    const embeddingMocks = await import("./embedding.test-mocks.js");
-    embedBatch = embeddingMocks.getEmbedBatchMock();
-    resetEmbeddingMocks = embeddingMocks.resetEmbeddingMocks;
-    ({ getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js"));
-    ({ closeAllMemorySearchManagers } = await import("./index.js"));
-    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
-    resetEmbeddingMocks();
-    shouldFail = false;
-    embedBatch.mockImplementation(async (texts: string[]) => {
-      if (shouldFail) {
-        throw new Error("embedding failure");
-      }
-      return texts.map((_, index) => [index + 1, 0, 0]);
-    });
-    workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
+    const workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(workspaceDir, { recursive: true });
     indexPath = path.join(workspaceDir, "index.sqlite");
-    await fs.mkdir(path.join(workspaceDir, "memory"));
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello memory.");
-  });
-
-  afterEach(async () => {
-    if (manager) {
-      await manager.close();
-      manager = null;
-    }
-    await closeAllMemorySearchManagers();
-    vi.unstubAllEnvs();
+    tempIndexPath = `${indexPath}.tmp`;
   });
 
   afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
-    }
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   it("keeps the prior index when a full reindex fails", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath },
-            cache: { enabled: false },
-            // Perf: keep test indexes to a single chunk to reduce sqlite work.
-            chunking: { tokens: 4000, overlap: 0 },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-          },
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
+
+    await expect(
+      runMemoryAtomicReindex({
+        targetPath: indexPath,
+        tempPath: tempIndexPath,
+        build: async () => {
+          throw new Error("embedding failure");
         },
-        list: [{ id: "main", default: true }],
-      },
-    } as OpenClawConfig;
+      }),
+    ).rejects.toThrow("embedding failure");
 
-    manager = await getRequiredMemoryIndexManager({ cfg, agentId: "main" });
+    expect(readChunkMarker(indexPath)).toBe("before");
+    await expectPathMissing(tempIndexPath);
+  });
 
-    await manager.sync({ force: true });
-    const beforeStatus = manager.status();
-    expect(beforeStatus.chunks).toBeGreaterThan(0);
+  it("replaces the old index after a successful temp reindex", async () => {
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
 
-    shouldFail = true;
-    await expect(manager.sync({ force: true })).rejects.toThrow("embedding failure");
+    await runMemoryAtomicReindex({
+      targetPath: indexPath,
+      tempPath: tempIndexPath,
+      build: async () => undefined,
+    });
 
-    const afterStatus = manager.status();
-    expect(afterStatus.chunks).toBeGreaterThan(0);
+    expect(readChunkMarker(indexPath)).toBe("after");
+    await expectPathMissing(tempIndexPath);
+  });
+
+  it("retries transient rename failures during index swaps", async () => {
+    const rename = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "EBUSY" }))
+      .mockResolvedValue(undefined);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
+      fileOps: { rename, rm: fs.rm, wait },
+      maxRenameAttempts: 3,
+      renameRetryDelayMs: 10,
+    });
+
+    expect(rename).toHaveBeenCalledTimes(4);
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(wait).toHaveBeenCalledWith(10);
+  });
+
+  it("throws after retrying transient rename failures up to the attempt limit", async () => {
+    const rename = vi.fn().mockRejectedValue(Object.assign(new Error("busy"), { code: "EBUSY" }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expectRejectCode(
+      moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
+        fileOps: { rename, rm: fs.rm, wait },
+        maxRenameAttempts: 3,
+        renameRetryDelayMs: 10,
+      }),
+      "EBUSY",
+    );
+
+    expect(rename).toHaveBeenCalledTimes(3);
+    expect(wait).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenNthCalledWith(1, 10);
+    expect(wait).toHaveBeenNthCalledWith(2, 20);
+  });
+
+  it("does not retry missing optional sqlite sidecar files", async () => {
+    const rename = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(Object.assign(new Error("missing wal"), { code: "ENOENT" }))
+      .mockRejectedValueOnce(Object.assign(new Error("missing shm"), { code: "ENOENT" }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
+      fileOps: { rename, rm: fs.rm, wait },
+      maxRenameAttempts: 3,
+      renameRetryDelayMs: 10,
+    });
+
+    expect(rename).toHaveBeenCalledTimes(3);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("does not retry non-transient rename failures", async () => {
+    const rename = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("invalid"), { code: "EINVAL" }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expectRejectCode(
+      moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
+        fileOps: { rename, rm: fs.rm, wait },
+        maxRenameAttempts: 3,
+        renameRetryDelayMs: 10,
+      }),
+      "EINVAL",
+    );
+
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it.each(["EBUSY", "EPERM", "EACCES"] as const)(
+    "retries transient %s rm failures during index file cleanup",
+    async (code) => {
+      const calls: string[] = [];
+      const rm: typeof fs.rm = vi.fn(async (filePath) => {
+        calls.push(String(filePath));
+        if (calls.length === 1) {
+          throw Object.assign(new Error("busy"), { code });
+        }
+      });
+      const wait = vi.fn().mockResolvedValue(undefined);
+
+      await removeMemoryIndexFiles("index.sqlite.tmp", {
+        fileOps: { rename: fs.rename, rm, wait },
+        maxRemoveAttempts: 3,
+        removeRetryDelayMs: 10,
+      });
+
+      expect(calls).toEqual([
+        "index.sqlite.tmp",
+        "index.sqlite.tmp",
+        "index.sqlite.tmp-wal",
+        "index.sqlite.tmp-shm",
+      ]);
+      expect(wait).toHaveBeenCalledTimes(1);
+      expect(wait).toHaveBeenCalledWith(10);
+    },
+  );
+
+  it("throws after exhausting transient rm retries", async () => {
+    const rm = vi.fn().mockRejectedValue(Object.assign(new Error("busy"), { code: "EBUSY" }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expectRejectCode(
+      removeMemoryIndexFiles("index.sqlite.tmp", {
+        fileOps: { rename: fs.rename, rm, wait },
+        maxRemoveAttempts: 3,
+        removeRetryDelayMs: 10,
+      }),
+      "EBUSY",
+    );
+
+    expect(rm).toHaveBeenCalledTimes(3);
+    expect(wait).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenNthCalledWith(1, 10);
+    expect(wait).toHaveBeenNthCalledWith(2, 20);
+  });
+
+  it("does not retry non-transient rm failures", async () => {
+    const rm = vi.fn().mockRejectedValue(Object.assign(new Error("invalid"), { code: "EINVAL" }));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expectRejectCode(
+      removeMemoryIndexFiles("index.sqlite.tmp", {
+        fileOps: { rename: fs.rename, rm, wait },
+        maxRemoveAttempts: 3,
+        removeRetryDelayMs: 10,
+      }),
+      "EINVAL",
+    );
+
+    expect(rm).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("closes temp resources before removing temp files after build failure", async () => {
+    const events: string[] = [];
+    let tempClosed = false;
+    const rm: typeof fs.rm = vi.fn(async (filePath) => {
+      events.push(tempClosed ? `rm:${String(filePath)}:closed` : `rm:${String(filePath)}:open`);
+    });
+
+    await expect(
+      runMemoryAtomicReindex({
+        targetPath: "index.sqlite",
+        tempPath: "index.sqlite.tmp",
+        beforeTempCleanup: async () => {
+          events.push("close-temp");
+          tempClosed = true;
+        },
+        fileOptions: {
+          fileOps: { rename: fs.rename, rm, wait: vi.fn().mockResolvedValue(undefined) },
+        },
+        build: async () => {
+          throw new Error("embedding failure");
+        },
+      }),
+    ).rejects.toThrow("embedding failure");
+
+    expect(events).toEqual([
+      "close-temp",
+      "rm:index.sqlite.tmp:closed",
+      "rm:index.sqlite.tmp-wal:closed",
+      "rm:index.sqlite.tmp-shm:closed",
+    ]);
   });
 });
+
+function writeChunkMarker(dbPath: string, marker: string): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec("CREATE TABLE chunks (id TEXT PRIMARY KEY, text TEXT NOT NULL)");
+    db.prepare("INSERT INTO chunks (id, text) VALUES (?, ?)").run("chunk-1", marker);
+  } finally {
+    db.close();
+  }
+}
+
+function readChunkMarker(dbPath: string): string | undefined {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return (
+      db.prepare("SELECT text FROM chunks WHERE id = ?").get("chunk-1") as
+        | { text: string }
+        | undefined
+    )?.text;
+  } finally {
+    db.close();
+  }
+}

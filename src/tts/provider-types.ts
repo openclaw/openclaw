@@ -1,9 +1,10 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { TalkProviderConfig } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.js";
+import type { ResolvedTtsPersona } from "../config/types.tts.js";
 
 export type SpeechProviderId = string;
 
-export type SpeechSynthesisTarget = "audio-file" | "voice-note";
+export type SpeechSynthesisTarget = "audio-file" | "voice-note" | "telephony";
 
 export type SpeechProviderConfig = Record<string, unknown>;
 
@@ -56,10 +57,21 @@ export type SpeechSynthesisResult = {
   voiceCompatible: boolean;
 };
 
+export type SpeechSynthesisStreamRequest = SpeechSynthesisRequest;
+
+export type SpeechSynthesisStreamResult = {
+  audioStream: ReadableStream<Uint8Array>;
+  outputFormat: string;
+  fileExtension: string;
+  voiceCompatible: boolean;
+  release?: () => Promise<void>;
+};
+
 export type SpeechTelephonySynthesisRequest = {
   text: string;
   cfg: OpenClawConfig;
   providerConfig: SpeechProviderConfig;
+  providerOverrides?: SpeechProviderOverrides;
   timeoutMs: number;
 };
 
@@ -67,6 +79,23 @@ export type SpeechTelephonySynthesisResult = {
   audioBuffer: Buffer;
   outputFormat: string;
   sampleRate: number;
+};
+
+export type SpeechProviderPrepareSynthesisContext = {
+  text: string;
+  cfg: OpenClawConfig;
+  providerConfig: SpeechProviderConfig;
+  providerOverrides?: SpeechProviderOverrides;
+  persona?: ResolvedTtsPersona;
+  personaProviderConfig?: SpeechProviderConfig;
+  target: SpeechSynthesisTarget;
+  timeoutMs: number;
+};
+
+export type SpeechProviderPreparedSynthesis = {
+  text?: string;
+  providerConfig?: SpeechProviderConfig;
+  providerOverrides?: SpeechProviderOverrides;
 };
 
 export type SpeechVoiceOption = {
@@ -96,6 +125,7 @@ export type SpeechDirectiveTokenParseContext = {
   key: string;
   value: string;
   policy: SpeechModelOverridePolicy;
+  selectedProvider?: SpeechProviderId;
   providerConfig?: SpeechProviderConfig;
   currentOverrides?: SpeechProviderOverrides;
 };

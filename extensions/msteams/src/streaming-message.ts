@@ -10,6 +10,7 @@
  */
 
 import { createDraftStreamLoop, type DraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** Default throttle interval between stream updates (ms).
  * Teams docs recommend buffering tokens for 1.5-2s; limit is 1 req/s. */
@@ -21,9 +22,15 @@ const MIN_INITIAL_CHARS = 20;
 /** Teams message text limit. */
 const TEAMS_MAX_CHARS = 4000;
 
-type StreamSendFn = (activity: Record<string, unknown>) => Promise<{ id?: string } | unknown>;
+/**
+ * Stop streaming before Teams expires the content stream server-side.
+ * The exact service limit is opaque, so stay comfortably under it.
+ */
+const MAX_STREAM_AGE_MS = 45_000;
 
-export type TeamsStreamOptions = {
+type StreamSendFn = (activity: Record<string, unknown>) => Promise<unknown>;
+
+type TeamsStreamOptions = {
   /** Function to send an activity (POST to Bot Framework). */
   sendActivity: StreamSendFn;
   /** Whether to enable feedback loop on the final message. */
@@ -35,11 +42,11 @@ export type TeamsStreamOptions = {
 };
 
 import { AI_GENERATED_ENTITY } from "./ai-entity.js";
+import { formatUnknownError } from "./errors.js";
 
 function extractId(response: unknown): string | undefined {
   if (response && typeof response === "object" && "id" in response) {
-    const id = (response as { id?: unknown }).id;
-    return typeof id === "string" ? id : undefined;
+    return readStringValue((response as { id?: unknown }).id);
   }
   return undefined;
 }
@@ -76,6 +83,8 @@ export class TeamsHttpStream {
   private finalized = false;
   private streamFailed = false;
   private lastStreamedText = "";
+  private finalMessageId: string | undefined = undefined;
+  private streamStartedAt: number | undefined = undefined;
   private loop: DraftStreamLoop;
 
   constructor(options: TeamsStreamOptions) {
@@ -141,17 +150,41 @@ export class TeamsHttpStream {
       return;
     }
 
+    // Stop early before Teams expires the stream server-side. finalize() will
+    // close the stream with the last good content, and reply-stream-controller
+    // will deliver any remaining suffix via normal fallback delivery.
+    if (this.streamStartedAt && Date.now() - this.streamStartedAt >= MAX_STREAM_AGE_MS) {
+      this.streamFailed = true;
+      void this.finalize();
+      return;
+    }
+
     // Don't append cursor — Teams requires each chunk to be a prefix of subsequent chunks.
     // The cursor character would cause "content should contain previously streamed content" errors.
     this.loop.update(this.accumulatedText);
   }
 
   /**
+   * Replace an informative progress update with final answer text.
+   * Returns false when the stream could not safely carry the final text, so
+   * callers can deliver the answer through the normal Teams message path.
+   */
+  async replaceInformativeWithFinal(text: string): Promise<boolean> {
+    if (this.stopped || this.finalized) {
+      return false;
+    }
+    this.update(text);
+    await this.loop.flush();
+    await this.finalize();
+    return !this.streamFailed && this.hasContent;
+  }
+
+  /**
    * Finalize the stream — send the final message activity.
    */
-  async finalize(): Promise<void> {
+  async finalize(): Promise<string | undefined> {
     if (this.finalized) {
-      return;
+      return this.finalMessageId;
     }
     this.finalized = true;
     this.stopped = true;
@@ -163,7 +196,7 @@ export class TeamsHttpStream {
     // bar after its streaming timeout. Sending an empty final message fails
     // with 403.
     if (!this.accumulatedText.trim()) {
-      return;
+      return this.finalMessageId;
     }
 
     // If streaming failed (>4000 chars or POST errors), close the stream
@@ -173,17 +206,18 @@ export class TeamsHttpStream {
     if (this.streamFailed) {
       if (this.streamId) {
         try {
-          await this.sendActivity({
+          const response = await this.sendActivity({
             type: "message",
             text: this.lastStreamedText || "",
             channelData: { feedbackLoopEnabled: this.feedbackLoopEnabled },
             entities: [AI_GENERATED_ENTITY, buildStreamInfoEntity(this.streamId, "final")],
           });
+          this.finalMessageId = extractId(response);
         } catch {
           // Best effort — stream will auto-close after Teams timeout
         }
       }
-      return;
+      return this.finalMessageId;
     }
 
     // Send final message activity.
@@ -203,10 +237,13 @@ export class TeamsHttpStream {
         entities,
       };
 
-      await this.sendActivity(finalActivity);
+      const response = await this.sendActivity(finalActivity);
+      this.finalMessageId = extractId(response);
     } catch (err) {
+      this.streamFailed = true;
       this.onError?.(err);
     }
+    return this.finalMessageId;
   }
 
   /** Whether streaming successfully delivered content (at least one chunk sent, not failed). */
@@ -214,9 +251,29 @@ export class TeamsHttpStream {
     return this.accumulatedText.length > 0 && !this.streamFailed;
   }
 
+  /** Whether streaming failed and fallback delivery is needed. */
+  get isFailed(): boolean {
+    return this.streamFailed;
+  }
+
+  /** Number of characters successfully streamed before failure. */
+  get streamedLength(): number {
+    return this.lastStreamedText.length;
+  }
+
   /** Whether the stream has been finalized. */
   get isFinalized(): boolean {
     return this.finalized;
+  }
+
+  /** Platform id returned by the final message activity, when available. */
+  get messageId(): string | undefined {
+    return this.finalMessageId;
+  }
+
+  /** Stream id returned by the first streaminfo activity, when available. */
+  get previewStreamId(): string | undefined {
+    return this.streamId;
   }
 
   /** Whether streaming fell back (not used in this implementation). */
@@ -245,6 +302,9 @@ export class TeamsHttpStream {
 
     try {
       const response = await this.sendActivity(activity);
+      if (!this.streamStartedAt) {
+        this.streamStartedAt = Date.now();
+      }
       if (!this.streamId) {
         this.streamId = extractId(response);
       }
@@ -254,7 +314,7 @@ export class TeamsHttpStream {
       const axiosData = (err as { response?: { data?: unknown; status?: number } })?.response;
       const statusCode = axiosData?.status ?? (err as { statusCode?: number })?.statusCode;
       const responseBody = axiosData?.data ? JSON.stringify(axiosData.data).slice(0, 300) : "";
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = formatUnknownError(err);
       this.onError?.(
         new Error(
           `stream POST failed (HTTP ${statusCode ?? "?"}): ${msg}${responseBody ? ` body=${responseBody}` : ""}`,
