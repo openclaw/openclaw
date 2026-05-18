@@ -6,7 +6,7 @@ import {
   isSecretRefHeaderValueMarker,
 } from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import { parseConfigJson5, resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -273,15 +273,22 @@ function collectConfigBackupPlaintext(params: {
     return;
   }
   params.collector.filesScanned.add(params.configBackupPath);
-  const parsedResult = readJsonObjectIfExists(params.configBackupPath, {
-    requireRegularFile: true,
-    maxBytes: MAX_AUDIT_MODELS_JSON_BYTES,
-  });
-  if (parsedResult.error || !parsedResult.value) {
+  let raw: string;
+  try {
+    const stats = fs.statSync(params.configBackupPath);
+    if (!stats.isFile() || stats.size > MAX_AUDIT_MODELS_JSON_BYTES) {
+      return;
+    }
+    raw = fs.readFileSync(params.configBackupPath, "utf8");
+  } catch {
+    return;
+  }
+  const parsedResult = parseConfigJson5(raw);
+  if (!parsedResult.ok || !isRecord(parsedResult.parsed)) {
     return;
   }
   collectConfigSecrets({
-    config: parsedResult.value as OpenClawConfig,
+    config: parsedResult.parsed as OpenClawConfig,
     configPath: params.configBackupPath,
     collector: params.collector,
     includeRefs: false,

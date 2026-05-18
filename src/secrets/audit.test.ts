@@ -285,6 +285,48 @@ describe("secrets audit", () => {
     ).toBe(true);
   });
 
+  it("scans JSON5 openclaw config backups for plaintext secret residues", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+    const backupPath = `${fixture.configPath}.pre-update`;
+    await fs.writeFile(
+      backupPath,
+      [
+        "{",
+        "  // Authored configs and their backups use JSON5.",
+        "  models: {",
+        "    providers: {",
+        "      openai: {",
+        '        baseUrl: "https://api.openai.com/v1",',
+        '        api: "openai-completions",',
+        '        apiKey: "sk-json5-backup-plaintext",', // pragma: allowlist secret
+        '        models: [{ id: "gpt-5", name: "gpt-5" }],',
+        "      },",
+        "    },",
+        "  },",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(report.filesScanned).toContain(backupPath);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === backupPath &&
+          entry.jsonPath === "models.providers.openai.apiKey",
+      ),
+    ).toBe(true);
+  });
+
   it("scans rejected openclaw config payload artifacts for plaintext secret residues", async () => {
     await writeJsonFile(fixture.authStorePath, {
       version: 1,
