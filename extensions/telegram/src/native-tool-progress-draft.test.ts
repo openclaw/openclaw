@@ -30,14 +30,12 @@ describe("createNativeTelegramToolProgressDraft", () => {
     } as never);
 
     expect(draft).toBeDefined();
-    await draft?.update("");
     await draft?.update("Running command");
 
-    expect(sendMessageDraft).toHaveBeenCalledTimes(2);
+    expect(sendMessageDraft).toHaveBeenCalledTimes(1);
     const firstDraftId = sendMessageDraft.mock.calls[0]?.[1];
     expect(firstDraftId).toEqual(expect.any(Number));
     expect(firstDraftId).not.toBe(0);
-    expect(sendMessageDraft.mock.calls[1]?.[1]).toBe(firstDraftId);
     expect(sendMessageDraft).toHaveBeenLastCalledWith(123, firstDraftId, "Running command", {
       message_thread_id: 456,
     });

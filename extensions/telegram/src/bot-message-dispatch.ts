@@ -671,15 +671,28 @@ export const dispatchTelegramMessage = async ({
     }
     const rawText = typeof line === "string" ? line : line?.text;
     const normalized = sanitizeProgressMarkdownText(rawText?.replace(/\s+/g, " ").trim() ?? "");
+    if (streamToolProgressSuppressed) {
+      return false;
+    }
+    if (streamMode !== "progress" && !streamToolProgressEnabled) {
+      return false;
+    }
+    const shouldUpdateProgressLines =
+      streamToolProgressEnabled && !streamToolProgressSuppressed && Boolean(normalized);
+    if (!shouldUpdateProgressLines && streamMode !== "progress") {
+      return false;
+    }
     const progressLine =
       typeof line === "object" && line !== undefined ? { ...line, text: normalized } : normalized;
-    if (nativeToolProgressDraft && !streamToolProgressSuppressed && normalized) {
-      const nextLines = mergeChannelProgressDraftLine(streamToolProgressLines, progressLine, {
-        maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
-      });
-      if (nextLines === streamToolProgressLines) {
-        return false;
-      }
+    const nextLines = shouldUpdateProgressLines
+      ? mergeChannelProgressDraftLine(streamToolProgressLines, progressLine, {
+          maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
+        })
+      : streamToolProgressLines;
+    if (shouldUpdateProgressLines && nextLines === streamToolProgressLines) {
+      return false;
+    }
+    if (nativeToolProgressDraft && shouldUpdateProgressLines) {
       const streamText = formatChannelProgressDraftText({
         entry: telegramCfg,
         lines: nextLines,
@@ -691,15 +704,6 @@ export const dispatchTelegramMessage = async ({
       }
     }
     if (streamMode !== "progress") {
-      if (!streamToolProgressEnabled || streamToolProgressSuppressed || !normalized) {
-        return false;
-      }
-      const nextLines = mergeChannelProgressDraftLine(streamToolProgressLines, progressLine, {
-        maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
-      });
-      if (nextLines === streamToolProgressLines) {
-        return false;
-      }
       streamToolProgressLines = nextLines;
       const streamText = formatChannelProgressDraftText({
         entry: telegramCfg,
@@ -714,21 +718,8 @@ export const dispatchTelegramMessage = async ({
       answerLane.stream.update(streamText);
       return true;
     }
-    if (streamToolProgressEnabled && !streamToolProgressSuppressed && normalized) {
-      streamToolProgressLines = mergeChannelProgressDraftLine(
-        streamToolProgressLines,
-        progressLine,
-        {
-          maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
-        },
-      );
-    }
-    if (
-      options?.startImmediately &&
-      streamToolProgressEnabled &&
-      !streamToolProgressSuppressed &&
-      normalized
-    ) {
+    streamToolProgressLines = nextLines;
+    if (options?.startImmediately) {
       const alreadyStarted = progressDraftGate.hasStarted;
       await progressDraftGate.startNow();
       if (alreadyStarted && progressDraftGate.hasStarted) {
