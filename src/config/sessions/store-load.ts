@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
 import {
@@ -248,6 +249,22 @@ function normalizePluginExtensionSlotKeys(entry: SessionEntry): SessionEntry {
   return next;
 }
 
+function sameDeliveryChannelRoute(
+  left: ChannelRouteRef | undefined,
+  right: ChannelRouteRef | undefined,
+): boolean {
+  return (
+    (left?.channel ?? undefined) === (right?.channel ?? undefined) &&
+    (left?.accountId ?? undefined) === (right?.accountId ?? undefined) &&
+    (left?.target?.to ?? undefined) === (right?.target?.to ?? undefined) &&
+    (left?.target?.rawTo ?? undefined) === (right?.target?.rawTo ?? undefined) &&
+    (left?.target?.chatType ?? undefined) === (right?.target?.chatType ?? undefined) &&
+    (left?.thread?.id ?? undefined) === (right?.thread?.id ?? undefined) &&
+    (left?.thread?.kind ?? undefined) === (right?.thread?.kind ?? undefined) &&
+    (left?.thread?.source ?? undefined) === (right?.thread?.source ?? undefined)
+  );
+}
+
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   const entryRoute = normalizeDeliveryChannelRoute(entry.route);
   const normalized = normalizeSessionDeliveryFields({
@@ -266,7 +283,7 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
     (entry.deliveryContext?.accountId ?? undefined) === nextDelivery?.accountId &&
     (entry.deliveryContext?.threadId ?? undefined) === nextDelivery?.threadId;
   const sameLast =
-    JSON.stringify(entryRoute) === JSON.stringify(normalized.route) &&
+    sameDeliveryChannelRoute(entryRoute, normalized.route) &&
     entry.lastChannel === normalized.lastChannel &&
     entry.lastTo === normalized.lastTo &&
     entry.lastAccountId === normalized.lastAccountId &&
