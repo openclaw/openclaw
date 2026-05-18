@@ -53,6 +53,7 @@ Docs: https://docs.openclaw.ai
 - QA-Lab: keep the OTLP smoke decoder independent of removed OpenTelemetry generated-root internals.
 - Messages: default group/channel visible replies to automatic final delivery again, keeping `message_tool` opt-in for ambient/shared rooms and tool-reliable models.
 - CLI/TUI: force standalone `/exit` runs to terminate after `runTui` returns so onboarding-launched TUI children do not stay alive invisibly. (#83501) Thanks @fuller-stack-dev.
+- Agents/code mode: honor per-agent code-mode config in schema, runtime catalog activation, and model payload filtering. Fixes #83388. Thanks @Kaspre.
 - Agents/code mode: preserve agent, session, run, and channel context in `before_tool_call` hooks for top-level `exec`/`wait` dispatches. Fixes #83387.
 - QQBot: shorten C2C typing indicators to a 10-second window renewed every 5 seconds, capped to keep a final passive-reply slot available. (#83469)
 - Replies: keep final payload delivery after live preview updates so channels can finalize or send the completed answer instead of losing preview-only drafts. (#83468)
