@@ -1,5 +1,6 @@
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
+import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
@@ -53,11 +54,18 @@ export async function discoverOpenAICompatibleLocalModels(params: {
     return [];
   }
 
+  // Skip discovery if no valid API key is available (including local-only markers
+  // like "custom-local" that don't represent real credentials).
+  const actualKey = normalizeOptionalString(params.apiKey);
+  if (!actualKey || isNonSecretApiKeyMarker(actualKey)) {
+    return [];
+  }
+
   const trimmedBaseUrl = params.baseUrl.trim().replace(/\/+$/, "");
   const url = `${trimmedBaseUrl}/models`;
 
   try {
-    const trimmedApiKey = normalizeOptionalString(params.apiKey);
+    const trimmedApiKey = actualKey;
     const response = await fetch(url, {
       headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
       signal: AbortSignal.timeout(5000),
@@ -266,7 +274,10 @@ export async function discoverOpenAICompatibleSelfHostedProvider<
     return null;
   }
   const { apiKey, discoveryApiKey } = params.ctx.resolveProviderApiKey(params.providerId);
-  if (!apiKey) {
+  // Non-secret auth markers ("custom-local", etc.) are placeholders for
+  // local providers that don't need authentication. Do not attempt catalog
+  // discovery with these — toDiscoveryApiKey already filters them to undefined.
+  if (!apiKey || isNonSecretApiKeyMarker(apiKey)) {
     return null;
   }
   return {
