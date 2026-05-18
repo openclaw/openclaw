@@ -45,7 +45,6 @@ function defaultLogPath() {
 function parseArgs(argv) {
   // Supported:
   //   node scripts/polytropos-release.mjs release [--log <path>]
-  //   node scripts/polytropos-release.mjs promote --tgz <path> [--log <path>]
   const args = argv.slice(2);
   const cmd = args[0] || "";
   let logPath = process.env.POLYTROPOS_RELEASE_LOG || defaultLogPath();
@@ -297,8 +296,7 @@ Behavior:
   - Uses the nearest reachable release tag (v<ver> or v<ver>+poly.<N>) to derive the base upstream version (v<ver>)
   - Computes next global poly build number N = max(existing poly) + 1
   - Creates tag v<ver>+poly.<N> at HEAD
-  - "release" builds using: pnpm install; pnpm ui:build; pnpm build
-  - "promote" skips local build and promotes a provided .tgz built elsewhere (e.g. GitHub Actions)
+  - If --tgz is provided, uses that pre-built tarball (e.g. from GitHub Actions) instead of building locally
   - Produces tarball via npm pack: ~/polytropos/releases/v<ver>+poly.<N>.tgz
   - Updates ~/polytropos/releases/previous.tgz -> old current.tgz (if present)
   - Updates ~/polytropos/releases/current.tgz -> new tarball
@@ -313,7 +311,7 @@ if (!cmd || cmd === "--help") {
   process.exit(0);
 }
 
-if (cmd !== "release" && cmd !== "promote") {
+if (cmd != "release") {
   fail(`unknown command: ${cmd}`);
 }
 
@@ -339,7 +337,7 @@ banner(logStream, `git tag -a ${polyTag}`);
 await shTee(logStream, "git", ["tag", "-a", polyTag, "-m", `Polytropos release ${polyTag}`]);
 
 let distBuilt = false;
-if (cmd === "release") {
+if (!tgzPath) {
   // Build dist locally
   banner(logStream, "Building dist/");
   ensureHooksDisabled(repoRoot, logStream, "before pnpm install");
@@ -352,8 +350,7 @@ if (cmd === "release") {
   ensureDistExists(repoRoot);
   distBuilt = true;
 } else {
-  if (!tgzPath) {
-    fail("promote requires --tgz <path>");
+if (!tgzPath) {
   }
 }
 
@@ -362,13 +359,13 @@ const relRoot = releasesRoot();
 fs.mkdirSync(relRoot, { recursive: true });
 const tarName = `${polyTag}.tgz`;
 let tarPath;
-if (cmd === "release") {
+if (!tgzPath) {
   tarPath = npmPack(repoRoot, relRoot, tarName);
   banner(logStream, `Packed tarball: ${tarPath}`);
 } else {
   const srcAbs = path.resolve(tgzPath);
   if (!fs.existsSync(srcAbs)) {
-    fail(`promote: tgz not found at ${srcAbs}`);
+    fail(`release: tgz not found at ${srcAbs}`);
   }
   banner(logStream, `Promoting tarball from: ${srcAbs}`);
   // Validate tarball matches the derived upstream version
@@ -376,10 +373,10 @@ if (cmd === "release") {
   const pkg = JSON.parse(pkgJsonRaw);
   const expectedVersion = baseUpstreamTag.replace(/^v/, "");
   if (pkg?.name !== "openclaw") {
-    fail(`promote: expected package name openclaw, got ${pkg?.name}`);
+    fail(`release: expected package name openclaw, got ${pkg?.name}`);
   }
   if (pkg?.version !== expectedVersion) {
-    fail(`promote: tarball version ${pkg?.version} != expected ${expectedVersion}`);
+    fail(`release: tarball version ${pkg?.version} != expected ${expectedVersion}`);
   }
   tarPath = path.join(relRoot, tarName);
   fs.copyFileSync(srcAbs, tarPath);
