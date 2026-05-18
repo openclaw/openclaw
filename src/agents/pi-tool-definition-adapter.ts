@@ -8,6 +8,11 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { logDebug, logError } from "../logger.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { isPlainObject } from "../utils.js";
+import {
+  getCodeModeExecBeforeHookMetadata,
+  normalizeCodeModeExecBeforeHookParams,
+  reconcileCodeModeExecBeforeHookParams,
+} from "./code-mode-control-tools.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
@@ -15,6 +20,7 @@ import {
   buildBlockedToolResult,
   isToolWrappedWithBeforeToolCallHook,
   isBeforeToolCallBlockedError,
+  recordAdjustedParamsForToolCall,
   runBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -329,9 +335,12 @@ export function toToolDefinitions(
         let executeParams = params;
         try {
           if (!beforeHookWrapped) {
+            const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params });
+            const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params });
             const hookOutcome = await runBeforeToolCallHook({
               toolName: name,
-              params,
+              params: hookParams,
+              ...hookMetadata,
               toolCallId,
               ctx: hookContext,
             });
@@ -344,7 +353,13 @@ export function toToolDefinitions(
               }
               throw new Error(hookOutcome.reason);
             }
-            executeParams = hookOutcome.params;
+            executeParams = reconcileCodeModeExecBeforeHookParams({
+              tool,
+              originalParams: params,
+              hookParams,
+              adjustedParams: hookOutcome.params,
+            });
+            recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
           }
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
           const result = normalizeToolExecutionResult({
