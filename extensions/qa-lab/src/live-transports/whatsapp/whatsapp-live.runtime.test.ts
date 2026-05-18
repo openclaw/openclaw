@@ -179,6 +179,22 @@ describe("WhatsApp QA live runtime", () => {
     );
   });
 
+  it("arms WhatsApp gateway heap checkpoints only when requested", () => {
+    expect(
+      __testing.buildWhatsAppGatewayHeapCheckpointRuntimeEnvPatch({
+        OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "0",
+      }),
+    ).toBeUndefined();
+    expect(
+      __testing.buildWhatsAppGatewayHeapCheckpointRuntimeEnvPatch({
+        OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "1",
+        NODE_OPTIONS: "--max-old-space-size=4096",
+      }),
+    ).toEqual({
+      NODE_OPTIONS: "--max-old-space-size=4096 --heapsnapshot-signal=SIGUSR2",
+    });
+  });
+
   it("fails explicitly requested group scenarios when group credentials are missing", () => {
     const [scenario] = testing.findScenarios(["whatsapp-mention-gating"]);
 

@@ -99,6 +99,7 @@ export async function startQaLiveLaneGateway(params: {
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
+  runtimeEnvPatch?: NodeJS.ProcessEnv;
 }) {
   const mock = await startQaProviderServer(params.providerMode);
   try {
@@ -116,6 +117,7 @@ export async function startQaLiveLaneGateway(params: {
       thinkingDefault: params.thinkingDefault,
       claudeCliAuthMode: params.claudeCliAuthMode,
       controlUiEnabled: params.controlUiEnabled,
+      runtimeEnvPatch: params.runtimeEnvPatch,
       mutateConfig: (cfg) =>
         prepareLiveTransportGatewayConfig(params.mutateConfig ? params.mutateConfig(cfg) : cfg),
     });

@@ -19,6 +19,7 @@ import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
 type GatewayOptions = {
   providerBaseUrl?: string;
   providerMode?: string;
+  runtimeEnvPatch?: NodeJS.ProcessEnv;
   transportBaseUrl?: string;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 };
@@ -169,6 +170,25 @@ describe("startQaLiveLaneGateway", () => {
     await harness.stop({ preserveToDir: ".artifacts/qa-e2e/debug" });
     expect(gatewayStop).toHaveBeenCalledWith({ preserveToDir: ".artifacts/qa-e2e/debug" });
     expect(mockStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards runtime env patches to the gateway child", async () => {
+    await startQaLiveLaneGateway({
+      repoRoot: "/tmp/openclaw-repo",
+      transport: createStubTransport(),
+      transportBaseUrl: "http://127.0.0.1:43123",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: "mock-openai/gpt-5.5-alt",
+      controlUiEnabled: false,
+      runtimeEnvPatch: {
+        NODE_OPTIONS: "--heapsnapshot-signal=SIGUSR2",
+      },
+    });
+
+    expect(firstGatewayOptions()?.runtimeEnvPatch).toEqual({
+      NODE_OPTIONS: "--heapsnapshot-signal=SIGUSR2",
+    });
   });
 
   it("skips mock bootstrap for live frontier runs", async () => {

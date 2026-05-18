@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { startWhatsAppQaDriverSession } from "@openclaw/whatsapp/api.js";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
@@ -103,6 +104,19 @@ type WhatsAppQaScenarioTimings = {
   waitForReplyMs?: number;
 };
 
+type WhatsAppQaGatewayRssSample = {
+  at: string;
+  gatewayProcessRssBytes: number;
+  label: string;
+};
+
+type WhatsAppQaGatewayHeapSnapshot = {
+  at: string;
+  bytes: number;
+  label: string;
+  path: string;
+};
+
 type WhatsAppQaScenarioResult = {
   details: string;
   id: string;
@@ -145,6 +159,10 @@ type WhatsAppQaSummary = {
     source: "convex" | "env";
   };
   finishedAt: string;
+  metrics?: {
+    gatewayHeapSnapshots?: WhatsAppQaGatewayHeapSnapshot[];
+    gatewayProcessRssSamples?: WhatsAppQaGatewayRssSample[];
+  };
   scenarios: WhatsAppQaScenarioResult[];
   startedAt: string;
   sutAccountId: string;
@@ -155,8 +173,10 @@ type WhatsAppCredentialLease = Awaited<
   ReturnType<typeof acquireQaCredentialLease<WhatsAppQaRuntimeEnv>>
 >;
 type WhatsAppCredentialHeartbeat = ReturnType<typeof startQaCredentialLeaseHeartbeat>;
+type WhatsAppQaGatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
 
 const WHATSAPP_QA_CAPTURE_CONTENT_ENV = "OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT";
+const WHATSAPP_QA_GATEWAY_HEAP_CHECKPOINTS_ENV = "OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS";
 const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 const WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS = 5;
 const WHATSAPP_QA_READY_TIMEOUT_MS = 150_000;
@@ -237,6 +257,22 @@ export const WHATSAPP_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardSce
 function isTruthyOptIn(value: string | undefined) {
   const normalized = value?.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function appendNodeOption(raw: string | undefined, option: string) {
+  const parts = (raw ?? "").split(/\s+/u).filter(Boolean);
+  return parts.includes(option) ? parts.join(" ") : [...parts, option].join(" ");
+}
+
+function buildWhatsAppGatewayHeapCheckpointRuntimeEnvPatch(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv | undefined {
+  if (!isTruthyOptIn(env[WHATSAPP_QA_GATEWAY_HEAP_CHECKPOINTS_ENV])) {
+    return undefined;
+  }
+  return {
+    NODE_OPTIONS: appendNodeOption(env.NODE_OPTIONS, "--heapsnapshot-signal=SIGUSR2"),
+  };
 }
 
 function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof WHATSAPP_QA_ENV_KEYS)[number]) {
@@ -517,6 +553,83 @@ export async function unpackWhatsAppAuthArchive(params: {
   return authDir;
 }
 
+function sanitizeWhatsAppGatewayCheckpointLabel(label: string) {
+  return label.replace(/[^a-zA-Z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "") || "checkpoint";
+}
+
+async function listWhatsAppGatewayHeapSnapshotFiles(tempRoot: string) {
+  const entries = await fs.readdir(tempRoot, { withFileTypes: true }).catch(() => []);
+  const files = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".heapsnapshot")) {
+      continue;
+    }
+    const pathName = path.join(tempRoot, entry.name);
+    const stats = await fs.stat(pathName).catch(() => null);
+    if (stats) {
+      files.push({ pathName, mtimeMs: stats.mtimeMs, size: stats.size });
+    }
+  }
+  return files.toSorted((left, right) => left.mtimeMs - right.mtimeMs);
+}
+
+async function waitForStableFileSize(pathName: string) {
+  let lastSize = -1;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const stats = await fs.stat(pathName).catch(() => null);
+    if (stats && stats.size > 0 && stats.size === lastSize) {
+      return stats.size;
+    }
+    lastSize = stats?.size ?? -1;
+    await sleep(250);
+  }
+  const stats = await fs.stat(pathName);
+  return stats.size;
+}
+
+async function captureWhatsAppGatewayHeapSnapshotCheckpoint(params: {
+  gateway: WhatsAppQaGatewayHandle;
+  outputDir: string;
+  label: string;
+}): Promise<WhatsAppQaGatewayHeapSnapshot | undefined> {
+  const before = new Set(
+    (await listWhatsAppGatewayHeapSnapshotFiles(params.gateway.tempRoot)).map(
+      (file) => file.pathName,
+    ),
+  );
+  params.gateway.signalProcess("SIGUSR2");
+  let snapshotPath: string | undefined;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const next = (await listWhatsAppGatewayHeapSnapshotFiles(params.gateway.tempRoot)).filter(
+      (file) => !before.has(file.pathName),
+    );
+    snapshotPath = next.at(-1)?.pathName;
+    if (snapshotPath) {
+      break;
+    }
+    await sleep(250);
+  }
+  if (!snapshotPath) {
+    return undefined;
+  }
+
+  const bytes = await waitForStableFileSize(snapshotPath);
+  const snapshotsDir = path.join(params.outputDir, "artifacts", "gateway-heap-snapshots");
+  await fs.mkdir(snapshotsDir, { recursive: true });
+  const relativePath = path.join(
+    "artifacts",
+    "gateway-heap-snapshots",
+    `${sanitizeWhatsAppGatewayCheckpointLabel(params.label)}.heapsnapshot`,
+  );
+  await fs.copyFile(snapshotPath, path.join(params.outputDir, relativePath));
+  return {
+    label: params.label,
+    at: new Date().toISOString(),
+    path: relativePath,
+    bytes,
+  };
+}
+
 function messageMatches(message: WhatsAppObservedMessage, matchText: string | RegExp) {
   return typeof matchText === "string"
     ? message.text.includes(matchText)
@@ -560,6 +673,10 @@ async function startWhatsAppQaDriverSessionWithRetry(params: { authDir: string }
 }
 
 async function runWhatsAppScenario(params: {
+  captureGatewayHeapCheckpoint?: (
+    gateway: WhatsAppQaGatewayHandle,
+    label: string,
+  ) => Promise<void>;
   driver: WhatsAppQaDriverSession;
   driverPhoneE164: string;
   gatewayDebugDirPath: string;
@@ -570,6 +687,7 @@ async function runWhatsAppScenario(params: {
   fastMode?: boolean;
   repoRoot: string;
   scenario: WhatsAppQaScenarioDefinition;
+  sampleGatewayProcessRss?: (gateway: WhatsAppQaGatewayHandle, label: string) => void;
   sutAccountId: string;
   sutAuthDir: string;
   sutPhoneE164: string;
@@ -601,6 +719,7 @@ async function runWhatsAppScenario(params: {
     alternateModel: params.alternateModel,
     fastMode: params.fastMode,
     controlUiEnabled: false,
+    runtimeEnvPatch: buildWhatsAppGatewayHeapCheckpointRuntimeEnvPatch(),
     mutateConfig: (cfg) =>
       buildWhatsAppQaConfig(cfg, {
         allowFrom,
@@ -611,11 +730,20 @@ async function runWhatsAppScenario(params: {
       }),
   });
   const gatewayStartMs = Date.now() - gatewayStartStartedAtMs;
+  params.sampleGatewayProcessRss?.(
+    gatewayHarness.gateway,
+    `${params.scenario.id}:gateway-start`,
+  );
   let preservedGatewayDebug = false;
   try {
     const channelReadyStartedAtMs = Date.now();
     await waitForWhatsAppChannelStable(gatewayHarness.gateway, params.sutAccountId);
     const channelReadyMs = Date.now() - channelReadyStartedAtMs;
+    params.sampleGatewayProcessRss?.(gatewayHarness.gateway, `${params.scenario.id}:ready`);
+    await params.captureGatewayHeapCheckpoint?.(
+      gatewayHarness.gateway,
+      `${params.scenario.id}:ready`,
+    );
     let quietWindowMs: number | undefined;
     if (scenarioRun.quietInput) {
       const quietStartedAt = new Date();
@@ -640,12 +768,18 @@ async function runWhatsAppScenario(params: {
     }
     const requestStartedAt = new Date();
     const requestStartedAtMs = requestStartedAt.getTime();
+    params.sampleGatewayProcessRss?.(gatewayHarness.gateway, `${params.scenario.id}:before-send`);
     const sendTextStartedAtMs = Date.now();
     await params.driver.sendText(target, scenarioRun.input);
     const sendTextMs = Date.now() - sendTextStartedAtMs;
     if (!scenarioRun.expectReply) {
       const waitStartedAtMs = Date.now();
       await new Promise((resolve) => setTimeout(resolve, params.scenario.timeoutMs));
+      params.sampleGatewayProcessRss?.(gatewayHarness.gateway, `${params.scenario.id}:no-reply`);
+      await params.captureGatewayHeapCheckpoint?.(
+        gatewayHarness.gateway,
+        `${params.scenario.id}:no-reply`,
+      );
       return {
         id: params.scenario.id,
         title: params.scenario.title,
@@ -679,6 +813,11 @@ async function runWhatsAppScenario(params: {
     const responseObservedAt = new Date(reply.observedAt);
     const waitForReplyMs = Date.now() - waitStartedAtMs;
     const rttMs = responseObservedAt.getTime() - requestStartedAtMs;
+    params.sampleGatewayProcessRss?.(gatewayHarness.gateway, `${params.scenario.id}:reply`);
+    await params.captureGatewayHeapCheckpoint?.(
+      gatewayHarness.gateway,
+      `${params.scenario.id}:reply`,
+    );
     return {
       id: params.scenario.id,
       title: params.scenario.title,
@@ -861,6 +1000,8 @@ export async function runWhatsAppQaLive(params: {
   const observedMessages: WhatsAppObservedMessage[] = [];
   const scenarioResults: WhatsAppQaScenarioResult[] = [];
   const cleanupIssues: string[] = [];
+  const gatewayProcessRssSamples: WhatsAppQaGatewayRssSample[] = [];
+  const gatewayHeapSnapshots: WhatsAppQaGatewayHeapSnapshot[] = [];
   const gatewayDebugDirPath = path.join(outputDir, "gateway-debug");
   let preservedGatewayDebugArtifacts = false;
   let credentialLease: WhatsAppCredentialLease | undefined;
@@ -868,6 +1009,29 @@ export async function runWhatsAppQaLive(params: {
   let runtimeEnv: WhatsAppQaRuntimeEnv | undefined;
   let tempAuthRoot: string | undefined;
   let driver: WhatsAppQaDriverSession | undefined;
+  const sampleGatewayProcessRss = (gateway: WhatsAppQaGatewayHandle, label: string) => {
+    const gatewayProcessRssBytes = gateway.getProcessRssBytes?.() ?? null;
+    if (gatewayProcessRssBytes !== null) {
+      gatewayProcessRssSamples.push({
+        label,
+        at: new Date().toISOString(),
+        gatewayProcessRssBytes,
+      });
+    }
+  };
+  const captureGatewayHeapCheckpoint = async (gateway: WhatsAppQaGatewayHandle, label: string) => {
+    if (!isTruthyOptIn(process.env[WHATSAPP_QA_GATEWAY_HEAP_CHECKPOINTS_ENV])) {
+      return;
+    }
+    const snapshot = await captureWhatsAppGatewayHeapSnapshotCheckpoint({
+      gateway,
+      outputDir,
+      label,
+    });
+    if (snapshot) {
+      gatewayHeapSnapshots.push(snapshot);
+    }
+  };
 
   try {
     credentialLease = await acquireQaCredentialLease({
@@ -923,9 +1087,11 @@ export async function runWhatsAppQaLive(params: {
             primaryModel,
             alternateModel,
             fastMode: params.fastMode,
+            captureGatewayHeapCheckpoint,
             groupJid: runtimeEnv.groupJid,
             repoRoot,
             scenario,
+            sampleGatewayProcessRss,
             sutAccountId,
             sutAuthDir,
             sutPhoneE164: runtimeEnv.sutPhoneE164,
@@ -1052,6 +1218,14 @@ export async function runWhatsAppQaLive(params: {
     startedAt,
     finishedAt,
     cleanupIssues,
+    ...(gatewayProcessRssSamples.length > 0 || gatewayHeapSnapshots.length > 0
+      ? {
+          metrics: {
+            ...(gatewayProcessRssSamples.length > 0 ? { gatewayProcessRssSamples } : {}),
+            ...(gatewayHeapSnapshots.length > 0 ? { gatewayHeapSnapshots } : {}),
+          },
+        }
+      : {}),
     counts: {
       total: scenarioResults.length,
       passed,
@@ -1099,6 +1273,7 @@ export async function runWhatsAppQaLive(params: {
 export const testing = {
   assertSafeArchiveEntries,
   appendPreScenarioFailureResults,
+  buildWhatsAppGatewayHeapCheckpointRuntimeEnvPatch,
   buildWhatsAppQaConfig,
   createMissingGroupJidScenarioResult,
   findScenarios,
