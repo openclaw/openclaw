@@ -24,8 +24,21 @@ export function resolveMergedAssistantText(params: {
   previousText: string;
   nextText: string;
   nextDelta: string;
+  /**
+   * When true, treat `nextText` as a full state replacement — bypass the
+   * "previousText.startsWith(nextText) → keep previousText" rollback branch
+   * that normally guards against out-of-order partial chunks. Used by
+   * emitters that intentionally shrink the assistant text (e.g. the CLI
+   * tool-use rolling-timer's terminal cleanup, which strips a `_ Ns ..._`
+   * suffix on result/finish and would otherwise leave the stale tick
+   * visible because the merger interprets the shorter text as stale).
+   */
+  replacement?: boolean;
 }): string {
-  const { previousText, nextText, nextDelta } = params;
+  const { previousText, nextText, nextDelta, replacement } = params;
+  if (replacement) {
+    return capLiveAssistantBuffer(nextText);
+  }
   if (nextText && previousText) {
     if (nextText.startsWith(previousText) && nextText.length > previousText.length) {
       return capLiveAssistantBuffer(nextText);

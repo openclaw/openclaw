@@ -3,6 +3,7 @@ import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
+import { sanitizeToolArgs } from "./pi-embedded-subscribe.tools.js";
 
 type CliUsage = {
   input?: number;
@@ -25,6 +26,19 @@ export type CliStreamingDelta = {
   delta: string;
   sessionId?: string;
   usage?: CliUsage;
+  /** Present when this delta carries a thinking chunk rather than assistant text. */
+  thinkingDelta?: string;
+  /** Accumulated thinking text so far; set whenever `thinkingDelta` is present. */
+  thinkingText?: string;
+  /**
+   * When true, the emitter is signalling that `text` is a full replacement
+   * — the live-chat merger should use `text` even when it is a strict
+   * prefix of its previousText (which the default "rollback" branch would
+   * otherwise treat as stale and ignore). Used by the rolling-timer
+   * terminal-cleanup path where the new text is shorter than what's
+   * already been shown.
+   */
+  replacement?: boolean;
 };
 
 function isClaudeCliProvider(providerId: string): boolean {
@@ -394,10 +408,244 @@ function parseClaudeCliStreamingDelta(params: {
   };
 }
 
+export type ClaudeToolEvent = {
+  phase: "start";
+  name: string;
+  args: Record<string, unknown> | undefined;
+  itemId: string | undefined;
+  sessionId: string | undefined;
+  usage: CliUsage | undefined;
+};
+
+type ClaudeToolBlockEntry = {
+  id: string;
+  name: string;
+  input: unknown;
+  partialJson: string;
+  emitted: boolean;
+};
+
+function readClaudeToolBlockKey(
+  event: Record<string, unknown>,
+  block: Record<string, unknown>,
+): string | undefined {
+  const id = typeof block.id === "string" && block.id.trim() ? block.id.trim() : undefined;
+  if (id) {
+    return id;
+  }
+  const index =
+    typeof event.index === "number"
+      ? event.index
+      : typeof event.content_block_index === "number"
+        ? event.content_block_index
+        : undefined;
+  return index === undefined ? undefined : `index:${index}`;
+}
+
+function readClaudeToolName(block: Record<string, unknown>): string | undefined {
+  for (const key of ["name", "tool_name", "toolName"] as const) {
+    const value = block[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function parseClaudeToolArgs(
+  input: unknown,
+  partialJson: string,
+): Record<string, unknown> | undefined {
+  if (isRecord(input)) {
+    return input;
+  }
+  const text =
+    typeof input === "string" && input.trim()
+      ? input.trim()
+      : typeof partialJson === "string" && partialJson.trim()
+        ? partialJson.trim()
+        : "";
+  if (!text) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readClaudeToolDeltaPartial(delta: unknown): string {
+  if (!isRecord(delta)) {
+    return "";
+  }
+  if (delta.type !== "input_json_delta") {
+    return "";
+  }
+  return typeof delta.partial_json === "string" ? delta.partial_json : "";
+}
+
+function createClaudeToolUseTracker(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  onToolEvent?: (evt: ClaudeToolEvent) => void;
+  onToolText?: (text: string) => void;
+  getSessionId: () => string | undefined;
+  getUsage: () => CliUsage | undefined;
+}): (parsed: Record<string, unknown>) => void {
+  const toolBlocks = new Map<string, ClaudeToolBlockEntry>();
+
+  const emitTool = (entry: ClaudeToolBlockEntry): void => {
+    if (entry.emitted) {
+      return;
+    }
+    if (!params.onToolEvent && !params.onToolText) {
+      return;
+    }
+    let args = parseClaudeToolArgs(entry.input, entry.partialJson);
+    if (args && Object.keys(args).length === 0 && entry.partialJson) {
+      try {
+        const p = JSON.parse(entry.partialJson);
+        if (p && typeof p === "object") {
+          args = p as Record<string, unknown>;
+        }
+      } catch {}
+    }
+    // Sanitize once before either consumer sees the args — matches the
+    // existing embedded-runtime contract (pi-embedded-subscribe.handlers
+    // .tools.ts) so tokens, API keys, and secret-bearing strings in
+    // command / URL / header fields are redacted before they reach inline
+    // assistant deltas OR structured tool events.
+    const safeArgs = args ? (sanitizeToolArgs(args) as Record<string, unknown>) : undefined;
+    if (params.onToolText) {
+      let detail = "";
+      if (safeArgs) {
+        const val =
+          safeArgs.command ||
+          safeArgs.file_path ||
+          safeArgs.pattern ||
+          safeArgs.query ||
+          safeArgs.description ||
+          safeArgs.url;
+        if (typeof val === "string" && val.trim()) {
+          detail = val.trim();
+          if (detail.length > 120) {
+            detail = detail.slice(0, 117) + "…";
+          }
+        }
+      }
+      const ts = new Date().toLocaleTimeString("en-GB", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+      params.onToolText(
+        detail ? `\n\n[${ts}] 🛠️ ${entry.name}: ${detail}\n` : `\n\n[${ts}] 🛠️ ${entry.name}\n`,
+      );
+    }
+    if (params.onToolEvent) {
+      params.onToolEvent({
+        phase: "start",
+        name: entry.name,
+        args: safeArgs,
+        itemId: entry.id,
+        sessionId: params.getSessionId(),
+        usage: params.getUsage(),
+      });
+    }
+    entry.emitted = true;
+  };
+
+  return (parsed) => {
+    if (!usesClaudeStreamJsonDialect({ backend: params.backend, providerId: params.providerId })) {
+      return;
+    }
+    if (parsed.type !== "stream_event" || !isRecord(parsed.event)) {
+      return;
+    }
+    const event = parsed.event;
+    if (event.type === "content_block_start" && isRecord(event.content_block)) {
+      const block = event.content_block;
+      if (
+        block.type !== "tool_use" &&
+        block.type !== "server_tool_use" &&
+        block.type !== "mcp_tool_use"
+      ) {
+        return;
+      }
+      const key = readClaudeToolBlockKey(event, block);
+      const name = readClaudeToolName(block);
+      if (!key || !name) {
+        return;
+      }
+      const entry: ClaudeToolBlockEntry = {
+        id: typeof block.id === "string" ? block.id : key,
+        name,
+        input: block.input,
+        partialJson: "",
+        emitted: false,
+      };
+      toolBlocks.set(key, entry);
+      const idxKey =
+        typeof event.index === "number"
+          ? `index:${event.index}`
+          : typeof event.content_block_index === "number"
+            ? `index:${event.content_block_index}`
+            : undefined;
+      if (idxKey && idxKey !== key) {
+        toolBlocks.set(idxKey, entry);
+      }
+      return;
+    }
+    if (event.type !== "content_block_delta" && event.type !== "content_block_stop") {
+      return;
+    }
+    const index =
+      typeof event.index === "number"
+        ? event.index
+        : typeof event.content_block_index === "number"
+          ? event.content_block_index
+          : undefined;
+    if (index === undefined) {
+      return;
+    }
+    const entry = toolBlocks.get(`index:${index}`) ?? Array.from(toolBlocks.values()).at(index);
+    if (!entry) {
+      return;
+    }
+    if (event.type === "content_block_delta") {
+      const partial = readClaudeToolDeltaPartial(event.delta);
+      if (partial) {
+        entry.partialJson += partial;
+      }
+      return;
+    }
+    emitTool(entry);
+    toolBlocks.delete(`index:${index}`);
+    if (entry.id) {
+      toolBlocks.delete(entry.id);
+    }
+  };
+}
+
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onToolEvent?: (evt: ClaudeToolEvent) => void;
+  /**
+   * Called at each tool-start emission to decide whether to also inject the
+   * `\n\n[HH:MM:SS] 🛠️ ToolName: detail\n` marker (plus rolling 8s timer)
+   * into the assistant text stream. Returning `false` keeps assistant text
+   * clean — only the structured `onToolEvent` fires, which downstream channels
+   * gate by their own tool-verbose policy. The callback is invoked per-tool
+   * (not captured once at parser construction) so session-level verbose changes
+   * mid-run are honoured: e.g. a user toggling tool verbose off during a long
+   * run will stop subsequent inline markers immediately, matching the
+   * server-chat re-resolution path. Omitting the callback defaults to `false`.
+   */
+  shouldInjectToolInlineMarkers?: () => boolean;
 }) {
   let lineBuffer = "";
   let assistantText = "";
@@ -405,6 +653,77 @@ export function createCliJsonlStreamingParser(params: {
   let usage: CliUsage | undefined;
   let output: CliOutput | null = null;
   const texts: string[] = [];
+
+  // Rolling-timer state: while a tool runs, we paint `_ <elapsed>s — <hh:mm:ss>_`
+  // at the tail of assistantText and refresh every 8s so the user sees the
+  // turn is still alive. Cleared on next text_delta, on result, or on finish.
+  let toolKeepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  let toolKeepaliveStart = 0;
+  let toolTickStart = -1;
+
+  const clearToolKeepalive = (): void => {
+    if (toolKeepaliveTimer) {
+      clearInterval(toolKeepaliveTimer);
+      toolKeepaliveTimer = null;
+    }
+  };
+
+  const stripToolTick = (): void => {
+    if (toolTickStart >= 0 && toolTickStart < assistantText.length) {
+      assistantText = assistantText.slice(0, toolTickStart);
+    }
+    toolTickStart = -1;
+  };
+
+  // For terminal paths (result, finish) where no follow-up text delta is
+  // coming: emit a replacement delta so the live-chat merger replaces the
+  // stale `_ Ns ..._` tick that was last sent. The new `text` is a strict
+  // prefix of the previously emitted text (timer suffix stripped) — the
+  // merger's default rollback branch would keep the longer previousText,
+  // leaving the timer visible. Set `replacement: true` to bypass that
+  // branch and force the merger to honour the shorter text.
+  const emitTickReplacementIfPainted = (): void => {
+    if (toolTickStart < 0) {
+      return;
+    }
+    stripToolTick();
+    params.onAssistantDelta({ text: assistantText, delta: "", replacement: true });
+  };
+
+  const trackClaudeToolUse = createClaudeToolUseTracker({
+    backend: params.backend,
+    providerId: params.providerId,
+    onToolEvent: params.onToolEvent,
+    // Per-tool re-evaluation of inline-marker policy: invokes the caller's
+    // resolver at emit time so a session verbose change mid-run is honoured.
+    // No-op when the caller didn't pass a resolver (default: never inject).
+    onToolText: (text) => {
+      if (!params.shouldInjectToolInlineMarkers?.()) {
+        return;
+      }
+      clearToolKeepalive();
+      stripToolTick();
+      assistantText += text;
+      params.onAssistantDelta({ text: assistantText, delta: text });
+      toolKeepaliveStart = Date.now();
+      toolTickStart = assistantText.length;
+      toolKeepaliveTimer = setInterval(() => {
+        const elapsed = Math.round((Date.now() - toolKeepaliveStart) / 1000);
+        const now = new Date().toLocaleTimeString("en-GB", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        });
+        assistantText = assistantText.slice(0, toolTickStart) + `_ ${elapsed}s — ${now}_`;
+        // Replacement semantics for the tick: empty delta signals to the
+        // live-chat merger to use the new full text rather than append a
+        // delta to its previousText (which still contains the old tick).
+        params.onAssistantDelta({ text: assistantText, delta: "" });
+      }, 8000);
+    },
+    getSessionId: () => sessionId,
+    getUsage: () => usage,
+  });
 
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
     sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
@@ -421,6 +740,7 @@ export function createCliJsonlStreamingParser(params: {
     if (shouldUseUsage) {
       usage = nextUsage ?? usage;
     }
+    trackClaudeToolUse(parsed);
 
     const result = parseClaudeCliJsonlResult({
       backend: params.backend,
@@ -430,6 +750,8 @@ export function createCliJsonlStreamingParser(params: {
       usage,
     });
     if (result) {
+      clearToolKeepalive();
+      emitTickReplacementIfPainted();
       output = result;
       return;
     }
@@ -442,7 +764,7 @@ export function createCliJsonlStreamingParser(params: {
       }
     }
 
-    const delta = parseClaudeCliStreamingDelta({
+    let delta = parseClaudeCliStreamingDelta({
       backend: params.backend,
       providerId: params.providerId,
       parsed,
@@ -451,6 +773,26 @@ export function createCliJsonlStreamingParser(params: {
       usage,
     });
     if (!delta) {
+      return;
+    }
+    if (toolKeepaliveTimer) {
+      clearToolKeepalive();
+      stripToolTick();
+      if (!assistantText.endsWith("\n\n")) {
+        assistantText = assistantText.replace(/\n*$/, "\n\n");
+      }
+      assistantText = assistantText + delta.delta;
+      params.onAssistantDelta({
+        text: assistantText,
+        delta: "",
+        sessionId: delta.sessionId,
+        usage: delta.usage,
+      });
+      return;
+    }
+    if (delta.thinkingDelta !== undefined) {
+      thinkingText += delta.thinkingDelta;
+      params.onAssistantDelta({ ...delta, thinkingText });
       return;
     }
     assistantText = delta.text;
@@ -494,7 +836,16 @@ export function createCliJsonlStreamingParser(params: {
       flushLines(false);
     },
     finish() {
+      clearToolKeepalive();
+      emitTickReplacementIfPainted();
       flushLines(true);
+      // The final flush can parse a content_block_stop for a tool, which
+      // (when inline markers are enabled) starts a fresh keepalive interval.
+      // Re-clear after the flush so the parser is truly quiescent when
+      // finish() returns — no setInterval left running past the caller's
+      // "we're done" signal.
+      clearToolKeepalive();
+      emitTickReplacementIfPainted();
     },
     getOutput() {
       if (output) {

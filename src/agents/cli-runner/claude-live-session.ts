@@ -1,18 +1,19 @@
 import crypto from "node:crypto";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
-import { isRecord } from "../../shared/record-coerce.js";
 import {
   loadExecApprovals,
   maxAsk,
   minSecurity,
   resolveExecApprovalsFromFile,
 } from "../../infra/exec-approvals.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
   parseCliOutput,
+  type ClaudeToolEvent,
   type CliOutput,
   type CliStreamingDelta,
 } from "../cli-output.js";
@@ -955,6 +956,8 @@ function createTurn(params: {
   context: PreparedCliRunContext;
   noOutputTimeoutMs: number;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onToolEvent?: (evt: ClaudeToolEvent) => void;
+  shouldInjectToolInlineMarkers?: () => boolean;
   session: ClaudeLiveSession;
   resolve: (output: CliOutput) => void;
   reject: (error: unknown) => void;
@@ -971,6 +974,8 @@ function createTurn(params: {
       backend: params.context.preparedBackend.backend,
       providerId: params.context.backendResolved.id,
       onAssistantDelta: params.onAssistantDelta,
+      onToolEvent: params.onToolEvent,
+      shouldInjectToolInlineMarkers: params.shouldInjectToolInlineMarkers,
     }),
     resolve: params.resolve,
     reject: params.reject,
@@ -1036,6 +1041,8 @@ export async function runClaudeLiveSessionTurn(params: {
   noOutputTimeoutMs: number;
   getProcessSupervisor: () => ProcessSupervisor;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onToolEvent?: (evt: ClaudeToolEvent) => void;
+  shouldInjectToolInlineMarkers?: () => boolean;
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
@@ -1157,6 +1164,8 @@ export async function runClaudeLiveSessionTurn(params: {
       context: params.context,
       noOutputTimeoutMs: params.noOutputTimeoutMs,
       onAssistantDelta: params.onAssistantDelta,
+      onToolEvent: params.onToolEvent,
+      shouldInjectToolInlineMarkers: params.shouldInjectToolInlineMarkers,
       session: liveSession,
       resolve,
       reject,
