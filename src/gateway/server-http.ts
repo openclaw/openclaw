@@ -490,6 +490,7 @@ export function createGatewayHttpServer(opts: {
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
+  unavailableGatewayMethods?: ReadonlySet<string>;
   getRuntimeConfig?: () => OpenClawConfig;
   tlsOptions?: TlsOptions;
 }): HttpServer {
@@ -601,6 +602,7 @@ export function createGatewayHttpServer(opts: {
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
+              unavailableGatewayMethods: opts.unavailableGatewayMethods,
             }),
         });
       }
@@ -625,6 +627,7 @@ export function createGatewayHttpServer(opts: {
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
+              unavailableGatewayMethods: opts.unavailableGatewayMethods,
             }),
         });
       }

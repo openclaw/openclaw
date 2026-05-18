@@ -847,6 +847,9 @@ export async function startGatewayServer(
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
   log.info("starting HTTP server...");
+  const unavailableGatewayMethods = new Set<string>(
+    minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
+  );
   const {
     releasePluginRouteRegistry,
     httpServer,
@@ -894,6 +897,7 @@ export async function startGatewayServer(
       logHooks,
       logPlugins,
       getReadiness,
+      unavailableGatewayMethods,
     }),
   );
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
@@ -1319,9 +1323,6 @@ export async function startGatewayServer(
       };
     };
 
-    const unavailableGatewayMethods = new Set<string>(
-      minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
-    );
     const { createGatewayRequestContext } = await import("./server-request-context.js");
     const gatewayRequestContext = createGatewayRequestContext({
       deps,

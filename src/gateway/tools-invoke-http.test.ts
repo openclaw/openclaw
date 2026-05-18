@@ -88,6 +88,21 @@ vi.mock("../agents/openclaw-tools.js", () => {
 
   const tools = [
     {
+      name: "web_fetch",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string" },
+        },
+        required: ["url"],
+        additionalProperties: false,
+      },
+      execute: async (_toolCallId: string, args: unknown) => ({
+        ok: true,
+        url: (args as { url?: unknown })?.url,
+      }),
+    },
+    {
       name: "session_status",
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true }),
@@ -218,6 +233,7 @@ const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
 const { toolsInvokeHandlers } = await import("./server-methods/tools-invoke.js");
 
 let pluginHttpHandlers: Array<(req: IncomingMessage, res: ServerResponse) => Promise<boolean>> = [];
+const unavailableGatewayMethods = new Set<string>();
 
 let sharedPort = 0;
 let sharedServer: ReturnType<typeof createServer> | undefined;
@@ -227,6 +243,7 @@ beforeAll(async () => {
     void (async () => {
       const handled = await handleToolsInvokeHttpRequest(req, res, {
         auth: { mode: "none", allowTailscale: false },
+        unavailableGatewayMethods,
       });
       if (handled) {
         return;
@@ -267,6 +284,7 @@ beforeEach(() => {
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   delete process.env.OPENCLAW_GATEWAY_PASSWORD;
   pluginHttpHandlers = [];
+  unavailableGatewayMethods.clear();
   cfg = {};
   lastCreateOpenClawToolsContext = undefined;
   pluginToolMetaState.clear();
@@ -440,6 +458,57 @@ const setMainAllowedTools = (params: {
 };
 
 describe("POST /tools/invoke", () => {
+  it("returns plugins_not_ready while startup still gates HTTP tools.invoke", async () => {
+    unavailableGatewayMethods.add("tools.invoke");
+
+    const res = await invokeToolAuthed({
+      tool: "tools_invoke_test",
+      args: { mode: "ok" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error?.type).toBe("plugins_not_ready");
+    expect(body.error?.retryable).toBe(true);
+    expect(body.error?.retryAfterMs).toBe(500);
+    expect(body.error?.details).toEqual({ reason: "startup-sidecars", method: "tools.invoke" });
+    expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+  });
+
+  it("returns not_found for a nonexistent tool after startup readiness clears", async () => {
+    const res = await invokeToolAuthed({
+      tool: "__readiness_probe_nonexistent",
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error?.type).toBe("not_found");
+  });
+
+  it("keeps warm threat-guard blocks on the HTTP tools surface after startup", async () => {
+    setMainAllowedTools({ allow: ["web_fetch"] });
+    hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: true,
+      reason: "[T-EXFIL-003] blocked by test threat guard",
+    });
+
+    const res = await invokeToolAuthed({
+      tool: "web_fetch",
+      args: { url: "https://webhook.site/test-warm" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error?.type).toBe("tool_call_blocked");
+    expect(body.error?.message).toContain("[T-EXFIL-003]");
+  });
+
   it("invokes a tool and returns {ok:true,result}", async () => {
     allowAgentsListForMain();
     const res = await invokeAgentsListAuthed({ sessionKey: "main" });
