@@ -1,6 +1,6 @@
-export type BedrockAuthenticationMode = 'apikey' | 'profile' | 'credentials' | 'default';
+export type BedrockAuthenticationMode = "apikey" | "profile" | "credentials" | "default";
 
-const VALID_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
+const VALID_EFFORTS = ["none", "low", "medium", "high"] as const;
 export type ReasoningEffort = (typeof VALID_EFFORTS)[number];
 
 export interface BedrockAuthConfig {
@@ -43,10 +43,10 @@ export interface LegacyBedrockOptions {
 }
 
 const VALID_MODES: ReadonlySet<BedrockAuthenticationMode> = new Set([
-  'apikey',
-  'profile',
-  'credentials',
-  'default',
+  "apikey",
+  "profile",
+  "credentials",
+  "default",
 ]);
 
 /**
@@ -70,15 +70,15 @@ function resolveMode(options: LegacyBedrockOptions): BedrockAuthenticationMode {
     return options.awsAuthentication as BedrockAuthenticationMode;
   }
   if (options.awsUseProfile) {
-    return 'profile';
+    return "profile";
   }
   if (options.awsBedrockApiKey) {
-    return 'apikey';
+    return "apikey";
   }
   if (options.awsAccessKey && options.awsSecretKey) {
-    return 'credentials';
+    return "credentials";
   }
-  return 'default';
+  return "default";
 }
 
 export function normalizeBedrockAuthConfig(options: LegacyBedrockOptions): BedrockAuthConfig {
@@ -88,7 +88,7 @@ export function normalizeBedrockAuthConfig(options: LegacyBedrockOptions): Bedro
 
   return {
     awsAuthentication: mode,
-    awsRegion: options.awsRegion || 'us-east-1',
+    awsRegion: options.awsRegion || "us-east-1",
     awsBedrockApiKey: options.awsBedrockApiKey,
     awsProfile: options.awsProfile,
     awsAccessKey: options.awsAccessKey,
