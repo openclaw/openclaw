@@ -26,6 +26,7 @@ import {
   shouldPreserveTransientCooldownProbeSlot,
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
+import { isAgentHarnessNotRegisteredError } from "./harness/errors.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   isModelFallbackDecisionLogEnabled,
@@ -1127,6 +1128,9 @@ export async function runWithModelFallback<T>(
       // that may have a smaller context window and fail worse.
       const errMessage = formatErrorMessage(err);
       if (isLikelyContextOverflowError(errMessage)) {
+        throw err;
+      }
+      if (isAgentHarnessNotRegisteredError(err)) {
         throw err;
       }
       const normalized =

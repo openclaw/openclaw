@@ -13,6 +13,7 @@ import { CommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError } from "./failover-error.js";
+import { AgentHarnessNotRegisteredError } from "./harness/errors.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   FallbackSummaryError,
@@ -910,6 +911,31 @@ describe("runWithModelFallback", () => {
         fallbacksOverride: [],
       }),
     ).rejects.toThrow("something weird");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back when strict agent harness selection is missing", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const missingHarness = new AgentHarnessNotRegisteredError("codex");
+    const run = vi.fn().mockRejectedValueOnce(missingHarness).mockResolvedValueOnce("ok");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        run,
+      }),
+    ).rejects.toBe(missingHarness);
     expect(run).toHaveBeenCalledTimes(1);
   });
 
