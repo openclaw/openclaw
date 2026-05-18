@@ -149,7 +149,10 @@ class GatewaySession(
     val tls: GatewayTlsParams?,
   )
 
-  private var desired: DesiredConnection? = null
+  private val lifecycleLock = Any()
+
+  @Volatile private var desired: DesiredConnection? = null
+
   private var job: Job? = null
 
   @Volatile private var currentConnection: Connection? = null
@@ -168,26 +171,39 @@ class GatewaySession(
     options: GatewayConnectOptions,
     tls: GatewayTlsParams? = null,
   ) {
-    desired = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls)
-    pendingDeviceTokenRetry = false
-    deviceTokenRetryBudgetUsed = false
-    reconnectPausedForAuthFailure = false
-    if (job == null) {
-      job = scope.launch(Dispatchers.IO) { runLoop() }
+    val connectionToClose: Connection?
+    synchronized(lifecycleLock) {
+      desired = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls)
+      pendingDeviceTokenRetry = false
+      deviceTokenRetryBudgetUsed = false
+      reconnectPausedForAuthFailure = false
+      connectionToClose = currentConnection
+      if (job?.isActive != true) {
+        job = scope.launch(Dispatchers.IO) { runLoop() }
+      }
     }
+    connectionToClose?.closeQuietly()
   }
 
   fun disconnect() {
-    desired = null
-    pendingDeviceTokenRetry = false
-    deviceTokenRetryBudgetUsed = false
-    reconnectPausedForAuthFailure = false
-    currentConnection?.closeQuietly()
-    scope.launch(Dispatchers.IO) {
-      job?.cancelAndJoin()
+    val jobToCancel: Job?
+    val connectionToClose: Connection?
+    synchronized(lifecycleLock) {
+      desired = null
+      pendingDeviceTokenRetry = false
+      deviceTokenRetryBudgetUsed = false
+      reconnectPausedForAuthFailure = false
+      connectionToClose = currentConnection
+      jobToCancel = job
       job = null
-      pluginSurfaceUrls = emptyMap()
-      mainSessionKey = null
+    }
+    connectionToClose?.closeQuietly()
+    scope.launch(Dispatchers.IO) {
+      jobToCancel?.cancelAndJoin()
+      if (desired == null) {
+        pluginSurfaceUrls = emptyMap()
+        mainSessionKey = null
+      }
       onDisconnected("Offline")
     }
   }
@@ -963,9 +979,11 @@ class GatewaySession(
         conn.connect()
         conn.awaitClose()
       } finally {
-        currentConnection = null
-        pluginSurfaceUrls = emptyMap()
-        mainSessionKey = null
+        if (currentConnection === conn) {
+          currentConnection = null
+          pluginSurfaceUrls = emptyMap()
+          mainSessionKey = null
+        }
       }
     }
 
