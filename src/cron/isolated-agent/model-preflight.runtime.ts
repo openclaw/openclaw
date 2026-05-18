@@ -190,7 +190,7 @@ async function resolveProbeApiKey(
   // 3. Env var: LITELLM_API_KEY, VLLM_API_KEY, SGLANG_API_KEY, etc.
   const upperName = provider.toUpperCase().replace(/[^A-Z0-9_]/g, "");
   const directKey = process.env[upperName + "_API_KEY"];
-  if (directKey?.trim()) return directKey.trim();
+  if (directKey?.trim()) { return directKey.trim(); }
 
   return undefined;
 }
