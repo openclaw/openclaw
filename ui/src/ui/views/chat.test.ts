@@ -73,7 +73,7 @@ vi.mock("../chat/build-chat-items.ts", () => ({
         (message) =>
           typeof message === "object" &&
           message !== null &&
-          (message as { __testDivider?: unknown }).__testDivider === true,
+          (message as { __testDivider?: unknown })["__testDivider"] === true,
       )
     ) {
       return [

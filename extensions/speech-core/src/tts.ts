@@ -541,8 +541,8 @@ export function buildTtsSystemPromptHint(
   if (autoMode === "off") {
     return undefined;
   }
-  const _config = resolveTtsConfig(cfg, agentId);
-  const persona = getTtsPersona(_config, prefsPath);
+  const configForTest = resolveTtsConfig(cfg, agentId);
+  const persona = getTtsPersona(configForTest, prefsPath);
   const maxLength = getTtsMaxLength(prefsPath);
   const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
   const autoHint =
@@ -1874,7 +1874,7 @@ export async function maybeApplyTtsToPayload(params: {
   return nextPayload;
 }
 
-export const _test = {
+export const testApi = {
   parseTtsDirectives,
   resolveModelOverridePolicy,
   supportsNativeVoiceNoteTts,
@@ -1886,3 +1886,6 @@ export const _test = {
   formatTtsProviderError,
   sanitizeTtsErrorForLog,
 };
+
+/** @deprecated Use `testApi`. */
+export { testApi as _test };

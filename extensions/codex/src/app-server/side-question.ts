@@ -675,7 +675,7 @@ function clampSideDynamicToolTimeoutMs(timeoutMs: number): number {
   return Math.max(1, Math.min(CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS, Math.floor(timeoutMs)));
 }
 
-export const __testing = {
+export const testing = {
   resolveSideDynamicToolCallTimeoutMs,
 } as const;
 
@@ -967,3 +967,4 @@ function formatCodexErrorMessage(
     "Codex /btw side thread failed.";
   return new Error(formatErrorMessage(message));
 }
+export { testing as __testing };

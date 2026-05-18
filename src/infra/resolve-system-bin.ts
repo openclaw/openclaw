@@ -205,12 +205,12 @@ export function resolveSystemBin(
 }
 
 /** Visible for tests: the computed trusted directories. */
-export function _getTrustedDirs(trust: SystemBinTrust = "strict"): readonly string[] {
+export function getTrustedDirsForTest(trust: SystemBinTrust = "strict"): readonly string[] {
   return getTrustedDirs(trust);
 }
 
 /** Reset cache and optionally override the executable-check function (for tests). */
-export function _resetResolveSystemBin(overrideIsExecutable?: (p: string) => boolean): void {
+export function resetResolveSystemBin(overrideIsExecutable?: (p: string) => boolean): void {
   resolvedCacheStrict.clear();
   resolvedCacheStandard.clear();
   trustedDirsStrict = null;

@@ -112,9 +112,8 @@ import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
-export async function __resetModelCatalogCacheForTest(): Promise<void> {
-  const { __resetModelCatalogCacheForTest: resetModelCatalogCacheForTest } =
-    await import("./server-model-catalog.js");
+export async function resetModelCatalogCacheForTest(): Promise<void> {
+  const { resetModelCatalogCacheForTest } = await import("./server-model-catalog.js");
   await resetModelCatalogCacheForTest();
 }
 

@@ -4355,7 +4355,7 @@ function handleApprovalRequest(params: {
   });
 }
 
-export const __testing = {
+export const testing = {
   CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
   CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
   CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
@@ -4387,3 +4387,4 @@ export const __testing = {
     openClawCodingToolsFactoryForTests = undefined;
   },
 } as const;
+export { testing as __testing };

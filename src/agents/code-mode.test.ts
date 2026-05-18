@@ -6,7 +6,7 @@ import {
   CODE_MODE_WAIT_TOOL_NAME,
   createCodeModeTools,
   resolveCodeModeConfig,
-  __testing,
+  testing,
 } from "./code-mode.js";
 import { createToolSearchCatalogRef, type ToolSearchCatalogRef } from "./tool-search.js";
 import {
@@ -94,8 +94,8 @@ async function runUntilCompleted(params: {
 
 describe("Code Mode", () => {
   afterEach(() => {
-    __testing.activeRuns.clear();
-    __testing.resumingRunIds.clear();
+    testing.activeRuns.clear();
+    testing.resumingRunIds.clear();
   });
 
   it("resolves object config defaults", () => {
@@ -168,12 +168,12 @@ describe("Code Mode", () => {
   });
 
   it("resolves the packaged worker URL from stable and hashed dist modules", () => {
-    expect(
-      __testing.resolveCodeModeWorkerUrl("file:///repo/dist/agents/code-mode.js").pathname,
-    ).toBe("/repo/dist/agents/code-mode.worker.js");
-    expect(
-      __testing.resolveCodeModeWorkerUrl("file:///repo/dist/selection-abc123.js").pathname,
-    ).toBe("/repo/dist/agents/code-mode.worker.js");
+    expect(testing.resolveCodeModeWorkerUrl("file:///repo/dist/agents/code-mode.js").pathname).toBe(
+      "/repo/dist/agents/code-mode.worker.js",
+    );
+    expect(testing.resolveCodeModeWorkerUrl("file:///repo/dist/selection-abc123.js").pathname).toBe(
+      "/repo/dist/agents/code-mode.worker.js",
+    );
   });
 
   it("hides all normal tools behind exec and wait", () => {
@@ -503,7 +503,7 @@ describe("Code Mode", () => {
 
     expect(details.status).toBe("completed");
     expect(details.value).toBe(42);
-    expect(__testing.getTypescriptRuntimePromise()).toBeNull();
+    expect(testing.getTypescriptRuntimePromise()).toBeNull();
   });
 
   it("allows identifiers and strings that contain import without module access", async () => {
@@ -542,7 +542,7 @@ describe("Code Mode", () => {
       catalogRef,
     });
 
-    const beforeRunCount = __testing.activeRuns.size;
+    const beforeRunCount = testing.activeRuns.size;
     const details = resultDetails(
       await codeModeTools[0].execute("code-call-empty-wait", {
         code: "await new Promise(() => undefined); return 'never';",
@@ -551,7 +551,7 @@ describe("Code Mode", () => {
 
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("pending without host work");
-    expect(__testing.activeRuns.size).toBe(beforeRunCount);
+    expect(testing.activeRuns.size).toBe(beforeRunCount);
   });
 
   it("clamps omitted code-mode catalog search limits to maxSearchLimit", async () => {
@@ -716,7 +716,7 @@ describe("Code Mode", () => {
       catalogRef,
     });
 
-    const beforeRunCount = __testing.activeRuns.size;
+    const beforeRunCount = testing.activeRuns.size;
     const details = resultDetails(
       await tools[0].execute("code-call-large-suspend", {
         code: "text('x'.repeat(2048)); await yield_control('pause'); return 1;",
@@ -725,7 +725,7 @@ describe("Code Mode", () => {
 
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("output limit exceeded");
-    expect(__testing.activeRuns.size).toBe(beforeRunCount);
+    expect(testing.activeRuns.size).toBe(beforeRunCount);
   });
 
   it("terminates hostile infinite loops outside the main event loop", async () => {

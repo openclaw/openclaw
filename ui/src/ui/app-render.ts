@@ -184,9 +184,9 @@ import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.t
 import { renderLoginGate } from "./views/login-gate.ts";
 import { renderOverview } from "./views/overview.ts";
 
-let _pendingUpdate: (() => void) | undefined;
+let pendingUpdate: (() => void) | undefined;
 
-const notifyLazyViewChanged = () => _pendingUpdate?.();
+const notifyLazyViewChanged = () => pendingUpdate?.();
 
 function renderSettingsSectionNav(state: AppViewState) {
   if (!isSettingsTab(state.tab)) {
@@ -898,7 +898,7 @@ export function renderApp(state: AppViewState) {
     typeof updatableState.requestUpdate === "function"
       ? () => updatableState.requestUpdate?.()
       : undefined;
-  _pendingUpdate = requestHostUpdate;
+  pendingUpdate = requestHostUpdate;
 
   // Gate: require successful gateway connection before showing the dashboard.
   // The gateway URL confirmation overlay is always rendered so URL-param flows still work.

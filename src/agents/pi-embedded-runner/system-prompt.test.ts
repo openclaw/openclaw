@@ -49,7 +49,7 @@ describe("applySystemPromptOverrideToSession", () => {
     const { mutable } = applyAndGetMutableSession(prompt);
 
     expect(mutable.agent.state.systemPrompt).toBe(prompt);
-    expect(mutable._baseSystemPrompt).toBe(prompt);
+    expect(mutable["_baseSystemPrompt"]).toBe(prompt);
   });
 
   it("trims whitespace from string overrides", () => {
@@ -67,7 +67,7 @@ describe("applySystemPromptOverrideToSession", () => {
 
   it("sets _rebuildSystemPrompt that returns the override", () => {
     const { mutable } = applyAndGetMutableSession("rebuild test");
-    expect(mutable._rebuildSystemPrompt?.(["tool1"])).toBe("rebuild test");
+    expect(mutable["_rebuildSystemPrompt"]?.(["tool1"])).toBe("rebuild test");
   });
 });
 

@@ -139,6 +139,6 @@ export function applySystemPromptOverrideToSession(
     _baseSystemPrompt?: string;
     _rebuildSystemPrompt?: (toolNames: string[]) => string;
   };
-  mutableSession._baseSystemPrompt = prompt;
-  mutableSession._rebuildSystemPrompt = () => prompt;
+  mutableSession["_baseSystemPrompt"] = prompt;
+  mutableSession["_rebuildSystemPrompt"] = () => prompt;
 }

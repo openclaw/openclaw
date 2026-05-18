@@ -65,7 +65,7 @@ vi.mock("../health-state.js", () => ({
   incrementPresenceVersion: incrementPresenceVersionMock,
 }));
 
-import { __testing, attachGatewayWsMessageHandler } from "./message-handler.js";
+import { testing, attachGatewayWsMessageHandler } from "./message-handler.js";
 
 function createLogger() {
   return {
@@ -404,7 +404,7 @@ describe("resolvePinnedClientMetadata", () => {
     "pins legacy node-host platform alias %s to paired canonical %s",
     (claimedPlatform, pairedPlatform) => {
       expect(
-        __testing.resolvePinnedClientMetadata({
+        testing.resolvePinnedClientMetadata({
           clientId: "node-host",
           clientMode: "node",
           claimedPlatform,
@@ -428,7 +428,7 @@ describe("resolvePinnedClientMetadata", () => {
     "pins canonical node-host platform %s over paired legacy alias %s",
     (claimedPlatform, pairedPlatform, deviceFamily) => {
       expect(
-        __testing.resolvePinnedClientMetadata({
+        testing.resolvePinnedClientMetadata({
           clientId: "node-host",
           clientMode: "node",
           claimedPlatform,
@@ -454,7 +454,7 @@ describe("resolvePinnedClientMetadata", () => {
     "allows %s platform version refresh without metadata-upgrade approval",
     (clientId, claimedPlatform, pairedPlatform, deviceFamily) => {
       expect(
-        __testing.resolvePinnedClientMetadata({
+        testing.resolvePinnedClientMetadata({
           clientId,
           clientMode: "node",
           claimedPlatform,
@@ -474,7 +474,7 @@ describe("resolvePinnedClientMetadata", () => {
 
   it("still requires approval when an iOS device family changes", () => {
     expect(
-      __testing.resolvePinnedClientMetadata({
+      testing.resolvePinnedClientMetadata({
         clientId: "openclaw-ios",
         clientMode: "node",
         claimedPlatform: "iOS 26.5.0",
@@ -493,7 +493,7 @@ describe("resolvePinnedClientMetadata", () => {
 
   it("keeps non-mobile platform version changes approval-bound", () => {
     expect(
-      __testing.resolvePinnedClientMetadata({
+      testing.resolvePinnedClientMetadata({
         clientId: "node-host",
         clientMode: "node",
         claimedPlatform: "linux 6.9",

@@ -1459,7 +1459,7 @@ async function compactEmbeddedPiSessionDirectOnce(
   }
 }
 
-export const __testing = {
+export const testing = {
   hasRealConversationContent,
   hasMeaningfulConversationContent,
   containsRealConversationMessages,
@@ -1474,3 +1474,4 @@ export const __testing = {
 } as const;
 
 export { runPostCompactionSideEffects } from "./compaction-hooks.js";
+export { testing as __testing };

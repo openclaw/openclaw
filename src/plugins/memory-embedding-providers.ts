@@ -161,4 +161,4 @@ export function clearMemoryEmbeddingProviders(): void {
   getMemoryEmbeddingProviders().clear();
 }
 
-export const _resetMemoryEmbeddingProviders = clearMemoryEmbeddingProviders;
+export const resetMemoryEmbeddingProviders = clearMemoryEmbeddingProviders;

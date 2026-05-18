@@ -1041,7 +1041,7 @@ export async function startGatewayPostAttachRuntime(
   };
 }
 
-export const __testing = {
+export const testing = {
   hasRestartSentinelFileFast,
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,
@@ -1051,3 +1051,4 @@ export const __testing = {
   shouldSkipStartupModelPrewarm,
   stopPostReadySidecarsAfterCloseStarted,
 };
+export { testing as __testing };

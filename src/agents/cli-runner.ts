@@ -31,7 +31,7 @@ import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 const log = createSubsystemLogger("agents/cli-runner");
 
 function flushSessionManagerFile(sessionManager: SessionManager): void {
-  (sessionManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
+  (sessionManager as unknown as { _rewriteFile?: () => void })["_rewriteFile"]?.();
 }
 
 function buildHandledReplyPayloads(reply?: ReplyPayload) {
