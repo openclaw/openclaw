@@ -64,12 +64,9 @@ export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
 
 export type TelegramStreamingPreviewConfig = ChannelStreamingPreviewConfig & {
-  /**
-   * Use Telegram-native ephemeral draft UI for DM preview tool progress.
-   * Default: false.
-   */
+  /** Use Telegram-native ephemeral draft UI for DM preview tool progress. */
   nativeToolProgress?: boolean;
-  /** Optional Telegram sender/user ID allowlist for native DM preview tool progress. */
+  /** Telegram sender/user IDs allowed to use native DM preview tool progress. */
   nativeToolProgressAllowFrom?: Array<string | number>;
 };
 

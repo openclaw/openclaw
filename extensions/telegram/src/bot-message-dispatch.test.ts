@@ -1605,6 +1605,28 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it("does not restart progress drafts after final answer delivery", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Branch is up to date" }, { kind: "final" });
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Shelling\n`🛠️ Exec`");
+    expectDeliveredReply(0, { text: "Branch is up to date" });
+  });
+
   it("uses the transcript final when progress-mode final text is truncated", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
     const fullAnswer =
@@ -1724,6 +1746,31 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n`🛠️ Exec`");
+    expect(draftStream.flush).toHaveBeenCalled();
+  });
+
+  it("keeps the progress draft label when tool progress lines are hidden", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", toolProgress: false },
+        },
+      },
+    });
+
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling");
     expect(draftStream.flush).toHaveBeenCalled();
   });
 

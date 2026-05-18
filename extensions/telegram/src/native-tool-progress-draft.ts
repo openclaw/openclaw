@@ -8,7 +8,7 @@ const TELEGRAM_DRAFT_ID_STATE_KEY = Symbol.for("openclaw.telegramNativeDraftIdSt
 type TelegramSendMessageDraft = (
   chatId: Parameters<Bot["api"]["sendMessage"]>[0],
   draftId: number,
-  text?: string,
+  text: string,
   params?: {
     message_thread_id?: number;
     parse_mode?: "HTML";
@@ -69,6 +69,9 @@ export function createNativeTelegramToolProgressDraft(params: {
         return false;
       }
       const normalizedText = normalizeDraftText(text);
+      if (!normalizedText) {
+        return false;
+      }
       if (normalizedText === lastSentText) {
         return true;
       }
