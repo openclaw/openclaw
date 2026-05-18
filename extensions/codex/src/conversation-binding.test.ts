@@ -402,6 +402,7 @@ describe("codex conversation binding", () => {
         schemaVersion: 1,
         threadId: "thread-old",
         cwd: tempDir,
+        dynamicToolsFingerprint: "[]",
       }),
     );
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -494,6 +495,14 @@ describe("codex conversation binding", () => {
 
     expect(result).toEqual({ handled: true, reply: { text: "done" } });
     expect(requests.map((request) => request.method)).toEqual(["thread/start", "turn/start"]);
+    const toolFactoryOptions = mockCallArg(agentHarnessMocks.createOpenClawCodingTools) as {
+      currentChannelId?: unknown;
+      messageTo?: unknown;
+      sessionId?: unknown;
+    };
+    expect(toolFactoryOptions.currentChannelId).toBe("5185575566");
+    expect(toolFactoryOptions.messageTo).toBe("5185575566");
+    expect(toolFactoryOptions.sessionId).toBe("5185575566");
     expect(execute).toHaveBeenCalledWith(
       "call-1",
       { text: "hello" },
@@ -504,6 +513,89 @@ describe("codex conversation binding", () => {
       contentItems: [{ type: "inputText", text: "echo:hello" }],
       success: true,
     });
+  });
+
+  it("preserves older native bound Codex threads without dynamic tool fingerprints", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    agentHarnessMocks.createOpenClawCodingTools.mockReturnValue([createEchoTool()] as never);
+    await fs.writeFile(
+      sessionFile + ".codex-app-server.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-old",
+        cwd: tempDir,
+      }),
+    );
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        if (method === "turn/start") {
+          setImmediate(() => {
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-old",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "still here" }],
+                },
+              },
+            });
+          });
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue",
+        bodyForAgent: "continue",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+        conversationId: "5185575566",
+      },
+      {
+        channelId: "telegram",
+        conversationId: "5185575566",
+        sessionKey: "telegram:direct:5185575566",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 500 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "still here" } });
+    expect(requests.map((request) => request.method)).toEqual(["turn/start"]);
+    expect(requests[0]?.params.threadId).toBe("thread-old");
+    const savedBinding = JSON.parse(
+      await fs.readFile(sessionFile + ".codex-app-server.json", "utf8"),
+    );
+    expect(savedBinding.threadId).toBe("thread-old");
+    expect(savedBinding).not.toHaveProperty("dynamicToolsFingerprint");
   });
 
   it("recreates a missing bound thread and preserves auth plus turn overrides", async () => {

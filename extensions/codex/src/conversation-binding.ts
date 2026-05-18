@@ -431,12 +431,14 @@ async function runBoundTurn(params: {
     signal: turnAbortController.signal,
   });
   const dynamicToolsFingerprint = codexDynamicToolsFingerprint(toolBridge.specs);
-  const shouldRefreshDynamicTools = binding.dynamicToolsFingerprint
-    ? !areCodexDynamicToolFingerprintsCompatible({
-        previous: binding.dynamicToolsFingerprint,
-        next: dynamicToolsFingerprint,
-      })
-    : toolBridge.specs.length > 0;
+  // Older bound sidecars predate dynamic-tool fingerprints. Preserve their
+  // existing thread context instead of rotating them as soon as plugins appear.
+  const shouldRefreshDynamicTools =
+    binding.dynamicToolsFingerprint !== undefined &&
+    !areCodexDynamicToolFingerprintsCompatible({
+      previous: binding.dynamicToolsFingerprint,
+      next: dynamicToolsFingerprint,
+    });
   if (shouldRefreshDynamicTools) {
     await createThread({
       pluginConfig: params.pluginConfig,
@@ -603,20 +605,22 @@ async function buildConversationDynamicToolBridge(params: {
   const signal = params.signal ?? new AbortController().signal;
   const codexConfig = readCodexPluginConfig(params.pluginConfig);
   const { createOpenClawCodingTools } = await import("openclaw/plugin-sdk/agent-harness");
+  const boundConversationId =
+    params.ctx?.conversationId ?? params.event?.conversationId ?? params.ctx?.channelId;
   const allTools = createOpenClawCodingTools({
     includeCoreTools: false,
     config: params.config,
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     workspaceDir: params.workspaceDir,
     spawnWorkspaceDir: params.workspaceDir,
-    sessionId: params.ctx?.conversationId ?? params.event?.conversationId,
+    sessionId: boundConversationId,
     sessionKey: params.ctx?.sessionKey,
     runId: params.ctx?.runId,
     messageProvider: params.event?.channel,
     agentAccountId: params.event?.accountId,
-    messageTo: params.event?.conversationId,
+    messageTo: boundConversationId,
     messageThreadId: params.event?.threadId,
-    currentChannelId: params.ctx?.channelId ?? params.event?.conversationId,
+    currentChannelId: boundConversationId,
     currentMessageId: params.event?.messageId,
     senderId: params.event?.senderId,
     senderName: params.event?.senderName,
@@ -630,10 +634,10 @@ async function buildConversationDynamicToolBridge(params: {
     signal,
     hookContext: {
       config: params.config,
-      sessionId: params.ctx?.conversationId ?? params.event?.conversationId,
+      sessionId: boundConversationId,
       sessionKey: params.ctx?.sessionKey,
       runId: params.ctx?.runId,
-      channelId: params.ctx?.channelId ?? params.event?.conversationId,
+      channelId: boundConversationId,
     },
     loading: resolveCodexDynamicToolsLoading(codexConfig),
   });
