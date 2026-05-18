@@ -820,7 +820,7 @@ describe("searchMemoryWiki", () => {
     ]);
   });
 
-  it("keeps QMD-slugified archived session search hits inside visibility policy", async () => {
+  it("keeps QMD archived session search hits inside visibility policy", async () => {
     const { config } = await createQueryVault({
       initialize: true,
       config: {
@@ -830,17 +830,17 @@ describe("searchMemoryWiki", () => {
     loadCombinedSessionStoreForGatewayMock.mockReturnValue({
       storePath: "(test)",
       store: {
-        "agent:main:foo_bar.v1": {
-          sessionId: "foo_bar.v1",
+        "agent:main:abc-uuid": {
+          sessionId: "abc-uuid",
           updatedAt: 1,
-          sessionFile: "/tmp/openclaw/foo_bar.v1.jsonl",
+          sessionFile: "/tmp/openclaw/abc-uuid.jsonl",
         },
       },
     });
     const manager = createMemoryManager({
       searchResults: [
         {
-          path: "qmd/sessions-main/foo-bar-v1-jsonl-reset-2026-02-16t22-26-33-000z.md",
+          path: "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z.md",
           startLine: 1,
           endLine: 2,
           score: 30,
@@ -848,7 +848,7 @@ describe("searchMemoryWiki", () => {
           source: "sessions",
         },
         {
-          path: "foo-bar-v1-jsonl-reset-2026-02-16t22-26-33-000z.md",
+          path: "abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z.md",
           startLine: 3,
           endLine: 4,
           score: 20,
@@ -862,14 +862,14 @@ describe("searchMemoryWiki", () => {
     const results = await searchMemoryWiki({
       config,
       appConfig: createSessionVisibilityAppConfig(),
-      agentSessionKey: "agent:main:foo_bar.v1",
+      agentSessionKey: "agent:main:abc-uuid",
       sandboxed: true,
       query: "transcript",
       maxResults: 10,
     });
 
     expect(results.map((result) => result.path)).toEqual([
-      "qmd/sessions-main/foo-bar-v1-jsonl-reset-2026-02-16t22-26-33-000z.md",
+      "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z.md",
     ]);
   });
 

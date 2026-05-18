@@ -80,6 +80,7 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     );
     expect(identity).toEqual({
       stem: "abc-uuid",
+      liveStem: "abc-uuid-jsonl-reset-2026-02-16T22-26-33.000Z",
       archived: true,
     });
   });
@@ -106,6 +107,7 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     );
     expect(identity).toEqual({
       stem: "abc-uuid",
+      liveStem: "abc-uuid.jsonl.reset.2026-02-16T22-26-33.000Z",
       archived: true,
     });
   });
@@ -116,6 +118,16 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     );
     expect(identity).toEqual({
       stem: "abc.jsonl.reset.not-a-timestamp",
+      archived: false,
+    });
+  });
+
+  it("does not treat non-QMD .md names with archive-looking timestamps as archives", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z.md",
+    );
+    expect(identity).toEqual({
+      stem: "abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z",
       archived: false,
     });
   });
@@ -148,6 +160,7 @@ describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
       ),
     ).toEqual({
       stem: "deleted-uuid",
+      liveStem: "deleted-uuid-jsonl-deleted-2026-02-16t22-27-33-000z",
       archived: true,
     });
   });

@@ -40,6 +40,7 @@ function normalizeQmdSessionStem(stem: string): string {
 
 export type SessionTranscriptHitIdentity = {
   stem: string;
+  liveStem?: string;
   ownerAgentId?: string;
   archived: boolean;
 };
@@ -71,6 +72,7 @@ export function extractTranscriptStemFromSessionsMemoryHit(hitPath: string): str
 export function extractTranscriptIdentityFromSessionsMemoryHit(
   hitPath: string,
 ): SessionTranscriptHitIdentity | null {
+  const isQmdPath = hitPath.replace(/\\/g, "/").startsWith("qmd/");
   const { base, ownerAgentId } = parseSessionsPath(hitPath);
   const archivedStem = parseUsageCountedSessionIdFromFileName(base);
   if (archivedStem && base !== `${archivedStem}.jsonl`) {
@@ -85,15 +87,17 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
     if (!mdStem) {
       return null;
     }
-    const exportedArchiveStem = parseUsageCountedSessionIdFromFileName(mdStem);
-    if (exportedArchiveStem && mdStem !== `${exportedArchiveStem}.jsonl`) {
-      return { stem: exportedArchiveStem, ownerAgentId, archived: true };
-    }
-    const restoredArchiveName = restoreQmdNormalizedArchiveName(mdStem);
-    if (restoredArchiveName) {
-      const archivedStem = parseUsageCountedSessionIdFromFileName(restoredArchiveName);
-      if (archivedStem && restoredArchiveName !== `${archivedStem}.jsonl`) {
-        return { stem: archivedStem, ownerAgentId, archived: true };
+    if (isQmdPath) {
+      const exportedArchiveStem = parseUsageCountedSessionIdFromFileName(mdStem);
+      if (exportedArchiveStem && mdStem !== `${exportedArchiveStem}.jsonl`) {
+        return { stem: exportedArchiveStem, liveStem: mdStem, ownerAgentId, archived: true };
+      }
+      const restoredArchiveName = restoreQmdNormalizedArchiveName(mdStem);
+      if (restoredArchiveName) {
+        const archivedStem = parseUsageCountedSessionIdFromFileName(restoredArchiveName);
+        if (archivedStem && restoredArchiveName !== `${archivedStem}.jsonl`) {
+          return { stem: archivedStem, liveStem: mdStem, ownerAgentId, archived: true };
+        }
       }
     }
     return { stem: mdStem, ownerAgentId, archived: false };
