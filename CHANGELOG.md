@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - QA-Lab: make runtime tool coverage fail on missing required tool exercise instead of treating pass/pass parity envelope drift as missing coverage.
 - Core/plugins: harden clawpatch-reported edge cases across gateway auth cleanup, Claude session id paths, plugin activation policy, apply-patch hunk handling, diagnostic redaction, and plugin metadata validation.
 - Mac app: prefer explicit private/Tailscale/LAN Gateway endpoints over SSH tunnels, preserve legacy loopback tunnel configs, persist transport choices, and show captured SSH stderr when tunneling really fails.
+- Gateway/sessions: keep ACP/acpx and runtime child sessions visible in configured-only session lists when their owner or parent session belongs to a configured agent.
 - Mac app: keep app-level menu commands and Dashboard failure states reachable when the remote Gateway is disconnected, and keep the Settings sidebar toggle in the leading titlebar area.
 - Gateway/webchat: hide internal runtime-context and other `display: false` transcript messages from Chat history and live message events. Fixes #83216. Thanks @EmpireCreator.
 - CLI/help: keep `gateway`, `doctor`, `status`, and `health` help registration out of action/runtime imports so subcommand `--help` stays lightweight in constrained terminals. Fixes #83228. Thanks @dfguerrerom.
