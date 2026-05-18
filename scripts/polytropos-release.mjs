@@ -45,9 +45,12 @@ function defaultLogPath() {
 function parseArgs(argv) {
   // Supported:
   //   node scripts/polytropos-release.mjs release [--log <path>]
+  node scripts/polytropos-release.mjs promote --tgz <path> [--log <path>]
+  //   node scripts/polytropos-release.mjs promote --tgz <path> [--log <path>]
   const args = argv.slice(2);
   const cmd = args[0] || "";
   let logPath = process.env.POLYTROPOS_RELEASE_LOG || defaultLogPath();
+  let tgzPath = null;
   for (let i = 1; i < args.length; i++) {
     const a = args[i];
     if (a === "--log") {
@@ -59,12 +62,21 @@ function parseArgs(argv) {
       i++;
       continue;
     }
+    if (a === "--tgz") {
+      const v = args[i + 1];
+      if (!v) {
+        fail("--tgz requires a path");
+      }
+      tgzPath = v;
+      i++;
+      continue;
+    }
     if (a === "--help" || a === "-h") {
-      return { cmd: "--help", logPath };
+      return { cmd: "--help", logPath, tgzPath };
     }
     fail(`unknown argument: ${a}`);
   }
-  return { cmd, logPath };
+  return { cmd, logPath, tgzPath };
 }
 
 function teeWriteStream(logStream, chunk) {
@@ -286,7 +298,8 @@ Behavior:
   - Uses the nearest reachable release tag (v<ver> or v<ver>+poly.<N>) to derive the base upstream version (v<ver>)
   - Computes next global poly build number N = max(existing poly) + 1
   - Creates tag v<ver>+poly.<N> at HEAD
-  - Builds using: pnpm install; pnpm ui:build; pnpm build
+  - "release" builds using: pnpm install; pnpm ui:build; pnpm build
+  - "promote" skips local build and promotes a provided .tgz built elsewhere (e.g. GitHub Actions)
   - Produces tarball via npm pack: ~/polytropos/releases/v<ver>+poly.<N>.tgz
   - Updates ~/polytropos/releases/previous.tgz -> old current.tgz (if present)
   - Updates ~/polytropos/releases/current.tgz -> new tarball
@@ -295,13 +308,13 @@ Behavior:
 `);
 }
 
-const { cmd, logPath } = parseArgs(process.argv);
+const { cmd, logPath, tgzPath } = parseArgs(process.argv);
 if (!cmd || cmd === "--help") {
   usage();
   process.exit(0);
 }
 
-if (cmd !== "release") {
+if (cmd !== "release" && cmd !== "promote") {
   fail(`unknown command: ${cmd}`);
 }
 
@@ -326,24 +339,53 @@ banner(logStream, `Next release tag: ${polyTag}`);
 banner(logStream, `git tag -a ${polyTag}`);
 await shTee(logStream, "git", ["tag", "-a", polyTag, "-m", `Polytropos release ${polyTag}`]);
 
-// Build dist/
-banner(logStream, "Building dist/");
-ensureHooksDisabled(repoRoot, logStream, "before pnpm install");
-await shTee(logStream, "pnpm", ["install"], { cwd: repoRoot });
-// `pnpm install` runs the repo `prepare` script, which sets core.hooksPath to `git-hooks`.
-// Re-disable hooks explicitly so the release flow never leaves hooks enabled on the host.
-ensureHooksDisabled(repoRoot, logStream, "after pnpm install (prepare may reset core.hooksPath)");
-await shTee(logStream, "pnpm", ["ui:build"], { cwd: repoRoot });
-await shTee(logStream, "pnpm", ["build"], { cwd: repoRoot });
-
-ensureDistExists(repoRoot);
+let distBuilt = false;
+if (cmd === "release") {
+  // Build dist locally
+  banner(logStream, "Building dist/");
+  ensureHooksDisabled(repoRoot, logStream, "before pnpm install");
+  await shTee(logStream, "pnpm", ["install"], { cwd: repoRoot });
+  // `pnpm install` runs the repo `prepare` script, which sets core.hooksPath to `git-hooks`.
+  // Re-disable hooks explicitly so the release flow never leaves hooks enabled on the host.
+  ensureHooksDisabled(repoRoot, logStream, "after pnpm install (prepare may reset core.hooksPath)");
+  await shTee(logStream, "pnpm", ["ui:build"], { cwd: repoRoot });
+  await shTee(logStream, "pnpm", ["build"], { cwd: repoRoot });
+  ensureDistExists(repoRoot);
+  distBuilt = true;
+} else {
+  if (!tgzPath) {
+    fail("promote requires --tgz <path>");
+  }
+}
 
 // Produce tarball into releases
 const relRoot = releasesRoot();
 fs.mkdirSync(relRoot, { recursive: true });
 const tarName = `${polyTag}.tgz`;
-const tarPath = npmPack(repoRoot, relRoot, tarName);
-banner(logStream, `Packed tarball: ${tarPath}`);
+let tarPath;
+if (cmd === "release") {
+  tarPath = npmPack(repoRoot, relRoot, tarName);
+  banner(logStream, `Packed tarball: ${tarPath}`);
+} else {
+  const srcAbs = path.resolve(tgzPath);
+  if (!fs.existsSync(srcAbs)) {
+    fail(`promote: tgz not found at ${srcAbs}`);
+  }
+  banner(logStream, `Promoting tarball from: ${srcAbs}`);
+  // Validate tarball matches the derived upstream version
+  const pkgJsonRaw = execFileSync("tar", ["-xOzf", srcAbs, "package/package.json"], { encoding: "utf8" });
+  const pkg = JSON.parse(pkgJsonRaw);
+  const expectedVersion = baseUpstreamTag.replace(/^v/, "");
+  if (pkg?.name !== "openclaw") {
+    fail(`promote: expected package name openclaw, got ${pkg?.name}`);
+  }
+  if (pkg?.version !== expectedVersion) {
+    fail(`promote: tarball version ${pkg?.version} != expected ${expectedVersion}`);
+  }
+  tarPath = path.join(relRoot, tarName);
+  fs.copyFileSync(srcAbs, tarPath);
+  banner(logStream, `Promoted tarball: ${tarPath}`);
+}
 
 // Update symlinks: previous.tgz then current.tgz (mandatory)
 const currentTgz = path.join(relRoot, "current.tgz");
