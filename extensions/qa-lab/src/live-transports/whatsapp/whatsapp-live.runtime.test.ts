@@ -149,7 +149,7 @@ describe("WhatsApp QA live runtime", () => {
           },
           list: [{ id: "qa", tools: { profile: "coding" } }],
         },
-        tools: { profile: "coding" },
+        tools: { profile: "coding", deny: ["exec"] },
       },
       {
         allowFrom: ["+15550000001"],
@@ -164,7 +164,13 @@ describe("WhatsApp QA live runtime", () => {
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({ id: "pi" });
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.params?.thinking).toBe("off");
     expect(cfg.tools?.profile).toBe("messaging");
+    expect(cfg.tools?.deny).toEqual(["exec", "session_status", "sessions_*", "web_search"]);
     expect(cfg.agents?.list?.[0]?.tools?.profile).toBe("messaging");
+    expect(cfg.agents?.list?.[0]?.tools?.deny).toEqual([
+      "session_status",
+      "sessions_*",
+      "web_search",
+    ]);
     expect(cfg.messages?.groupChat?.visibleReplies).toBe("automatic");
     expect(cfg.messages?.groupChat?.mentionPatterns).toContain("\\bopenclawqa\\b");
   });

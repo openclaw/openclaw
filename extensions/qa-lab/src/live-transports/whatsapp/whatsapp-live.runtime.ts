@@ -384,6 +384,12 @@ function findScenarios(ids?: string[]) {
   });
 }
 
+const WHATSAPP_QA_DENIED_MODEL_TOOLS = ["session_status", "sessions_*", "web_search"];
+
+function mergeDeniedModelTools(existing?: string[]): string[] {
+  return [...new Set([...(existing ?? []), ...WHATSAPP_QA_DENIED_MODEL_TOOLS])];
+}
+
 function buildWhatsAppQaConfig(
   baseCfg: OpenClawConfig,
   params: {
@@ -426,12 +432,14 @@ function buildWhatsAppQaConfig(
         tools: {
           ...agent.tools,
           profile: "messaging",
+          deny: mergeDeniedModelTools(agent.tools?.deny),
         },
       })),
     },
     tools: {
       ...baseCfg.tools,
       profile: "messaging",
+      deny: mergeDeniedModelTools(baseCfg.tools?.deny),
     },
     plugins: {
       ...baseCfg.plugins,
