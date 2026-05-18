@@ -9,6 +9,15 @@
   "providerAuthEnvVars": {
     "serpapi": ["SERPAPI_API_KEY"]
   },
+  "setup": {
+    "providers": [
+      {
+        "id": "serpapi",
+        "authMethods": ["api-key"],
+        "envVars": ["SERPAPI_API_KEY"]
+      }
+    ]
+  },
   "uiHints": {
     "apiKey": {
       "label": "SerpApi API Key",
