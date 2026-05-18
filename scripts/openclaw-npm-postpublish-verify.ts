@@ -53,6 +53,14 @@ const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 6 * 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_FILES = 5000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
+const DISCORD_SUBAGENT_HOOK_SOURCE_MARKER = "//#region extensions/discord/src/subagent-hooks.ts";
+const DISCORD_SUBAGENT_DELIVERY_ORIGIN_MARKERS = [
+  "threadBindingReady: true",
+  "deliveryOrigin",
+  "to: `channel:${binding.threadId}`",
+  "threadId: binding.threadId",
+];
+const DISCORD_SUBAGENT_DELIVERY_ORIGIN_MIN_VERSION = { year: 2026, month: 5, day: 18 };
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // Optional A2UI markdown renderer. The Canvas host bundle catches the missing
   // package and falls back when the optional renderer is unavailable.
@@ -131,8 +139,44 @@ export function collectInstalledPackageErrors(params: {
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkZodArtifactErrors(params.packageRoot));
   errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
+  if (shouldVerifyDiscordSubagentDeliveryOrigin(params.expectedVersion)) {
+    errors.push(...collectInstalledDiscordSubagentDeliveryOriginErrors(params.packageRoot));
+  }
 
   return errors;
+}
+
+function parseCalverForVerification(
+  version: string,
+): { year: number; month: number; day: number } | null {
+  const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[-+].*)?$/u.exec(version);
+  if (!match) {
+    return null;
+  }
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+  };
+}
+
+function compareCalverForVerification(
+  left: { year: number; month: number; day: number },
+  right: { year: number; month: number; day: number },
+): number {
+  for (const key of ["year", "month", "day"] as const) {
+    if (left[key] !== right[key]) {
+      return left[key] - right[key];
+    }
+  }
+  return 0;
+}
+
+function shouldVerifyDiscordSubagentDeliveryOrigin(version: string): boolean {
+  const parsed = parseCalverForVerification(version);
+  return parsed
+    ? compareCalverForVerification(parsed, DISCORD_SUBAGENT_DELIVERY_ORIGIN_MIN_VERSION) >= 0
+    : false;
 }
 
 function collectInstalledBundledExtensionIds(packageRoot: string): Set<string> {
@@ -213,6 +257,43 @@ export function collectInstalledContextEngineRuntimeErrors(packageRoot: string):
     }
   }
   return errors;
+}
+
+export function collectInstalledDiscordSubagentDeliveryOriginErrors(packageRoot: string): string[] {
+  const distRoot = join(packageRoot, "dist");
+  const discordSubagentHookFiles: string[] = [];
+
+  for (const filePath of listDistJavaScriptFiles(packageRoot)) {
+    const fileStat = lstatSync(filePath);
+    if (!fileStat.isFile() || fileStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES) {
+      continue;
+    }
+    const source = readFileSync(filePath, "utf8");
+    if (source.includes(DISCORD_SUBAGENT_HOOK_SOURCE_MARKER)) {
+      discordSubagentHookFiles.push(filePath);
+    }
+  }
+
+  if (discordSubagentHookFiles.length === 0) {
+    return [
+      "installed package is missing the compiled Discord subagent hook; expected source marker extensions/discord/src/subagent-hooks.ts.",
+    ];
+  }
+
+  const hasDeliveryOriginContract = discordSubagentHookFiles.some((filePath) => {
+    const source = readFileSync(filePath, "utf8");
+    return DISCORD_SUBAGENT_DELIVERY_ORIGIN_MARKERS.every((marker) => source.includes(marker));
+  });
+  if (hasDeliveryOriginContract) {
+    return [];
+  }
+
+  const relativeFiles = discordSubagentHookFiles
+    .map((filePath) => relative(distRoot, filePath).replaceAll("\\", "/"))
+    .toSorted((left, right) => left.localeCompare(right));
+  return [
+    `installed package Discord subagent hook omits deliveryOrigin for bound thread spawns; rebuild dist so ${relativeFiles.join(", ")} returns the bound thread delivery origin.`,
+  ];
 }
 
 function resolveInstalledDistRelativeImport(params: {

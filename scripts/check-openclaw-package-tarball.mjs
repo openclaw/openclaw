@@ -82,7 +82,15 @@ const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html"];
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
 const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
 const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
+const DISCORD_SUBAGENT_DELIVERY_ORIGIN_MIN_VERSION = { year: 2026, month: 5, day: 18 };
 const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set(LOCAL_BUILD_METADATA_DIST_PATHS);
+const DISCORD_SUBAGENT_HOOK_SOURCE_MARKER = "//#region extensions/discord/src/subagent-hooks.ts";
+const DISCORD_SUBAGENT_DELIVERY_ORIGIN_MARKERS = [
+  "threadBindingReady: true",
+  "deliveryOrigin",
+  "to: `channel:${binding.threadId}`",
+  "threadId: binding.threadId",
+];
 
 const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
   "dist/extensions/qa-channel/",
@@ -144,6 +152,11 @@ function isLegacyLocalBuildMetadataCompatVersion(version) {
   return parsed ? compareCalver(parsed, LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX) <= 0 : false;
 }
 
+function isDiscordSubagentDeliveryOriginRequiredVersion(version) {
+  const parsed = parseCalver(version);
+  return parsed ? compareCalver(parsed, DISCORD_SUBAGENT_DELIVERY_ORIGIN_MIN_VERSION) >= 0 : false;
+}
+
 function readTarEntry(entryPath) {
   const candidates = [
     path.join(extractDir, entryPath),
@@ -155,6 +168,36 @@ function readTarEntry(entryPath) {
     }
   }
   return "";
+}
+
+function collectPackagedDiscordSubagentDeliveryOriginErrors() {
+  if (!isDiscordSubagentDeliveryOriginRequiredVersion(packageVersion)) {
+    return [];
+  }
+
+  const discordSubagentHookFiles = normalized.filter((entry) => {
+    if (!entry.startsWith("dist/") || !entry.endsWith(".js")) {
+      return false;
+    }
+    return readTarEntry(entry).includes(DISCORD_SUBAGENT_HOOK_SOURCE_MARKER);
+  });
+  if (discordSubagentHookFiles.length === 0) {
+    return [
+      "packaged dist is missing the compiled Discord subagent hook; expected source marker extensions/discord/src/subagent-hooks.ts.",
+    ];
+  }
+
+  const hasDeliveryOriginContract = discordSubagentHookFiles.some((entry) => {
+    const source = readTarEntry(entry);
+    return DISCORD_SUBAGENT_DELIVERY_ORIGIN_MARKERS.every((marker) => source.includes(marker));
+  });
+  if (hasDeliveryOriginContract) {
+    return [];
+  }
+
+  return [
+    `packaged Discord subagent hook omits deliveryOrigin for bound thread spawns; rebuild dist so ${discordSubagentHookFiles.join(", ")} returns the bound thread delivery origin.`,
+  ];
 }
 
 for (const entry of normalized) {
@@ -260,6 +303,7 @@ errors.push(
     imports: packageDistImports ?? undefined,
   }),
 );
+errors.push(...collectPackagedDiscordSubagentDeliveryOriginErrors());
 
 if (errors.length > 0) {
   fs.rmSync(extractDir, { recursive: true, force: true });

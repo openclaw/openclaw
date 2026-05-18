@@ -208,4 +208,55 @@ describe("check-openclaw-package-tarball", () => {
       "2026.4.26",
     );
   });
+
+  it("rejects packaged Discord subagent hooks without deliveryOrigin", () => {
+    withTarball(
+      ["dist/subagent-hooks-OLD.js"],
+      {
+        "dist/subagent-hooks-OLD.js": `//#region extensions/discord/src/subagent-hooks.ts
+async function handleDiscordSubagentSpawning() {
+  return { status: "ok", threadBindingReady: true };
+}
+`,
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "packaged Discord subagent hook omits deliveryOrigin for bound thread spawns",
+        );
+      },
+      "2026.5.18",
+    );
+  });
+
+  it("accepts packaged Discord subagent hooks with bound thread deliveryOrigin", () => {
+    withTarball(
+      ["dist/subagent-hooks-CURRENT.js"],
+      {
+        "dist/subagent-hooks-CURRENT.js": `//#region extensions/discord/src/subagent-hooks.ts
+async function handleDiscordSubagentSpawning() {
+  return {
+    status: "ok",
+    threadBindingReady: true,
+    deliveryOrigin: {
+      channel: "discord",
+      accountId: account.accountId,
+      to: \`channel:\${binding.threadId}\`,
+      threadId: binding.threadId,
+    },
+  };
+}
+`,
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.5.18",
+    );
+  });
 });

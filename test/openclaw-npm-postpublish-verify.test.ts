@@ -7,6 +7,7 @@ import {
   buildPublishedInstallScenarios,
   collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
+  collectInstalledDiscordSubagentDeliveryOriginErrors,
   collectInstalledPluginSdkZodArtifactErrors,
   collectInstalledRootDependencyManifestErrors,
   collectInstalledPackageErrors,
@@ -141,6 +142,69 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
       );
 
       expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toStrictEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("collectInstalledDiscordSubagentDeliveryOriginErrors", () => {
+  function makeInstalledPackageRoot(): string {
+    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-discord-hook-"));
+  }
+
+  function writeInstalledFile(packageRoot: string, relativePath: string, contents: string): void {
+    const filePath = join(packageRoot, ...relativePath.split("/"));
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, contents, "utf8");
+  }
+
+  it("rejects installed packages whose Discord subagent hook lacks deliveryOrigin", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeInstalledFile(
+        packageRoot,
+        "dist/subagent-hooks-OLD.js",
+        `//#region extensions/discord/src/subagent-hooks.ts
+async function handleDiscordSubagentSpawning() {
+  return { status: "ok", threadBindingReady: true };
+}
+`,
+      );
+
+      expect(collectInstalledDiscordSubagentDeliveryOriginErrors(packageRoot)).toEqual([
+        "installed package Discord subagent hook omits deliveryOrigin for bound thread spawns; rebuild dist so subagent-hooks-OLD.js returns the bound thread delivery origin.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts installed packages whose Discord subagent hook returns deliveryOrigin", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeInstalledFile(
+        packageRoot,
+        "dist/subagent-hooks-CURRENT.js",
+        `//#region extensions/discord/src/subagent-hooks.ts
+async function handleDiscordSubagentSpawning() {
+  return {
+    status: "ok",
+    threadBindingReady: true,
+    deliveryOrigin: {
+      channel: "discord",
+      accountId: account.accountId,
+      to: \`channel:\${binding.threadId}\`,
+      threadId: binding.threadId,
+    },
+  };
+}
+`,
+      );
+
+      expect(collectInstalledDiscordSubagentDeliveryOriginErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
