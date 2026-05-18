@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createSourceDeliveryPlan,
   resolveSourceDeliveryOutcome,
   sourceDeliveryTargetsMatch,
 } from "./source-delivery-plan.js";
+
+vi.mock("./target-normalization.js", () => ({
+  normalizeTargetForProvider: (_provider: string, raw?: string) => raw?.trim() || undefined,
+}));
 
 describe("source delivery plan", () => {
   it("projects message-tool-owned delivery to existing source reply and message tool fields", () => {
