@@ -37,7 +37,7 @@ import {
   loadAuthProfileStoreForSecretsRuntime,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "./store.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 
 export {
   isSafeToCopyOAuthIdentity,
@@ -120,12 +120,37 @@ async function buildOAuthApiKey(
   return typeof formatted === "string" && formatted.length > 0 ? formatted : credentials.access;
 }
 
-function buildApiKeyProfileResult(params: { apiKey: string; provider: string; email?: string }) {
-  return {
+type ResolveApiKeyForProfileResult = {
+  apiKey: string;
+  provider: string;
+  email?: string;
+  profileId: string;
+  profileType: AuthProfileCredential["type"];
+};
+
+function buildApiKeyProfileResult(params: {
+  apiKey: string;
+  provider: string;
+  email?: string;
+  profileId: string;
+  profileType: AuthProfileCredential["type"];
+}): ResolveApiKeyForProfileResult {
+  const result = {
     apiKey: params.apiKey,
     provider: params.provider,
     email: params.email,
   };
+  Object.defineProperties(result, {
+    profileId: {
+      value: params.profileId,
+      enumerable: false,
+    },
+    profileType: {
+      value: params.profileType,
+      enumerable: false,
+    },
+  });
+  return result as ResolveApiKeyForProfileResult;
 }
 
 function extractErrorMessage(error: unknown): string {
@@ -214,7 +239,7 @@ export function resetOAuthRefreshQueuesForTest(): void {
 
 async function tryResolveOAuthProfile(
   params: ResolveApiKeyForProfileParams,
-): Promise<{ apiKey: string; provider: string; email?: string } | null> {
+): Promise<ResolveApiKeyForProfileResult | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
   if (!cred || cred.type !== "oauth") {
@@ -246,6 +271,8 @@ async function tryResolveOAuthProfile(
     apiKey: resolved.apiKey,
     provider: resolved.credential.provider,
     email: resolved.credential.email ?? cred.email,
+    profileId,
+    profileType: cred.type,
   });
 }
 
@@ -302,7 +329,7 @@ async function resolveProfileSecretString(params: {
 
 export async function resolveApiKeyForProfile(
   params: ResolveApiKeyForProfileParams,
-): Promise<{ apiKey: string; provider: string; email?: string } | null> {
+): Promise<ResolveApiKeyForProfileResult | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
   if (!cred) {
@@ -346,7 +373,13 @@ export async function resolveApiKeyForProfile(
     if (!key) {
       return null;
     }
-    return buildApiKeyProfileResult({ apiKey: key, provider: cred.provider, email: cred.email });
+    return buildApiKeyProfileResult({
+      apiKey: key,
+      provider: cred.provider,
+      email: cred.email,
+      profileId,
+      profileType: cred.type,
+    });
   }
   if (cred.type === "token") {
     const expiryState = resolveTokenExpiryState(cred.expires);
@@ -367,7 +400,13 @@ export async function resolveApiKeyForProfile(
     if (!token) {
       return null;
     }
-    return buildApiKeyProfileResult({ apiKey: token, provider: cred.provider, email: cred.email });
+    return buildApiKeyProfileResult({
+      apiKey: token,
+      provider: cred.provider,
+      email: cred.email,
+      profileId,
+      profileType: cred.type,
+    });
   }
 
   try {
@@ -386,6 +425,8 @@ export async function resolveApiKeyForProfile(
       apiKey: resolved.apiKey,
       provider: resolved.credential.provider,
       email: resolved.credential.email ?? cred.email,
+      profileId,
+      profileType: cred.type,
     });
   } catch (error) {
     let refreshedStore =

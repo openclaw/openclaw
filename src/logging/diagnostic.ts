@@ -544,10 +544,13 @@ function isIdleQueuedEmbeddedRunStall(params: {
   activity: DiagnosticSessionActivitySnapshot;
   staleMs: number;
 }): boolean {
+  const hasEmbeddedOwner =
+    params.activity.activeWorkKind === "embedded_run" ||
+    params.activity.hasActiveEmbeddedRun === true;
   return (
     params.state.state === "idle" &&
     params.state.queueDepth > 0 &&
-    params.activity.activeWorkKind === "embedded_run" &&
+    hasEmbeddedOwner &&
     (params.activity.lastProgressAgeMs ?? 0) > params.staleMs
   );
 }
