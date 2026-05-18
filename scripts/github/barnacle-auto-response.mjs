@@ -798,10 +798,16 @@ function shouldRemoveProofSufficientLabel(context, proofEvaluation, hasExactHead
   if (hasExactHeadClawSweeperProof) {
     return false;
   }
+  if (proofEvaluation.status === "override") {
+    return false;
+  }
+  if (!["edited", "synchronize"].includes(context.payload.action)) {
+    return false;
+  }
   if (proofEvaluation.status !== "passed") {
     return true;
   }
-  return ["edited", "synchronize"].includes(context.payload.action);
+  return true;
 }
 
 async function applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet) {
