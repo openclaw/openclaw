@@ -15,9 +15,9 @@ type SendInputNotifyFn = (
   inputSecond: number,
 ) => Promise<unknown>;
 
-/** Refresh every 50s for the QQ API's 60s input-notify window. */
-const TYPING_INTERVAL_MS = 50_000;
-export const TYPING_INPUT_SECOND = 60;
+/** Refresh every 5s for the QQ API's 10s input-notify window. */
+const TYPING_INTERVAL_MS = 5_000;
+export const TYPING_INPUT_SECOND = 10;
 
 export class TypingKeepAlive {
   private timer: ReturnType<typeof setInterval> | null = null;
