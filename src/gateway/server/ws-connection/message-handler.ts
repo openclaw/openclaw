@@ -1374,6 +1374,37 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               }
             }
 
+            const retryBootstrapHandoffProfile =
+              authMethod === "bootstrap-token" &&
+              bootstrapTokenCandidate &&
+              role === "node" &&
+              scopes.length === 0 &&
+              !isControlUi &&
+              !isBrowserOperatorUi &&
+              !isWebchat &&
+              connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
+              pairedRoles.includes("operator") &&
+              roleScopesAllow({
+                role: "operator",
+                requestedScopes: BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+                allowedScopes: pairedScopes,
+              })
+                ? await getBoundDeviceBootstrapProfile({
+                    token: bootstrapTokenCandidate,
+                    deviceId: device.id,
+                    publicKey: devicePublicKey,
+                  })
+                : null;
+            if (
+              retryBootstrapHandoffProfile &&
+              sameBootstrapProfile(retryBootstrapHandoffProfile, PAIRING_SETUP_BOOTSTRAP_PROFILE)
+            ) {
+              // If the first QR bootstrap hello-ok failed to reach mobile, the
+              // bootstrap token is restored while the paired device already has
+              // node+operator grants. Preserve the same bounded handoff on retry.
+              handoffBootstrapProfile = retryBootstrapHandoffProfile;
+            }
+
             // Metadata pinning is approval-bound. Reconnects can update access metadata
             // and same-family mobile OS version labels, but real platform/device-family
             // changes must stay on the approved pairing record.

@@ -1198,6 +1198,94 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
+  test("qr bootstrap retry keeps bounded operator handoff after paired approval", async () => {
+    const { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } =
+      await import("../infra/device-bootstrap.js");
+    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
+    const { approveBootstrapDevicePairing, requestDevicePairing } =
+      await import("../infra/device-pairing.js");
+    const { PAIRING_SETUP_BOOTSTRAP_PROFILE } =
+      await import("../shared/device-bootstrap-profile.js");
+    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { identityPath, identity } = await createOperatorIdentityFixture(
+      "openclaw-bootstrap-node-retry-",
+    );
+    const client = {
+      id: "openclaw-ios",
+      version: "2026.3.30",
+      platform: "iOS 26.3.1",
+      mode: "node",
+      deviceFamily: "iPhone",
+    };
+
+    try {
+      const issued = await issueDeviceBootstrapToken();
+      const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+      const pending = await requestDevicePairing({
+        deviceId: identity.deviceId,
+        publicKey,
+        role: "node",
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.write"],
+        clientId: client.id,
+        clientMode: client.mode,
+        displayName: client.id,
+        platform: client.platform,
+        deviceFamily: client.deviceFamily,
+        silent: true,
+      });
+      await approveBootstrapDevicePairing(
+        pending.request.requestId,
+        PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      );
+
+      const wsRetry = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const retry = await connectReq(wsRetry, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client,
+        deviceIdentityPath: identityPath,
+      });
+      expect(retry.ok).toBe(true);
+      const payload = retry.payload as
+        | {
+            auth?: {
+              deviceToken?: string;
+              deviceTokens?: Array<{ deviceToken?: string; role?: string; scopes?: string[] }>;
+            };
+          }
+        | undefined;
+      expect(payload?.auth?.deviceToken).toBeTruthy();
+      const operatorHandoff = payload?.auth?.deviceTokens?.find(
+        (entry) => entry.role === "operator",
+      );
+      expect(operatorHandoff?.deviceToken).toBeTruthy();
+      expect(operatorHandoff?.scopes).toEqual([
+        "operator.approvals",
+        "operator.read",
+        "operator.write",
+      ]);
+      expect(operatorHandoff?.scopes).not.toContain("operator.admin");
+      expect(operatorHandoff?.scopes).not.toContain("operator.pairing");
+      wsRetry.close();
+
+      await expect(
+        verifyDeviceBootstrapToken({
+          token: issued.token,
+          deviceId: identity.deviceId,
+          publicKey,
+          role: "node",
+          scopes: [],
+        }),
+      ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+    } finally {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("rejected non-baseline bootstrap request cannot recreate pending node pairing", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
     const { listDevicePairing, rejectDevicePairing } = await import("../infra/device-pairing.js");
