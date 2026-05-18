@@ -608,6 +608,63 @@ describe("runCodexAppServerAttempt", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  it("includes launch context in app-server startup close diagnostics", () => {
+    const diagnostics = __testing.buildCodexAppServerStartupCloseDiagnostics({
+      params: {
+        ...createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+        agentId: "eva",
+        authProfileId: "codex-oauth",
+        runtimePlan: {
+          ...createCodexRuntimePlanFixture(),
+          observability: {
+            resolvedRef: "openai-codex/gpt-5.5",
+            provider: "openai-codex",
+            modelId: "gpt-5.5",
+            harnessId: "codex",
+          },
+        },
+      },
+      attempt: 3,
+      maxAttempts: 3,
+      nextAttempt: undefined,
+      clearedSharedClient: true,
+      error: new Error("codex app-server exited: code=1 signal=null"),
+      startupAuthProfileId: "codex-oauth-resolved",
+      sessionAgentId: "eva",
+      effectiveWorkspace: path.join(tempDir, "sandbox"),
+      sandboxSessionKey: "eva:dm:session-1",
+      startupBinding: {
+        threadId: "thread-existing",
+        cwd: path.join(tempDir, "workspace"),
+        model: "gpt-5.4-codex",
+      },
+    });
+
+    expect(diagnostics).toMatchObject({
+      attempt: 3,
+      maxAttempts: 3,
+      clearedSharedClient: true,
+      error: "codex app-server exited: code=1 signal=null",
+      runId: "run-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sandboxSessionKey: "eva:dm:session-1",
+      sessionAgentId: "eva",
+      agentId: "eva",
+      provider: "codex",
+      modelId: "gpt-5.4-codex",
+      resolvedRef: "openai-codex/gpt-5.5",
+      resolvedProvider: "openai-codex",
+      resolvedModelId: "gpt-5.5",
+      harnessId: "codex",
+      authProfileId: "codex-oauth-resolved",
+      requestedAuthProfileId: "codex-oauth",
+      previousThreadId: "thread-existing",
+      previousThreadModel: "gpt-5.4-codex",
+    });
+    expect(diagnostics.effectiveWorkspace).toContain("sandbox");
+  });
+
   it("filters Codex-native dynamic tools from app-server tool exposure", () => {
     const tools = [
       "read",
