@@ -374,9 +374,11 @@ describe("configured plugin install release step", () => {
     });
   });
 
-  it("repairs package-manager plugins for legacy parents that only support doctor config writes", async () => {
+  it("defers package-manager plugins for writable legacy parents without explicit deferral", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: [],
+      changes: [
+        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
+      ],
       warnings: [],
     });
 
@@ -403,10 +405,12 @@ describe("configured plugin install release step", () => {
       OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
     });
     expect(result).toEqual({
-      changes: [],
+      changes: [
+        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
+      ],
       warnings: [],
-      completed: true,
-      touchedConfig: true,
+      completed: false,
+      touchedConfig: false,
     });
   });
 
