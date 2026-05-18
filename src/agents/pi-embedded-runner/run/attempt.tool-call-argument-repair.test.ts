@@ -109,6 +109,59 @@ describe("shouldRepairMalformedToolCallArguments", () => {
   });
 });
 
+describe("openai-completions concatenated tool-call argument repair", () => {
+  it("keeps the first JSON when a provider emits multiple tool-call args concatenated", async () => {
+    const partialToolCall = { type: "functionCall", name: "read", arguments: {} };
+    const streamedToolCall = { type: "functionCall", name: "read", arguments: {} };
+    const endMessageToolCall = { type: "functionCall", name: "read", arguments: {} };
+    const finalToolCall = { type: "functionCall", name: "read", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const endMessage = { role: "assistant", content: [endMessageToolCall] };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+
+    const stream = await invokeProviderStream({
+      provider: "xiaomi-mimo",
+      modelApi: "openai-completions",
+      baseFn: () =>
+        createFakeStream({
+          events: [
+            {
+              type: "toolcall_delta",
+              contentIndex: 0,
+              delta: '{"path":"/tmp/a.txt"}',
+              partial: partialMessage,
+            },
+            {
+              type: "toolcall_delta",
+              contentIndex: 0,
+              delta: '\n{"path":"/tmp/b.txt"}',
+              partial: partialMessage,
+            },
+            {
+              type: "toolcall_end",
+              contentIndex: 0,
+              toolCall: streamedToolCall,
+              partial: partialMessage,
+              message: endMessage,
+            },
+          ],
+          resultMessage: finalMessage,
+        }),
+    });
+
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.arguments).toEqual({ path: "/tmp/a.txt" });
+    expect(streamedToolCall.arguments).toEqual({ path: "/tmp/a.txt" });
+    expect(endMessageToolCall.arguments).toEqual({ path: "/tmp/a.txt" });
+    expect(finalToolCall.arguments).toEqual({ path: "/tmp/a.txt" });
+    expect(result).toBe(finalMessage);
+  });
+});
+
 describe("openai-completions malformed tool-call argument repair", () => {
   it.each([
     ["openai-completions", "sglang"],

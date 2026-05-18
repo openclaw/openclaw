@@ -16,12 +16,57 @@ function isToolCallBlockType(type: unknown): boolean {
 const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;
 const MAX_TOOLCALL_REPAIR_LEADING_CHARS = 96;
 const MAX_TOOLCALL_REPAIR_TRAILING_CHARS = 3;
+const MAX_TOOLCALL_REPAIR_CONCAT_PROBE_COUNT = 8;
 const TOOLCALL_REPAIR_ALLOWED_LEADING_RE = /^[a-z0-9\s"'`.:/_\\-]+$/i;
 const TOOLCALL_REPAIR_ALLOWED_TRAILING_RE = /^[^\s{}[\]":,\\]{1,3}$/;
 const TOOLCALL_REPAIR_RESPONSES_APIS = new Set([
   "azure-openai-responses",
   "openai-codex-responses",
 ]);
+
+// Some OpenAI-compatible providers (observed with xiaomi/mimo-v2.5-pro) emit
+// multiple tool-call argument JSON objects concatenated into a single stream
+// chunk, e.g. `{"path":"/a"}{"path":"/b"}`. Treat such a trailing as benign so
+// the first balanced JSON can be kept and the rest discarded; without this the
+// whole turn fails with `stopReason=error` and the agent loop never executes
+// any tool.
+function isConcatenatedJsonTrailing(suffix: string): boolean {
+  if (suffix.length > MAX_TOOLCALL_REPAIR_BUFFER_CHARS) {
+    return false;
+  }
+  let remaining = suffix.trim();
+  let inspected = 0;
+  while (remaining.length > 0 && inspected < MAX_TOOLCALL_REPAIR_CONCAT_PROBE_COUNT) {
+    if (!remaining.startsWith("{") && !remaining.startsWith("[")) {
+      return false;
+    }
+    const extracted = extractBalancedJsonPrefix(remaining);
+    if (!extracted || extracted.startIndex !== 0) {
+      return false;
+    }
+    try {
+      JSON.parse(extracted.json) as unknown;
+    } catch {
+      return false;
+    }
+    remaining = remaining.slice(extracted.json.length).trim();
+    inspected += 1;
+  }
+  return remaining.length === 0;
+}
+
+function isAllowedToolCallRepairTrailingSuffix(suffix: string): boolean {
+  if (suffix.length === 0) {
+    return true;
+  }
+  if (
+    suffix.length <= MAX_TOOLCALL_REPAIR_TRAILING_CHARS &&
+    TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(suffix)
+  ) {
+    return true;
+  }
+  return isConcatenatedJsonTrailing(suffix);
+}
 
 function shouldAttemptMalformedToolCallRepair(partialJson: string, delta: string): boolean {
   if (/[}\]]/.test(delta)) {
@@ -82,10 +127,7 @@ function tryExtractUsableToolCallArguments(raw: string): ToolCallArgumentRepair 
     if (leadingPrefix.length === 0 && suffix.length === 0) {
       return undefined;
     }
-    if (
-      suffix.length > MAX_TOOLCALL_REPAIR_TRAILING_CHARS ||
-      (suffix.length > 0 && !TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(suffix))
-    ) {
+    if (!isAllowedToolCallRepairTrailingSuffix(suffix)) {
       return undefined;
     }
     try {
