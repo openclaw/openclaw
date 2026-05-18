@@ -38,6 +38,7 @@ describe("qa scenario packs", () => {
       "personal-tool-safety-followthrough",
       "personal-approval-denial-stop",
       "personal-task-followthrough-status",
+      "personal-share-safe-diagnostics-artifact",
     ]);
 
     for (const scenarioId of personalPack?.scenarioIds ?? []) {
@@ -81,6 +82,8 @@ describe("qa scenario packs", () => {
     );
     const taskFollowthroughScenario = readQaScenarioById("personal-task-followthrough-status");
     const taskFollowthroughFlow = JSON.stringify(taskFollowthroughScenario.execution.flow);
+    const diagnosticsScenario = readQaScenarioById("personal-share-safe-diagnostics-artifact");
+    const diagnosticsFlow = JSON.stringify(diagnosticsScenario.execution.flow);
     const memoryScenario = readQaScenarioById("personal-memory-preference-recall");
     const memoryFlow = JSON.stringify(memoryScenario.execution.flow);
 
@@ -105,6 +108,17 @@ describe("qa scenario packs", () => {
     expect(taskFollowthroughFlow).toContain("plannedToolName === 'write'");
     expect(taskFollowthroughFlow).toContain("readIndices[1] < firstWrite");
     expect(taskFollowthroughScenario.successCriteria.join("\n").toLowerCase()).toContain("blocked");
+
+    expect(diagnosticsScenario.execution.config?.prompt).toContain(
+      "Personal share-safe diagnostics check",
+    );
+    expect(diagnosticsScenario.execution.config?.artifactName).toBe(
+      "personal-diagnostics-summary.txt",
+    );
+    expect(diagnosticsFlow).toContain("plannedToolName === 'write'");
+    expect(diagnosticsFlow).toContain("readIndices[1] < firstWrite");
+    expect(diagnosticsFlow).toContain("forbiddenNeedles");
+    expect(diagnosticsScenario.successCriteria.join("\n").toLowerCase()).toContain("share-safe");
 
     expect(memoryFlow).toContain("config.rememberPrompt");
     expect(memoryFlow).toContain("config.recallPrompt");
