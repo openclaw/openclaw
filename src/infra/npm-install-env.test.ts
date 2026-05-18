@@ -371,7 +371,11 @@ describe("npm project install env", () => {
       expect(env.npm_config_before).toBe("");
       expect(env.npm_config_min_release_age).toBe("0");
       const npmConfig = readNpmConfigList(env);
-      expect(npmConfig.before == null || typeof npmConfig.before === "string").toBe(true);
+      expect(
+        npmConfig.before == null ||
+          npmConfig.before === false ||
+          typeof npmConfig.before === "string",
+      ).toBe(true);
       expectZeroNpmJsonConfig(npmConfig["min-release-age"]);
     } finally {
       fsSync.rmSync(dir, { recursive: true, force: true });

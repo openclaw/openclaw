@@ -779,6 +779,7 @@ describe("qa cli runtime", () => {
         "personal-tool-safety-followthrough",
         "personal-approval-denial-stop",
         "personal-task-followthrough-status",
+        "personal-share-safe-diagnostics-artifact",
       ],
     });
   });
