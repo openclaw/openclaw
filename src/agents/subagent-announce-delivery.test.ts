@@ -211,12 +211,21 @@ async function deliverTelegramDirectMessageCompletion(params: {
   internalEvents?: AgentInternalEvent[];
   isActive?: boolean;
   queueEmbeddedPiMessageWithOutcome?: QueueEmbeddedPiMessageWithOutcome;
+  requesterSessionKey?: string;
+  sourceTool?: string;
+  origin?: {
+    channel: "telegram";
+    to: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
 }) {
-  const origin = {
+  const origin = params.origin ?? {
     channel: "telegram",
     to: "123456789",
     accountId: "bot-1",
   };
+  const requesterSessionKey = params.requesterSessionKey ?? "agent:main:telegram:123456789";
   __testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
@@ -230,8 +239,8 @@ async function deliverTelegramDirectMessageCompletion(params: {
   });
 
   return deliverSubagentAnnouncement({
-    requesterSessionKey: "agent:main:telegram:123456789",
-    targetRequesterSessionKey: "agent:main:telegram:123456789",
+    requesterSessionKey,
+    targetRequesterSessionKey: requesterSessionKey,
     triggerMessage: "child done",
     steerMessage: "child done",
     requesterOrigin: origin,
@@ -243,6 +252,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
     bestEffortDeliver: true,
     directIdempotencyKey: "announce-telegram-dm-fallback",
     internalEvents: params.internalEvents,
+    sourceTool: params.sourceTool,
   });
 }
 
@@ -1598,6 +1608,56 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       accountId: "acct-1",
       to: "dm:U123",
       threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("stringifies Telegram topic ids for generated video completion handoff", async () => {
+    const callGateway = createGatewayMock({
+      payloads: [],
+      didSendViaMessagingTool: true,
+      messagingToolSentMediaUrls: ["/tmp/generated-corgi.mp4"],
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      requesterSessionKey: "agent:main:telegram:group:-1003970070733:topic:1",
+      origin: {
+        channel: "telegram",
+        to: "telegram:-1003970070733",
+        accountId: "bot-1",
+        threadId: 1,
+      },
+      sourceTool: "video_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "video_generation",
+          childSessionKey: "video_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "video generation task",
+          taskLabel: "anime corgi skateboard",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 video.\nMEDIA:/tmp/generated-corgi.mp4",
+          mediaUrls: ["/tmp/generated-corgi.mp4"],
+          replyInstruction: "Deliver the generated video through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "telegram",
+      accountId: "bot-1",
+      to: "telegram:-1003970070733",
+      threadId: "1",
       sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(sendMessage).not.toHaveBeenCalled();
