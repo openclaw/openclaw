@@ -31,6 +31,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -39,6 +40,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -1403,7 +1405,7 @@ class TalkModeManager internal constructor(
     }
   }
 
-  private suspend fun waitForChatFinal(runId: String): Boolean {
+  internal suspend fun waitForChatFinal(runId: String): Boolean {
     consumeRunCompletion(runId)?.let { return it }
     val deferred =
       if (pendingRunId == runId) {
@@ -1414,13 +1416,12 @@ class TalkModeManager internal constructor(
 
     consumeRunCompletion(runId)?.let { return it }
 
+    val timeoutMs = if (supportsChatSubscribe) chatFinalWaitWithSubscribeMs else chatFinalWaitWithoutSubscribeMs
     val result =
-      withContext(Dispatchers.IO) {
-        try {
-          kotlinx.coroutines.withTimeout(120_000) { deferred.await() }
-        } catch (_: Throwable) {
-          false
-        }
+      try {
+        withTimeout(timeoutMs) { deferred.await() }
+      } catch (_: TimeoutCancellationException) {
+        false
       }
 
     if (!result && pendingRunId == runId) {
