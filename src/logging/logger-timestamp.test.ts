@@ -48,5 +48,6 @@ describe("logger timestamp format", () => {
     // NOT UTC format like "2026-02-27T07:04:00.000Z"
     expect(lastLine.time).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
     expect(lastLine.time).not.toMatch(/Z$/);
+    expect(lastLine["_meta"].date).toBe(lastLine.time);
   });
 });

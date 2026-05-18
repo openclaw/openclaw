@@ -99,6 +99,27 @@ const HOSTNAME = os.hostname() || "unknown";
 
 type DiagnosticLogAttributes = Record<string, string | number | boolean>;
 
+function buildFileLogRecord(
+  logObj: LogObj,
+  time: string,
+  structuredFields: TsLogRecord,
+  traceFields: TsLogRecord,
+): TsLogRecord {
+  const rawMeta = logObj["_meta"];
+  const recordBase = { ...logObj, time, ...structuredFields, ...traceFields };
+  if (rawMeta === null || typeof rawMeta !== "object" || Array.isArray(rawMeta)) {
+    return recordBase;
+  }
+
+  return {
+    ...recordBase,
+    _meta: {
+      ...(rawMeta as Record<string, unknown>),
+      date: time,
+    },
+  };
+}
+
 function clampDiagnosticLogText(value: string, maxChars: number): string {
   return value.length > maxChars ? `${value.slice(0, maxChars)}...(truncated)` : value;
 }
@@ -564,7 +585,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
       const traceFields = buildTraceFileLogFields(logObj as TsLogRecord);
       const structuredFields = buildStructuredFileLogFields(logObj as TsLogRecord);
-      const record = { ...logObj, time, ...structuredFields, ...traceFields };
+      const record = buildFileLogRecord(logObj, time, structuredFields, traceFields);
       const line = redactSensitiveText(JSON.stringify(redactLogRecordForTransport(record)));
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
