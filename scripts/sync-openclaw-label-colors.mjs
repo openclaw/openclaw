@@ -12,23 +12,23 @@ const COLORS = {
   softerAmber: "F9D65C",
   paleYellow: "F7E7A1",
   saturatedGreen: "0E8A16",
-  mutedGreen: "B8E0B0",
-  paleGreen: "DDF4E4",
-  proofGreen: "C2E0C6",
-  mutedProofGreen: "9BD3A0",
-  overrideGreen: "DDECCF",
+  mutedGreen: "B7D7BF",
+  paleGreen: "D6E3DA",
+  proofGreen: "C8DCCB",
+  mutedProofGreen: "B7D7BF",
+  overrideGreen: "C8DCCB",
   saturatedBlue: "0F2CCE",
-  paleBlue: "CFE3F8",
-  channelBlue: "DDEBFA",
-  dedupeBlue: "BFD4F2",
-  triageBlue: "D8E8F8",
+  paleBlue: "D7E3EF",
+  channelBlue: "D9E2EC",
+  dedupeBlue: "CBD5E1",
+  triageBlue: "D9E2EC",
   saturatedPurple: "7057FF",
-  mutedPurple: "D9CCF5",
-  appPurple: "EADFF8",
-  neutralGray: "EDEDED",
-  duplicateGray: "CFD3D7",
+  mutedPurple: "D8DCE3",
+  appPurple: "D8DEE9",
+  neutralGray: "E5E7EB",
+  duplicateGray: "D1D5DB",
   darkGray: "8C8C8C",
-  mutedRose: "E8C4CB",
+  mutedRose: "D1D5DB",
   mutedRed: "E99695",
   black: "000000",
   white: "FFFFFF",
@@ -43,6 +43,13 @@ const EXACT_COLORS = new Map(
     P1: COLORS.saturatedOrangeRed,
     P2: COLORS.saturatedAmber,
     P3: COLORS.mutedGreen,
+    "rating: 🦀 challenger crab": "1F883D",
+    "rating: 🦞 diamond lobster": "0969DA",
+    "rating: 🐚 platinum hermit": "4E6E8E",
+    "rating: 🦐 gold shrimp": "9A6700",
+    "rating: 🦪 silver shellfish": "6E7781",
+    "rating: 🧂 unranked krab": "8C2F39",
+    "rating: 🌊 off-meta tidepool": "6E7781",
     "impact:data-loss": COLORS.saturatedRed,
     "impact:security": COLORS.saturatedRed,
     "impact:crash-loop": COLORS.saturatedOrangeRed,
@@ -195,6 +202,9 @@ function wantedPolicy(name) {
 function exactFamily(name) {
   if (/^P[0-3]$/.test(name)) {
     return "priority";
+  }
+  if (name.startsWith("rating:")) {
+    return "rating";
   }
   if (name.startsWith("impact:")) {
     return "impact";
