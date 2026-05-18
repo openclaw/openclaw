@@ -25,6 +25,16 @@ export type TelegramMessageContextOptions = {
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
   promptContextMinTimestampMs?: number;
+  sessionKeyOverride?: string;
+  routeAgentIdOverride?: string;
+  systemPromptPrefix?: string;
+  skipGroupBaseAccess?: boolean;
+  conversationKindOverride?: "direct" | "group" | "channel";
+  fromOverride?: string;
+  conversationIdOverride?: string;
+  conversationLabelOverride?: string;
+  originatingToOverride?: string;
+  suppressUpdateLastRoute?: boolean;
 };
 
 export type TelegramPromptContextEntry = NonNullable<

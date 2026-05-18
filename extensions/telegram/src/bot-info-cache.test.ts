@@ -1,13 +1,19 @@
 // Telegram tests cover bot info cache plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   deleteCachedTelegramBotInfo,
+  listTelegramLegacyBotInfoCacheEntries,
   readCachedTelegramBotInfo,
+  resolveTelegramBotInfoCachePath,
   setTelegramBotInfoCacheStoreForTest,
   TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS,
   writeCachedTelegramBotInfo,
 } from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
+import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
 const botInfo: TelegramBotInfo = {
   id: 123456,
@@ -96,6 +102,36 @@ describe("Telegram bot info cache", () => {
         now: new Date(Date.now() + TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS + 1),
       }),
     ).resolves.toBeNull();
+  });
+
+  it("lists previous file cache versions for migration", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-bot-info-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const filePath = resolveTelegramBotInfoCachePath("ops", env);
+    const botToken = "123456:secret";
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        tokenFingerprint: fingerprintTelegramBotToken(botToken),
+        fetchedAt: new Date().toISOString(),
+        botInfo,
+      }),
+      "utf8",
+    );
+
+    await expect(
+      listTelegramLegacyBotInfoCacheEntries({ accountId: "ops", persistedPath: filePath }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        key: "ops",
+        value: expect.objectContaining({
+          tokenFingerprint: fingerprintTelegramBotToken(botToken),
+          botInfo,
+        }),
+      }),
+    ]);
   });
 
   it("deletes cached botInfo for an account", async () => {

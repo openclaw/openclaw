@@ -463,11 +463,27 @@ describe("startTelegramWebhook", () => {
     const runtimeLog = vi.fn();
     const setStatus = vi.fn();
     const cfg = { bindings: [] };
+    const botInfo = {
+      id: 123456,
+      is_bot: true,
+      first_name: "OpenClaw",
+      username: "openclaw_bot",
+      can_join_groups: true,
+      can_read_all_group_messages: false,
+      can_manage_bots: false,
+      supports_inline_queries: false,
+      supports_guest_queries: true,
+      can_connect_to_business: false,
+      has_main_web_app: false,
+      has_topics_enabled: false,
+      allows_users_to_create_topics: false,
+    } as const;
     await withStartedWebhook(
       {
         secret: TELEGRAM_SECRET,
         accountId: "opie",
         config: cfg,
+        botInfo,
         runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
         setStatus,
       },
@@ -478,6 +494,7 @@ describe("startTelegramWebhook", () => {
         );
         expect(botParams.accountId).toBe("opie");
         expect(requireRecord(botParams.config, "telegram config").bindings).toEqual([]);
+        expect(botParams.botInfo).toBe(botInfo);
         const health = await fetch(`http://127.0.0.1:${port}/healthz`);
         expect(health.status).toBe(200);
         expect(initSpy).toHaveBeenCalledTimes(1);

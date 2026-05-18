@@ -240,6 +240,7 @@ type TelegramPollingSessionOpts = {
     proxy?: string;
     network?: TelegramNetworkConfig;
     spoolDir?: string;
+    includeGuestUpdates?: boolean;
     createWorker?: TelegramIngressWorkerFactory;
     drainIntervalMs?: number;
     spooledUpdateHandlerTimeoutMs?: number;
@@ -799,6 +800,7 @@ export class TelegramPollingSession {
       timeoutSeconds: ingress.timeoutSeconds,
       network: ingress.network,
       proxy: ingress.proxy,
+      includeGuestUpdates: ingress.includeGuestUpdates,
     });
     let stopWorkerPromise: Promise<void> | undefined;
     const stopWorker = () => {

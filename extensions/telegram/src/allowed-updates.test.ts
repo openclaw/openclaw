@@ -35,6 +35,31 @@ describe("resolveTelegramAllowedUpdates", () => {
       "chat_boost",
       "removed_chat_boost",
     ]);
-    expect(updates).toEqual([...DEFAULT_TELEGRAM_UPDATE_TYPES, "message_reaction"]);
+    expect(updates).toEqual([
+      ...DEFAULT_TELEGRAM_UPDATE_TYPES.filter((update) => update !== "guest_message"),
+      "message_reaction",
+    ]);
+    expect(updates).not.toContain("guest_message");
+  });
+
+  it("includes guest messages when guest mode is explicitly enabled", () => {
+    const updates = resolveTelegramAllowedUpdates({ guest: { enabled: true } });
+    expect(updates).toContain("guest_message");
+  });
+
+  it("includes guest messages in auto mode when Telegram metadata supports them", () => {
+    const updates = resolveTelegramAllowedUpdates({
+      guest: { enabled: "auto" },
+      botInfo: { supports_guest_queries: true },
+    });
+    expect(updates).toContain("guest_message");
+  });
+
+  it("does not include guest messages in auto mode without Telegram support", () => {
+    const updates = resolveTelegramAllowedUpdates({
+      guest: { enabled: "auto" },
+      botInfo: { supports_guest_queries: false },
+    });
+    expect(updates).not.toContain("guest_message");
   });
 });

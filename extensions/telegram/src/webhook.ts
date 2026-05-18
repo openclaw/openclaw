@@ -30,8 +30,10 @@ import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { readJsonBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
+import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import type { TelegramBotInfo } from "./bot-info.js";
 import { createTelegramBot } from "./bot.js";
 import {
   isRecoverableTelegramNetworkError,
@@ -249,6 +251,7 @@ export async function startTelegramWebhook(opts: {
   publicUrl?: string;
   webhookCertPath?: string;
   webhookRegistrationRetryPolicy?: BackoffPolicy;
+  botInfo?: TelegramBotInfo;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }) {
   const path = opts.path ?? "/telegram-webhook";
@@ -268,12 +271,19 @@ export async function startTelegramWebhook(opts: {
   const webhookRegistrationRetryPolicy =
     opts.webhookRegistrationRetryPolicy ?? TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY;
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
+  const account = opts.config
+    ? resolveTelegramAccount({
+        cfg: opts.config,
+        accountId: opts.accountId,
+      })
+    : undefined;
   const bot = createTelegramBot({
     token: opts.token,
     runtime,
     proxyFetch: opts.fetch,
     config: opts.config,
     accountId: opts.accountId,
+    botInfo: opts.botInfo,
   });
   await initializeTelegramWebhookBot({
     bot,
@@ -446,7 +456,10 @@ export async function startTelegramWebhook(opts: {
         fn: () =>
           bot.api.setWebhook(publicUrl, {
             secret_token: secret,
-            allowed_updates: resolveTelegramAllowedUpdates(),
+            allowed_updates: resolveTelegramAllowedUpdates({
+              guest: account?.config.guest,
+              botInfo: opts.botInfo,
+            }),
             certificate: opts.webhookCertPath ? new InputFile(opts.webhookCertPath) : undefined,
           }),
       });
