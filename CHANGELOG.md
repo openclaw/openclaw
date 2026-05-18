@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 
 - Mac app: keep app-level menu commands and Dashboard failure states reachable when the remote Gateway is disconnected, and keep the Settings sidebar toggle in the leading titlebar area.
 - Mac app: align the Sessions settings pane with the standard Settings page gutter and row spacing.
+- OpenAI/Codex: stop rejecting available `openai-codex` GPT-5.1, GPT-5.2, and GPT-5.3 model refs during config validation, while keeping removed Spark aliases suppressed. Fixes #83303.
 - Codex app-server: preserve streamed native command output in mirrored transcripts and trajectory exports when final snapshots omit aggregated output. (#83200) Thanks @rozmiarD.
 - Codex app-server: fail closed when chat or sender policy denies tools, disabling native code, app, environment, and user MCP surfaces for restricted turns. (#82374) Thanks @VACInc.
 - Codex app-server: keep recent context-engine messages when oversized projected history is truncated, so short follow-ups in long channel sessions do not fall back to stale earlier turns. (#83127) Thanks @VACInc.
