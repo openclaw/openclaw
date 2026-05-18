@@ -1,0 +1,13 @@
+{
+  "id": "agent-os",
+  "name": "Agent OS",
+  "description": "Bounded Agent OS rollback integration surfaces. Inert until a separately authorized runtime activation publishes an inspector.",
+  "activation": {
+    "onStartup": false
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

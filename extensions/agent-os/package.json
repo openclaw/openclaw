@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/agent-os",
+  "version": "2026.5.16",
+  "description": "Agent OS bounded rollback integration surfaces for OpenClaw.",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.5.16"
+    }
+  }
+}
