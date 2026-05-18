@@ -160,9 +160,20 @@ function resolveProbeApiKey(providerCfg: ModelProviderConfig | undefined, provid
   if (configKey && typeof configKey === "string" && configKey.trim()) {
     return configKey.trim();
   }
-  // Fall back to env var lookup using the provider name
-  const envResult = resolveEnvApiKey(provider, process.env);
-  return envResult?.apiKey || undefined;
+  // Try direct env var: LITELLM_API_KEY, VLLM_API_KEY, SGLANG_API_KEY, etc.
+  const upperName = provider.toUpperCase().replace(/[^A-Z0-9_]/g, "");
+  const directKey = process.env[upperName + "_API_KEY"];
+  if (directKey?.trim()) {
+    return directKey.trim();
+  }
+  // Fall back to env var lookup via provider-registered env var names
+  try {
+    const envResult = resolveEnvApiKey(provider, process.env);
+    if (envResult?.apiKey) return envResult.apiKey;
+  } catch {
+    // ignore resolution errors
+  }
+  return undefined;
 }
 
 async function probeLocalProviderEndpoint(params: {
