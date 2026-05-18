@@ -1,3 +1,4 @@
+import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import {
@@ -29,8 +30,12 @@ export async function buildSingleProviderApiKeyCatalog(params: {
   allowExplicitBaseUrl?: boolean;
 }): Promise<ProviderCatalogResult> {
   const providerId = normalizeProviderId(params.providerId);
-  const apiKey = params.ctx.resolveProviderApiKey(providerId).apiKey;
-  if (!apiKey) {
+  const { apiKey } = params.ctx.resolveProviderApiKey(providerId);
+  // Non-secret auth markers ("custom-local", "ollama-local", etc.) are placeholders
+  // for local providers that don't need authentication. Do not attempt catalog
+  // discovery with these — the HTTP request would be sent without a valid
+  // Authorization header (toDiscoveryApiKey already filters them to undefined).
+  if (!apiKey || isNonSecretApiKeyMarker(apiKey)) {
     return null;
   }
 
@@ -58,8 +63,8 @@ export async function buildPairedProviderApiKeyCatalog(params: {
     | Record<string, ModelProviderConfig>
     | Promise<Record<string, ModelProviderConfig>>;
 }): Promise<ProviderCatalogResult> {
-  const apiKey = params.ctx.resolveProviderApiKey(normalizeProviderId(params.providerId)).apiKey;
-  if (!apiKey) {
+  const { apiKey } = params.ctx.resolveProviderApiKey(normalizeProviderId(params.providerId));
+  if (!apiKey || isNonSecretApiKeyMarker(apiKey)) {
     return null;
   }
 
