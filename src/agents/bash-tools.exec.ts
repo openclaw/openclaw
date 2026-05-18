@@ -1223,10 +1223,19 @@ type DeniedExecPathPattern = {
   recursive: boolean;
 };
 
+type ExecPathNamespace = "host" | "sandbox";
+type ExecPathOps = Pick<typeof path, "isAbsolute" | "parse" | "resolve" | "sep">;
+
+function getExecPathOps(namespace: ExecPathNamespace): ExecPathOps {
+  return namespace === "sandbox" ? path.posix : path;
+}
+
 function normalizeDeniedExecPathPatterns(
   entries: string[] | undefined,
   workdir: string | undefined,
+  namespace: ExecPathNamespace,
 ): DeniedExecPathPattern[] {
+  const pathOps = getExecPathOps(namespace);
   const patterns: DeniedExecPathPattern[] = [];
   for (const entry of entries ?? []) {
     const trimmed = entry.trim();
@@ -1236,13 +1245,13 @@ function normalizeDeniedExecPathPatterns(
     const recursive = trimmed.endsWith("/**") || trimmed.endsWith("\\**");
     const rawRoot = recursive ? trimmed.slice(0, -3) : trimmed;
     const rootInput =
-      rawRoot || (trimmed.startsWith("/") ? path.parse(path.resolve("/")).root : "");
+      rawRoot || (trimmed.startsWith("/") ? pathOps.parse(pathOps.resolve("/")).root : "");
     if (!rootInput) {
       continue;
     }
-    const root = path.isAbsolute(rootInput)
-      ? path.resolve(rootInput)
-      : path.resolve(workdir ?? process.cwd(), rootInput);
+    const root = pathOps.isAbsolute(rootInput)
+      ? pathOps.resolve(rootInput)
+      : pathOps.resolve(workdir ?? process.cwd(), rootInput);
     patterns.push({ root, recursive });
   }
   return patterns;
@@ -1277,23 +1286,25 @@ function resolveExecPathCandidate(params: {
   raw: string;
   workdir: string | undefined;
   env: NodeJS.ProcessEnv;
+  namespace: ExecPathNamespace;
 }): string | null {
+  const pathOps = getExecPathOps(params.namespace);
   const value = params.raw.trim();
   if (!value || value === "-") {
     return null;
   }
-  if (path.isAbsolute(value)) {
-    return path.resolve(value);
+  if (pathOps.isAbsolute(value)) {
+    return pathOps.resolve(value);
   }
   if (value === "~" || value.startsWith("~/")) {
     const home = normalizeOptionalString(params.env.HOME);
     if (!home) {
       return null;
     }
-    return path.resolve(home, value.slice(2));
+    return pathOps.resolve(home, value.slice(2));
   }
   if (/^\.{1,2}(?:[\\/]|$)/u.test(value) || value.includes("/") || value.includes("\\")) {
-    return path.resolve(params.workdir ?? process.cwd(), value);
+    return pathOps.resolve(params.workdir ?? process.cwd(), value);
   }
   return null;
 }
@@ -1302,6 +1313,7 @@ function collectExecPathCandidates(params: {
   command: string;
   workdir: string | undefined;
   env: NodeJS.ProcessEnv;
+  namespace: ExecPathNamespace;
 }): string[] {
   const tokens: string[] = [];
   const pushArgvTokens = (argv: string[]) => {
@@ -1342,6 +1354,7 @@ function collectExecPathCandidates(params: {
         raw: expanded,
         workdir: params.workdir,
         env: params.env,
+        namespace: params.namespace,
       });
       if (candidate) {
         candidates.add(candidate);
@@ -1351,11 +1364,18 @@ function collectExecPathCandidates(params: {
   return Array.from(candidates);
 }
 
-function pathMatchesDeniedPattern(candidate: string, pattern: DeniedExecPathPattern): boolean {
+function pathMatchesDeniedPattern(
+  candidate: string,
+  pattern: DeniedExecPathPattern,
+  namespace: ExecPathNamespace,
+): boolean {
   if (!pattern.recursive) {
     return candidate === pattern.root;
   }
-  const rootPrefix = pattern.root.endsWith(path.sep) ? pattern.root : `${pattern.root}${path.sep}`;
+  const pathOps = getExecPathOps(namespace);
+  const rootPrefix = pattern.root.endsWith(pathOps.sep)
+    ? pattern.root
+    : `${pattern.root}${pathOps.sep}`;
   return candidate === pattern.root || candidate.startsWith(rootPrefix);
 }
 
@@ -1364,8 +1384,11 @@ function assertExecDeniedPaths(params: {
   command: string;
   workdir: string | undefined;
   env: NodeJS.ProcessEnv;
+  namespace?: ExecPathNamespace;
 }): void {
-  const patterns = normalizeDeniedExecPathPatterns(params.deniedPaths, params.workdir);
+  const namespace = params.namespace ?? "host";
+  const pathOps = getExecPathOps(namespace);
+  const patterns = normalizeDeniedExecPathPatterns(params.deniedPaths, params.workdir, namespace);
   if (patterns.length === 0) {
     return;
   }
@@ -1373,12 +1396,15 @@ function assertExecDeniedPaths(params: {
     command: params.command,
     workdir: params.workdir,
     env: params.env,
+    namespace,
   });
   if (params.workdir) {
-    candidates.push(path.resolve(params.workdir));
+    candidates.push(pathOps.resolve(params.workdir));
   }
   for (const candidate of candidates) {
-    const matched = patterns.find((pattern) => pathMatchesDeniedPattern(candidate, pattern));
+    const matched = patterns.find((pattern) =>
+      pathMatchesDeniedPattern(candidate, pattern, namespace),
+    );
     if (matched) {
       throw new Error(`Security Violation: exec command references denied path ${candidate}`);
     }
@@ -1691,8 +1717,9 @@ export function createExecTool(
       assertExecDeniedPaths({
         deniedPaths: defaults?.deniedPaths,
         command: params.command,
-        workdir,
+        workdir: sandbox && host === "sandbox" ? containerWorkdir : workdir,
         env,
+        namespace: sandbox && host === "sandbox" ? "sandbox" : "host",
       });
 
       if (host === "node") {

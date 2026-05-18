@@ -311,6 +311,43 @@ describe("exec host env validation", () => {
     ).rejects.toThrow(`Security Violation: exec command references denied path ${deniedFile}`);
   });
 
+  it("blocks sandbox relative denied paths in the container namespace before execution", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-denied-"));
+    const workspaceDir = path.join(tempRoot, "host", "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    const buildExecSpec = vi.fn(async (params) => ({
+      argv: ["sh", "-c", "echo should-not-run"],
+      env: params.env,
+      stdinMode: "pipe-closed" as const,
+    }));
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      deniedPaths: ["/run/secrets/**"],
+      sandbox: {
+        containerName: "openclaw-test-sandbox",
+        workspaceDir,
+        containerWorkdir: "/workspace",
+        buildExecSpec,
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-denied-sandbox-path", {
+          command: "cat ../../run/secrets/provider.key",
+          workdir: "/workspace",
+        }),
+      ).rejects.toThrow(
+        "Security Violation: exec command references denied path /run/secrets/provider.key",
+      );
+      expect(buildExecSpec).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
