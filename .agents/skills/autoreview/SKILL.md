@@ -28,6 +28,7 @@ Use when:
 - Treat the helper's successful exit plus absence of actionable findings as the clean review result, even if the underlying Codex CLI output is terse.
 - If rejecting a finding as intentional/not worth fixing, add a brief inline code comment only when it explains a real invariant or ownership decision that future reviewers should know.
 - Do not push just to review. Push only when the user requested push/ship/PR update.
+- In OpenClaw, keep autoreview validation Crabbox/Testbox-aware. A review pass may inspect files and run cheap non-Node probes, but it must not start local `pnpm`, Vitest, `tsgo`, `npm test`, or `node scripts/run-vitest.mjs` from a Codex/worktree review unless the operator explicitly requested local proof. For runtime proof, use existing evidence or route through `OPENCLAW_TESTBOX=1` / Crabbox/Testbox and report the id.
 
 ## Pick Target
 
@@ -50,7 +51,7 @@ git fetch origin
 codex review --base origin/main
 ```
 
-Do not pass an inline prompt with `--base`; current CLI rejects `--base` + `[PROMPT]` even though help text is ambiguous. If custom instructions are needed, run the plain base review first, then do a local/manual follow-up pass.
+Do not pass an inline prompt with `--base`; some CLI versions reject `--base` + `[PROMPT]` even though help text is ambiguous. If custom instructions are needed, prefer stdin prompt form (`codex review --base <ref> -`) as used by the helper.
 
 If an open PR exists, use its actual base:
 
@@ -115,6 +116,7 @@ The helper:
 - writes only to stdout unless `--output` or `AUTOREVIEW_OUTPUT` is set
 - supports `--dry-run`, `--parallel-tests`, and commit refs
 - runs nested review with `--dangerously-bypass-approvals-and-sandbox --sandbox danger-full-access` by default
+- injects OpenClaw validation policy into native Codex review so local memory-heavy Node/Vitest checks are avoided in favor of Crabbox/Testbox proof
 - keeps accepting `--full-access`; use `--no-yolo` or `AUTOREVIEW_YOLO=0` to opt out
 - still accepts legacy `CODEX_REVIEW_*` env vars when the matching `AUTOREVIEW_*` var is unset
 - prints `autoreview clean: no accepted/actionable findings reported` when the selected review command exits 0
