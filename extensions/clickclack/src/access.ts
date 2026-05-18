@@ -13,7 +13,9 @@ function normalizeClickClackUserId(value: string): string | null {
   if (!trimmed) {
     return null;
   }
-  return trimmed.replace(/^(clickclack|cc):/i, "").trim() || null;
+  const withoutProvider = trimmed.replace(/^(clickclack|cc):/i, "").trim();
+  const directTarget = withoutProvider.match(/^dm:(.+)$/i);
+  return directTarget?.[1]?.trim() || withoutProvider || null;
 }
 
 const clickClackIngressIdentity = {

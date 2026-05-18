@@ -219,6 +219,36 @@ describe("handleClickClackInbound", () => {
     expect(runPrepared.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
   });
 
+  it("accepts ClickClack DM target syntax in allowFrom", async () => {
+    const runtime = createRuntime();
+    vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
+    setClickClackRuntime(runtime);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4-mini",
+        },
+      },
+    } satisfies CoreConfig;
+
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        allowFrom: ["dm:usr_owner"],
+        config: { allowFrom: ["dm:usr_owner"] },
+      }),
+      config: cfg,
+      message: createMessage({
+        channel_id: undefined,
+        direct_conversation_id: "dcn_1",
+      }),
+    });
+
+    const runPrepared = vi.mocked(runtime.channel.turn.runPrepared);
+    expect(runPrepared).toHaveBeenCalledTimes(1);
+    expect(runPrepared.mock.calls[0]?.[0].ctxPayload.ChatType).toBe("direct");
+    expect(runPrepared.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
+  });
+
   it("does not dispatch agent turns from senders outside allowFrom", async () => {
     const runtime = createRuntime();
     vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
