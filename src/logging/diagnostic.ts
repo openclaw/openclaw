@@ -28,6 +28,7 @@ import {
 } from "./diagnostic-runtime.js";
 import {
   classifySessionAttention,
+  isTerminalDiagnosticProgressReason,
   type SessionAttentionClassification,
 } from "./diagnostic-session-attention.js";
 import {
@@ -757,20 +758,6 @@ function sessionAttentionFields(params: {
       : {}),
     ...(terminalProgressStale ? { terminalProgressStale: true } : {}),
   };
-}
-
-function isTerminalDiagnosticProgressReason(reason: string | undefined): boolean {
-  if (!reason) {
-    return false;
-  }
-  return (
-    reason === "run:completed" ||
-    reason === "embedded_run:ended" ||
-    reason.includes("response.completed") ||
-    reason.includes("rawResponseItem/completed") ||
-    reason.includes("raw_response_item.completed") ||
-    reason.includes("output_item.done")
-  );
 }
 
 function formatSessionActivityLogFields(activity: DiagnosticSessionActivitySnapshot): string {

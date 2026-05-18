@@ -558,6 +558,18 @@ describe("modelsStatusCommand auth overview", () => {
         .slice(syntheticProbeStart)
         .map(([arg]) => (arg as { provider: string }).provider);
       expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
+      expect(payload.auth.runtimeAuthRoutes).toEqual([
+        {
+          provider: "openai",
+          runtime: "codex",
+          authProvider: "openai-codex",
+          status: "usable",
+          effective: {
+            kind: "synthetic",
+            detail: "codex-app-server",
+          },
+        },
+      ]);
       expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
       expect(syntheticProbeProviders).toContain("codex");
     } finally {
