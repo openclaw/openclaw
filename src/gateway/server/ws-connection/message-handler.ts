@@ -1405,8 +1405,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
           });
         }
-        if (device && handoffBootstrapProfile) {
-          for (const bootstrapRole of handoffBootstrapProfile.roles) {
+        const approvedHandoffBootstrapProfile =
+          handoffBootstrapProfile as DeviceBootstrapProfile | null;
+        if (device && approvedHandoffBootstrapProfile) {
+          for (const bootstrapRole of approvedHandoffBootstrapProfile.roles) {
             if (bootstrapDeviceTokens.some((entry) => entry.role === bootstrapRole)) {
               continue;
             }
@@ -1417,7 +1419,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               bootstrapRole === "operator"
                 ? resolveBootstrapProfileScopesForRole(
                     bootstrapRole,
-                    handoffBootstrapProfile.scopes,
+                    approvedHandoffBootstrapProfile.scopes,
                   )
                 : [];
             const extraToken = await ensureDeviceToken({
