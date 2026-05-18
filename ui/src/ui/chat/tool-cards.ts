@@ -366,6 +366,26 @@ export function renderRawOutputToggle(text: string) {
   `;
 }
 
+const TOOL_OUTPUT_URL_PATTERN = /https?:\/\/[^\s"'<>]+/g;
+
+function renderLinkifiedToolText(text: string) {
+  const parts: Array<string | ReturnType<typeof html>> = [];
+  let lastIndex = 0;
+  for (const match of text.matchAll(TOOL_OUTPUT_URL_PATTERN)) {
+    const url = match[0];
+    const index = match.index ?? 0;
+    if (index > lastIndex) {
+      parts.push(text.slice(lastIndex, index));
+    }
+    parts.push(html`<a href=${url} target="_blank" rel="noopener noreferrer">${url}</a>`);
+    lastIndex = index + url.length;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+  return parts.length > 0 ? parts : [text];
+}
+
 function renderToolDataBlock(params: {
   label: string;
   text: string;
@@ -382,7 +402,7 @@ function renderToolDataBlock(params: {
       ${empty
         ? html`<div class="chat-tool-card__block-empty muted">${text}</div>`
         : expanded
-          ? html`<pre class="chat-tool-card__block-content"><code>${text}</code></pre>`
+          ? html`<pre class="chat-tool-card__block-content"><code>${renderLinkifiedToolText(text)}</code></pre>`
           : html`<div class="chat-tool-card__block-preview mono">
               ${getTruncatedPreview(text)}
             </div>`}

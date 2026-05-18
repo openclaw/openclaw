@@ -63,6 +63,31 @@ describe("tool-cards", () => {
     ]);
   });
 
+  it("linkifies URL values in expanded tool output", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:4c:call-4c",
+          name: "web_fetch",
+          outputText: '{\n  "url": "https://example.com/article?ref=123",\n  "status": 200\n}',
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const link = container.querySelector<HTMLAnchorElement>(".chat-tool-card__block-content a");
+    expect(link).toBeInstanceOf(HTMLAnchorElement);
+    expect(link?.href).toBe("https://example.com/article?ref=123");
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel).toBe("noopener noreferrer");
+    expect(link?.textContent).toBe("https://example.com/article?ref=123");
+    expect(container.querySelector("code")?.textContent).toContain(
+      '"url": "https://example.com/article?ref=123"',
+    );
+  });
+
   it("renders expanded tool calls without an inline output block when no output is present", () => {
     const container = document.createElement("div");
     render(
