@@ -46,6 +46,7 @@ type ComfyDimensionConfig = {
   widthInputName?: string;
   heightNodeId: string;
   heightInputName?: string;
+  baseSize?: number;
 };
 
 type ComfyCapability = "image" | "music" | "video";
@@ -329,8 +330,8 @@ function calculateDimensions(params: {
   const arH = parseInt(parts[1], 10);
   if (!arW || !arH || arW <= 0 || arH <= 0) return null;
 
-  // Use a base of 1024px for the shorter side, then scale up
-  const baseSize = 1024;
+  // Use a configurable base resolution (default 1024px) for the shorter side, then scale up
+  const baseSize = params.baseConfig?.baseSize ?? 1024;
   let width: number, height: number;
 
   if (arW >= arH) {
@@ -732,6 +733,7 @@ export async function runComfyWorkflow(params: {
     const dims = calculateDimensions({
       aspectRatio: params.aspectRatio,
       size: params.size,
+      baseConfig: capabilityConfig.dimensions,
     });
     if (dims) {
       appliedDimensions = dims;

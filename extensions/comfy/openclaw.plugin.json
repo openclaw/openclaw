@@ -239,7 +239,8 @@
               "widthNodeId": { "type": "string" },
               "widthInputName": { "type": "string" },
               "heightNodeId": { "type": "string" },
-              "heightInputName": { "type": "string" }
+              "heightInputName": { "type": "string" },
+              "baseSize": { "type": "integer", "minimum": 1 }
             }
           }
         }
