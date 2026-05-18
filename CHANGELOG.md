@@ -44,6 +44,7 @@ Docs: https://docs.openclaw.ai
 
 - CLI: enforce the documented Node.js 22.19 runtime floor in the source launcher.
 - Agents/replies: persist queued follow-up user messages and assistant error stubs only once across model-fallback retries, preventing repeated provider rejections from corrupted same-role session transcripts. Fixes #83404. (#83417) Thanks @yetval.
+- Slack: persist delivered inbound message IDs and fail closed when same-channel thread replies lose their thread context, preventing delayed duplicate replies and accidental channel-root posts. Fixes #83521. Thanks @shannon0430.
 - Gateway/config: keep config writes from failing on unrelated unresolved auth-profile SecretRefs while preserving live auth-profile runtime snapshots.
 - Gateway/sessions: clear stored CLI provider resume bindings on non-subagent `/reset` so the next turn starts a fresh provider-side CLI conversation instead of resuming old context. (#83448) Thanks @jasonyliu.
 - Discord/OpenAI: keep realtime Discord voice sessions hearing follow-up turns with OpenAI realtime and prebuffer assistant playback to avoid choppy starts. (#80505) Thanks @Solvely-Colin.
