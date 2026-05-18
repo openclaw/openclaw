@@ -10,7 +10,9 @@ const QMD_ARCHIVE_STEM_RE = /^(.+)-jsonl-(reset|deleted)-(.+)$/;
 
 function restoreQmdNormalizedArchiveName(mdStem: string): string | null {
   const match = QMD_ARCHIVE_STEM_RE.exec(mdStem);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const [, sessionId, reason, timestamp] = match;
   return `${sessionId}.jsonl.${reason}.${timestamp}`;
 }
@@ -59,7 +61,9 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
   }
   if (base.endsWith(".md")) {
     const mdStem = base.slice(0, -".md".length);
-    if (!mdStem) return null;
+    if (!mdStem) {
+      return null;
+    }
     const restoredArchiveName = restoreQmdNormalizedArchiveName(mdStem);
     if (restoredArchiveName) {
       const archivedStem = parseUsageCountedSessionIdFromFileName(restoredArchiveName);
