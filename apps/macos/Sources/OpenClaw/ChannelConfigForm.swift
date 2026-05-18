@@ -282,11 +282,10 @@ struct ConfigSchemaForm: View {
         "webhookUrl",
     ]
 
-    @ViewBuilder
-    private func renderChannelQuickField<Control: View>(
+    private func renderChannelQuickField(
         title: String?,
         subtitle: String?,
-        @ViewBuilder control: () -> Control) -> some View
+        @ViewBuilder control: () -> some View) -> some View
     {
         SettingsCardRow(title: title ?? "Value", subtitle: subtitle) {
             control()
@@ -514,6 +513,7 @@ struct ConfigSchemaForm: View {
             }
         }
     }
+
     private func stringBinding(_ path: ConfigPath, defaultValue: String?) -> Binding<String> {
         Binding(
             get: {
