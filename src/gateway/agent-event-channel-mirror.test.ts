@@ -18,16 +18,26 @@ function event(overrides: Partial<AgentEventPayload>): AgentEventPayload {
   } as AgentEventPayload;
 }
 
-function createHarness() {
+function createHarness(options?: { telegramConfig?: Record<string, unknown> }) {
   const sendDurableMessageBatch = vi.fn().mockResolvedValue({
     status: "sent",
     results: [{ channel: "telegram", messageId: "tg-1", chatId: "-100" }],
     receipt: { id: "receipt-1" },
   });
+  const sendProgressPreview = vi.fn().mockResolvedValue({ messageId: "preview-1" });
+  const editProgressPreview = vi.fn().mockResolvedValue(undefined);
+  const deleteProgressPreview = vi.fn().mockResolvedValue(undefined);
   const loadSessionEntry = vi.fn().mockReturnValue({
-    cfg: { channels: {} },
+    cfg: {
+      channels: {
+        telegram: options?.telegramConfig ?? {
+          streaming: { mode: "progress", progress: { label: false, maxLines: 8 } },
+        },
+      },
+    },
     entry: {
       sessionId: "session-1",
+      agentId: "main",
       deliveryContext: {
         channel: "telegram",
         to: "-100",
@@ -39,17 +49,29 @@ function createHarness() {
   const mirror = createAgentEventChannelMirror({
     sendDurableMessageBatch,
     loadSessionEntry,
+    sendProgressPreview,
+    editProgressPreview,
+    deleteProgressPreview,
     delayMs: 0,
-  });
-  return { mirror, sendDurableMessageBatch, loadSessionEntry };
+  } as any);
+  return {
+    mirror,
+    sendDurableMessageBatch,
+    sendProgressPreview,
+    editProgressPreview,
+    deleteProgressPreview,
+    loadSessionEntry,
+  };
 }
 
 describe("agent event channel mirror", () => {
   afterEach(() => {
     resetAgentRunContextForTest();
   });
-  it("mirrors thread-bound subagent progress, tool, command output, and thinking events to the Telegram topic", async () => {
-    const { mirror, sendDurableMessageBatch } = createHarness();
+
+  it("updates one thread progress preview instead of appending durable messages for each mirrored event", async () => {
+    const { mirror, sendDurableMessageBatch, sendProgressPreview, editProgressPreview } =
+      createHarness();
 
     await mirror(
       event({
@@ -61,14 +83,21 @@ describe("agent event channel mirror", () => {
       event({
         seq: 2,
         stream: "item",
-        data: { phase: "start", kind: "tool", title: "exec cargo fmt" },
+        data: { itemId: "tool-1", phase: "start", kind: "tool", title: "exec cargo fmt" },
       }),
     );
     await mirror(
       event({
         seq: 3,
         stream: "command_output",
-        data: { phase: "end", title: "exec cargo fmt", output: "fmt passed" },
+        data: {
+          itemId: "tool-1-output",
+          phase: "end",
+          title: "exec cargo fmt",
+          name: "exec",
+          output: "fmt passed",
+          exitCode: 0,
+        },
       }),
     );
     await mirror(
@@ -79,27 +108,24 @@ describe("agent event channel mirror", () => {
       }),
     );
 
-    expect(sendDurableMessageBatch).toHaveBeenCalledTimes(4);
-    for (const call of sendDurableMessageBatch.mock.calls) {
-      expect(call[0]).toMatchObject({
-        channel: "telegram",
-        to: "-100",
-        accountId: "default",
-        threadId: "1189",
-        bestEffort: true,
-      });
-    }
-    const sentText = sendDurableMessageBatch.mock.calls
-      .map((call) => call[0].payloads?.[0]?.text)
-      .join("\n---\n");
-    expect(sentText).toContain("Step 1: inspect");
-    expect(sentText).toContain("exec cargo fmt");
-    expect(sentText).toContain("fmt passed");
-    expect(sentText).toContain("checking blockers");
+    expect(sendDurableMessageBatch).not.toHaveBeenCalled();
+    expect(sendProgressPreview).toHaveBeenCalledTimes(1);
+    expect(sendProgressPreview.mock.calls[0]?.[0]).toMatchObject({
+      cfg: { channels: { telegram: expect.any(Object) } },
+      to: "-100",
+      accountId: "default",
+      threadId: "1189",
+      text: expect.stringContaining("Step 1: inspect"),
+    });
+    expect(editProgressPreview).toHaveBeenCalledTimes(3);
+    const editedTexts = editProgressPreview.mock.calls.map((call) => call[0].text).join("\n---\n");
+    expect(editedTexts).toContain("exec cargo fmt");
+    expect(editedTexts).toContain("completed");
+    expect(editedTexts).toContain("checking blockers");
   });
 
   it("skips final-answer assistant text because normal agent delivery already sends it", async () => {
-    const { mirror, sendDurableMessageBatch } = createHarness();
+    const { mirror, sendProgressPreview } = createHarness();
 
     await mirror(
       event({
@@ -111,11 +137,11 @@ describe("agent event channel mirror", () => {
       }),
     );
 
-    expect(sendDurableMessageBatch).not.toHaveBeenCalled();
+    expect(sendProgressPreview).not.toHaveBeenCalled();
   });
 
   it("resolves hidden cron run session keys from agent run context", async () => {
-    const { mirror, sendDurableMessageBatch } = createHarness();
+    const { mirror, sendProgressPreview } = createHarness();
     registerAgentRunContext("run-hidden-cron", {
       sessionKey: "agent:main:cron:job-1:run:run-hidden-cron",
       isControlUiVisible: false,
@@ -129,16 +155,15 @@ describe("agent event channel mirror", () => {
       }),
     );
 
-    expect(sendDurableMessageBatch).toHaveBeenCalledTimes(1);
-    expect(sendDurableMessageBatch.mock.calls[0]?.[0]).toMatchObject({
-      channel: "telegram",
+    expect(sendProgressPreview).toHaveBeenCalledTimes(1);
+    expect(sendProgressPreview.mock.calls[0]?.[0]).toMatchObject({
       threadId: "1189",
-      payloads: [{ text: "💬 hidden cron progress" }],
+      text: "💬 hidden cron progress",
     });
   });
 
   it("mirrors any session with an explicit Telegram thread route, including cron proof sessions", async () => {
-    const { mirror, sendDurableMessageBatch } = createHarness();
+    const { mirror, sendProgressPreview } = createHarness();
 
     await mirror(
       event({
@@ -147,17 +172,48 @@ describe("agent event channel mirror", () => {
       }),
     );
 
-    expect(sendDurableMessageBatch).toHaveBeenCalledTimes(1);
-    expect(sendDurableMessageBatch.mock.calls[0]?.[0]).toMatchObject({
-      channel: "telegram",
+    expect(sendProgressPreview).toHaveBeenCalledTimes(1);
+    expect(sendProgressPreview.mock.calls[0]?.[0]).toMatchObject({
       to: "-100",
       threadId: "1189",
-      payloads: [{ text: "💬 cron threaded progress" }],
+      text: "💬 cron threaded progress",
     });
   });
 
+  it("bounds progress preview lines and deletes the preview when the run ends", async () => {
+    const { mirror, sendProgressPreview, editProgressPreview, deleteProgressPreview } =
+      createHarness({
+        telegramConfig: {
+          streaming: { mode: "progress", progress: { label: false, maxLines: 3 } },
+        },
+      });
+
+    await mirror(event({ data: { text: "first", delta: "first" } }));
+    await mirror(event({ seq: 2, stream: "thinking", data: { text: "second", delta: "second" } }));
+    await mirror(event({ seq: 3, stream: "assistant", data: { text: "third", delta: "third" } }));
+    await mirror(event({ seq: 4, stream: "assistant", data: { text: "fourth", delta: "fourth" } }));
+
+    const latestPreviewText = editProgressPreview.mock.calls.at(-1)?.[0].text;
+    expect(latestPreviewText).not.toContain("first");
+    expect(latestPreviewText).toContain("second");
+    expect(latestPreviewText).toContain("third");
+    expect(latestPreviewText).toContain("fourth");
+
+    await mirror(event({ seq: 5, stream: "lifecycle", data: { phase: "end" } }));
+    expect(deleteProgressPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "-100",
+        threadId: "1189",
+        messageId: "preview-1",
+      }),
+    );
+
+    await mirror(event({ seq: 6, runId: "run-2", data: { text: "new run", delta: "new run" } }));
+    expect(sendProgressPreview).toHaveBeenCalledTimes(2);
+  });
+
   it("does not mirror sessions without a Telegram thread route", async () => {
-    const { sendDurableMessageBatch, loadSessionEntry } = createHarness();
+    const { sendProgressPreview, sendDurableMessageBatch, loadSessionEntry } = createHarness();
     loadSessionEntry.mockReturnValue({
       cfg: { channels: {} },
       entry: {
@@ -168,8 +224,9 @@ describe("agent event channel mirror", () => {
     const mirror = createAgentEventChannelMirror({
       sendDurableMessageBatch,
       loadSessionEntry,
+      sendProgressPreview,
       delayMs: 0,
-    });
+    } as any);
 
     await mirror(
       event({
@@ -178,6 +235,7 @@ describe("agent event channel mirror", () => {
       }),
     );
 
+    expect(sendProgressPreview).not.toHaveBeenCalled();
     expect(sendDurableMessageBatch).not.toHaveBeenCalled();
   });
 });

@@ -1,9 +1,18 @@
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { sendDurableMessageBatch as defaultSendDurableMessageBatch } from "../channels/message/runtime.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/send.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  buildChannelProgressDraftLineForEntry,
+  formatChannelProgressDraftText,
+  mergeChannelProgressDraftLine,
+  resolveChannelPreviewStreamMode,
+  resolveChannelProgressDraftMaxLines,
+  resolveChannelStreamingPreviewToolProgress,
+  type ChannelProgressDraftLine,
+} from "../plugin-sdk/channel-streaming.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { loadSessionEntry as defaultLoadSessionEntry } from "./session-utils.js";
 
@@ -17,16 +26,49 @@ type SendDurableMessageBatch = (
   params: Parameters<typeof defaultSendDurableMessageBatch>[0],
 ) => Promise<DurableMessageBatchSendResult> | DurableMessageBatchSendResult;
 
+type ProgressPreviewParams = {
+  cfg: OpenClawConfig;
+  to: string;
+  accountId?: string;
+  threadId: string | number;
+  text: string;
+  sessionKey: string;
+};
+
+type SendProgressPreview = (
+  params: ProgressPreviewParams,
+) => Promise<{ messageId: string }> | { messageId: string };
+
+type EditProgressPreview = (
+  params: ProgressPreviewParams & { messageId: string },
+) => Promise<void> | void;
+
+type DeleteProgressPreview = (
+  params: Omit<ProgressPreviewParams, "text"> & { messageId: string },
+) => Promise<void> | void;
+
 type AgentEventChannelMirrorDeps = {
   loadSessionEntry?: (sessionKey: string) => LoadedSessionEntry;
   sendDurableMessageBatch?: SendDurableMessageBatch;
+  sendProgressPreview?: SendProgressPreview;
+  editProgressPreview?: EditProgressPreview;
+  deleteProgressPreview?: DeleteProgressPreview;
   delayMs?: number;
+};
+
+type ProgressPreviewLine = string | ChannelProgressDraftLine;
+
+type ProgressPreviewState = {
+  lines: ProgressPreviewLine[];
+  messageId?: string;
+  lastText?: string;
 };
 
 type MirrorState = {
   assistantTextByRun: Map<string, string>;
   thinkingTextByRun: Map<string, string>;
   queuesBySession: Map<string, Promise<void>>;
+  previewsBySession: Map<string, ProgressPreviewState>;
   seenEvents: Set<string>;
 };
 
@@ -36,6 +78,15 @@ type DeliveryRoute = {
   accountId?: string;
   threadId: string | number;
 };
+
+type TelegramRuntimeApi = typeof import("../../extensions/telegram/runtime-api.js");
+
+let telegramRuntimeApiPromise: Promise<TelegramRuntimeApi> | undefined;
+
+async function loadTelegramRuntimeApi(): Promise<TelegramRuntimeApi> {
+  telegramRuntimeApiPromise ??= import("../../extensions/telegram/runtime-api.js");
+  return await telegramRuntimeApiPromise;
+}
 
 function eventKey(evt: AgentEventPayload): string {
   return `${evt.runId}:${evt.seq}:${evt.stream}`;
@@ -79,6 +130,43 @@ function resolveTelegramThreadRoute(loaded: LoadedSessionEntry | undefined): Del
   };
 }
 
+function resolveTelegramStreamingEntry(
+  cfg: OpenClawConfig,
+  accountId: string | undefined,
+): Record<string, unknown> | null {
+  const telegram = cfg.channels?.telegram;
+  if (!telegram || typeof telegram !== "object") {
+    return null;
+  }
+  const base = telegram as Record<string, unknown>;
+  const accounts = base.accounts;
+  const account =
+    accountId && accountId !== "default" && accounts && typeof accounts === "object"
+      ? (accounts as Record<string, unknown>)[accountId]
+      : undefined;
+  if (account && typeof account === "object" && !Array.isArray(account)) {
+    const accountRecord = account as Record<string, unknown>;
+    return {
+      ...base,
+      ...accountRecord,
+      streaming: accountRecord.streaming ?? base.streaming,
+    };
+  }
+  return base;
+}
+
+function shouldMirrorTelegramProgress(loaded: LoadedSessionEntry, route: DeliveryRoute): boolean {
+  const entry = resolveTelegramStreamingEntry(loaded.cfg, route.accountId);
+  if (!entry) {
+    return false;
+  }
+  const mode = resolveChannelPreviewStreamMode(entry, "partial");
+  if (mode === "off" || mode === "block") {
+    return false;
+  }
+  return resolveChannelStreamingPreviewToolProgress(entry, true);
+}
+
 function trimForProgressMessage(text: string): string {
   const trimmed = text.trim();
   if (trimmed.length <= MAX_INLINE_OUTPUT_CHARS) {
@@ -115,10 +203,21 @@ function textFromData(
   return text;
 }
 
-export function formatAgentEventForChannelMirror(
+function lineWithId<TLine extends ChannelProgressDraftLine | undefined>(
+  line: TLine,
+  id: string | undefined,
+): TLine {
+  if (!line || !id) {
+    return line;
+  }
+  return { ...line, id } as TLine;
+}
+
+function formatAgentEventForChannelMirrorLine(
   evt: AgentEventPayload,
   state: Pick<MirrorState, "assistantTextByRun" | "thinkingTextByRun">,
-): string | undefined {
+  entry: Record<string, unknown> | null,
+): ProgressPreviewLine | undefined {
   const data = evt.data ?? {};
   if (evt.stream === "assistant") {
     if (data.phase === "final_answer") {
@@ -137,43 +236,81 @@ export function formatAgentEventForChannelMirror(
     if (data.suppressChannelProgress === true) {
       return undefined;
     }
-    const phase = normalizeOptionalString(data.phase) ?? "update";
-    const title =
-      normalizeOptionalString(data.title) ?? normalizeOptionalString(data.name) ?? "agent item";
-    const status = normalizeOptionalString(data.status);
-    const summary =
-      normalizeOptionalString(data.summary) ?? normalizeOptionalString(data.progressText);
-    const prefix = phase === "start" ? "▶️" : phase === "end" ? "✅" : "🔄";
-    const statusPart = status ? ` (${status})` : "";
-    const summaryPart = summary ? `\n${trimForProgressMessage(summary)}` : "";
-    return `${prefix} ${title}${statusPart}${summaryPart}`;
+    return buildChannelProgressDraftLineForEntry(entry, {
+      event: "item",
+      itemId: normalizeOptionalString(data.itemId),
+      itemKind: normalizeOptionalString(data.kind),
+      title: normalizeOptionalString(data.title),
+      name: normalizeOptionalString(data.name),
+      phase: normalizeOptionalString(data.phase),
+      status: normalizeOptionalString(data.status),
+      summary: normalizeOptionalString(data.summary),
+      progressText: normalizeOptionalString(data.progressText),
+      meta: normalizeOptionalString(data.meta),
+    });
   }
 
   if (evt.stream === "command_output") {
-    const phase = normalizeOptionalString(data.phase) ?? "output";
-    const title =
-      normalizeOptionalString(data.title) ?? normalizeOptionalString(data.name) ?? "command output";
-    const output = normalizeOptionalString(data.output);
-    const exitCode = typeof data.exitCode === "number" ? data.exitCode : undefined;
-    const exitPart = exitCode === undefined ? "" : ` exit=${exitCode}`;
-    if (!output && phase !== "end") {
-      return undefined;
-    }
-    const outputPart = output ? `\n\`\`\`\n${trimForProgressMessage(output)}\n\`\`\`` : "";
-    return `📟 ${title} [${phase}${exitPart}]${outputPart}`;
+    const id = normalizeOptionalString(data.itemId) ?? normalizeOptionalString(data.toolCallId);
+    return lineWithId(
+      buildChannelProgressDraftLineForEntry(entry, {
+        event: "command-output",
+        phase: normalizeOptionalString(data.phase),
+        title: normalizeOptionalString(data.title),
+        name: normalizeOptionalString(data.name),
+        status: normalizeOptionalString(data.status),
+        exitCode: typeof data.exitCode === "number" ? data.exitCode : null,
+      }),
+      id,
+    );
   }
 
   if (evt.stream === "approval") {
-    const title = normalizeOptionalString(data.title) ?? "approval";
-    const status =
-      normalizeOptionalString(data.status) ?? normalizeOptionalString(data.phase) ?? "requested";
-    return `🛂 ${title} (${status})`;
+    const id = normalizeOptionalString(data.approvalId) ?? normalizeOptionalString(data.toolCallId);
+    return lineWithId(
+      buildChannelProgressDraftLineForEntry(entry, {
+        event: "approval",
+        phase: normalizeOptionalString(data.phase),
+        title: normalizeOptionalString(data.title),
+        command: normalizeOptionalString(data.command),
+        reason: normalizeOptionalString(data.reason),
+        message: normalizeOptionalString(data.message),
+      }),
+      id,
+    );
   }
 
   if (evt.stream === "plan") {
-    const title = normalizeOptionalString(data.title) ?? "plan update";
-    const explanation = normalizeOptionalString(data.explanation);
-    return `📝 ${title}${explanation ? `\n${trimForProgressMessage(explanation)}` : ""}`;
+    return buildChannelProgressDraftLineForEntry(entry, {
+      event: "plan",
+      phase: normalizeOptionalString(data.phase),
+      title: normalizeOptionalString(data.title),
+      explanation: normalizeOptionalString(data.explanation),
+      steps: Array.isArray(data.steps)
+        ? data.steps.filter((step): step is string => typeof step === "string")
+        : undefined,
+    });
+  }
+
+  if (evt.stream === "patch") {
+    const id = normalizeOptionalString(data.itemId) ?? normalizeOptionalString(data.toolCallId);
+    const stringArray = (value: unknown): string[] | undefined =>
+      Array.isArray(value)
+        ? value.filter((entry): entry is string => typeof entry === "string")
+        : undefined;
+    return lineWithId(
+      buildChannelProgressDraftLineForEntry(entry, {
+        event: "patch",
+        phase: normalizeOptionalString(data.phase),
+        title: normalizeOptionalString(data.title),
+        name: normalizeOptionalString(data.name),
+        added: stringArray(data.added),
+        modified: stringArray(data.modified),
+        deleted: stringArray(data.deleted),
+        summary: normalizeOptionalString(data.summary),
+      }),
+      id,
+    );
   }
 
   if (evt.stream === "error") {
@@ -195,6 +332,29 @@ export function formatAgentEventForChannelMirror(
   }
 
   return undefined;
+}
+
+export function formatAgentEventForChannelMirror(
+  evt: AgentEventPayload,
+  state: Pick<MirrorState, "assistantTextByRun" | "thinkingTextByRun">,
+): string | undefined {
+  const line = formatAgentEventForChannelMirrorLine(evt, state, null);
+  if (!line) {
+    return undefined;
+  }
+  return typeof line === "string" ? line : line.text;
+}
+
+function isTerminalMirrorEvent(evt: AgentEventPayload): boolean {
+  const data = evt.data ?? {};
+  if (evt.stream === "assistant" && data.phase === "final_answer") {
+    return true;
+  }
+  if (evt.stream === "lifecycle") {
+    const phase = normalizeOptionalString(data.phase);
+    return phase === "end" || phase === "error";
+  }
+  return false;
 }
 
 function enqueueSessionSend(
@@ -226,15 +386,80 @@ function enqueueSessionSend(
   return next;
 }
 
+function resolveMessageIdFromDurableSend(
+  result: DurableMessageBatchSendResult,
+): string | undefined {
+  if ("receipt" in result) {
+    const receiptId =
+      result.receipt.primaryPlatformMessageId ?? result.receipt.platformMessageIds[0];
+    if (receiptId) {
+      return String(receiptId);
+    }
+  }
+  if ("results" in result) {
+    const resultId = result.results.find((entry) => entry.messageId)?.messageId;
+    if (resultId) {
+      return String(resultId);
+    }
+  }
+  return undefined;
+}
+
+function defaultSendProgressPreview(
+  sendDurableMessageBatch: SendDurableMessageBatch,
+): SendProgressPreview {
+  return async (params) => {
+    const result = await sendDurableMessageBatch({
+      cfg: params.cfg,
+      channel: "telegram",
+      to: params.to,
+      ...(params.accountId ? { accountId: params.accountId } : {}),
+      threadId: params.threadId,
+      payloads: [{ text: params.text }],
+      bestEffort: true,
+      session: {
+        key: params.sessionKey,
+      },
+    });
+    const messageId = resolveMessageIdFromDurableSend(result);
+    if (!messageId) {
+      throw new Error("Telegram progress preview send returned no message id");
+    }
+    return { messageId };
+  };
+}
+
+const defaultEditProgressPreview: EditProgressPreview = async (params) => {
+  const { editMessageTelegram } = await loadTelegramRuntimeApi();
+  await editMessageTelegram(params.to, params.messageId, params.text, {
+    cfg: params.cfg,
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    linkPreview: false,
+  });
+};
+
+const defaultDeleteProgressPreview: DeleteProgressPreview = async (params) => {
+  const { deleteMessageTelegram } = await loadTelegramRuntimeApi();
+  await deleteMessageTelegram(params.to, params.messageId, {
+    cfg: params.cfg,
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+  });
+};
+
 export function createAgentEventChannelMirror(deps: AgentEventChannelMirrorDeps = {}) {
   const state: MirrorState = {
     assistantTextByRun: new Map(),
     thinkingTextByRun: new Map(),
     queuesBySession: new Map(),
+    previewsBySession: new Map(),
     seenEvents: new Set(),
   };
   const loadSessionEntry = deps.loadSessionEntry ?? defaultLoadSessionEntry;
   const sendDurableMessageBatch = deps.sendDurableMessageBatch ?? defaultSendDurableMessageBatch;
+  const sendProgressPreview =
+    deps.sendProgressPreview ?? defaultSendProgressPreview(sendDurableMessageBatch);
+  const editProgressPreview = deps.editProgressPreview ?? defaultEditProgressPreview;
+  const deleteProgressPreview = deps.deleteProgressPreview ?? defaultDeleteProgressPreview;
   const delayMs = deps.delayMs ?? DEFAULT_DELAY_MS;
 
   return async (evt: AgentEventPayload): Promise<void> => {
@@ -248,31 +473,82 @@ export function createAgentEventChannelMirror(deps: AgentEventChannelMirrorDeps 
     if (!rememberSeenEvent(state, key)) {
       return;
     }
-    const text = formatAgentEventForChannelMirror(evt, state);
-    if (!text) {
-      return;
-    }
+
     const loaded = loadSessionEntry(sessionKey);
     const route = resolveTelegramThreadRoute(loaded);
     if (!route) {
       return;
     }
-    const payloads: ReplyPayload[] = [{ text }];
+
+    if (isTerminalMirrorEvent(evt)) {
+      const preview = state.previewsBySession.get(sessionKey);
+      if (!preview) {
+        return;
+      }
+      await enqueueSessionSend(state, sessionKey, delayMs, async () => {
+        state.previewsBySession.delete(sessionKey);
+        const messageId = preview.messageId;
+        preview.messageId = undefined;
+        preview.lines = [];
+        preview.lastText = undefined;
+        if (!messageId) {
+          return;
+        }
+        await deleteProgressPreview({
+          cfg: loaded.cfg,
+          to: route.to,
+          ...(route.accountId ? { accountId: route.accountId } : {}),
+          threadId: route.threadId,
+          messageId,
+          sessionKey,
+        });
+      });
+      return;
+    }
+
+    if (!shouldMirrorTelegramProgress(loaded, route)) {
+      return;
+    }
+
+    const entry = resolveTelegramStreamingEntry(loaded.cfg, route.accountId);
+    const line = formatAgentEventForChannelMirrorLine(evt, state, entry);
+    if (!line) {
+      return;
+    }
+
+    let preview = state.previewsBySession.get(sessionKey);
+    if (!preview) {
+      preview = { lines: [] };
+      state.previewsBySession.set(sessionKey, preview);
+    }
+    const maxLines = resolveChannelProgressDraftMaxLines(entry, 8);
+    preview.lines = mergeChannelProgressDraftLine(preview.lines, line, { maxLines });
+    const text = formatChannelProgressDraftText({
+      entry,
+      lines: preview.lines,
+      seed: sessionKey,
+    });
+    if (!text.trim() || text === preview.lastText) {
+      return;
+    }
+
     await enqueueSessionSend(state, sessionKey, delayMs, async () => {
-      await sendDurableMessageBatch({
+      const params = {
         cfg: loaded.cfg,
-        channel: route.channel,
         to: route.to,
         ...(route.accountId ? { accountId: route.accountId } : {}),
         threadId: route.threadId,
-        payloads,
-        bestEffort: true,
-        session: {
-          key: sessionKey,
-          agentId: loaded.entry?.agentId,
-          sessionId: loaded.entry?.sessionId,
-        },
-      });
+        text,
+        sessionKey,
+      } satisfies ProgressPreviewParams;
+      if (!preview.messageId) {
+        const sent = await sendProgressPreview(params);
+        preview.messageId = sent.messageId;
+        preview.lastText = text;
+        return;
+      }
+      await editProgressPreview({ ...params, messageId: preview.messageId });
+      preview.lastText = text;
     });
   };
 }
