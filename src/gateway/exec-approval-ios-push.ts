@@ -21,6 +21,7 @@ import {
 } from "../infra/push-apns.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 
 const APPROVALS_SCOPE = "operator.approvals";
 const OPERATOR_ROLE = "operator";
@@ -96,13 +97,14 @@ function shouldTargetDevice(params: {
 async function loadRegisteredTargets(params: {
   deviceIds: readonly string[];
 }): Promise<DeliveryTarget[]> {
-  const targets = await Promise.all(
-    params.deviceIds.map(async (nodeId) => {
+  const { results } = await runTasksWithConcurrency({
+    tasks: params.deviceIds.map((nodeId) => async () => {
       const registration = await loadApnsRegistration(nodeId);
-      return registration ? { nodeId, registration } : null;
+      return registration ? ({ nodeId, registration } as DeliveryTarget) : null;
     }),
-  );
-  return targets.filter((target): target is DeliveryTarget => target !== null);
+    limit: 10,
+  });
+  return results.filter((target): target is DeliveryTarget => target !== null);
 }
 
 async function resolvePairedTargets(params: {
