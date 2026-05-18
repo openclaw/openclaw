@@ -246,6 +246,63 @@ describe("models-config", () => {
     ]);
   });
 
+  it("strips provider api keys from serialized models.json", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            mode: "merge",
+            providers: {
+              configured: {
+                baseUrl: "https://configured.example/v1",
+                api: "openai-responses",
+                apiKey: "CONFIGURED_KEY", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: {
+          providers: {
+            existing: {
+              baseUrl: "https://existing.example/v1",
+              api: "openai-responses",
+              apiKey: "EXISTING_KEY", // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          implicit: {
+            baseUrl: "https://implicit.example/v1",
+            api: "openai-responses",
+            apiKey: "IMPLICIT_KEY", // pragma: allowlist secret
+            models: [],
+          },
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string; baseUrl?: string }>;
+    };
+    expect(parsed.providers?.configured?.baseUrl).toBe("https://configured.example/v1");
+    expect(parsed.providers?.configured).not.toHaveProperty("apiKey");
+    expect(parsed.providers?.implicit?.baseUrl).toBe("https://implicit.example/v1");
+    expect(parsed.providers?.implicit).not.toHaveProperty("apiKey");
+    expect(parsed.providers?.existing?.baseUrl).toBe("https://existing.example/v1");
+    expect(parsed.providers?.existing).not.toHaveProperty("apiKey");
+  });
+
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       unsetEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR]);
