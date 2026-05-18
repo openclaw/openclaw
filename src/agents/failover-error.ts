@@ -268,7 +268,13 @@ function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new
  * See #83510.
  */
 export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
-  return hasSessionWriteLockTimeout(err) || hasEmbeddedAttemptSessionTakeover(err);
+  if (!hasSessionWriteLockTimeout(err) && !hasEmbeddedAttemptSessionTakeover(err)) {
+    return false;
+  }
+  if (isFailoverError(err)) {
+    return false;
+  }
+  return resolveFailoverClassificationFromError(err) === null;
 }
 
 function hasTimeoutHint(err: unknown): boolean {

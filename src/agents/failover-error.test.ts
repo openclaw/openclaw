@@ -1151,6 +1151,14 @@ describe("failover-error", () => {
       expect(isNonProviderRuntimeCoordinationError({ status: 429, message: "rate limit" })).toBe(
         false,
       );
+      expect(
+        isNonProviderRuntimeCoordinationError({
+          status: 429,
+          code: "RESOURCE_EXHAUSTED",
+          message: "upstream quota pressure",
+          cause: makeSessionLockError(),
+        }),
+      ).toBe(false);
       expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
       expect(isNonProviderRuntimeCoordinationError(undefined)).toBe(false);
     });
