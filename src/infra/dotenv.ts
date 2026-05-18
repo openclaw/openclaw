@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import dotenv from "dotenv";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import {
@@ -204,13 +205,30 @@ function shouldBlockRuntimeDotEnvKey(key: string): boolean {
   return false;
 }
 
-function shouldBlockWorkspaceDotEnvKey(key: string): boolean {
+function buildProviderAuthWorkspaceDotEnvBlocklist(): ReadonlySet<string> {
+  const keys = new Set<string>(BLOCKED_PROVIDER_AUTH_WORKSPACE_DOTENV_KEYS);
+  for (const rawKey of listKnownProviderAuthEnvVarNames({
+    includeUntrustedWorkspacePlugins: false,
+  })) {
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    if (key) {
+      keys.add(key.toUpperCase());
+    }
+  }
+  return keys;
+}
+
+function shouldBlockWorkspaceDotEnvKey(
+  key: string,
+  getProviderAuthBlockedKeys: () => ReadonlySet<string>,
+): boolean {
   const upper = key.toUpperCase();
   return (
     shouldBlockWorkspaceRuntimeDotEnvKey(upper) ||
     BLOCKED_WORKSPACE_DOTENV_KEYS.has(upper) ||
     BLOCKED_WORKSPACE_DOTENV_PREFIXES.some((prefix) => upper.startsWith(prefix)) ||
-    BLOCKED_WORKSPACE_DOTENV_SUFFIXES.some((suffix) => upper.endsWith(suffix))
+    BLOCKED_WORKSPACE_DOTENV_SUFFIXES.some((suffix) => upper.endsWith(suffix)) ||
+    getProviderAuthBlockedKeys().has(upper)
   );
 }
 
@@ -264,9 +282,14 @@ function readDotEnvFile(params: {
 }
 
 export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boolean }) {
+  let providerAuthBlockedKeys: ReadonlySet<string> | undefined;
+  const getProviderAuthBlockedKeys = () => {
+    providerAuthBlockedKeys ??= buildProviderAuthWorkspaceDotEnvBlocklist();
+    return providerAuthBlockedKeys;
+  };
   const parsed = readDotEnvFile({
     filePath,
-    shouldBlockKey: shouldBlockWorkspaceDotEnvKey,
+    shouldBlockKey: (key) => shouldBlockWorkspaceDotEnvKey(key, getProviderAuthBlockedKeys),
     quiet: opts?.quiet ?? true,
   });
   if (!parsed) {
