@@ -908,6 +908,10 @@ describe("runCodexAppServerAttempt", () => {
     expect((factoryOptions[0] as { authProfileStore?: unknown }).authProfileStore).toBe(
       authProfileStore,
     );
+    expect(
+      (factoryOptions[0] as { retainUnauthorizedOwnerOnlyTools?: unknown })
+        .retainUnauthorizedOwnerOnlyTools,
+    ).toBe(true);
   });
 
   it("keeps canonical OpenAI Codex runs on OpenAI dynamic tool policy", async () => {
@@ -1256,12 +1260,16 @@ describe("runCodexAppServerAttempt", () => {
     expect(startConfig?.["features.code_mode_only"]).toBe(true);
   });
 
-  it("omits unavailable owner-only dynamic tools from non-owner Codex thread starts", async () => {
+  it("keeps owner-only dynamic tool schemas stable for non-owner Codex thread starts", async () => {
     const factoryOptions: unknown[] = [];
     __testing.setOpenClawCodingToolsFactoryForTests((options) => {
       factoryOptions.push(options);
-      const toolOptions = options as { senderIsOwner?: boolean };
-      return toolOptions.senderIsOwner === true
+      const toolOptions = options as {
+        retainUnauthorizedOwnerOnlyTools?: boolean;
+        senderIsOwner?: boolean;
+      };
+      return toolOptions.senderIsOwner === true ||
+        toolOptions.retainUnauthorizedOwnerOnlyTools === true
         ? [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("cron")]
         : [createRuntimeDynamicTool("message")];
     });
@@ -1281,23 +1289,27 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    expect(factoryOptions[0]).not.toHaveProperty("retainUnavailableOwnerOnlyTools");
+    expect(factoryOptions[0]).toMatchObject({ retainUnauthorizedOwnerOnlyTools: true });
     const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
     const dynamicToolNames =
       (
         startRequest?.params as { dynamicTools?: Array<{ name?: string }> } | undefined
       )?.dynamicTools?.map((tool) => tool.name) ?? [];
     expect(dynamicToolNames).toContain("message");
-    expect(dynamicToolNames).not.toContain("cron");
+    expect(dynamicToolNames).toContain("cron");
   });
 
-  it("resumes matching Codex thread bindings when owner-only tool availability flips", async () => {
+  it("resumes one Codex thread when owner-only tool availability flips", async () => {
     __testing.setOpenClawCodingToolsFactoryForTests((options) => {
       const toolOptions = options as {
+        retainUnauthorizedOwnerOnlyTools?: boolean;
         senderIsOwner?: boolean;
       };
       const tools = [createRuntimeDynamicTool("message")];
-      if (toolOptions.senderIsOwner === true) {
+      if (
+        toolOptions.senderIsOwner === true ||
+        toolOptions.retainUnauthorizedOwnerOnlyTools === true
+      ) {
         tools.push(createRuntimeDynamicTool("cron"));
       }
       return tools;
@@ -1343,7 +1355,7 @@ describe("runCodexAppServerAttempt", () => {
       },
       { interval: 1, timeout: 120_000 },
     );
-    await harness.completeTurn({ threadId: "thread-2", turnId: "turn-2" });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-2" });
     await secondRun;
 
     const ownerResumeRun = runCodexAppServerAttempt(ownerParams, {
@@ -1358,31 +1370,19 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-3" });
     await ownerResumeRun;
 
-    const nonOwnerResumeRun = runCodexAppServerAttempt(nonOwnerParams, {
-      pluginConfig: { appServer: { mode: "yolo" } },
-    });
-    await vi.waitFor(
-      () => {
-        expect(harness.requests.filter((entry) => entry.method === "turn/start")).toHaveLength(4);
-      },
-      { interval: 1, timeout: 120_000 },
-    );
-    await harness.completeTurn({ threadId: "thread-2", turnId: "turn-4" });
-    await nonOwnerResumeRun;
-
     const startRequests = harness.requests.filter((entry) => entry.method === "thread/start");
     const startToolNames = startRequests.map((entry) =>
       ((entry.params as { dynamicTools?: Array<{ name?: string }> }).dynamicTools ?? []).map(
         (tool) => tool.name,
       ),
     );
-    expect(startToolNames).toEqual([["message", "cron"], ["message"]]);
-    expect(resumedThreadIds).toEqual(["thread-1", "thread-2"]);
+    expect(startToolNames).toEqual([["message", "cron"]]);
+    expect(resumedThreadIds).toEqual(["thread-1", "thread-1"]);
     expect(
       harness.requests
         .map((entry) => entry.method)
         .filter((method) => method === "thread/start" || method === "thread/resume"),
-    ).toEqual(["thread/start", "thread/start", "thread/resume", "thread/resume"]);
+    ).toEqual(["thread/start", "thread/resume", "thread/resume"]);
   });
 
   it("disables Codex native tool surfaces when runtime toolsAllow is empty", async () => {

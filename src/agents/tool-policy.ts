@@ -54,6 +54,7 @@ export function applyOwnerOnlyToolPolicy(
   tools: AnyAgentTool[],
   senderIsOwner: boolean,
   ownerOnlyToolAllowlist?: string[],
+  options?: { retainUnauthorizedOwnerOnlyTools?: boolean },
 ) {
   const allowedOwnerOnlyTools = new Set(
     ownerOnlyToolAllowlist?.map((name) => normalizeToolName(name)) ?? [],
@@ -67,6 +68,9 @@ export function applyOwnerOnlyToolPolicy(
     return wrapOwnerOnlyToolExecution(tool, isAuthorized(tool));
   });
   if (senderIsOwner) {
+    return withGuard;
+  }
+  if (options?.retainUnauthorizedOwnerOnlyTools === true) {
     return withGuard;
   }
   return withGuard.filter((tool) => !isOwnerOnlyTool(tool) || isAuthorized(tool));

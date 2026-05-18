@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearCodexAppServerBinding,
   readCodexAppServerBinding,
-  readCodexAppServerBindings,
   resolveCodexAppServerBindingPath,
   writeCodexAppServerBinding,
   type CodexAppServerAuthProfileLookup,
@@ -75,29 +74,6 @@ describe("codex app-server session binding", () => {
     expect(binding?.userMcpServersFingerprint).toBe("user-mcp-v1");
     const bindingStat = await fs.stat(resolveCodexAppServerBindingPath(sessionFile));
     expect(bindingStat.isFile()).toBe(true);
-  });
-
-  it("preserves alternate dynamic tool thread bindings for the same session", async () => {
-    const sessionFile = path.join(tempDir, "session.json");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-owner",
-      cwd: tempDir,
-      dynamicToolsFingerprint: "tools-owner",
-    });
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-non-owner",
-      cwd: tempDir,
-      dynamicToolsFingerprint: "tools-non-owner",
-    });
-
-    const latest = await readCodexAppServerBinding(sessionFile);
-    const bindings = await readCodexAppServerBindings(sessionFile);
-
-    expect(latest?.threadId).toBe("thread-non-owner");
-    expect(bindings.map((binding) => binding.threadId)).toEqual([
-      "thread-non-owner",
-      "thread-owner",
-    ]);
   });
 
   it("round-trips plugin app policy context with app ids as record keys", async () => {

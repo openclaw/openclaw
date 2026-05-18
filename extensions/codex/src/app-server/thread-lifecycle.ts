@@ -37,7 +37,7 @@ import {
 import {
   clearCodexAppServerBinding,
   isCodexAppServerNativeAuthProfile,
-  readCodexAppServerBindings,
+  readCodexAppServerBinding,
   writeCodexAppServerBinding,
   type CodexAppServerAuthProfileLookup,
   type CodexAppServerContextEngineBinding,
@@ -111,14 +111,11 @@ export async function startOrResumeThread(params: {
           agentId: params.agentId ?? params.params.agentId,
         });
   const userMcpServersFingerprint = fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
-  let binding = selectCodexAppServerBindingForDynamicTools(
-    await readCodexAppServerBindings(params.params.sessionFile, {
-      authProfileStore: params.params.authProfileStore,
-      agentDir: params.params.agentDir,
-      config: params.params.config,
-    }),
-    dynamicToolsFingerprint,
-  );
+  let binding = await readCodexAppServerBinding(params.params.sessionFile, {
+    authProfileStore: params.params.authProfileStore,
+    agentDir: params.params.agentDir,
+    config: params.params.config,
+  });
   let preserveExistingBinding = false;
   let rotatedContextEngineBinding = false;
   let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
@@ -242,11 +239,12 @@ export async function startOrResumeThread(params: {
         );
       } else {
         embeddedAgentLog.debug(
-          "codex app-server dynamic tool catalog changed; starting a new thread binding",
+          "codex app-server dynamic tool catalog changed; starting a new thread",
           {
             threadId: binding.threadId,
           },
         );
+        await clearCodexAppServerBinding(params.params.sessionFile);
       }
     } else {
       try {
@@ -755,20 +753,6 @@ export function areCodexDynamicToolFingerprintsCompatible(params: {
   next: string;
 }): boolean {
   return areDynamicToolFingerprintsCompatible(params.previous, params.next);
-}
-
-export function selectCodexAppServerBindingForDynamicTools(
-  bindings: CodexAppServerThreadBinding[],
-  dynamicToolsFingerprint: string,
-): CodexAppServerThreadBinding | undefined {
-  return (
-    bindings.find((binding) =>
-      areDynamicToolFingerprintsCompatible(
-        binding.dynamicToolsFingerprint,
-        dynamicToolsFingerprint,
-      ),
-    ) ?? bindings[0]
-  );
 }
 
 function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
