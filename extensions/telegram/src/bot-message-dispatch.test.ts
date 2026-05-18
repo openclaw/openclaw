@@ -2124,6 +2124,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       secondStarted = resolve;
     });
     let firstAbortSignal: AbortSignal | undefined;
+    let sideAbortSignal: AbortSignal | undefined;
     dispatchReplyWithBufferedBlockDispatcher
       .mockImplementationOnce(async ({ replyOptions }) => {
         firstAbortSignal = replyOptions?.abortSignal;
@@ -2205,7 +2206,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const sideStartGate = new Promise<void>((resolve) => {
       sideStarted = resolve;
     });
+    let releaseSide: (() => void) | undefined;
+    const sideGate = new Promise<void>((resolve) => {
+      releaseSide = resolve;
+    });
     let firstAbortSignal: AbortSignal | undefined;
+    let sideAbortSignal: AbortSignal | undefined;
     dispatchReplyWithBufferedBlockDispatcher
       .mockImplementationOnce(async ({ replyOptions }) => {
         firstAbortSignal = replyOptions?.abortSignal;
@@ -2216,8 +2222,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
           counts: { block: 0, final: 0, tool: 0 },
         };
       })
-      .mockImplementationOnce(async () => {
+      .mockImplementationOnce(async ({ replyOptions }) => {
+        sideAbortSignal = replyOptions?.abortSignal;
         sideStarted?.();
+        await sideGate;
         return {
           queuedFinal: false,
           counts: { block: 0, final: 0, tool: 0 },
@@ -2260,6 +2268,17 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await sideStartGate;
 
     expect(firstAbortSignal?.aborted).toBe(false);
+    const { buildTelegramReplyFenceLaneKey, supersedeTelegramReplyFenceLane } =
+      await import("./telegram-reply-fence.js");
+    supersedeTelegramReplyFenceLane(
+      buildTelegramReplyFenceLaneKey({
+        accountId: "default",
+        sequentialKey: "telegram:-100123:btw:100",
+      }),
+    );
+    expect(sideAbortSignal?.aborted).toBe(true);
+    expect(firstAbortSignal?.aborted).toBe(false);
+    releaseSide?.();
     releaseFirst?.();
     await Promise.all([firstPromise, sidePromise]);
   });

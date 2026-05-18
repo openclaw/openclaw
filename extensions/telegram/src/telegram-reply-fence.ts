@@ -27,6 +27,13 @@ export function buildTelegramReplyFenceLaneKey(params: {
   return `${params.accountId}\0${params.sequentialKey}`;
 }
 
+export function buildTelegramNonInterruptingReplyFenceKey(params: {
+  activeKey: string;
+  laneKey: string;
+}): string {
+  return `${params.activeKey}\0non-interrupting\0${params.laneKey}`;
+}
+
 function normalizeTelegramFenceKey(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;

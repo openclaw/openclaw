@@ -110,6 +110,7 @@ import { getTelegramSequentialKey } from "./sequential-key.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 import {
   beginTelegramReplyFence,
+  buildTelegramNonInterruptingReplyFenceKey,
   buildTelegramReplyFenceLaneKey,
   endTelegramReplyFence,
   getTelegramReplyFenceSizeForTests,
@@ -418,6 +419,7 @@ export const dispatchTelegramMessage = async ({
     accountId: route.accountId,
     sequentialKey: replyFenceLaneKey,
   });
+  let activeReplyFenceKey = replyFenceKey.activeKey;
   let replyFenceGeneration: number | undefined;
   const replyAbortController = new AbortController();
   let replyAbortControllerQueued = false;
@@ -425,7 +427,7 @@ export const dispatchTelegramMessage = async ({
   const isDispatchSuperseded = () =>
     replyFenceGeneration !== undefined &&
     isTelegramReplyFenceSuperseded({
-      key: replyFenceKey.activeKey,
+      key: activeReplyFenceKey,
       generation: replyFenceGeneration,
     });
   const releaseReplyFence = () => {
@@ -433,7 +435,7 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     endTelegramReplyFence(
-      replyFenceKey.activeKey,
+      activeReplyFenceKey,
       replyAbortControllerQueued ? undefined : replyAbortController,
     );
     replyFenceGeneration = undefined;
@@ -821,11 +823,17 @@ export const dispatchTelegramMessage = async ({
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
 
   const supersedeReplyFence = shouldSupersedeTelegramReplyFence(ctxPayload);
+  activeReplyFenceKey = supersedeReplyFence
+    ? replyFenceKey.activeKey
+    : buildTelegramNonInterruptingReplyFenceKey({
+        activeKey: replyFenceKey.activeKey,
+        laneKey: scopedReplyFenceLaneKey,
+      });
   if (!isRoomEvent && supersedeReplyFence) {
     supersedeTelegramReplyFence(replyFenceKey.roomEventKey);
   }
   replyFenceGeneration = beginTelegramReplyFence({
-    key: replyFenceKey.activeKey,
+    key: activeReplyFenceKey,
     supersede: supersedeReplyFence,
     abortController: replyAbortController,
     laneKey: scopedReplyFenceLaneKey,
@@ -1468,7 +1476,7 @@ export const dispatchTelegramMessage = async ({
                         onComplete: () => {
                           replyAbortControllerQueued = false;
                           releaseTelegramReplyFenceAbortController(
-                            replyFenceKey.activeKey,
+                            activeReplyFenceKey,
                             replyAbortController,
                           );
                         },
