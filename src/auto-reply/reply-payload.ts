@@ -149,6 +149,8 @@ export type ReplyPayloadMetadata = {
    * assistant source replies are message-tool-only; sendPolicy deny still wins.
    */
   deliverDespiteSourceReplySuppression?: boolean;
+  /** Limit suppression-bypass delivery to media fields while keeping ordinary text private. */
+  sourceReplySuppressionDeliveryMode?: "media_only";
   /**
    * A message-tool reply to the active internal UI source. The final payload is
    * still the live delivery vehicle; this mirror makes the reply durable for
@@ -188,5 +190,12 @@ export function copyReplyPayloadMetadata<T extends object>(source: object, paylo
 export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(payload: T): T {
   return setReplyPayloadMetadata(payload, {
     deliverDespiteSourceReplySuppression: true,
+  });
+}
+
+export function markReplyPayloadForSourceSuppressionMediaDelivery<T extends object>(payload: T): T {
+  return setReplyPayloadMetadata(payload, {
+    deliverDespiteSourceReplySuppression: true,
+    sourceReplySuppressionDeliveryMode: "media_only",
   });
 }

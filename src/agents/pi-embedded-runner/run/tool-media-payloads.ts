@@ -2,6 +2,7 @@ import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-opti
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionMediaDelivery,
 } from "../../../auto-reply/reply-payload.js";
 import type { EmbeddedPiRunResult } from "../types.js";
 
@@ -22,6 +23,11 @@ export function mergeAttemptToolMediaPayloads(params: {
   }
 
   const payloads = params.payloads?.length ? [...params.payloads] : [];
+  const shouldDeliverToolMediaDespiteSourceReplySuppression =
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    params.toolAudioAsVoice === true &&
+    params.toolTrustedLocalMedia === true &&
+    mediaUrls.length > 0;
   const payloadIndex = payloads.findIndex((payload) => !payload.isReasoning);
   if (payloadIndex >= 0) {
     const payload = payloads[payloadIndex];
@@ -32,23 +38,29 @@ export function mergeAttemptToolMediaPayloads(params: {
       return payloads;
     }
     const mergedMediaUrls = Array.from(new Set([...(payload.mediaUrls ?? []), ...mediaUrls]));
-    payloads[payloadIndex] = copyReplyPayloadMetadata(payload, {
+    const mergedPayload = copyReplyPayloadMetadata(payload, {
       ...payload,
       mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
       mediaUrl: payload.mediaUrl ?? mergedMediaUrls[0],
       audioAsVoice: payload.audioAsVoice || params.toolAudioAsVoice || undefined,
       trustedLocalMedia: payload.trustedLocalMedia || params.toolTrustedLocalMedia || undefined,
     });
+    payloads[payloadIndex] = shouldDeliverToolMediaDespiteSourceReplySuppression
+      ? markReplyPayloadForSourceSuppressionMediaDelivery(mergedPayload)
+      : mergedPayload;
     return payloads;
   }
 
+  const mediaPayload: EmbeddedRunPayload = {
+    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+    mediaUrl: mediaUrls[0],
+    audioAsVoice: params.toolAudioAsVoice || undefined,
+    trustedLocalMedia: params.toolTrustedLocalMedia || undefined,
+  };
   return [
     ...payloads,
-    {
-      mediaUrls: mediaUrls.length ? mediaUrls : undefined,
-      mediaUrl: mediaUrls[0],
-      audioAsVoice: params.toolAudioAsVoice || undefined,
-      trustedLocalMedia: params.toolTrustedLocalMedia || undefined,
-    },
+    shouldDeliverToolMediaDespiteSourceReplySuppression
+      ? markReplyPayloadForSourceSuppressionMediaDelivery(mediaPayload)
+      : mediaPayload,
   ];
 }

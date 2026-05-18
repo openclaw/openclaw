@@ -1,6 +1,7 @@
 import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { markReplyPayloadForSourceSuppressionMediaDelivery } from "../auto-reply/reply-payload.js";
 import {
   parseReplyDirectives,
   type ReplyDirectiveParseResult,
@@ -185,6 +186,19 @@ function clearPendingToolMedia(
   state.pendingToolTrustedLocalMedia = false;
 }
 
+function shouldDeliverPendingToolMediaDespiteSourceReplySuppression(
+  state: Pick<
+    EmbeddedPiSubscribeState,
+    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+  >,
+): boolean {
+  return (
+    state.pendingToolMediaUrls.length > 0 &&
+    state.pendingToolAudioAsVoice &&
+    state.pendingToolTrustedLocalMedia
+  );
+}
+
 function hasReplyMedia(payload: BlockReplyPayload): boolean {
   return (payload.mediaUrls ?? []).some((url) => url.trim().length > 0);
 }
@@ -221,6 +235,9 @@ export function consumePendingToolMediaIntoReply(
     audioAsVoice: payload.audioAsVoice || state.pendingToolAudioAsVoice || undefined,
     trustedLocalMedia: payload.trustedLocalMedia || state.pendingToolTrustedLocalMedia || undefined,
   };
+  if (shouldDeliverPendingToolMediaDespiteSourceReplySuppression(state)) {
+    markReplyPayloadForSourceSuppressionMediaDelivery(mergedPayload);
+  }
   clearPendingToolMedia(state);
   return mergedPayload;
 }
@@ -252,13 +269,17 @@ export function readPendingToolMediaReply(
   ) {
     return null;
   }
-  return {
+  const payload: BlockReplyPayload = {
     mediaUrls: state.pendingToolMediaUrls.length
       ? Array.from(new Set(state.pendingToolMediaUrls))
       : undefined,
     audioAsVoice: state.pendingToolAudioAsVoice || undefined,
     trustedLocalMedia: state.pendingToolTrustedLocalMedia || undefined,
   };
+  if (shouldDeliverPendingToolMediaDespiteSourceReplySuppression(state)) {
+    markReplyPayloadForSourceSuppressionMediaDelivery(payload);
+  }
+  return payload;
 }
 
 function hasReplyDirectiveMetadata(parsed: ReplyDirectiveParseResult | null | undefined): boolean {

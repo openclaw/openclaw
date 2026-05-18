@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
@@ -485,6 +486,29 @@ describe("consumePendingToolMediaReply", () => {
     });
     expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
+  });
+
+  it("marks trusted voice tool media for source-suppression delivery", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: true,
+    };
+
+    const reply = consumePendingToolMediaReply(state);
+
+    expect(reply).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    expect(getReplyPayloadMetadata(reply ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplySuppressionDeliveryMode: "media_only",
+    });
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
+    expect(state.pendingToolAudioAsVoice).toBe(false);
+    expect(state.pendingToolTrustedLocalMedia).toBe(false);
   });
 });
 

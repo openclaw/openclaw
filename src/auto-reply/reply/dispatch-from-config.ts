@@ -92,6 +92,7 @@ import {
 } from "../command-turn-context.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
 import {
+  copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   markReplyPayloadAsTtsSupplement,
   type ReplyPayload,
@@ -181,6 +182,47 @@ function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function buildSourceSuppressionDeliveryPayload(reply: ReplyPayload): ReplyPayload {
+  if (getReplyPayloadMetadata(reply)?.sourceReplySuppressionDeliveryMode !== "media_only") {
+    return reply;
+  }
+  const mediaPayload: ReplyPayload = {};
+  if (reply.mediaUrl) {
+    mediaPayload.mediaUrl = reply.mediaUrl;
+  }
+  if (reply.mediaUrls) {
+    mediaPayload.mediaUrls = reply.mediaUrls;
+  }
+  if (reply.audioAsVoice) {
+    mediaPayload.audioAsVoice = true;
+  }
+  if (reply.trustedLocalMedia) {
+    mediaPayload.trustedLocalMedia = true;
+  }
+  if (reply.sensitiveMedia) {
+    mediaPayload.sensitiveMedia = true;
+  }
+  if (reply.spokenText) {
+    mediaPayload.spokenText = reply.spokenText;
+  }
+  if (reply.ttsSupplement) {
+    mediaPayload.ttsSupplement = reply.ttsSupplement;
+  }
+  if (reply.delivery) {
+    mediaPayload.delivery = reply.delivery;
+  }
+  if (reply.replyToId) {
+    mediaPayload.replyToId = reply.replyToId;
+  }
+  if (reply.replyToTag) {
+    mediaPayload.replyToTag = true;
+  }
+  if (reply.replyToCurrent) {
+    mediaPayload.replyToCurrent = true;
+  }
+  return copyReplyPayloadMetadata(reply, mediaPayload);
 }
 
 async function maybeApplyTtsToReplyPayload(
@@ -1699,7 +1741,12 @@ export async function dispatchReplyFromConfig(
               ) {
                 markInboundDedupeReplayUnsafe();
               }
-              if (suppressDelivery) {
+              const deliverDespiteSourceReplySuppression =
+                suppressAutomaticSourceDelivery &&
+                ctx.InboundEventKind !== "room_event" &&
+                !sendPolicyDenied &&
+                getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true;
+              if (suppressDelivery && !deliverDespiteSourceReplySuppression) {
                 return;
               }
               // Suppress reasoning payloads — channels using this generic dispatch
@@ -1735,6 +1782,13 @@ export async function dispatchReplyFromConfig(
               if (!hasOutboundReplyContent(visiblePayload, { trimText: true })) {
                 return;
               }
+              const sourceDeliveryPayload =
+                suppressDelivery && deliverDespiteSourceReplySuppression
+                  ? buildSourceSuppressionDeliveryPayload(visiblePayload)
+                  : visiblePayload;
+              if (!hasOutboundReplyContent(sourceDeliveryPayload, { trimText: true })) {
+                return;
+              }
               // Channels that keep a live draft preview may need to rotate their
               // preview state at the logical block boundary before queued block
               // delivery drains asynchronously through the dispatcher.
@@ -1750,7 +1804,7 @@ export async function dispatchReplyFromConfig(
                 await params.replyOptions?.onBlockReplyQueued?.(visiblePayload, queuedContext);
               }
               const ttsPayload = await maybeApplyTtsToReplyPayload({
-                payload: visiblePayload,
+                payload: sourceDeliveryPayload,
                 cfg,
                 channel: deliveryChannel,
                 kind: "block",
@@ -1853,8 +1907,15 @@ export async function dispatchReplyFromConfig(
         }
         continue;
       }
+      const deliveryReply =
+        suppressDelivery && shouldDeliverDespiteSourceReplySuppression(reply)
+          ? buildSourceSuppressionDeliveryPayload(reply)
+          : reply;
+      if (!hasOutboundReplyContent(deliveryReply, { trimText: true })) {
+        continue;
+      }
       attemptedFinalDelivery = true;
-      const finalReply = await sendFinalPayload(reply);
+      const finalReply = await sendFinalPayload(deliveryReply);
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {

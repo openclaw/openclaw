@@ -90,6 +90,43 @@ describe("mergeAttemptToolMediaPayloads", () => {
     ]);
   });
 
+  it("marks trusted voice tool media for message-tool-only source delivery", () => {
+    const [mergedReply] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "done" }],
+        toolMediaUrls: ["/tmp/reply.opus"],
+        toolAudioAsVoice: true,
+        toolTrustedLocalMedia: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(mergedReply).toEqual({
+      text: "done",
+      mediaUrls: ["/tmp/reply.opus"],
+      mediaUrl: "/tmp/reply.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    expect(getReplyPayloadMetadata(mergedReply ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplySuppressionDeliveryMode: "media_only",
+    });
+  });
+
+  it("does not mark untrusted voice media for message-tool-only source delivery", () => {
+    const [mergedReply] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "done" }],
+        toolMediaUrls: ["https://example.com/reply.opus"],
+        toolAudioAsVoice: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(getReplyPayloadMetadata(mergedReply ?? {})?.deliverDespiteSourceReplySuppression).toBe(
+      undefined,
+    );
+  });
+
   it("does not attach tool media to message-tool-only source reply mirrors", () => {
     const sourceReply = setReplyPayloadMetadata(
       { text: "sent through message tool" },
