@@ -787,7 +787,7 @@ See the full channel index: [Channels](/channels).
 
 Group messages default to **require mention** (metadata mention or safe regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
 
-Visible replies are controlled separately. Normal direct, group, and channel requests default to automatic final delivery: final assistant text posts through the legacy visible reply path. Set `"message_tool"` when a chat should only post visible output after the agent calls `message(action=send)`. If the model returns final text without calling the message tool, that final text stays private and the gateway verbose log records suppressed payload metadata.
+Visible replies are controlled separately. Normal group and channel requests default to automatic final delivery: final assistant text posts through the legacy visible reply path. Some harnesses, including Codex, default direct/source chats to message-tool delivery so visible output only posts after the agent calls `message(action=send)`. If the model returns final text without calling the message tool, that final text stays private and the gateway verbose log records suppressed payload metadata.
 
 Tool-only visible replies require a model/runtime that reliably calls tools, and are recommended for shared ambient rooms on latest-generation models such as GPT 5.5. If
 the session log shows assistant text with `didSendViaMessagingTool: false`, the
@@ -810,7 +810,7 @@ The gateway hot-reloads `messages` config after the file is saved. Restart only 
 ```json5
 {
   messages: {
-    visibleReplies: "automatic", // global default for direct/source chats
+    visibleReplies: "automatic", // force old automatic final replies for direct/source chats
     groupChat: {
       historyLimit: 50,
       unmentionedInbound: "room_event", // always-on unmentioned room chatter becomes quiet context
@@ -827,7 +827,7 @@ The gateway hot-reloads `messages` config after the file is saved. Restart only 
 
 `messages.groupChat.unmentionedInbound: "room_event"` submits unmentioned always-on group/channel messages as quiet room context on supported channels. Mentioned messages, commands, and direct messages remain user requests. See [Ambient room events](/channels/ambient-room-events) for complete Discord, Slack, and Telegram examples.
 
-`messages.visibleReplies` is the global source-event default; `messages.groupChat.visibleReplies` overrides it for group/channel source events. When `messages.visibleReplies` is unset, direct/source chats use automatic final delivery across runtimes. Channel allowlists and mention gating still decide whether an event is processed.
+`messages.visibleReplies` is the global source-event default; `messages.groupChat.visibleReplies` overrides it for group/channel source events. When `messages.visibleReplies` is unset, direct/source chats use the selected runtime or harness default. The Codex harness defaults direct/source chats to message-tool delivery; set `messages.visibleReplies: "automatic"` to use automatic final delivery. Channel allowlists and mention gating still decide whether an event is processed.
 
 #### DM history limits
 

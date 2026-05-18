@@ -46,8 +46,7 @@
   "messages": {
     "groupChat": {
       "visibleReplies": "message_tool"
-    },
-    "visibleReplies": "message_tool"
+    }
   },
   "tools": {
     "profiles": {

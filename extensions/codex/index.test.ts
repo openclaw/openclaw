@@ -72,7 +72,9 @@ describe("codex plugin", () => {
     expect(providerRegistration.label).toBe("Codex");
     expect(agentHarnessRegistration.id).toBe("codex");
     expect(agentHarnessRegistration.label).toBe("Codex agent harness");
-    expect(agentHarnessRegistration.deliveryDefaults).toBeUndefined();
+    expect(agentHarnessRegistration.deliveryDefaults).toEqual({
+      sourceVisibleReplies: "message_tool",
+    });
     expect(typeof agentHarnessRegistration.dispose).toBe("function");
     expect(mediaProviderRegistration?.id).toBe("codex");
     expect(mediaProviderRegistration?.capabilities).toEqual(["image"]);
@@ -119,7 +121,7 @@ describe("codex plugin", () => {
   it("only claims the codex provider by default", () => {
     const harness = createCodexAppServerAgentHarness();
 
-    expect("deliveryDefaults" in harness).toBe(false);
+    expect(harness.deliveryDefaults?.sourceVisibleReplies).toBe("message_tool");
     expect(
       harness.supports({ provider: "codex", modelId: "gpt-5.4", requestedRuntime: "auto" })
         .supported,
