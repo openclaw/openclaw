@@ -142,15 +142,79 @@ const EXACT_COLORS = new Map(
   }),
 );
 
-function wantedColor(name) {
-  if (EXACT_COLORS.has(name)) return EXACT_COLORS.get(name);
-  if (name.startsWith("channel: ")) return COLORS.channelBlue;
-  if (name.startsWith("app: ")) return COLORS.appPurple;
-  if (name.startsWith("extensions: ")) return COLORS.neutralGray;
-  if (name.startsWith("plugin: ")) return COLORS.neutralGray;
-  if (name.startsWith("size: ")) return COLORS.mutedRose;
-  if (name.startsWith("triage:")) return COLORS.triageBlue;
+const FAMILY_RULES = [
+  {
+    family: "channel",
+    match: (name) => name.startsWith("channel: "),
+    color: COLORS.channelBlue,
+    reason: "routine channel taxonomy stays visually quiet",
+  },
+  {
+    family: "app",
+    match: (name) => name.startsWith("app: "),
+    color: COLORS.appPurple,
+    reason: "app platform taxonomy stays muted",
+  },
+  {
+    family: "extension",
+    match: (name) => name.startsWith("extensions: "),
+    color: COLORS.neutralGray,
+    reason: "plugin implementation taxonomy should not compete with priority",
+  },
+  {
+    family: "plugin",
+    match: (name) => name.startsWith("plugin: "),
+    color: COLORS.neutralGray,
+    reason: "plugin taxonomy stays neutral unless it becomes an action gate",
+  },
+  {
+    family: "size",
+    match: (name) => name.startsWith("size: "),
+    color: COLORS.mutedRose,
+    reason: "size text carries the value, so one muted family color is enough",
+  },
+  {
+    family: "triage-candidate",
+    match: (name) => name.startsWith("triage:"),
+    color: COLORS.triageBlue,
+    reason: "routine triage candidates stay softer than blockers and priorities",
+  },
+];
+
+function wantedPolicy(name) {
+  if (EXACT_COLORS.has(name)) {
+    return { color: EXACT_COLORS.get(name), family: exactFamily(name), source: "exact" };
+  }
+  const rule = FAMILY_RULES.find((candidate) => candidate.match(name));
+  if (rule) {
+    return { color: rule.color, family: rule.family, source: "family" };
+  }
   return null;
+}
+
+function exactFamily(name) {
+  if (/^P[0-3]$/.test(name)) {
+    return "priority";
+  }
+  if (name.startsWith("impact:")) {
+    return "impact";
+  }
+  if (name.startsWith("clawsweeper")) {
+    return "clawsweeper";
+  }
+  if (name.startsWith("close:") || name.startsWith("r:")) {
+    return "resolution";
+  }
+  if (name.startsWith("proof:")) {
+    return "proof";
+  }
+  if (name.startsWith("triage:")) {
+    return "triage-status";
+  }
+  if (name.startsWith("bug") || name === "security" || name === "regression") {
+    return "risk";
+  }
+  return "specific";
 }
 
 function ghJson(args) {
@@ -183,7 +247,9 @@ function fetchLabels() {
     ]);
     const page = response.data.repository.labels;
     labels.push(...page.nodes);
-    if (!page.pageInfo.hasNextPage) return labels;
+    if (!page.pageInfo.hasNextPage) {
+      return labels;
+    }
     cursor = page.pageInfo.endCursor;
   }
 }
@@ -192,23 +258,31 @@ const changes = fetchLabels()
   .map((label) => ({
     name: label.name,
     current: label.color.toUpperCase(),
-    wanted: wantedColor(label.name),
+    policy: wantedPolicy(label.name),
   }))
-  .filter((label) => label.wanted && label.current !== label.wanted)
-  .sort((a, b) => a.name.localeCompare(b.name));
+  .filter((label) => label.policy && label.current !== label.policy.color)
+  .toSorted((a, b) => a.name.localeCompare(b.name));
 
 if (changes.length === 0) {
   console.log("No label color changes needed.");
   process.exit(0);
 }
 
+const familyCounts = new Map();
 for (const change of changes) {
+  familyCounts.set(change.policy.family, (familyCounts.get(change.policy.family) ?? 0) + 1);
   console.log(
-    `${APPLY ? "update" : "would update"} ${change.name}: ${change.current} -> ${change.wanted}`,
+    `${APPLY ? "update" : "would update"} [${change.policy.family}] ${change.name}: ${change.current} -> ${change.policy.color}`,
   );
   if (APPLY) {
-    gh(["label", "edit", change.name, "--repo", REPO, "--color", change.wanted]);
+    gh(["label", "edit", change.name, "--repo", REPO, "--color", change.policy.color]);
   }
 }
 
+console.log("Family summary:");
+for (const [family, count] of [...familyCounts.entries()].toSorted(([a], [b]) =>
+  a.localeCompare(b),
+)) {
+  console.log(`- ${family}: ${count}`);
+}
 console.log(`${APPLY ? "Updated" : "Would update"} ${changes.length} labels.`);
