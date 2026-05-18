@@ -58,16 +58,19 @@ import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../d
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { coerceToFailoverError, describeFailoverError } from "../failover-error.js";
+import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
+  formatMissingAuthError,
   getApiKeyForModel,
   resolveModelAuthMode,
 } from "../model-auth.js";
 import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
 import { createBundleLspToolRuntime } from "../pi-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
 import { ensureSessionHeader } from "../pi-embedded-helpers.js";
@@ -96,7 +99,7 @@ import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
-  resolveSessionWriteLockAcquireTimeoutMs,
+  resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import {
@@ -535,9 +538,7 @@ async function compactEmbeddedPiSessionDirectOnce(
 
     if (!apiKeyInfo.apiKey) {
       if (apiKeyInfo.mode !== "aws-sdk") {
-        throw new Error(
-          `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
-        );
+        throw new Error(formatMissingAuthError(apiKeyInfo, runtimeModel.provider));
       }
     } else {
       const preparedAuth = await prepareProviderRuntimeAuth({
@@ -629,7 +630,7 @@ async function compactEmbeddedPiSessionDirectOnce(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
-    const contextInjectionMode = resolveContextInjectionMode(params.config);
+    const contextInjectionMode = resolveContextInjectionMode(params.config, effectiveSkillAgentId);
     const { contextFiles } =
       contextInjectionMode === "never"
         ? { contextFiles: [] }
@@ -638,6 +639,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             config: params.config,
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
+            agentId: effectiveSkillAgentId,
             warn: makeBootstrapWarn({
               sessionLabel,
               warn: (message) => log.warn(message),
@@ -646,9 +648,19 @@ async function compactEmbeddedPiSessionDirectOnce(
     // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
     // threshold uses the effective limit, not the native context window.
     const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
+    const runtimeHarnessPolicy = resolveAgentHarnessPolicy({
+      provider,
+      modelId,
+      config: params.config,
+      agentId: effectiveSkillAgentId,
+      sessionKey: params.sessionKey,
+    });
     const ctxInfo = resolveContextWindowInfo({
       cfg: params.config,
-      provider,
+      provider: resolveContextConfigProviderForRuntime({
+        provider,
+        runtimeId: runtimeHarnessPolicy.runtime,
+      }),
       modelId,
       modelContextTokens: readPiModelContextTokens(runtimeModel),
       modelContextWindow: runtimeModelWithContext.contextWindow,
@@ -720,6 +732,7 @@ async function compactEmbeddedPiSessionDirectOnce(
       modelCompat: extractModelCompat(effectiveModel),
       modelApi: model.api,
       modelContextWindowTokens: ctxInfo.tokens,
+      skillsSnapshot: skillsSnapshotForRun,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config, undefined, {
         workspaceDir: effectiveWorkspace,
       }),
@@ -943,9 +956,10 @@ async function compactEmbeddedPiSessionDirectOnce(
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
-      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
-      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: compactionTimeoutMs,
+      ...resolveSessionWriteLockOptions(params.config, {
+        maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
+          timeoutMs: compactionTimeoutMs,
+        }),
       }),
     });
     try {

@@ -236,7 +236,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       permissions: {
         contents: "read",
       },
-      "runs-on": "blacksmith-8vcpu-ubuntu-2404",
+      "runs-on":
+        "${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}",
       steps: [
         {
           name: "Checkout",
@@ -316,7 +317,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(workflow.jobs["check-shard"].strategy.matrix.include[3]).toEqual({
       check_name: "check-dependencies",
       task: "dependencies",
-      runner: "ubuntu-24.04",
+      runner: "blacksmith-8vcpu-ubuntu-2404",
     });
     expect(
       workflow.jobs["check-shard"].steps.find((step) => step.name === "Run check shard").run,

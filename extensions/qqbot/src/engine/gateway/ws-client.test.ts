@@ -5,7 +5,7 @@ const webSocketCtorMock = vi.hoisted(() =>
   }),
 );
 const proxyAgentCtorMock = vi.hoisted(() =>
-  vi.fn(function proxyAgentCtorMockImpl() {
+  vi.fn(function createAmbientNodeProxyAgentMockImpl() {
     return { proxied: true };
   }),
 );
@@ -21,14 +21,22 @@ let createQQWSClient: CreateQQWSClient;
 let priorProxyEnv: Partial<Record<ProxyEnvKey, string | undefined>> = {};
 
 beforeAll(async () => {
-  vi.doMock("proxy-agent", () => ({
-    ProxyAgent: proxyAgentCtorMock,
+  vi.doMock("@openclaw/proxyline", () => ({
+    createAmbientNodeProxyAgent: proxyAgentCtorMock,
+    hasAmbientNodeProxyConfigured: vi.fn(() =>
+      Boolean(
+        process.env.HTTPS_PROXY ??
+        process.env.https_proxy ??
+        process.env.HTTP_PROXY ??
+        process.env.http_proxy,
+      ),
+    ),
   }));
   ({ createQQWSClient } = await import("./ws-client.js"));
 });
 
 function expectWebSocketCtorCall(expected: unknown[]): void {
-  const call = webSocketCtorMock.mock.calls.at(0);
+  const call = webSocketCtorMock.mock.calls[0];
   if (!call) {
     throw new Error("Expected WebSocket constructor call");
   }

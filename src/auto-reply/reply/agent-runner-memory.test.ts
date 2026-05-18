@@ -334,6 +334,113 @@ describe("runMemoryFlushIfNeeded", () => {
     ]);
   });
 
+  it("surfaces generic non-abort memory-flush failures so cron meta.error is populated (regression: #80755)", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error("provider timed out after 60s while flushing memory"),
+    );
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onVisibleErrorPayloads: (payloads) => {
+        visibleErrorPayloads.push(...payloads);
+      },
+    });
+
+    expect(visibleErrorPayloads).toEqual([
+      {
+        text: "⚠️ provider timed out after 60s while flushing memory",
+        isError: true,
+      },
+    ]);
+  });
+
+  it("redacts and caps generic visible memory-flush failures before delivery", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
+    const token = "sk-abcdefghijklmnopqrstuv";
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error(`provider failed with Authorization: Bearer ${token} ${"x".repeat(800)}`),
+    );
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onVisibleErrorPayloads: (payloads) => {
+        visibleErrorPayloads.push(...payloads);
+      },
+    });
+
+    const [payload] = visibleErrorPayloads;
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toMatch(/^⚠️ provider failed with Authorization: Bearer /);
+    expect(payload?.text).not.toContain(token);
+    expect(payload?.text?.length).toBeLessThanOrEqual(600);
+    expect(payload?.text?.endsWith("…")).toBe(true);
+  });
+
+  it("does not surface user-abort errors as visible payloads (regression: #80755)", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
+    const abortErr = new Error("operation aborted by user");
+    abortErr.name = "AbortError";
+    runWithModelFallbackMock.mockRejectedValueOnce(abortErr);
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onVisibleErrorPayloads: (payloads) => {
+        visibleErrorPayloads.push(...payloads);
+      },
+    });
+
+    expect(visibleErrorPayloads).toEqual([]);
+  });
+
   it("runs memory flush on the configured maintenance model without active fallbacks", async () => {
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
@@ -625,6 +732,99 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const compactCall = requireCompactEmbeddedPiSessionCall();
     expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
+  });
+
+  it("uses the persisted Codex runtime context window for OpenAI preflight compaction", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 347_000,
+      totalTokensFresh: false,
+      agentHarnessId: "codex",
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
+            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+          },
+        },
+        agents: { defaults: { compaction: { memoryFlush: {} } } },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey: "main",
+      }),
+      defaultModel: "gpt-5.5",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    const compactCall = requireCompactEmbeddedPiSessionCall();
+    expect(compactCall.currentTokenCount).toBe(347_000);
+  });
+
+  it("keeps the OpenAI API context window for persisted PI runtime overrides", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 347_000,
+      totalTokensFresh: false,
+      agentRuntimeOverride: "pi",
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
+            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+          },
+        },
+        agents: { defaults: { compaction: { memoryFlush: {} } } },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey: "main",
+      }),
+      defaultModel: "gpt-5.5",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
   });
 
   it("uses the active run sessionFile when the session entry has no transcript path", async () => {

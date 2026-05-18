@@ -1,5 +1,11 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+} from "../internal-runtime-context.js";
 import { normalizeAssistantReplayContent } from "./replay-history.js";
 
 const FALLBACK_TEXT = "[assistant turn failed before producing content]";
@@ -120,6 +126,15 @@ describe("normalizeAssistantReplayContent", () => {
     expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
   });
 
+  it("converts mid-turn zero-usage null stop turns to a replay sentinel", () => {
+    const falseSuccessStop = bedrockAssistant(null, "stop");
+    const messages = [userMessage("hello"), falseSuccessStop, userMessage("retry")];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).not.toBe(messages);
+    const repaired = out[1] as AgentMessage & { content: { type: string; text: string }[] };
+    expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
+  });
+
   it("preserves empty content with non-error stopReasons (toolUse, length) untouched", () => {
     // Boundary lock: only `stopReason:"error"` should trip the sentinel
     // substitution. `toolUse` and `length` are reachable in practice when a
@@ -141,6 +156,21 @@ describe("normalizeAssistantReplayContent", () => {
     expect(wrapped.content).toEqual([{ type: "text", text: "plain string content" }]);
   });
 
+  it("wraps legacy object assistant content as a single block (regression)", () => {
+    const block = { type: "text", text: "plain object content" };
+    const messages = [userMessage("hi"), bedrockAssistant(block, "stop")];
+    const out = normalizeAssistantReplayContent(messages);
+    const wrapped = out[1] as AgentMessage & { content: unknown[] };
+    expect(wrapped.content).toEqual([block]);
+  });
+
+  it("normalizes null assistant content to an empty block array (regression)", () => {
+    const messages = [userMessage("hi"), bedrockAssistant(null, "toolUse")];
+    const out = normalizeAssistantReplayContent(messages);
+    const normalized = out[1] as AgentMessage & { content: unknown[] };
+    expect(normalized.content).toEqual([]);
+  });
+
   it("drops metadata-only legacy string assistant content from replay", () => {
     const messages = [
       userMessage("first"),
@@ -150,6 +180,36 @@ describe("normalizeAssistantReplayContent", () => {
     const out = normalizeAssistantReplayContent(messages);
     expect(out).toEqual([messages[0], messages[2]]);
     expect(JSON.stringify(out)).not.toContain("assistant copied inbound metadata omitted");
+  });
+
+  it("drops standalone silent assistant replay text", () => {
+    const messages = [userMessage("first"), bedrockAssistant("NO_REPLY"), userMessage("second")];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toEqual([messages[0], messages[2]]);
+  });
+
+  it("strips copied runtime context from assistant replay text", () => {
+    const messages = [
+      userMessage("first"),
+      bedrockAssistant([
+        {
+          type: "text",
+          text: [
+            "Visible before",
+            INTERNAL_RUNTIME_CONTEXT_BEGIN,
+            "keep this internal",
+            INTERNAL_RUNTIME_CONTEXT_END,
+            OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+            OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+            "",
+            "Visible after",
+          ].join("\n"),
+        },
+      ]),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    const normalized = out[1] as AgentMessage & { content: unknown[] };
+    expect(normalized.content).toEqual([{ type: "text", text: "Visible before\n\nVisible after" }]);
   });
 
   it("drops metadata-only assistant text blocks without fabricating placeholder output", () => {

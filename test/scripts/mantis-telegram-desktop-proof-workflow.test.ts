@@ -14,9 +14,11 @@ type WorkflowStep = {
   name?: string;
   run?: string;
   uses?: string;
+  with?: Record<string, string>;
 };
 
 type WorkflowJob = {
+  if?: string;
   steps?: WorkflowStep[];
 };
 
@@ -24,6 +26,20 @@ type Workflow = {
   concurrency?: unknown;
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
+  on?: {
+    pull_request_target?: {
+      types?: string[];
+    };
+    workflow_dispatch?: {
+      inputs?: Record<
+        string,
+        {
+          required?: boolean;
+          type?: string;
+        }
+      >;
+    };
+  };
   permissions?: Record<string, string>;
 };
 
@@ -94,12 +110,57 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
   it("uses the OpenClaw Mantis mention as the comment trigger", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
+    const liveWorkflow = readFileSync(LIVE_WORKFLOW, "utf8");
     expect(workflow).toContain("@openclaw-mantis");
     expect(workflow).toContain("/openclaw-mantis");
     expect(workflow).toContain("mantis: telegram-visible-proof");
+    expect(workflow).toContain('setOutput("should_run", "false")');
+    expect(workflow).toContain('normalized.includes("telegram desktop")');
+    expect(liveWorkflow).toContain('normalized.includes("telegram desktop")');
+    expect(liveWorkflow).toContain("!requestedDesktopProof");
     expect(workflow).not.toContain("@Mantis");
     expect(workflow).not.toContain("@mantis");
     expect(workflow).not.toContain('"/mantis"');
+  });
+
+  it("runs when ClawSweeper applies the Telegram proof label", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const workflowText = readFileSync(WORKFLOW, "utf8");
+
+    expect(workflow.on?.pull_request_target?.types).toContain("labeled");
+    expect(workflowText).toContain("github.event.label.name == 'mantis: telegram-visible-proof'");
+    expect(workflowText).toContain('eventName === "pull_request_target"');
+    expect(workflowText).toContain("context.payload.pull_request?.number");
+    expect(workflowText).toContain("Accepted Mantis label trigger");
+    expect(workflowText).toContain("allow-bot-users: clawsweeper[bot]");
+  });
+
+  it("can publish an existing proof artifact without recapturing", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const workflowText = readFileSync(WORKFLOW, "utf8");
+    const publishJob = workflow.jobs?.publish_existing_telegram_desktop_proof;
+    const captureJob = workflow.jobs?.run_telegram_desktop_proof;
+    const validateJob = workflow.jobs?.validate_refs;
+
+    expect(workflow.on?.workflow_dispatch?.inputs?.publish_artifact_name?.required).toBe(false);
+    expect(workflow.on?.workflow_dispatch?.inputs?.publish_run_id?.required).toBe(false);
+    expect(captureJob?.if).toBe(
+      "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''",
+    );
+    expect(validateJob?.if).toBe(
+      "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''",
+    );
+    expect(publishJob?.if).toBe(
+      "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name != ''",
+    );
+    expect(workflowText).toContain("publish_run_id is required when publish_artifact_name is set.");
+    expect(workflowText).toContain('gh run download "$run_id"');
+    expect(workflowText).toContain(
+      '--artifact-root "mantis/telegram-desktop/pr-${TARGET_PR}/published-',
+    );
+    expect(workflowText).toContain(
+      "PUBLISH_ARTIFACT_URL=https://github.com/${GITHUB_REPOSITORY}/actions/runs/",
+    );
   });
 
   it("uses the repo-owned Telegram user driver by default", () => {
@@ -147,6 +208,14 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const prompt = readFileSync(PROMPT, "utf8");
     expect(prompt).toContain("$OPENCLAW_TELEGRAM_USER_PROOF_CMD");
     expect(prompt).toContain("do not run\n   `pnpm qa:telegram-user:crabbox` directly");
+  });
+
+  it("runs the Mantis Codex agent in fast medium-effort mode", () => {
+    const agent = workflowStep("Run Codex Mantis Telegram agent");
+
+    expect(agent.uses).toContain("openai/codex-action@");
+    expect(agent.with?.effort).toBe("medium");
+    expect(agent.with?.["codex-args"]).toBe('["-c","service_tier=\\"fast\\""]');
   });
 
   it("derives refs from the PR instead of parsing comment prose", () => {

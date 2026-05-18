@@ -1,5 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { qaSuiteProgressTesting, runQaSuite } from "./suite.js";
+
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
+afterEach(() => {
+  fetchWithSsrFGuardMock.mockReset();
+  vi.useRealTimers();
+});
 
 describe("qa suite", () => {
   it("rejects unsupported transport ids before starting the lab", async () => {
@@ -21,6 +32,46 @@ describe("qa suite", () => {
     expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("false")).toBe(false);
     expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("off")).toBe(false);
     expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("maybe")).toBeUndefined();
+  });
+
+  it("stops an owned lab when readiness never becomes healthy", async () => {
+    const stop = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: false },
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      qaSuiteProgressTesting.waitForQaLabReadyOrStopOwned({
+        lab: {
+          listenUrl: "http://127.0.0.1:43123",
+          stop,
+        },
+        ownsLab: true,
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("timed out after 1ms waiting for qa-lab ready");
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves caller-owned labs running when readiness never becomes healthy", async () => {
+    const stop = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: false },
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      qaSuiteProgressTesting.waitForQaLabReadyOrStopOwned({
+        lab: {
+          listenUrl: "http://127.0.0.1:43123",
+          stop,
+        },
+        ownsLab: false,
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("timed out after 1ms waiting for qa-lab ready");
+    expect(stop).not.toHaveBeenCalled();
   });
 
   it("defaults progress logging from CI when no override is set", () => {
@@ -84,5 +135,52 @@ describe("qa suite", () => {
       "scenario id value",
     );
     expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("\u0000\u0001")).toBe("<empty>");
+  });
+
+  it("builds a codex mock runtime env patch that stays on the QA mock provider", () => {
+    expect(
+      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
+        providerMode: "mock-openai",
+        forcedRuntime: "codex",
+        mockBaseUrl: "http://127.0.0.1:44080",
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+      OPENCLAW_CODEX_APP_SERVER_ARGS:
+        "app-server -c openai_base_url=http://127.0.0.1:44080/v1 --listen stdio://",
+      OPENAI_API_KEY: "qa-mock-openai-key",
+      CODEX_API_KEY: "qa-mock-openai-key",
+    });
+  });
+
+  it("omits mock OpenAI rewiring for non-codex runtime overrides", () => {
+    expect(
+      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
+        providerMode: "mock-openai",
+        forcedRuntime: "pi",
+        mockBaseUrl: "http://127.0.0.1:44080",
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "pi",
+    });
+  });
+
+  it("remaps mock-openai model refs onto the app-server OpenAI provider for codex cells only", () => {
+    expect(
+      qaSuiteProgressTesting.remapModelRefForForcedRuntime({
+        modelRef: "mock-openai/gpt-5.5",
+        providerMode: "mock-openai",
+        forcedRuntime: "codex",
+      }),
+    ).toBe("openai/gpt-5.5");
+    expect(
+      qaSuiteProgressTesting.remapModelRefForForcedRuntime({
+        modelRef: "mock-openai/gpt-5.5",
+        providerMode: "mock-openai",
+        forcedRuntime: "pi",
+      }),
+    ).toBe("mock-openai/gpt-5.5");
   });
 });

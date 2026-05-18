@@ -331,6 +331,16 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:root-managed-vps-upgrade",
+        imageKind: "bare",
+        live: false,
+        name: "root-managed-vps-upgrade",
+        resources: ["docker", "npm"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 1_500_000,
+        weight: 3,
+      },
+      {
         command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-restart-auth",
         imageKind: "bare",
         live: false,
@@ -483,6 +493,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "skill-install",
       "upgrade-survivor",
       "published-upgrade-survivor",
+      "root-managed-vps-upgrade",
       "update-restart-auth",
     ]);
     expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual([
@@ -573,6 +584,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29",
       "published-upgrade-survivor-2026.4.29-feishu-channel",
       "published-upgrade-survivor-2026.4.29-bootstrap-persona",
+      "published-upgrade-survivor-2026.4.29-channel-post-core-restore",
       "published-upgrade-survivor-2026.4.29-plugin-deps-cleanup",
       "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
       "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
@@ -592,6 +604,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29",
       "published-upgrade-survivor-2026.4.29-feishu-channel",
       "published-upgrade-survivor-2026.4.29-bootstrap-persona",
+      "published-upgrade-survivor-2026.4.29-channel-post-core-restore",
       "published-upgrade-survivor-2026.4.29-plugin-deps-cleanup",
       "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
       "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
@@ -600,6 +613,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.3.13",
       "published-upgrade-survivor-2026.3.13-feishu-channel",
       "published-upgrade-survivor-2026.3.13-bootstrap-persona",
+      "published-upgrade-survivor-2026.3.13-channel-post-core-restore",
       "published-upgrade-survivor-2026.3.13-configured-plugin-installs",
       "published-upgrade-survivor-2026.3.13-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.3.13-tilde-log-path",

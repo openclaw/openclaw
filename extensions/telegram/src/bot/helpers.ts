@@ -1,4 +1,4 @@
-import type { Chat, Message } from "@grammyjs/types";
+import type { Chat, Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import {
   resolveCommandAuthorization,
@@ -337,6 +337,20 @@ export function buildTelegramRoutingTarget(
     return base;
   }
   return `${base}:topic:${messageThreadId}`;
+}
+
+/**
+ * Build the canonical Telegram inbound origin used by queued follow-up routing.
+ * DM thread ids remain metadata-only; real forum topics must be in-band.
+ */
+export function buildTelegramInboundOriginTarget(
+  chatId: number | string,
+  thread?: TelegramThreadSpec | null,
+): string {
+  if (thread?.scope !== "forum") {
+    return `telegram:${chatId}`;
+  }
+  return buildTelegramRoutingTarget(chatId, thread);
 }
 
 /**

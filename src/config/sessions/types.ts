@@ -290,14 +290,7 @@ export type SessionEntry = {
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   sendPolicy?: "allow" | "deny";
-  queueMode?:
-    | "steer"
-    | "followup"
-    | "collect"
-    | "steer-backlog"
-    | "steer+backlog"
-    | "queue"
-    | "interrupt";
+  queueMode?: "steer" | "followup" | "collect" | "interrupt";
   queueDebounceMs?: number;
   queueCap?: number;
   queueDrop?: "old" | "new" | "summarize";
@@ -620,6 +613,11 @@ export type SessionSystemPromptReport = {
     chars: number;
     projectContextChars: number;
     nonProjectContextChars: number;
+  };
+  currentTurn?: {
+    kind?: "user_request" | "room_event";
+    promptChars: number;
+    runtimeContextChars: number;
   };
   injectedWorkspaceFiles: Array<{
     name: string;

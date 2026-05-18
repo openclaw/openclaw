@@ -271,12 +271,14 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       },
       historyLimit: 20,
       textChunkLimit: 2000,
+      suppressEmbeds: true,
       chunkMode: "length", // length | newline
       streaming: {
         mode: "progress", // off | partial | block | progress (Discord default: progress)
         progress: {
           label: "auto",
           maxLines: 8,
+          maxLineChars: 120,
           toolProgress: true,
         },
       },
@@ -335,9 +337,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Use `user:<id>` (DM) or `channel:<id>` (guild channel) for delivery targets; bare numeric IDs are rejected.
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
 - Bot-authored messages are ignored by default. `allowBots: true` enables them; use `allowBots: "mentions"` to only accept bot messages that mention the bot (own messages still filtered).
+- Channels that support bot-authored inbound messages can use shared [bot loop protection](/channels/bot-loop-protection). Set `channels.defaults.botLoopProtection` for baseline pair budgets, then override the channel or account only when one surface needs different limits.
 - `channels.discord.guilds.<id>.ignoreOtherMentions` (and channel overrides) drops messages that mention another user or role but not the bot (excluding @everyone/@here).
 - `channels.discord.mentionAliases` maps stable outbound `@handle` text to Discord user IDs before sending, so known teammates can be mentioned deterministically even when the transient directory cache is empty. Per-account overrides live under `channels.discord.accounts.<accountId>.mentionAliases`.
 - `maxLinesPerMessage` (default 17) splits tall messages even when under 2000 chars.
+- `channels.discord.suppressEmbeds` defaults to `true`, so outbound URLs do not expand into Discord link previews unless disabled. Explicit `embeds` payloads still send normally; per-message tool calls can override with `suppressEmbeds`.
 - `channels.discord.threadBindings` controls Discord thread-bound routing:
   - `enabled`: Discord override for thread-bound session features (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`, and bound delivery/routing)
   - `idleHours`: Discord override for inactivity auto-unfocus in hours (`0` disables)
@@ -475,7 +479,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
-- `socketMode` passes Slack SDK Socket Mode transport tuning through to the public Bolt receiver API. Use it only when investigating ping/pong timeout or stale websocket behavior.
+- `socketMode` passes Slack SDK Socket Mode transport tuning through to the public Bolt receiver API. Use it only when investigating ping/pong timeout or stale websocket behavior. `clientPingTimeout` defaults to `15000`; `serverPingTimeout` and `pingPongLoggingEnabled` are passed only when configured.
 - `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Slack account snapshots expose per-credential source/status fields such as
@@ -486,7 +490,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `configWrites: false` blocks Slack-initiated config writes.
 - Optional `channels.slack.defaultAccount` overrides default account selection when it matches a configured account id.
 - `channels.slack.streaming.mode` is the canonical Slack stream mode key. `channels.slack.streaming.nativeTransport` controls Slack's native streaming transport. Legacy `streamMode`, boolean `streaming`, and `nativeStreaming` values remain runtime aliases; run `openclaw doctor --fix` to rewrite persisted config.
-- `unfurlLinks` and `unfurlMedia` pass Slack's `chat.postMessage` link and media unfurl booleans through for bot replies. Omit them to keep Slack's default behavior; set them at `channels.slack.accounts.<accountId>` to override the top-level default for one account.
+- `unfurlLinks` and `unfurlMedia` pass Slack's `chat.postMessage` link and media unfurl booleans through for bot replies. `unfurlLinks` defaults to `false` so outbound bot links do not expand inline unless enabled; `unfurlMedia` is omitted unless configured. Set either value at `channels.slack.accounts.<accountId>` to override the top-level value for one account.
 - Use `user:<id>` (DM) or `channel:<id>` for delivery targets.
 
 **Reaction notification modes:** `off`, `own` (default), `all`, `allowlist` (from `reactionAllowlist`).
@@ -783,14 +787,15 @@ See the full channel index: [Channels](/channels).
 
 Group messages default to **require mention** (metadata mention or safe regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
 
-Visible replies are controlled separately. Group/channel rooms default to `messages.groupChat.visibleReplies: "message_tool"`: OpenClaw still processes the turn, but normal final replies stay private and visible room output requires `message(action=send)`. Set `"automatic"` only when you want the legacy behavior where normal replies are posted back to the room. To apply the same tool-only visible-reply behavior to direct chats too, set `messages.visibleReplies: "message_tool"`; the Codex harness also uses that tool-only behavior as its unset direct-chat default.
+Visible replies are controlled separately. Group/channel rooms default to `messages.groupChat.visibleReplies: "message_tool"`: OpenClaw still processes the turn and asks the agent to use `message(action=send)` for visible room output. If the model returns final text without calling the message tool, that final text stays private and the gateway verbose log records suppressed payload metadata. Set `"automatic"` when you want all visible group replies to use the legacy final-reply path. To apply the same tool-only visible-reply behavior to direct chats too, set `messages.visibleReplies: "message_tool"`; the Codex harness also uses that tool-only behavior as its unset direct-chat default.
 
 Tool-only visible replies require a model/runtime that reliably calls tools. If
 the session log shows assistant text with `didSendViaMessagingTool: false`, the
-model produced a private final answer instead of calling the message tool.
-Switch to a stronger tool-calling model for that channel, or set
-`messages.groupChat.visibleReplies: "automatic"` to restore legacy visible final
-replies.
+model produced private final text instead of calling the message tool. Switch
+to a stronger tool-calling model for that channel, inspect the gateway verbose
+log for the suppressed payload summary, or set
+`messages.groupChat.visibleReplies: "automatic"` to use legacy visible final
+replies for every group/channel request.
 
 If the message tool is unavailable under the active tool policy, OpenClaw falls back to automatic visible replies instead of silently suppressing the response. `openclaw doctor` warns about this mismatch.
 
@@ -808,6 +813,7 @@ The gateway hot-reloads `messages` config after the file is saved. Restart only 
     visibleReplies: "automatic", // global default for direct/source chats; Codex harness defaults unset direct chats to message_tool
     groupChat: {
       historyLimit: 50,
+      unmentionedInbound: "room_event", // always-on unmentioned room chatter becomes quiet context
       visibleReplies: "message_tool", // default; use "automatic" for legacy final replies
     },
   },
@@ -819,7 +825,9 @@ The gateway hot-reloads `messages` config after the file is saved. Restart only 
 
 `messages.groupChat.historyLimit` sets the global default. Channels can override with `channels.<channel>.historyLimit` (or per-account). Set `0` to disable.
 
-`messages.visibleReplies` is the global source-turn default; `messages.groupChat.visibleReplies` overrides it for group/channel source turns. When `messages.visibleReplies` is unset, a harness can provide its own direct/source default; the Codex harness defaults to `message_tool`. Channel allowlists and mention gating still decide whether a turn is processed.
+`messages.groupChat.unmentionedInbound: "room_event"` submits unmentioned always-on group/channel messages as quiet room context on supported channels. Mentioned messages, commands, and direct messages remain user requests. See [Ambient room events](/channels/ambient-room-events) for complete Discord, Slack, and Telegram examples.
+
+`messages.visibleReplies` is the global source-event default; `messages.groupChat.visibleReplies` overrides it for group/channel source events. When `messages.visibleReplies` is unset, a harness can provide its own direct/source default; the Codex harness defaults to `message_tool`. Channel allowlists and mention gating still decide whether an event is processed.
 
 #### DM history limits
 

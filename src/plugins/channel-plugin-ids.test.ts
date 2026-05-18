@@ -164,7 +164,7 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         origin: "bundled",
         enabledByDefault: true,
         providers: ["openai", "openai-codex"],
-        cliBackends: ["codex-cli"],
+        cliBackends: [],
         contracts: {
           imageGenerationProviders: ["openai"],
           videoGenerationProviders: ["openai"],
@@ -181,6 +181,17 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
           imageGenerationProviders: ["google"],
           videoGenerationProviders: ["google"],
           musicGenerationProviders: ["google"],
+        },
+      },
+      {
+        id: "brave",
+        channels: [],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+        contracts: {
+          webSearchProviders: ["brave"],
         },
       },
       {
@@ -820,6 +831,75 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "memory-core"],
     ],
     [
+      "includes explicitly selected external web search providers at startup",
+      {
+        channels: {},
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          allow: ["brave"],
+          entries: {
+            brave: {
+              enabled: true,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["brave"],
+    ],
+    [
+      "honors disabled web search when selecting startup providers",
+      {
+        channels: {},
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          allow: ["brave"],
+          entries: {
+            brave: {
+              enabled: true,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      [],
+    ],
+    [
+      "honors explicit plugin disablement for configured web search providers",
+      {
+        channels: {},
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          allow: ["brave"],
+          entries: {
+            brave: {
+              enabled: false,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      [],
+    ],
+    [
       "keeps configured generation providers behind restrictive allowlists",
       {
         channels: {},
@@ -881,6 +961,40 @@ describe("resolveGatewayStartupPluginIds", () => {
       config: effectiveConfig,
       activationSourceConfig: rawConfig,
       expected: ["browser"],
+    });
+  });
+
+  it("includes auto-enabled external web search providers at startup", () => {
+    const rawConfig = {
+      channels: {},
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "brave",
+          },
+        },
+      },
+      plugins: {
+        allow: ["browser"],
+      },
+    } as OpenClawConfig;
+    const effectiveConfig = {
+      ...rawConfig,
+      plugins: {
+        allow: ["browser", "brave"],
+        entries: {
+          brave: {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: effectiveConfig,
+      activationSourceConfig: rawConfig,
+      expected: ["browser", "brave"],
     });
   });
 
@@ -1441,6 +1555,22 @@ describe("resolveGatewayStartupPluginIds", () => {
       config: createStartupConfig({
         modelId: "openai/gpt-5.5",
       }),
+      expected: ["demo-channel", "browser", "codex", "memory-core"],
+    });
+  });
+
+  it("includes Codex when OpenAI is a selectable default agent model", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "openai/gpt-5.5": {},
+            },
+          },
+        },
+      } as OpenClawConfig,
       expected: ["demo-channel", "browser", "codex", "memory-core"],
     });
   });

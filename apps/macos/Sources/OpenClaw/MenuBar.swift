@@ -91,8 +91,11 @@ struct OpenClawApp: App {
         }
     }
 
-    private func applyStatusItemAppearance(paused: Bool, sleeping: Bool) {
-        self.statusItem?.button?.appearsDisabled = paused || sleeping
+    private func applyStatusItemAppearance(paused _: Bool, sleeping _: Bool) {
+        // Keep the status item actionable even when the Gateway is paused or disconnected.
+        // The SwiftUI label already renders those states; AppKit's disabled appearance can
+        // leak into menu item validation and grey out app-level commands like Settings.
+        self.statusItem?.button?.appearsDisabled = false
     }
 
     private static func applyAttachOnlyOverrideIfNeeded() {
@@ -143,7 +146,7 @@ struct OpenClawApp: App {
         handler.translatesAutoresizingMaskIntoConstraints = false
         handler.onLeftClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemClick")
-            self.toggleWebChatPanel()
+            self.openDashboardWindow()
         }
         handler.onRightClick = { [self] in
             HoverHUDController.shared.dismiss(reason: "statusItemRightClick")
@@ -167,14 +170,21 @@ struct OpenClawApp: App {
     }
 
     @MainActor
-    private func toggleWebChatPanel() {
+    private func openDashboardWindow() {
         HoverHUDController.shared.setSuppressed(true)
         self.isMenuPresented = false
+        if DashboardManager.shared.showConfiguredWindowIfPossible() {
+            return
+        }
         Task { @MainActor in
-            let sessionKey = await WebChatManager.shared.preferredSessionKey()
-            WebChatManager.shared.togglePanel(
-                sessionKey: sessionKey,
-                anchorProvider: { [self] in self.statusButtonScreenFrame() })
+            if DashboardManager.shared.showConfiguredWindowIfPossible() {
+                return
+            }
+            do {
+                try await DashboardManager.shared.show()
+            } catch {
+                DashboardManager.shared.showFailure(error)
+            }
         }
     }
 
@@ -283,6 +293,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 WebChatManager.shared.show(sessionKey: sessionKey)
             }
         }
+        if CommandLine.arguments.contains("--dashboard") {
+            self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
+            Task { @MainActor in
+                if DashboardManager.shared.showConfiguredWindowIfPossible() {
+                    return
+                }
+                do {
+                    try await DashboardManager.shared.show()
+                } catch {
+                    DashboardManager.shared.showFailure(error)
+                }
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -294,6 +317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MacNodeModeCoordinator.shared.stop()
         TerminationSignalWatcher.shared.stop()
         VoiceWakeGlobalSettingsSync.shared.stop()
+        DashboardManager.shared.close()
         WebChatManager.shared.close()
         WebChatManager.shared.resetTunnels()
         Task { await RemoteTunnelManager.shared.stopAll() }
@@ -303,6 +327,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func scheduleFirstRunOnboardingIfNeeded() {
+        if AppStateStore.shared.connectionMode != .unconfigured {
+            OnboardingController.markComplete()
+            return
+        }
         let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
         let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }

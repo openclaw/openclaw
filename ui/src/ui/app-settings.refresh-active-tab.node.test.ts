@@ -5,13 +5,15 @@ type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
 function createDeferred<T = void>() {
   let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  const promise = new Promise<T>((res) => {
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  if (!resolve) {
+  if (!resolve || !reject) {
     throw new Error("Expected deferred resolver to be initialized");
   }
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 async function raceWithNextMacrotask(promise: Promise<unknown>): Promise<"resolved" | "pending"> {
@@ -348,6 +350,39 @@ describe("refreshActiveTab", () => {
     });
   });
 
+  it("loads scoped settings snapshots before starting the schema refresh", async () => {
+    const host = createHost();
+    host.tab = "communications";
+    const config = createDeferred();
+    mocks.loadConfigMock.mockReturnValueOnce(config.promise);
+
+    const refresh = refreshActiveTab(host as never);
+    await Promise.resolve();
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadConfigSchemaMock).not.toHaveBeenCalled();
+    await expect(raceWithNextMacrotask(refresh)).resolves.toBe("pending");
+
+    config.resolve();
+    await refresh;
+
+    await vi.waitFor(() => {
+      expect(mocks.loadConfigSchemaMock).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("does not start the deferred schema refresh when scoped settings fail to load", async () => {
+    const host = createHost();
+    host.tab = "communications";
+    const error = new Error("config unavailable");
+    mocks.loadConfigMock.mockRejectedValueOnce(error);
+
+    await expect(refreshActiveTab(host as never)).rejects.toBe(error);
+    await Promise.resolve();
+
+    expect(mocks.loadConfigSchemaMock).not.toHaveBeenCalled();
+  });
+
   it("renders channels from the cheap snapshot without waiting for config schema", async () => {
     const host = createHost();
     host.tab = "channels";
@@ -400,6 +435,56 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadCronStatusMock).toHaveBeenCalledOnce();
     expect(mocks.loadCronJobsPageMock).toHaveBeenCalledOnce();
     expect(mocks.loadCronRunsMock).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes model auth status on the chat tab for the quota pill", async () => {
+    const host = createHost();
+    host.tab = "chat";
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.refreshChatMock).toHaveBeenCalledOnce();
+    expect(mocks.loadModelAuthStatusStateMock).toHaveBeenCalledWith(host);
+    expect(mocks.scheduleChatScrollMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not wait for quota status before scrolling the chat tab", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    const quotaRefresh = createDeferred();
+    mocks.loadModelAuthStatusStateMock.mockReturnValueOnce(quotaRefresh.promise);
+
+    const refresh = refreshActiveTab(host as never);
+    const outcome = await raceWithNextMacrotask(refresh);
+
+    expect(outcome).toBe("resolved");
+    expect(mocks.refreshChatMock).toHaveBeenCalledOnce();
+    expect(mocks.scheduleChatScrollMock).toHaveBeenCalledOnce();
+
+    quotaRefresh.resolve();
+    await quotaRefresh.promise;
+  });
+
+  it("preserves chat refresh failures while loading quota status", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    mocks.refreshChatMock.mockRejectedValueOnce(new Error("chat refresh failed"));
+
+    await expect(refreshActiveTab(host as never)).rejects.toThrow("chat refresh failed");
+
+    expect(mocks.loadModelAuthStatusStateMock).toHaveBeenCalledWith(host);
+    expect(mocks.scheduleChatScrollMock).not.toHaveBeenCalled();
+  });
+
+  it("contains quota status failures on the chat tab", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    mocks.loadModelAuthStatusStateMock.mockRejectedValueOnce(new Error("quota failed"));
+
+    await expect(refreshActiveTab(host as never)).resolves.toBeUndefined();
+
+    expect(mocks.refreshChatMock).toHaveBeenCalledOnce();
+    expect(mocks.scheduleChatScrollMock).toHaveBeenCalledOnce();
   });
 
   it("records failed cron runs status from the controller outcome", async () => {

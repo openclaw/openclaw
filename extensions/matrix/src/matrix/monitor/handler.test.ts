@@ -540,12 +540,16 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("accepts room messages from configured Matrix bot accounts when allowBots is true", async () => {
-    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+    const { handler, recordInboundSession, runPrepared } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountAllowBots: true,
+      accountConfig: { botLoopProtection: { windowSeconds: 120, cooldownSeconds: 240 } },
       configuredBotUserIds: new Set(["@ops:example.org"]),
       roomsConfig: {
-        "!room:example.org": { requireMention: false },
+        "!room:example.org": {
+          requireMention: false,
+          botLoopProtection: { maxEventsPerWindow: 3 },
+        },
       },
       getMemberDisplayName: async () => "ops-bot",
     });
@@ -556,10 +560,21 @@ describe("matrix monitor handler pairing account scope", () => {
         eventId: "$bot-on",
         sender: "@ops:example.org",
         body: "hello from bot",
+        originServerTs: 123_456,
       }),
     );
 
     expect(recordInboundSession).toHaveBeenCalled();
+    expect(runPrepared.mock.calls[0]?.[0].botLoopProtection).toEqual({
+      scopeId: "ops",
+      conversationId: "!room:example.org",
+      senderId: "@ops:example.org",
+      receiverId: "@bot:example.org",
+      config: { maxEventsPerWindow: 3, windowSeconds: 120, cooldownSeconds: 240 },
+      defaultsConfig: undefined,
+      defaultEnabled: true,
+      nowMs: 123_456,
+    });
   });
 
   it("does not treat unconfigured Matrix users as bots when allowBots is off", async () => {
@@ -2480,6 +2495,48 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
   });
 
+  it("commits a claimed event when bot loop protection suppresses dispatch", async () => {
+    const inboundDeduper = {
+      claimEvent: vi.fn(() => true),
+      commitEvent: vi.fn(async () => undefined),
+      releaseEvent: vi.fn(),
+    };
+    const runPrepared = vi.fn(
+      async (turn: { ctxPayload: Record<string, unknown>; routeSessionKey: string }) => ({
+        admission: { kind: "drop" as const, reason: "bot-loop-protection" as const },
+        dispatched: false as const,
+        ctxPayload: turn.ctxPayload,
+        routeSessionKey: turn.routeSessionKey,
+      }),
+    );
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      accountAllowBots: true,
+      configuredBotUserIds: new Set(["@ops:example.org"]),
+      inboundDeduper,
+      isDirectMessage: false,
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      runPrepared,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$bot-loop-drop",
+        sender: "@ops:example.org",
+        body: "hello from bot",
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(inboundDeduper.commitEvent).toHaveBeenCalledWith({
+      roomId: "!room:example.org",
+      eventId: "$bot-loop-drop",
+    });
+    expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
+  });
+
   it("releases a claimed event when reply dispatch fails before completion", async () => {
     const inboundDeduper = {
       claimEvent: vi.fn(() => true),
@@ -2752,6 +2809,9 @@ describe("matrix monitor handler draft streaming", () => {
       text?: string;
       mediaUrl?: string;
       mediaUrls?: string[];
+      audioAsVoice?: boolean;
+      spokenText?: string;
+      ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
       isCompactionNotice?: boolean;
       replyToId?: string;
     },
@@ -2799,7 +2859,7 @@ describe("matrix monitor handler draft streaming", () => {
   function createStreamingHarness(opts?: {
     replyToMode?: "off" | "first" | "all" | "batched";
     blockStreamingEnabled?: boolean;
-    streaming?: "partial" | "quiet" | "progress";
+    streaming?: "partial" | "quiet" | "progress" | "off";
     previewToolProgressEnabled?: boolean;
     accountConfig?: import("../../types.js").MatrixConfig;
   }) {
@@ -3047,6 +3107,166 @@ describe("matrix monitor handler draft streaming", () => {
     expectEditLiveFlag("$draft1", "Single block", false);
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("keeps the draft preview and sends media-only for TTS supplement finals", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      blockStreamingEnabled: true,
+      streaming: "partial",
+    });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Spoken answer" });
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    await deliver(
+      {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      },
+      { kind: "final" },
+    );
+
+    expectEditLiveFlag("$draft1", "Spoken answer", false);
+    expect(redactEventMock).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    expect(
+      requireRecord(
+        callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),
+        "deliver replies params",
+      ).replies,
+    ).toEqual([
+      {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      },
+    ]);
+    await finish();
+  });
+
+  it("falls back with visible text when TTS supplement live finalization fails", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      blockStreamingEnabled: true,
+      streaming: "partial",
+    });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Spoken answer" });
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    editMessageMatrixMock.mockRejectedValueOnce(new Error("rate limited"));
+    await deliver(
+      {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      },
+      { kind: "final" },
+    );
+
+    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    expect(
+      requireRecord(
+        callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),
+        "deliver replies params",
+      ).replies,
+    ).toEqual([
+      {
+        text: "Spoken answer",
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      },
+    ]);
+    await finish();
+  });
+
+  it("falls back with visible text when TTS supplement preview has no event id", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      blockStreamingEnabled: true,
+      streaming: "partial",
+    });
+    const { deliver, finish } = await dispatch();
+
+    await deliver(
+      {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      },
+      { kind: "final" },
+    );
+
+    expect(redactEventMock).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    expect(
+      requireRecord(
+        callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),
+        "deliver replies params",
+      ).replies,
+    ).toEqual([
+      {
+        text: "Spoken answer",
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      },
+    ]);
+    await finish();
+  });
+
+  it("keeps already-delivered TTS supplements audio-only without a draft preview", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({
+      blockStreamingEnabled: true,
+      streaming: "off",
+    });
+    const { deliver, finish } = await dispatch();
+
+    await deliver(
+      {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: {
+          spokenText: "Spoken answer",
+          visibleTextAlreadyDelivered: true,
+        },
+      },
+      { kind: "final" },
+    );
+
+    expect(redactEventMock).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    expect(
+      requireRecord(
+        callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),
+        "deliver replies params",
+      ).replies,
+    ).toEqual([
+      {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: {
+          spokenText: "Spoken answer",
+          visibleTextAlreadyDelivered: true,
+        },
+      },
+    ]);
     await finish();
   });
 

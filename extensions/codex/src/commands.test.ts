@@ -265,6 +265,116 @@ describe("codex command", () => {
     expect(writeCodexAppServerBinding).not.toHaveBeenCalled();
   });
 
+  it("lists Codex CLI sessions from a requested node", async () => {
+    const listCodexCliSessionsOnNode = vi.fn(async () => ({
+      node: { nodeId: "mb-m5", displayName: "mb-m5" },
+      result: {
+        codexHome: "/Users/mariano/.codex",
+        sessions: [
+          {
+            sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+            cwd: "/repo",
+            updatedAt: "2026-05-13T06:30:00.000Z",
+            lastMessage: "fix the bridge",
+            messageCount: 2,
+          },
+        ],
+      },
+    }));
+
+    const result = await handleCodexCommand(createContext("sessions --host mb-m5 bridge"), {
+      deps: createDeps({ listCodexCliSessionsOnNode }),
+    });
+
+    expect(result.text).toContain("Codex CLI sessions on mb-m5 / mb-m5:");
+    expect(result.text).toContain("019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd");
+    expect(result.text).toContain(
+      "Bind: /codex resume 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd --host mb-m5 --bind here",
+    );
+    expect(listCodexCliSessionsOnNode).toHaveBeenCalledWith({
+      requestedNode: "mb-m5",
+      filter: "bridge",
+      limit: undefined,
+    });
+  });
+
+  it("binds the current conversation to a Codex CLI node session", async () => {
+    const requestConversationBinding = vi.fn(async () => ({
+      status: "bound" as const,
+      binding: {
+        bindingId: "binding-1",
+        pluginId: "codex",
+        pluginRoot: "/plugin",
+        channel: "test",
+        accountId: "default",
+        conversationId: "conversation",
+        boundAt: 1,
+      },
+    }));
+    const resolveCodexCliSessionForBindingOnNode = vi.fn(async () => ({
+      node: { nodeId: "node-123", displayName: "mb-m5" },
+      session: {
+        sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+        cwd: "/repo",
+        messageCount: 2,
+      },
+    }));
+
+    await expect(
+      handleCodexCommand(
+        createContext(
+          "resume 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd --host mb-m5 --bind here",
+          undefined,
+          { requestConversationBinding },
+        ),
+        {
+          deps: createDeps({ resolveCodexCliSessionForBindingOnNode }),
+        },
+      ),
+    ).resolves.toEqual({
+      text: "Bound this conversation to Codex CLI session 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd on node-123.",
+    });
+    expect(resolveCodexCliSessionForBindingOnNode).toHaveBeenCalledWith({
+      requestedNode: "mb-m5",
+      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+    });
+    expect(requestConversationBinding).toHaveBeenCalledWith({
+      summary: "Codex CLI session 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd on node-123",
+      detachHint: "/codex detach",
+      data: {
+        kind: "codex-cli-node-session",
+        version: 1,
+        nodeId: "node-123",
+        sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+        cwd: "/repo",
+      },
+    });
+  });
+
+  it("refuses to bind a Codex CLI node session that the node did not list", async () => {
+    const requestConversationBinding = vi.fn();
+    const resolveCodexCliSessionForBindingOnNode = vi.fn(async () => ({
+      node: { nodeId: "node-123", displayName: "mb-m5" },
+      session: undefined,
+    }));
+
+    await expect(
+      handleCodexCommand(
+        createContext(
+          "resume 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd --host mb-m5 --bind here",
+          undefined,
+          { requestConversationBinding },
+        ),
+        {
+          deps: createDeps({ resolveCodexCliSessionForBindingOnNode }),
+        },
+      ),
+    ).resolves.toEqual({
+      text: "No Codex CLI session 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd was found on mb-m5.",
+    });
+    expect(requestConversationBinding).not.toHaveBeenCalled();
+  });
+
   it("escapes resumed Codex thread ids before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const unsafe = "thread-123 <@U123> [trusted](https://evil)";
@@ -528,9 +638,74 @@ describe("codex command", () => {
     });
 
     const statusResult = await handleCodexCommand(createContext("status"), { deps });
-    expectResultTextContains(statusResult, "Rate limits: Codex: primary 42%");
+    expectResultTextContains(statusResult, "Rate limits: Codex: primary 58% left");
     const accountResult = await handleCodexCommand(createContext("account"), { deps });
     expectResultTextContains(accountResult, "Codex is available.");
+  });
+
+  it("does not count empty Codex rate-limit buckets as returned limits", async () => {
+    const limits = {
+      ok: true as const,
+      value: {
+        rateLimits: [
+          {
+            limitId: "codex",
+            limitName: "Codex",
+            primary: null,
+            secondary: null,
+            credits: null,
+            planType: "plus",
+            rateLimitReachedType: null,
+          },
+        ],
+        rateLimitsByLimitId: {
+          premium: {
+            limitId: "premium",
+            limitName: "premium",
+            primary: null,
+            secondary: null,
+            credits: null,
+            planType: "pro",
+            rateLimitReachedType: null,
+          },
+          codex: {
+            limitId: "codex",
+            limitName: "Codex",
+            primary: null,
+            secondary: null,
+            credits: null,
+            planType: "plus",
+            rateLimitReachedType: null,
+          },
+        },
+      },
+    };
+    const deps = createDeps({
+      readCodexStatusProbes: vi.fn(async () => ({
+        models: { ok: false as const, error: "offline" },
+        account: { ok: false as const, error: "offline" },
+        limits,
+        mcps: { ok: true as const, value: { data: [], nextCursor: null } },
+        skills: { ok: true as const, value: { data: [] } },
+      })),
+      safeCodexControlRequest: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true as const,
+          value: { account: { email: "codex@example.com" } },
+        })
+        .mockResolvedValueOnce(limits),
+    });
+
+    const statusResult = await handleCodexCommand(createContext("status"), { deps });
+    expectResultTextContains(statusResult, "Rate limits: none returned");
+    expect(statusResult.text).not.toContain("Rate limits: 1");
+    expect(statusResult.text).not.toContain("premium");
+
+    const accountResult = await handleCodexCommand(createContext("account"), { deps });
+    expectResultTextContains(accountResult, "Rate limits: none returned");
+    expect(accountResult.text).not.toContain("Rate limits: 1");
+    expect(accountResult.text).not.toContain("premium");
   });
 
   it("rejects extra operands for read-only Codex commands", async () => {
@@ -1139,9 +1314,18 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "Started Codex compaction for thread thread-123.",
     });
-    expect(codexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.compact, {
-      threadId: "thread-123",
-    });
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.compact,
+      {
+        threadId: "thread-123",
+      },
+      {
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        authProfileId: undefined,
+        config: {},
+      },
+    );
   });
 
   it("starts review with the generated app-server target shape", async () => {
@@ -1159,10 +1343,19 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "Started Codex review for thread thread-123.",
     });
-    expect(codexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.review, {
-      threadId: "thread-123",
-      target: { type: "uncommittedChanges" },
-    });
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.review,
+      {
+        threadId: "thread-123",
+        target: { type: "uncommittedChanges" },
+      },
+      {
+        agentDir: path.join(tempDir, "agents", "main", "agent"),
+        authProfileId: undefined,
+        config: {},
+      },
+    );
   });
 
   it("rejects malformed compact and review commands before starting thread actions", async () => {
@@ -2491,6 +2684,7 @@ describe("codex command", () => {
       config: {},
       sessionFile,
       workspaceDir: "/repo",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
       threadId: "thread-123",
       model: "gpt-5.4",
       modelProvider: "openai",
@@ -2549,6 +2743,7 @@ describe("codex command", () => {
       config: {},
       sessionFile,
       workspaceDir: "/repo with space",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
       threadId: "thread-123",
       model: undefined,
       modelProvider: undefined,
@@ -2796,6 +2991,8 @@ describe("codex command", () => {
     expect(stopCodexConversationTurn).toHaveBeenCalledWith({
       sessionFile,
       pluginConfig: undefined,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 
@@ -2827,6 +3024,8 @@ describe("codex command", () => {
       sessionFile,
       pluginConfig: undefined,
       message: "focus tests first",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 
@@ -2857,16 +3056,22 @@ describe("codex command", () => {
       sessionFile,
       pluginConfig: undefined,
       model: "gpt-5.4",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
     expect(setCodexConversationFastMode).toHaveBeenCalledWith({
       sessionFile,
       pluginConfig: undefined,
       enabled: true,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
     expect(setCodexConversationPermissions).toHaveBeenCalledWith({
       sessionFile,
       pluginConfig: undefined,
       mode: "yolo",
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 
@@ -2986,6 +3191,8 @@ describe("codex command", () => {
       sessionFile: hostSessionFile,
       pluginConfig: undefined,
       enabled: true,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: {},
     });
   });
 

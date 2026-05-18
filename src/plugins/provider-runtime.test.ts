@@ -196,7 +196,8 @@ function expectObjectOrArrayFields(value: unknown, fields: Record<string, unknow
 }
 
 function getLastResolvePluginProvidersParams() {
-  return requireRecord(resolvePluginProvidersMock.mock.calls.at(-1)?.[0], "provider load params");
+  const calls = resolvePluginProvidersMock.mock.calls;
+  return requireRecord(calls[calls.length - 1]?.[0], "provider load params");
 }
 
 function expectProviderRuntimePluginLoad(params: { provider: string; expectedPluginId?: string }) {
@@ -481,6 +482,45 @@ describe("provider-runtime", () => {
 
     expect(plugin?.id).toBe("ollama");
     expect(plugin?.pluginId).toBe("ollama");
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("uses loaded stream hooks without loading runtime plugins when requested", () => {
+    const createStreamFn = vi.fn(() => vi.fn());
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+      createStreamFn,
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: DEMO_PROVIDER_ID,
+      provider,
+      source: "test",
+    });
+    setActivePluginRegistry(registry, "startup-registry", "gateway-bindable", "/tmp/workspace");
+
+    expect(
+      resolveProviderStreamFn({
+        provider: DEMO_PROVIDER_ID,
+        workspaceDir: "/tmp/workspace",
+        allowRuntimePluginLoad: false,
+        context: createDemoResolvedModelContext({}),
+      }),
+    ).toBeTypeOf("function");
+    expect(createStreamFn).toHaveBeenCalledOnce();
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("does not load runtime plugins for stream hooks when loading is disabled", () => {
+    expect(
+      resolveProviderStreamFn({
+        provider: DEMO_PROVIDER_ID,
+        allowRuntimePluginLoad: false,
+        context: createDemoResolvedModelContext({}),
+      }),
+    ).toBeUndefined();
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 

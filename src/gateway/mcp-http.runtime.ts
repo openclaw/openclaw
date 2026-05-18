@@ -1,4 +1,5 @@
 import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildMcpToolSchema,
@@ -26,12 +27,14 @@ export class McpLoopbackToolCache {
     sessionKey: string;
     messageProvider: string | undefined;
     accountId: string | undefined;
+    inboundEventKind: InboundEventKind | undefined;
     senderIsOwner: boolean | undefined;
   }): CachedScopedTools {
     const cacheKey = [
       params.sessionKey,
       params.messageProvider ?? "",
       params.accountId ?? "",
+      params.inboundEventKind ?? "",
       params.senderIsOwner === true ? "owner" : "non-owner",
     ].join("\u0000");
     const now = Date.now();
@@ -45,6 +48,7 @@ export class McpLoopbackToolCache {
       sessionKey: params.sessionKey,
       messageProvider: params.messageProvider,
       accountId: params.accountId,
+      inboundEventKind: params.inboundEventKind,
       senderIsOwner: params.senderIsOwner,
       surface: "loopback",
       excludeToolNames: NATIVE_TOOL_EXCLUDE,

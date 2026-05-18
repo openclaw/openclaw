@@ -1,12 +1,20 @@
-import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
+import type { Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
-import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildMentionRegexes,
+  implicitMentionKindWhen,
+  matchesMentionWithExplicit,
+  resolveInboundMentionDecision,
+  shouldDebounceTextInbound,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -14,12 +22,13 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
+import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -35,6 +44,7 @@ import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./ac
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   normalizeDmAllowFromWithStore,
+  firstDefined,
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
@@ -71,6 +81,7 @@ import {
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import {
   getTelegramTextParts,
+  hasBotMention,
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   isTelegramCommandsAllowFromConfigured,
@@ -94,6 +105,7 @@ import {
   isTelegramExecApprovalAuthorizedSender,
   shouldEnableTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
+import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -141,6 +153,8 @@ export const registerTelegramHandlers = ({
   processMessage,
   logger,
   telegramDeps,
+  resolveGroupActivation,
+  resolveGroupRequireMention,
 }: RegisterTelegramHandlerParams) => {
   const mediaRuntimeOptions = resolveTelegramMediaRuntimeOptions({
     cfg,
@@ -167,7 +181,20 @@ export const registerTelegramHandlers = ({
         ? Math.max(10, Math.floor(telegramCfg.mediaGroupFlushMs))
         : MEDIA_GROUP_TIMEOUT_MS;
 
-  const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
+  type BufferedMediaGroupEntry = MediaGroupEntry & {
+    storeAllowFrom: string[];
+    isGroup: boolean;
+    isForum: boolean;
+    resolvedThreadId?: number;
+    dmThreadId?: number;
+    senderId: string;
+    effectiveGroupAllow: NormalizedAllowFrom;
+    effectiveDmAllow: NormalizedAllowFrom;
+    groupConfig?: TelegramGroupConfig;
+    topicConfig?: TelegramTopicConfig;
+  };
+
+  const mediaGroupBuffer = new Map<string, BufferedMediaGroupEntry>();
   let mediaGroupProcessing: Promise<void> = Promise.resolve();
   const messageCache = createTelegramMessageCache({
     persistedPath: resolveTelegramMessageCachePath(
@@ -391,6 +418,7 @@ export const registerTelegramHandlers = ({
 
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
     debounceMs,
+    serializeImmediate: true,
     resolveDebounceMs: (entry) =>
       entry.debounceLane === "forward" ? FORWARD_BURST_DEBOUNCE_MS : debounceMs,
     buildKey: (entry) => entry.debounceKey,
@@ -574,14 +602,170 @@ export const registerTelegramHandlers = ({
     };
   };
 
-  const processMediaGroup = async (entry: MediaGroupEntry) => {
+  const mediaMayNeedDownloadForMentionDetection = (msg: Message): boolean => {
+    const textParts = getTelegramTextParts(msg);
+    if (textParts.text.trim()) {
+      return false;
+    }
+    const documentMime = msg.document?.mime_type?.split(";")[0]?.trim().toLowerCase();
+    return Boolean(msg.audio ?? msg.voice ?? documentMime?.startsWith("audio/"));
+  };
+
+  const shouldSkipMediaDownloadForUnaddressedMentionGroup = async (params: {
+    ctx: TelegramContext;
+    msg: Message;
+    chatId: number;
+    isGroup: boolean;
+    isForum: boolean;
+    resolvedThreadId?: number;
+    dmThreadId?: number;
+    senderId: string;
+    effectiveGroupAllow: NormalizedAllowFrom;
+    effectiveDmAllow: NormalizedAllowFrom;
+    groupConfig?: TelegramGroupConfig;
+    topicConfig?: TelegramTopicConfig;
+  }): Promise<boolean> => {
+    const {
+      ctx,
+      msg,
+      chatId,
+      isGroup,
+      isForum,
+      resolvedThreadId,
+      dmThreadId,
+      senderId,
+      effectiveGroupAllow,
+      effectiveDmAllow,
+      groupConfig,
+      topicConfig,
+    } = params;
+    if (!isGroup || mediaMayNeedDownloadForMentionDetection(msg)) {
+      return false;
+    }
+
+    const runtimeCfg = telegramDeps.getRuntimeConfig();
+    const sessionState = resolveTelegramSessionState({
+      chatId,
+      isGroup,
+      isForum,
+      resolvedThreadId,
+      messageThreadId: resolvedThreadId ?? dmThreadId,
+      senderId,
+      runtimeCfg,
+    });
+    const activationOverride = resolveGroupActivation({
+      chatId,
+      messageThreadId: resolvedThreadId,
+      sessionKey: sessionState.sessionKey,
+      agentId: sessionState.agentId,
+    });
+    const requireMention = firstDefined(
+      topicConfig?.requireMention,
+      activationOverride,
+      groupConfig?.requireMention,
+      resolveGroupRequireMention(chatId),
+    );
+    if (!requireMention) {
+      return false;
+    }
+
+    const botUsername = ctx.me?.username?.trim().toLowerCase();
+    const mentionRegexes = buildMentionRegexes(runtimeCfg, sessionState.agentId);
+    const messageTextParts = getTelegramTextParts(msg);
+    const hasAnyMention = messageTextParts.entities.some((ent) => ent.type === "mention");
+    const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
+    const wasMentioned = matchesMentionWithExplicit({
+      text: messageTextParts.text,
+      mentionRegexes,
+      explicit: {
+        hasAnyMention,
+        isExplicitlyMentioned: explicitlyMentioned,
+        canResolveExplicit: Boolean(botUsername),
+      },
+    });
+    const botId = ctx.me?.id;
+    const replyFromId = msg.reply_to_message?.from?.id;
+    const replyToBotMessage = botId != null && replyFromId === botId;
+    const isReplyToServiceMessage =
+      replyToBotMessage && isTelegramForumServiceMessage(msg.reply_to_message);
+    const implicitMentionKinds = implicitMentionKindWhen(
+      "reply_to_bot",
+      replyToBotMessage && !isReplyToServiceMessage,
+    );
+    const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
+    const hasControlCommandInMessage = hasControlCommand(messageTextParts.text, runtimeCfg, {
+      botUsername,
+    });
+    const commandGate = await resolveTelegramCommandIngressAuthorization({
+      accountId,
+      cfg: runtimeCfg,
+      dmPolicy: "pairing",
+      isGroup,
+      chatId,
+      resolvedThreadId,
+      senderId,
+      effectiveDmAllow,
+      effectiveGroupAllow,
+      ownerAccess: { ownerList: [], senderIsOwner: false },
+      eventKind: "message",
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommandInMessage,
+      modeWhenAccessGroupsOff: "allow",
+      includeDmAllowForGroupCommands: false,
+    });
+    const mentionDecision = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention,
+        wasMentioned,
+        hasAnyMention,
+        implicitMentionKinds,
+      },
+      policy: {
+        isGroup,
+        requireMention: true,
+        allowTextCommands: true,
+        hasControlCommand: hasControlCommandInMessage,
+        commandAuthorized: commandGate.authorized,
+      },
+    });
+    if (mentionDecision.shouldSkip) {
+      logger.info({ chatId, reason: "no-mention" }, "skipping group media before download");
+      return true;
+    }
+    return false;
+  };
+
+  const processMediaGroup = async (entry: BufferedMediaGroupEntry) => {
     try {
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
 
       const captionMsg = entry.messages.find((m) => m.msg.caption || m.msg.text);
       const primaryEntry = captionMsg ?? entry.messages[0];
+      if (!primaryEntry) {
+        return;
+      }
+
+      if (
+        await shouldSkipMediaDownloadForUnaddressedMentionGroup({
+          ctx: primaryEntry.ctx,
+          msg: primaryEntry.msg,
+          chatId: primaryEntry.msg.chat.id,
+          isGroup: entry.isGroup,
+          isForum: entry.isForum,
+          resolvedThreadId: entry.resolvedThreadId,
+          dmThreadId: entry.dmThreadId,
+          senderId: entry.senderId,
+          effectiveGroupAllow: entry.effectiveGroupAllow,
+          effectiveDmAllow: entry.effectiveDmAllow,
+          groupConfig: entry.groupConfig,
+          topicConfig: entry.topicConfig,
+        })
+      ) {
+        return;
+      }
 
       const allMedia: TelegramMediaRef[] = [];
+      let skippedCount = 0;
       for (const { ctx } of entry.messages) {
         let media;
         try {
@@ -597,6 +781,7 @@ export const registerTelegramHandlers = ({
           runtime.log?.(
             warn(`media group: skipping photo that failed to fetch: ${String(mediaErr)}`),
           );
+          skippedCount++;
           continue;
         }
         if (media) {
@@ -605,15 +790,36 @@ export const registerTelegramHandlers = ({
             contentType: media.contentType,
             stickerMetadata: media.stickerMetadata,
           });
+        } else {
+          skippedCount++;
         }
       }
 
-      const storeAllowFrom = await loadStoreAllowFrom();
+      if (skippedCount > 0) {
+        const total = entry.messages.length;
+        const wasOrWere = skippedCount === 1 ? "was" : "were";
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(
+              primaryEntry.msg.chat.id,
+              `⚠️ Received ${allMedia.length} of ${total} images — ${skippedCount} could not be fetched and ${wasOrWere} skipped.`,
+              {
+                reply_parameters: {
+                  message_id: primaryEntry.msg.message_id,
+                  allow_sending_without_reply: true,
+                },
+              },
+            ),
+        }).catch(() => {});
+      }
+
       await processMessageWithReplyChain(
         primaryEntry.ctx,
         primaryEntry.msg,
         allMedia,
-        storeAllowFrom,
+        entry.storeAllowFrom,
         promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
       );
     } catch (err) {
@@ -1297,9 +1503,17 @@ export const registerTelegramHandlers = ({
     ctx: TelegramContext;
     msg: Message;
     chatId: number;
+    isGroup: boolean;
+    isForum: boolean;
     resolvedThreadId?: number;
     dmThreadId?: number;
+    dmPolicy: DmPolicy;
     storeAllowFrom: string[];
+    senderId: string;
+    effectiveGroupAllow: NormalizedAllowFrom;
+    effectiveDmAllow: NormalizedAllowFrom;
+    groupConfig?: TelegramGroupConfig;
+    topicConfig?: TelegramTopicConfig;
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
     promptContextMinTimestampMs?: number;
@@ -1308,19 +1522,55 @@ export const registerTelegramHandlers = ({
       ctx,
       msg,
       chatId,
+      isGroup,
+      isForum,
       resolvedThreadId,
       dmThreadId,
+      dmPolicy,
       storeAllowFrom,
+      senderId,
+      effectiveGroupAllow,
+      effectiveDmAllow,
+      groupConfig,
+      topicConfig,
       sendOversizeWarning,
       oversizeLogMessage,
       promptContextMinTimestampMs,
     } = params;
 
+    const messageText = getTelegramTextParts(msg).text;
+    const botUsername = ctx.me?.username;
+    const isAbortControlMessage = isAbortRequestText(messageText, { botUsername });
+    let abortControlAuthorized: Promise<boolean> | undefined;
+    const isAuthorizedAbortControlMessage = () => {
+      if (!isAbortControlMessage || !senderId) {
+        return Promise.resolve(false);
+      }
+      abortControlAuthorized ??= resolveTelegramCommandIngressAuthorization({
+        accountId,
+        cfg,
+        dmPolicy,
+        isGroup,
+        chatId,
+        resolvedThreadId,
+        senderId,
+        effectiveDmAllow,
+        effectiveGroupAllow,
+        ownerAccess: { ownerList: [], senderIsOwner: false },
+        eventKind: "message",
+        allowTextCommands: true,
+        hasControlCommand: true,
+        modeWhenAccessGroupsOff: "allow",
+        includeDmAllowForGroupCommands: false,
+      }).then((gate) => gate.authorized);
+      return abortControlAuthorized;
+    };
+
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
     // We buffer “near-limit” messages and append immediately-following parts.
     const text = typeof msg.text === "string" ? msg.text : undefined;
     const isCommandLike = (text ?? "").trim().startsWith("/");
-    if (text && !isCommandLike) {
+    if (text && !isCommandLike && !isAbortControlMessage) {
       const nowMs = Date.now();
       const senderId = msg.from?.id != null ? String(msg.from.id) : "unknown";
       // Use resolvedThreadId for forum groups, dmThreadId for DM topics
@@ -1383,6 +1633,15 @@ export const registerTelegramHandlers = ({
         scheduleTextFragmentFlush(entry);
         return;
       }
+    } else if (text && isAbortControlMessage && (await isAuthorizedAbortControlMessage())) {
+      const senderId = msg.from?.id != null ? String(msg.from.id) : "unknown";
+      const threadId = resolvedThreadId ?? dmThreadId;
+      const key = `text:${chatId}:${threadId ?? "main"}:${senderId}`;
+      const existing = textFragmentBuffer.get(key);
+      if (existing) {
+        clearTimeout(existing.timer);
+        textFragmentBuffer.delete(key);
+      }
     }
 
     // Media group handling - buffer multi-image messages
@@ -1406,8 +1665,18 @@ export const registerTelegramHandlers = ({
           await mediaGroupProcessing;
         }, mediaGroupTimeoutMs);
       } else {
-        const entry: MediaGroupEntry = {
+        const entry: BufferedMediaGroupEntry = {
           messages: [{ msg, ctx }],
+          storeAllowFrom,
+          isGroup,
+          isForum,
+          resolvedThreadId,
+          dmThreadId,
+          senderId,
+          effectiveGroupAllow,
+          effectiveDmAllow,
+          groupConfig,
+          topicConfig,
           ...promptContextBoundaryOptions(promptContextMinTimestampMs),
           timer: setTimeout(async () => {
             mediaGroupBuffer.delete(mediaGroupId);
@@ -1421,6 +1690,25 @@ export const registerTelegramHandlers = ({
         };
         mediaGroupBuffer.set(mediaGroupId, entry);
       }
+      return;
+    }
+
+    if (
+      await shouldSkipMediaDownloadForUnaddressedMentionGroup({
+        ctx,
+        msg,
+        chatId,
+        isGroup,
+        isForum,
+        resolvedThreadId,
+        dmThreadId,
+        senderId,
+        effectiveGroupAllow,
+        effectiveDmAllow,
+        groupConfig,
+        topicConfig,
+      })
+    ) {
       return;
     }
 
@@ -1482,7 +1770,6 @@ export const registerTelegramHandlers = ({
           },
         ]
       : [];
-    const senderId = msg.from?.id ? String(msg.from.id) : "";
     const conversationKey = buildTelegramInboundDebounceConversationKey({
       chatId,
       threadId: resolvedThreadId ?? dmThreadId,
@@ -1496,15 +1783,27 @@ export const registerTelegramHandlers = ({
           debounceLane,
         })
       : null;
+    if (senderId && (await isAuthorizedAbortControlMessage())) {
+      for (const lane of ["default", "forward"] as const) {
+        inboundDebouncer.cancelKey(
+          buildTelegramInboundDebounceKey({
+            accountId,
+            conversationKey,
+            senderId,
+            debounceLane: lane,
+          }),
+        );
+      }
+    }
     await inboundDebouncer.enqueue({
       ctx,
       msg,
       allMedia,
       storeAllowFrom,
       receivedAtMs: Date.now(),
-      debounceKey,
+      debounceKey: isAbortControlMessage ? null : debounceKey,
       debounceLane,
-      botUsername: ctx.me?.username,
+      botUsername,
       ...promptContextBoundaryOptions(promptContextMinTimestampMs),
     });
   };
@@ -1854,6 +2153,18 @@ export const registerTelegramHandlers = ({
           logVerbose(
             `telegram: failed to resolve approval callback ${approvalCallback.approvalId}: ${errStr}`,
           );
+          if (isApprovalNotFoundError(resolveErr)) {
+            if (isPluginApproval || pluginApprovalAuthorizedSender) {
+              try {
+                await clearCallbackButtons();
+              } catch (editErr) {
+                logVerbose(
+                  `telegram: failed to clear expired approval callback buttons: ${String(editErr)}`,
+                );
+              }
+            }
+            return;
+          }
           throw new TelegramRetryableCallbackError(resolveErr);
         }
         try {
@@ -2211,9 +2522,11 @@ export const registerTelegramHandlers = ({
       if (migration.migrated) {
         runtime.log?.(warn(`[telegram] Migrating group config from ${oldChatId} to ${newChatId}`));
         migrateTelegramGroupConfig({ cfg, accountId, oldChatId, newChatId });
-        await replaceConfigFile({
-          nextConfig: currentConfig,
+        await mutateConfigFile({
           afterWrite: { mode: "auto" },
+          mutate: (draft) => {
+            migrateTelegramGroupConfig({ cfg: draft, accountId, oldChatId, newChatId });
+          },
         });
         runtime.log?.(warn(`[telegram] Group config migrated and saved successfully`));
       } else if (migration.skippedExisting) {
@@ -2391,9 +2704,17 @@ export const registerTelegramHandlers = ({
         ctx: event.ctx,
         msg: event.msg,
         chatId: event.chatId,
+        isGroup: event.isGroup,
+        isForum: event.isForum,
         resolvedThreadId,
         dmThreadId,
+        dmPolicy,
         storeAllowFrom,
+        senderId: event.senderId,
+        effectiveGroupAllow,
+        effectiveDmAllow,
+        groupConfig: event.isGroup ? (groupConfig as TelegramGroupConfig | undefined) : undefined,
+        topicConfig,
         sendOversizeWarning: event.sendOversizeWarning,
         oversizeLogMessage: event.oversizeLogMessage,
         ...promptContextBoundaryOptions(promptContextMinTimestampMs),

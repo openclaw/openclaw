@@ -329,6 +329,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       },
       skillsSnapshot: emptySkillsSnapshot,
       agentPayload: null,
+      useSubagentFallbacks: false,
       liveSelection: {
         provider: "openai",
         model: "gpt-5.4",
@@ -561,6 +562,25 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       mode: "announce",
       channel: "messagechat",
       to: "123",
+    });
+  });
+
+  it("keeps cron announce source replies message-tool-only", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob(),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expectEmbeddedRunFields({
+      sourceReplyDeliveryMode: "message_tool_only",
+      forceMessageTool: true,
+      messageChannel: "messagechat",
+      messageTo: "123",
+      currentChannelId: "123",
     });
   });
 

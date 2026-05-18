@@ -333,6 +333,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../harness/selection.js", () => ({
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
+    resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "pi" })),
   }));
 
   vi.doMock("../../plugins/provider-runtime.js", () => ({
@@ -436,7 +437,15 @@ export async function loadCompactHooksHarness(): Promise<{
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({})),
-    getApiKeyForModel: vi.fn(async () => ({ apiKey: "test", mode: "env" })),
+    formatMissingAuthError: vi.fn(
+      (auth: { mode: string; source: string }, provider: string) =>
+        `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
+    ),
+    getApiKeyForModel: vi.fn(async () => ({
+      apiKey: "test",
+      mode: "env",
+      source: "test harness",
+    })),
     resolveModelAuthMode: vi.fn(() => "env"),
   }));
 
@@ -452,6 +461,11 @@ export async function loadCompactHooksHarness(): Promise<{
     acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
     resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
+    resolveSessionWriteLockOptions: vi.fn(() => ({
+      timeoutMs: 60_000,
+      staleMs: 1_800_000,
+      maxHoldMs: 300_000,
+    })),
   }));
 
   vi.doMock("../../context-engine/init.js", () => ({
