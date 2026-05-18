@@ -10,6 +10,7 @@ import { createSerpApiFinanceTool } from "./src/tools/finance.js";
 import { createSerpApiFlightsTool } from "./src/tools/flights.js";
 import { createSerpApiHotelsTool } from "./src/tools/hotels.js";
 import { createSerpApiJobsTool } from "./src/tools/jobs.js";
+import { createSerpApiLensTool } from "./src/tools/lens.js";
 import { createSerpApiMapsTool } from "./src/tools/maps.js";
 import { createSerpApiNewsTool } from "./src/tools/news.js";
 import { createSerpApiScholarTool } from "./src/tools/scholar.js";
@@ -34,6 +35,7 @@ export default definePluginEntry({
     api.registerTool((ctx) => createSerpApiDuckDuckGoTool(api, ctx), { name: "serpapi_duckduckgo" });
     api.registerTool((ctx) => createSerpApiImmersiveProductTool(api, ctx), { name: "serpapi_immersive_product" });
     api.registerTool((ctx) => createSerpApiJobsTool(api, ctx), { name: "serpapi_jobs" });
+    api.registerTool((ctx) => createSerpApiLensTool(api, ctx), { name: "serpapi_lens" });
     api.registerTool((ctx) => createSerpApiYouTubeTool(api, ctx), { name: "serpapi_youtube" });
     api.registerTool((ctx) => createSerpApiTrendsTool(api, ctx), { name: "serpapi_trends" });
     api.registerTool((ctx) => createSerpApiFlightsTool(api, ctx), { name: "serpapi_flights" });
