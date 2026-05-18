@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
+import {
+  isLegacyParentWritableUpdateDoctorPass,
+  UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
+} from "../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -48,9 +52,6 @@ function isUpdateDoctorRun(env: NodeJS.ProcessEnv | Record<string, string | unde
 function resolveDoctorMode(cfg: OpenClawConfig): DoctorFlowMode {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
-
-const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
-  "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 
 function isTruthyEnvValue(value: string | undefined): boolean {
   if (!value) {
@@ -338,11 +339,16 @@ async function runReleaseConfiguredPluginInstallsHealth(
   if (!result.touchedConfig) {
     return;
   }
+  const lastTouchedVersion = isLegacyParentWritableUpdateDoctorPass(ctx.env ?? process.env)
+    ? ctx.configResult.sourceLastTouchedVersion?.trim() ||
+      ctx.cfg.meta?.lastTouchedVersion ||
+      VERSION
+    : VERSION;
   ctx.cfg = {
     ...ctx.cfg,
     meta: {
       ...ctx.cfg.meta,
-      lastTouchedVersion: VERSION,
+      lastTouchedVersion,
       lastTouchedAt: new Date().toISOString(),
     },
   };
@@ -650,6 +656,11 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
       return;
     }
+    const legacyParentVersionOverride = isLegacyParentWritableUpdateDoctorPass(
+      ctx.env ?? process.env,
+    )
+      ? ctx.configResult.sourceLastTouchedVersion?.trim() || ctx.cfg.meta?.lastTouchedVersion
+      : undefined;
     await replaceConfigFile({
       nextConfig: ctx.cfg,
       afterWrite: { mode: "auto" },
@@ -658,6 +669,9 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
         skipPluginValidation:
           ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
         preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
+        ...(legacyParentVersionOverride
+          ? { lastTouchedVersionOverride: legacyParentVersionOverride }
+          : {}),
       },
     });
     logConfigUpdated(ctx.runtime);

@@ -21,6 +21,7 @@ import {
 } from "../subagent-capabilities.js";
 import { expandToolGroups, normalizeToolName } from "../tool-policy.js";
 import { createPiAgentHarness } from "./builtin-pi.js";
+import { MissingAgentHarnessError } from "./errors.js";
 import {
   resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy,
   type AgentHarnessPolicy,
@@ -170,7 +171,7 @@ function selectAgentHarnessDecision(params: {
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }
-    throw new Error(`Requested agent harness "${runtime}" is not registered.`);
+    throw new MissingAgentHarnessError(runtime);
   }
 
   const candidates = pluginHarnesses.map((harness) => ({

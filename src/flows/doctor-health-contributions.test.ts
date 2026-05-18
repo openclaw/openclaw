@@ -156,6 +156,34 @@ describe("doctor health contributions", () => {
     expect(ctx.cfg.meta?.lastTouchedVersion).toBe("2026.5.2-test");
   });
 
+  it("keeps legacy parent writable release repairs old-parent-readable", async () => {
+    mocks.maybeRunConfiguredPluginInstallReleaseStep.mockResolvedValue({
+      changes: ["Installed configured plugin matrix."],
+      warnings: [],
+      touchedConfig: true,
+    });
+    const contribution = requireDoctorContribution("doctor:release-configured-plugin-installs");
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {}, sourceLastTouchedVersion: "2026.5.16-beta.4" },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      },
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(ctx.cfg.meta?.lastTouchedVersion).toBe("2026.5.16-beta.4");
+    expect(ctx.cfg.meta?.lastTouchedAt).toEqual(expect.any(String));
+  });
+
   it("checks command owner configuration before final config writes", () => {
     const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
 
@@ -275,6 +303,43 @@ describe("doctor health contributions", () => {
         expect.objectContaining({
           writeOptions: expect.objectContaining({
             skipPluginValidation: true,
+          }),
+        }),
+      );
+    });
+
+    it("preserves source config version for legacy parent writable update doctor writes", async () => {
+      const ctx = buildWriteConfigCtx({
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      });
+      ctx.configResult.sourceLastTouchedVersion = "2026.5.16-beta.4";
+
+      await writeConfigContribution.run(ctx);
+
+      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          writeOptions: expect.objectContaining({
+            lastTouchedVersionOverride: "2026.5.16-beta.4",
+          }),
+        }),
+      );
+    });
+
+    it("does not preserve source config version for explicit deferral update doctors", async () => {
+      const ctx = buildWriteConfigCtx({
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      });
+      ctx.configResult.sourceLastTouchedVersion = "2026.5.16-beta.4";
+
+      await writeConfigContribution.run(ctx);
+
+      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          writeOptions: expect.not.objectContaining({
+            lastTouchedVersionOverride: expect.anything(),
           }),
         }),
       );

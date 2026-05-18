@@ -77,7 +77,7 @@
   "approvalsReviewer": "user",
   "config": {
     "features.code_mode": true,
-    "features.code_mode_only": true,
+    "features.code_mode_only": false,
     "instructions": "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\nSOUL.md: persona/tone. Follow it unless higher-priority instructions override.\n\n## /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/TOOLS.md\n\n<TOOLS.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/HEARTBEAT.md\n\n<HEARTBEAT.md contents will be here>"
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
@@ -115,7 +115,7 @@
   "approvalsReviewer": "user",
   "config": {
     "features.code_mode": true,
-    "features.code_mode_only": true,
+    "features.code_mode_only": false,
     "instructions": "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\nSOUL.md: persona/tone. Follow it unless higher-priority instructions override.\n\n## /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/TOOLS.md\n\n<TOOLS.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/HEARTBEAT.md\n\n<HEARTBEAT.md contents will be here>"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
@@ -221,16 +221,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 10111
   },
   "openClawDeveloperInstructions": {
-    "chars": 5436,
-    "roughTokens": 1359
+    "chars": 5673,
+    "roughTokens": 1419
   },
   "totalTextOnly": {
-    "chars": 28516,
-    "roughTokens": 7129
+    "chars": 28753,
+    "roughTokens": 7189
   },
   "totalWithDynamicToolsJson": {
-    "chars": 68959,
-    "roughTokens": 17240
+    "chars": 69196,
+    "roughTokens": 17299
   },
   "userInputText": {
     "chars": 870,
@@ -433,6 +433,8 @@ SOUL.md: persona/tone. Follow it unless higher-priority instructions override.
 
 ````text
 Running inside OpenClaw. Use dynamic tools for messaging, cron, sessions, media, gateway, and nodes when available.
+
+Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation; if it is not already loaded, search for `sessions_spawn` in the `openclaw` dynamic tool namespace before calling it.
 
 Preserve channel/session context. Visible channel replies: use `message`, do not describe would-reply.
 

@@ -757,7 +757,7 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.mcpServersFingerprint).toBe("mcp-v1");
@@ -1067,6 +1067,8 @@ describe("runCodexAppServerAttempt", () => {
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("web_search"),
       createRuntimeDynamicTool("heartbeat_respond"),
+      createRuntimeDynamicTool("sessions_spawn"),
+      createRuntimeDynamicTool("sessions_yield"),
     ]);
     const harness = createStartedThreadHarness();
     const params = createParams(
@@ -1076,7 +1078,13 @@ describe("runCodexAppServerAttempt", () => {
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.sourceReplyDeliveryMode = "message_tool_only";
-    params.toolsAllow = ["message", "web_search", "heartbeat_respond"];
+    params.toolsAllow = [
+      "message",
+      "web_search",
+      "heartbeat_respond",
+      "sessions_spawn",
+      "sessions_yield",
+    ];
 
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { mode: "yolo" } },
@@ -1092,6 +1100,8 @@ describe("runCodexAppServerAttempt", () => {
     const message = dynamicTools.find((tool) => tool.name === "message");
     const webSearch = dynamicTools.find((tool) => tool.name === "web_search");
     const heartbeat = dynamicTools.find((tool) => tool.name === "heartbeat_respond");
+    const sessionsSpawn = dynamicTools.find((tool) => tool.name === "sessions_spawn");
+    const sessionsYield = dynamicTools.find((tool) => tool.name === "sessions_yield");
 
     expect(message).not.toHaveProperty("namespace");
     expect(message).not.toHaveProperty("deferLoading");
@@ -1099,6 +1109,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(webSearch?.deferLoading).toBe(true);
     expect(heartbeat?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
     expect(heartbeat?.deferLoading).toBe(true);
+    expect(sessionsSpawn?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
+    expect(sessionsSpawn?.deferLoading).toBe(true);
+    expect(sessionsYield).not.toHaveProperty("namespace");
+    expect(sessionsYield).not.toHaveProperty("deferLoading");
   });
 
   it("disables Codex native tool surfaces when runtime toolsAllow is empty", async () => {
@@ -7363,7 +7377,7 @@ describe("runCodexAppServerAttempt", () => {
     const expectedConfig = {
       ...config,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     };
 
     await startOrResumeThread({
@@ -7431,7 +7445,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       hooks: { PreToolUse: [] },
       ...createPluginAppConfigPatch(),
     });
@@ -7509,14 +7523,14 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toMatchObject({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       "hooks.PreToolUse": finalConfigPatch["hooks.PreToolUse"],
       ...createPluginAppConfigPatch(),
     });
     expect(requestCalls[1]?.[1].config).toMatchObject({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       "hooks.PreToolUse": finalConfigPatch["hooks.PreToolUse"],
     });
   });
@@ -7577,13 +7591,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       ...createPluginAppConfigPatch(),
     });
     expect(requestCalls[1]?.[1].config).toEqual({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
   });
 
@@ -7641,7 +7655,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       apps: {
         _default: {
           enabled: false,
@@ -7695,7 +7709,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-existing");
@@ -7750,7 +7764,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       ...createPluginAppConfigPatch(),
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
@@ -7811,7 +7825,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
   });
 
@@ -7862,7 +7876,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       ...createTwoPluginAppConfigPatch(),
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
@@ -7922,7 +7936,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       ...createTwoCalendarAppConfigPatch(),
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
@@ -7969,7 +7983,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       ...createPluginAppConfigPatch(),
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-plugins");
@@ -8043,7 +8057,7 @@ describe("runCodexAppServerAttempt", () => {
     const resumeConfig = resumeRequestParams?.config as Record<string, unknown> | undefined;
     expect(resumeConfig?.["features.hooks"]).toBe(true);
     expect(resumeConfig?.["features.code_mode"]).toBe(true);
-    expect(resumeConfig?.["features.code_mode_only"]).toBe(true);
+    expect(resumeConfig?.["features.code_mode_only"]).toBe(false);
     expect(resumeRequestParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnRequest = requests.find((request) => request.method === "turn/start");
     const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
@@ -8054,7 +8068,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.model).toBe("gpt-5.4-codex");
   });
 
-  it("clamps Codex danger-full-access when OpenClaw sandboxing is active", () => {
+  it("maps active OpenClaw sandbox egress into Codex workspace-write turns", () => {
     const appServer = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {
         appServer: {
@@ -8064,22 +8078,91 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    const sandboxed = __testing.restrictCodexAppServerSandboxForOpenClawSandbox(appServer, {
-      enabled: true,
-    } as never);
-    expect(sandboxed).not.toBe(appServer);
-    expect(sandboxed.approvalPolicy).toBe("never");
-    expect(sandboxed.sandbox).toBe("workspace-write");
-
-    expect(__testing.restrictCodexAppServerSandboxForOpenClawSandbox(appServer, null)).toBe(
-      appServer,
-    );
     expect(
-      __testing.restrictCodexAppServerSandboxForOpenClawSandbox(
+      __testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        appServer,
+        {
+          enabled: true,
+          backendId: "docker",
+          docker: { network: "none" },
+        } as never,
+        "/tmp/workspace",
+      ),
+    ).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/workspace"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+
+    expect(
+      __testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        { ...appServer, sandbox: "workspace-write" },
+        {
+          enabled: true,
+          backendId: "docker",
+          docker: { network: "bridge" },
+        } as never,
+        "/tmp/workspace",
+      ),
+    ).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/workspace"],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+
+    expect(
+      __testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        appServer,
+        {
+          enabled: true,
+          backendId: "docker",
+          docker: { network: "bridge" },
+        } as never,
+        "/tmp/workspace",
+      ),
+    ).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/workspace"],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+
+    expect(
+      __testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        appServer,
+        {
+          enabled: true,
+          backendId: "ssh",
+        } as never,
+        "/tmp/workspace",
+      ),
+    ).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/workspace"],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+
+    expect(
+      __testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        appServer,
+        null,
+        "/tmp/workspace",
+      ),
+    ).toBeUndefined();
+    expect(
+      __testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
         { ...appServer, sandbox: "read-only" },
         { enabled: true } as never,
-      ).sandbox,
-    ).toBe("read-only");
+        "/tmp/workspace",
+      ),
+    ).toBeUndefined();
   });
 
   it("passes current Codex service tier request values through app-server resume and turn requests", async () => {
@@ -8163,7 +8246,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalsReviewer: "guardian_subagent",
       config: {
         "features.code_mode": true,
-        "features.code_mode_only": true,
+        "features.code_mode_only": false,
       },
       sandbox: "danger-full-access",
       serviceTier: "flex",

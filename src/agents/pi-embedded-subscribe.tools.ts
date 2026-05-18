@@ -593,8 +593,21 @@ export function extractMessagingToolSend(
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
     const threadId = normalizeOptionalString(args.threadId);
+    const threadSuppressed = args.topLevel === true || args.threadId === null;
+    const threadImplicit =
+      !threadId &&
+      !threadSuppressed &&
+      Boolean(providerId && getChannelPlugin(providerId)?.threading?.resolveAutoThreadId);
     return to
-      ? { tool: toolName, provider, accountId, to, ...(threadId ? { threadId } : {}) }
+      ? {
+          tool: toolName,
+          provider,
+          accountId,
+          to,
+          ...(threadId ? { threadId } : {}),
+          ...(threadImplicit ? { threadImplicit: true } : {}),
+          ...(threadSuppressed ? { threadSuppressed: true } : {}),
+        }
       : undefined;
   }
   const providerId = normalizeChannelId(toolName);
@@ -607,12 +620,14 @@ export function extractMessagingToolSend(
     return undefined;
   }
   const to = normalizeTargetForProvider(providerId, extracted.to);
+  const threadId = normalizeOptionalString(extracted.threadId);
   return to
     ? {
         tool: toolName,
         provider: providerId,
         accountId: extracted.accountId ?? accountId,
         to,
+        ...(threadId ? { threadId } : {}),
       }
     : undefined;
 }

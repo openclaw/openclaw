@@ -1,6 +1,7 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
+  buildDeveloperInstructions,
   buildTurnStartParams,
   buildThreadResumeParams,
   buildThreadStartParams,
@@ -58,7 +59,16 @@ function createAppServerOptions() {
 }
 
 describe("Codex app-server native code mode config", () => {
-  it("enables Codex code-mode-only on thread/start without clobbering other config", () => {
+  it("keeps Codex-native subagents primary while routing OpenClaw spawn through dynamic search", () => {
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }));
+
+    expect(instructions).toContain("Use Codex native `spawn_agent` for Codex subagents");
+    expect(instructions).toContain(
+      "search for `sessions_spawn` in the `openclaw` dynamic tool namespace",
+    );
+  });
+
+  it("enables Codex code mode on thread/start without clobbering other config", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",
       dynamicTools: [],
@@ -74,11 +84,28 @@ describe("Codex app-server native code mode config", () => {
       "features.hooks": true,
       apps: { _default: { enabled: false } },
       "features.code_mode": true,
+      "features.code_mode_only": false,
+    });
+  });
+
+  it("allows thread config to opt into Codex code-mode-only", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      config: {
+        "features.code_mode_only": true,
+      },
+    });
+
+    expect(request.config).toEqual({
+      "features.code_mode": true,
       "features.code_mode_only": true,
     });
   });
 
-  it("enables Codex code-mode-only on thread/resume", () => {
+  it("enables Codex code mode on thread/resume", () => {
     const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       appServer: createAppServerOptions() as never,
@@ -87,7 +114,7 @@ describe("Codex app-server native code mode config", () => {
 
     expect(request.config).toEqual({
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
   });
 
@@ -147,7 +174,7 @@ describe("Codex app-server native code mode config", () => {
       project_doc_max_bytes: 0,
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
   });
 
@@ -167,12 +194,35 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       project_doc_max_bytes: 64_000,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
   });
 });
 
 describe("Codex app-server turn input image sanitizing", () => {
+  it("uses an explicit turn sandbox policy override when provided", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: ["/repo"],
+        networkAccess: true,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      },
+    });
+
+    expect(request.sandboxPolicy).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/repo"],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+  });
+
   it("replaces malformed inline images before turn/start", () => {
     const request = buildTurnStartParams(
       createAttemptParams({

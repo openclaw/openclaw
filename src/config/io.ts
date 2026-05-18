@@ -251,6 +251,11 @@ export type ConfigWriteOptions = {
    * an unrelated plugin rule prevents the full write from succeeding.
    */
   skipPluginValidation?: boolean;
+  /**
+   * Preserve an older writer version for update handoff writes that must be
+   * readable by the parent process after a candidate doctor repair.
+   */
+  lastTouchedVersionOverride?: string;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -912,8 +917,8 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
   }
 }
 
-function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
-  return stampConfigWriteMetadata(cfg);
+function stampConfigVersion(cfg: OpenClawConfig, version?: string): OpenClawConfig {
+  return stampConfigWriteMetadata(cfg, new Date().toISOString(), version);
 }
 
 function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {
@@ -2135,7 +2140,10 @@ export function createConfigIO(
     const outputConfig = applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths);
     // Do NOT apply runtime defaults when writing - user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
-    const stampedOutputConfig = stampConfigVersion(outputConfig);
+    const stampedOutputConfig = stampConfigVersion(
+      outputConfig,
+      options.lastTouchedVersionOverride,
+    );
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
     const nextHash = hashConfigRaw(json);
     const previousHash = resolveConfigSnapshotHash(snapshot);
@@ -2488,6 +2496,7 @@ export async function writeConfigFile(
     skipOutputLogs: options.skipOutputLogs,
     skipPluginValidation: options.skipPluginValidation,
     preservedLegacyRootKeys: options.preservedLegacyRootKeys,
+    lastTouchedVersionOverride: options.lastTouchedVersionOverride,
   });
   if (
     options.skipRuntimeSnapshotRefresh &&

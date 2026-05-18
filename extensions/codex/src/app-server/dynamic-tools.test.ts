@@ -161,12 +161,13 @@ afterEach(() => {
 });
 
 describe("createCodexDynamicToolBridge", () => {
-  it("defers OpenClaw dynamic tools behind Codex tool search by default", () => {
+  it("keeps turn-yield direct while deferring OpenClaw session spawn", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [
         createTool({ name: "web_search" }),
         createTool({ name: "message" }),
         createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME }),
+        createTool({ name: "sessions_spawn" }),
         createTool({ name: "sessions_yield" }),
       ],
       signal: new AbortController().signal,
@@ -175,6 +176,7 @@ describe("createCodexDynamicToolBridge", () => {
     const webSearch = bridge.specs.find((tool) => tool.name === "web_search");
     const message = bridge.specs.find((tool) => tool.name === "message");
     const heartbeat = bridge.specs.find((tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME);
+    const sessionsSpawn = bridge.specs.find((tool) => tool.name === "sessions_spawn");
     const sessionsYield = bridge.specs.find((tool) => tool.name === "sessions_yield");
 
     expectDynamicSpec(webSearch, {
@@ -189,6 +191,11 @@ describe("createCodexDynamicToolBridge", () => {
     });
     expectDynamicSpec(heartbeat, {
       name: HEARTBEAT_RESPONSE_TOOL_NAME,
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      deferLoading: true,
+    });
+    expectDynamicSpec(sessionsSpawn, {
+      name: "sessions_spawn",
       namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
       deferLoading: true,
     });

@@ -70,6 +70,7 @@ import {
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
+import { isLoopbackHost } from "./net.js";
 import {
   listChannelPluginConfigTargetIds,
   pluginConfigTargetsChanged,
@@ -1041,6 +1042,7 @@ export async function startGatewayServer(
           cfgAtStart,
           port,
           gatewayTls,
+          gatewayDirectReachable: !isLoopbackHost(bindHost),
           tailscaleMode,
           log,
           logDiscovery,
@@ -1199,6 +1201,7 @@ export async function startGatewayServer(
           cfgAtStart,
           port,
           gatewayTls,
+          gatewayDirectReachable: !isLoopbackHost(bindHost),
           tailscaleMode,
           logDiscovery,
           pluginRegistry: nextPluginRegistry,

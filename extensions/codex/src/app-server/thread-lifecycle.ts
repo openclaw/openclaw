@@ -28,6 +28,7 @@ import {
 import {
   isJsonObject,
   type CodexDynamicToolSpec,
+  type CodexSandboxPolicy,
   type CodexThreadResumeParams,
   type CodexThreadStartParams,
   type CodexTurnStartParams,
@@ -70,7 +71,7 @@ export type CodexPluginThreadConfigProvider = {
 
 export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
-  "features.code_mode_only": true,
+  "features.code_mode_only": false,
 };
 
 export const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
@@ -626,14 +627,22 @@ export function buildCodexRuntimeThreadConfig(
   config: JsonObject | undefined,
   options: { nativeCodeModeEnabled?: boolean } = {},
 ): JsonObject {
-  const codeModeConfig =
-    options.nativeCodeModeEnabled === false
-      ? CODEX_CODE_MODE_DISABLED_THREAD_CONFIG
-      : CODEX_CODE_MODE_THREAD_CONFIG;
-  const runtimeConfig = mergeCodexThreadConfigs(config, codeModeConfig) ?? {
-    ...codeModeConfig,
-  };
-  return runtimeConfig;
+  if (options.nativeCodeModeEnabled === false) {
+    return (
+      mergeCodexThreadConfigs(
+        CODEX_CODE_MODE_THREAD_CONFIG,
+        config,
+        CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+      ) ?? {
+        ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+      }
+    );
+  }
+  return (
+    mergeCodexThreadConfigs(CODEX_CODE_MODE_THREAD_CONFIG, config) ?? {
+      ...CODEX_CODE_MODE_THREAD_CONFIG,
+    }
+  );
 }
 
 function buildCodexRuntimeThreadConfigForRun(
@@ -660,6 +669,7 @@ export function buildTurnStartParams(
     cwd: string;
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
+    sandboxPolicy?: CodexSandboxPolicy;
   },
 ): CodexTurnStartParams {
   return {
@@ -668,7 +678,8 @@ export function buildTurnStartParams(
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
-    sandboxPolicy: codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
+    sandboxPolicy:
+      options.sandboxPolicy ?? codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
@@ -798,6 +809,7 @@ export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): st
   const promptOverlay = renderCodexRuntimePromptOverlay(params);
   const sections = [
     "Running inside OpenClaw. Use dynamic tools for messaging, cron, sessions, media, gateway, and nodes when available.",
+    "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation; if it is not already loaded, search for `sessions_spawn` in the `openclaw` dynamic tool namespace before calling it.",
     "Preserve channel/session context. Visible channel replies: use `message`, do not describe would-reply.",
     promptOverlay,
     params.extraSystemPrompt,

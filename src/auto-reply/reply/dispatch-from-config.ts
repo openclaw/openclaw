@@ -771,11 +771,10 @@ export async function dispatchReplyFromConfig(
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
+    ctx.InboundEventKind === "room_event" ||
     (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
       !isExplicitSourceReplyCommand(ctx) &&
-      (chatType === "group" || chatType === "channel"
-        ? effectiveVisibleReplies !== "automatic"
-        : effectiveVisibleReplies === "message_tool"));
+      effectiveVisibleReplies === "message_tool");
   const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
     ...(profileAlsoAllow ?? []),

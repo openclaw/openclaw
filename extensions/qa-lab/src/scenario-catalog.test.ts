@@ -120,6 +120,7 @@ describe("qa scenario catalog", () => {
     const applyPatch = readQaScenarioById("runtime-tool-apply-patch");
     const messageTool = readQaScenarioById("runtime-tool-message-tool");
     const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
+    const webSearch = readQaScenarioById("runtime-tool-web-search");
 
     expect(applyPatch.runtimeParityTier).toBe("standard");
     expect(messageTool.runtimeParityTier).toBe("optional");
@@ -140,6 +141,16 @@ describe("qa scenario catalog", () => {
         required: false,
       },
     });
+    expect(readQaScenarioExecutionConfig(webSearch.id)).toMatchObject({
+      toolName: "web_search",
+      toolCoverage: {
+        bucket: "openclaw-dynamic-integration",
+        expectedLayer: "openclaw-dynamic",
+        capabilityLayer: "openclaw-dynamic-direct",
+        required: true,
+      },
+    });
+    expect(readQaScenarioExecutionConfig(webSearch.id)).not.toHaveProperty("knownHarnessGap");
   });
 
   it("loads the Codex Pi-shaped Read vocabulary live parity canary", () => {

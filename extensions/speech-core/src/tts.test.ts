@@ -55,7 +55,7 @@ const transcodeAudioBufferMock = vi.hoisted(() =>
   >(async () => ({ ok: false, reason: "platform-unsupported" })),
 );
 
-vi.mock("./audio-transcode.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   transcodeAudioBuffer: transcodeAudioBufferMock,
 }));
 
