@@ -1,18 +1,7 @@
 import "./isolated-agent.mocks.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
-import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import {
-  makeCfg,
-  makeJob,
-  withTempCronHome,
-  writeSessionStoreEntries,
-} from "./isolated-agent.test-harness.js";
+import { runCronTurn, withTempHome } from "./isolated-agent.turn-test-helpers.js";
 
 function lastEmbeddedCall(): { runTimeoutOverrideMs?: number; timeoutMs?: number } {
   const calls = vi.mocked(runEmbeddedAgent).mock.calls;
@@ -20,94 +9,22 @@ function lastEmbeddedCall(): { runTimeoutOverrideMs?: number; timeoutMs?: number
   return calls.at(-1)?.[0] as { runTimeoutOverrideMs?: number; timeoutMs?: number };
 }
 
-function makeTimeoutTestCfg(
-  home: string,
-  storePath: string,
-  timeoutSeconds: number,
-): OpenClawConfig {
-  return makeCfg(home, storePath, {
-    agents: { defaults: { timeoutSeconds } },
-    models: {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          agentRuntime: { id: "openclaw" },
-          models: [],
-        },
-      },
-    },
-  });
-}
-
-const envSnapshot = {
-  HOME: process.env.HOME,
-  USERPROFILE: process.env.USERPROFILE,
-  HOMEDRIVE: process.env.HOMEDRIVE,
-  HOMEPATH: process.env.HOMEPATH,
-  OPENCLAW_HOME: process.env.OPENCLAW_HOME,
-  OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-} as const;
-
-function restoreSnapshotEnv() {
-  for (const [key, value] of Object.entries(envSnapshot)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
-
 describe("runCronIsolatedAgentTurn — explicit per-run timeout signal", () => {
   beforeEach(() => {
     vi.mocked(runEmbeddedAgent).mockClear();
   });
 
-  afterEach(() => {
-    restoreSnapshotEnv();
-    vi.doUnmock("../agents/embedded-agent.js");
-    vi.doUnmock("../agents/model-catalog.js");
-    vi.doUnmock("../agents/model-selection.js");
-    vi.doUnmock("../agents/subagent-announce.js");
-    vi.doUnmock("../gateway/call.js");
-    clearSessionStoreCacheForTest();
-    resetAgentRunContextForTest();
-    clearAllBootstrapSnapshots();
-    vi.restoreAllMocks();
-    vi.resetModules();
-  });
-
   // Regression: when a cron job's payload `timeoutSeconds` numerically equals
-  // `agents.defaults.timeoutSeconds`, the run is still an *explicit* per-run
-  // override. The embedded runner used to detect "explicit" by comparing
-  // `params.timeoutMs !== resolveAgentTimeoutMs({cfg})` — which collapses to
+  // the configured agent default, `timeoutMs !== defaultTimeoutMs` collapses to
   // `false` in this case, stripping the runTimeoutMs signal and letting the
   // LLM idle watchdog fall back to the implicit 120s cap.
   // Fix: forward `runTimeoutOverrideMs` from the cron entry point so the
   // explicit-vs-default distinction survives the merge into `timeoutMs`.
   it("forwards runTimeoutOverrideMs when payload.timeoutSeconds equals the agent default", async () => {
-    await withTempCronHome(async (home) => {
-      const storePath = await writeSessionStoreEntries(home, {
-        "agent:main:main": {
-          sessionId: "main-session",
-          updatedAt: Date.now(),
-          lastProvider: "webchat",
-          lastTo: "",
-        },
-      });
-      mockAgentPayloads([{ text: "ok" }]);
-
-      const cfg = makeTimeoutTestCfg(home, storePath, 300);
-
-      await runCronIsolatedAgentTurn({
-        cfg,
-        deps: createCliDeps(),
-        job: {
-          ...makeJob({ kind: "agentTurn", message: "do it", timeoutSeconds: 300 }),
-          delivery: { mode: "none" },
-        },
-        message: "do it",
-        sessionKey: "cron:job-1",
+    await withTempHome(async (home) => {
+      await runCronTurn(home, {
+        cfgOverrides: { agents: { defaults: { timeoutSeconds: 300 } } },
+        jobPayload: { kind: "agentTurn", message: "do it", timeoutSeconds: 300 },
       });
 
       const call = lastEmbeddedCall();
@@ -116,28 +33,10 @@ describe("runCronIsolatedAgentTurn — explicit per-run timeout signal", () => {
   });
 
   it("forwards runTimeoutOverrideMs when payload.timeoutSeconds differs from the agent default", async () => {
-    await withTempCronHome(async (home) => {
-      const storePath = await writeSessionStoreEntries(home, {
-        "agent:main:main": {
-          sessionId: "main-session",
-          updatedAt: Date.now(),
-          lastProvider: "webchat",
-          lastTo: "",
-        },
-      });
-      mockAgentPayloads([{ text: "ok" }]);
-
-      const cfg = makeTimeoutTestCfg(home, storePath, 300);
-
-      await runCronIsolatedAgentTurn({
-        cfg,
-        deps: createCliDeps(),
-        job: {
-          ...makeJob({ kind: "agentTurn", message: "do it", timeoutSeconds: 600 }),
-          delivery: { mode: "none" },
-        },
-        message: "do it",
-        sessionKey: "cron:job-1",
+    await withTempHome(async (home) => {
+      await runCronTurn(home, {
+        cfgOverrides: { agents: { defaults: { timeoutSeconds: 300 } } },
+        jobPayload: { kind: "agentTurn", message: "do it", timeoutSeconds: 600 },
       });
 
       const call = lastEmbeddedCall();
@@ -146,28 +45,10 @@ describe("runCronIsolatedAgentTurn — explicit per-run timeout signal", () => {
   });
 
   it("leaves runTimeoutOverrideMs undefined when payload omits timeoutSeconds", async () => {
-    await withTempCronHome(async (home) => {
-      const storePath = await writeSessionStoreEntries(home, {
-        "agent:main:main": {
-          sessionId: "main-session",
-          updatedAt: Date.now(),
-          lastProvider: "webchat",
-          lastTo: "",
-        },
-      });
-      mockAgentPayloads([{ text: "ok" }]);
-
-      const cfg = makeTimeoutTestCfg(home, storePath, 300);
-
-      await runCronIsolatedAgentTurn({
-        cfg,
-        deps: createCliDeps(),
-        job: {
-          ...makeJob({ kind: "agentTurn", message: "do it" }),
-          delivery: { mode: "none" },
-        },
-        message: "do it",
-        sessionKey: "cron:job-1",
+    await withTempHome(async (home) => {
+      await runCronTurn(home, {
+        cfgOverrides: { agents: { defaults: { timeoutSeconds: 300 } } },
+        jobPayload: { kind: "agentTurn", message: "do it" },
       });
 
       const call = lastEmbeddedCall();
