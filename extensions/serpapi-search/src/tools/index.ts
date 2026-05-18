@@ -17,6 +17,7 @@ export { createSerpApiNewsTool } from "./news.js";
 export { createSerpApiScholarTool } from "./scholar.js";
 export { createSerpApiShoppingTool } from "./shopping.js";
 export { createSerpApiTrendsTool } from "./trends.js";
+export { createSerpApiTripadvisorTool } from "./tripadvisor.js";
 export { createSerpApiYouTubeTool } from "./youtube.js";
 export { createSerpApiYouTubeTranscriptTool } from "./youtube-transcript.js";
 export { createSerpApiYouTubeVideoTool } from "./youtube-video.js";

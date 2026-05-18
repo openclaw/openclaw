@@ -20,6 +20,7 @@ import {
   createSerpApiScholarTool,
   createSerpApiShoppingTool,
   createSerpApiTrendsTool,
+  createSerpApiTripadvisorTool,
   createSerpApiYouTubeTool,
   createSerpApiYouTubeTranscriptTool,
   createSerpApiYouTubeVideoTool,
@@ -49,6 +50,8 @@ export default definePluginEntry({
     api.registerTool((ctx) => createSerpApiYouTubeTranscriptTool(api, ctx), { name: "serpapi_youtube_transcript" });
     api.registerTool((ctx) => createSerpApiYouTubeVideoTool(api, ctx), { name: "serpapi_youtube_video" });
     api.registerTool((ctx) => createSerpApiTrendsTool(api, ctx), { name: "serpapi_trends" });
+    api.registerTool((ctx) => createSerpApiTripadvisorTool(api, ctx), { name: "serpapi_tripadvisor" });
+    api.registerTool((ctx) => createSerpApiTripadvisorTool(api, ctx), { name: "serpapi_tripadvisor" });
     api.registerTool((ctx) => createSerpApiFlightsTool(api, ctx), { name: "serpapi_flights" });
     api.registerTool((ctx) => createSerpApiHotelsTool(api, ctx), { name: "serpapi_hotels" });
     api.registerTool((ctx) => createSerpApiEventsTool(api, ctx), { name: "serpapi_events" });

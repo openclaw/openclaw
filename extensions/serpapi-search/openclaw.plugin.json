@@ -49,6 +49,7 @@
       "serpapi_youtube_transcript",
       "serpapi_youtube_video",
       "serpapi_trends",
+      "serpapi_tripadvisor",
       "serpapi_flights",
       "serpapi_hotels",
       "serpapi_events",
