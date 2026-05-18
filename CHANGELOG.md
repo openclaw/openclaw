@@ -58,6 +58,9 @@ Docs: https://docs.openclaw.ai
 - Mac app: tighten remote Gateway fields in Settings so the Connection pane keeps readable labels and full action button text.
 - Mac app: keep custom Settings card rows left-aligned and full-width so Discovery and status sections no longer appear centered or detached.
 - Mac app: align Location permission controls to the same trailing column as the rest of Settings.
+- Mac app: add Dashboard, Chat, Canvas, and Settings shortcuts to the Dock icon menu.
+- Mac app: replace the Settings window's native split-view sidebar with an explicit layout so page content keeps its leading gutter when the sidebar is shown or hidden.
+- Mac app: render channel quick config as aligned Settings rows and hide schema-only variants that cannot be edited safely from the quick pane.
 - Gateway/webchat: hide internal runtime-context and other `display: false` transcript messages from Chat history and live message events. Fixes #83216. Thanks @EmpireCreator.
 - CLI/help: keep `gateway`, `doctor`, `status`, and `health` help registration out of action/runtime imports so subcommand `--help` stays lightweight in constrained terminals. Fixes #83228. Thanks @dfguerrerom.
 - Cron/Discord: keep explicit announce runs in message-tool-only source-reply mode so scheduled agent turns post once instead of also echoing through automatic visible replies. Fixes #83261. Thanks @Theralley.

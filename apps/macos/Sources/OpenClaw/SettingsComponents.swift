@@ -1,6 +1,9 @@
 import SwiftUI
 
 enum SettingsLayout {
+    static let sidebarWidth: CGFloat = 250
+    static let detailHorizontalPadding: CGFloat = 22
+    static let nestedSidebarWidth: CGFloat = 260
     static let scrollbarGutter: CGFloat = 36
 }
 
