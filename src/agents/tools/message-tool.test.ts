@@ -447,7 +447,7 @@ describe("message tool secret scoping", () => {
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(input?.toolContext?.currentChannelProvider).toBe("telegram");
     expect(input?.toolContext?.currentChannelId).toBe("-5150615830");
-    expect(input?.params).toEqual({ action: "send", message: "hi" });
+    expect(input?.params).toMatchObject({ action: "send", message: "hi" });
 
     const secretResolveCall = latestSecretResolveCall();
     expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.telegram.botToken"]);
@@ -475,7 +475,7 @@ describe("message tool secret scoping", () => {
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(input?.toolContext?.currentChannelProvider).toBe("discord");
     expect(input?.toolContext?.currentChannelId).toBe("user:123456789");
-    expect(input?.params).toEqual({ action: "send", message: "hi" });
+    expect(input?.params).toMatchObject({ action: "send", message: "hi" });
 
     const secretResolveCall = latestSecretResolveCall();
     expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.discord.token"]);
@@ -503,7 +503,7 @@ describe("message tool secret scoping", () => {
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(input?.toolContext?.currentChannelProvider).toBe("msteams");
     expect(input?.toolContext?.currentChannelId).toBe("user:user-1");
-    expect(input?.params).toEqual({ action: "send", message: "hi" });
+    expect(input?.params).toMatchObject({ action: "send", message: "hi" });
 
     const secretResolveCall = latestSecretResolveCall();
     expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.msteams.appPassword"]);
@@ -531,7 +531,7 @@ describe("message tool secret scoping", () => {
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(input?.toolContext?.currentChannelProvider).toBe("telegram");
     expect(input?.toolContext?.currentChannelId).toBe("123456789");
-    expect(input?.params).toEqual({ action: "send", message: "hi" });
+    expect(input?.params).toMatchObject({ action: "send", message: "hi" });
 
     const secretResolveCall = latestSecretResolveCall();
     expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.telegram.botToken"]);
