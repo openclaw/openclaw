@@ -25,3 +25,4 @@ export { createSerpApiYouTubeTool } from "./youtube.js";
 export { createSerpApiYouTubeTranscriptTool } from "./youtube-transcript.js";
 export { createSerpApiYouTubeVideoTool } from "./youtube-video.js";
 export { createSerpApiYahooTool } from "./yahoo.js";
+export { createSerpApiWeatherTool } from "./weather.js";

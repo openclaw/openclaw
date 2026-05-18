@@ -59,7 +59,8 @@
       "serpapi_facebook_profile",
       "serpapi_finance",
       "serpapi_yahoo",
-      "serpapi_autocomplete"
+      "serpapi_autocomplete",
+      "serpapi_weather"
     ]
   },
   "configSchema": {

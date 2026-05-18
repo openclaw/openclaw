@@ -28,6 +28,7 @@ import {
   createSerpApiYouTubeTranscriptTool,
   createSerpApiYouTubeVideoTool,
   createSerpApiYahooTool,
+  createSerpApiWeatherTool,
 } from "./src/tools/index.js";
 
 export default definePluginEntry({
@@ -64,5 +65,6 @@ export default definePluginEntry({
     api.registerTool((ctx) => createSerpApiFinanceTool(api, ctx), { name: "serpapi_finance" });
     api.registerTool((ctx) => createSerpApiYahooTool(api, ctx), { name: "serpapi_yahoo" });
     api.registerTool((ctx) => createSerpApiAutocompleteTool(api, ctx), { name: "serpapi_autocomplete" });
+    api.registerTool((ctx) => createSerpApiWeatherTool(api, ctx), { name: "serpapi_weather" });
   },
 });
