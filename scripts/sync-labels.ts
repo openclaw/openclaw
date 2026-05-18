@@ -10,7 +10,7 @@ type RepoLabel = {
 
 const COLOR_BY_PREFIX = new Map<string, string>([
   ["channel", "0969DA"],
-  ["app", "D8DEE9"],
+  ["app", "6E7781"],
   ["extensions", "6E7781"],
   ["plugin", "6E7781"],
   ["docs", "0A3069"],
