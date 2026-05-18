@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/skills: preflight remote macOS skill-bin refreshes with a WebSocket connectivity check so stale node sessions skip quickly instead of logging slow `system.which` timeout warnings.
 - GitHub Copilot: drop unsafe native Responses reasoning replay items with non-replayable IDs before dispatch, preventing affected Copilot sessions from failing with `invalid_request_body`. Fixes #83220. Thanks @galiniliev.
 - QA-Lab: make runtime tool coverage fail on missing required tool exercise instead of treating pass/pass parity envelope drift as missing coverage.
 - Core/plugins: harden clawpatch-reported edge cases across gateway auth cleanup, Claude session id paths, plugin activation policy, apply-patch hunk handling, diagnostic redaction, and plugin metadata validation.
