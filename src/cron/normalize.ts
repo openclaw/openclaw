@@ -450,7 +450,7 @@ export function normalizeCronJobInput(
 
   if ("agentId" in base) {
     const agentId = base.agentId;
-    if (agentId === null) {
+    if (agentId === null || agentId === "null") {
       next.agentId = null;
     } else if (typeof agentId === "string") {
       const trimmed = agentId.trim();
@@ -464,7 +464,7 @@ export function normalizeCronJobInput(
 
   if ("sessionKey" in base) {
     const sessionKey = base.sessionKey;
-    if (sessionKey === null) {
+    if (sessionKey === null || sessionKey === "null") {
       next.sessionKey = null;
     } else if (typeof sessionKey === "string") {
       const trimmed = sessionKey.trim();

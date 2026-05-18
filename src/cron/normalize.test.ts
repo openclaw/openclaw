@@ -124,6 +124,21 @@ describe("normalizeCronJobCreate", () => {
     }) as unknown as Record<string, unknown>;
 
     expect(cleared.agentId).toBeNull();
+
+    const clearedByString = normalizeCronJobCreate({
+      name: "agent-clear-string",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      agentId: "null",
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(clearedByString.agentId).toBeNull();
   });
 
   it("trims sessionKey and drops blanks", () => {
@@ -913,6 +928,13 @@ describe("normalizeCronJobPatch", () => {
       sessionKey: null,
     }) as unknown as Record<string, unknown>;
     expect(cleared.sessionKey).toBeNull();
+
+    // The tool schema uses plain string type for OpenAPI 3.0 compat; agents that
+    // follow the "or null to clear it" description may send the string "null".
+    const clearedByString = normalizeCronJobPatch({
+      sessionKey: "null",
+    }) as unknown as Record<string, unknown>;
+    expect(clearedByString.sessionKey).toBeNull();
   });
 
   it("normalizes cron stagger values in patch schedules", () => {
