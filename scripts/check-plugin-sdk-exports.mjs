@@ -71,8 +71,8 @@ for (const name of requiredExports) {
 }
 
 for (const entry of pluginSdkSubpaths) {
-  const jsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.js`);
-  const dtsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.d.ts`);
+  const jsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", `${entry}.js`);
+  const dtsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", `${entry}.d.ts`);
   if (!existsSync(jsPath)) {
     console.error(`MISSING SUBPATH JS: dist/plugin-sdk/${entry}.js`);
     missing += 1;
@@ -84,7 +84,7 @@ for (const entry of pluginSdkSubpaths) {
 }
 
 for (const entry of requiredRuntimeShimEntries) {
-  const shimPath = resolve(__dirname, "..", "dist", "plugin-sdk", entry);
+  const shimPath = resolve(scriptDir, "..", "dist", "plugin-sdk", entry);
   if (!existsSync(shimPath)) {
     console.error(`MISSING RUNTIME SHIM: dist/plugin-sdk/${entry}`);
     missing += 1;
@@ -92,7 +92,7 @@ for (const entry of requiredRuntimeShimEntries) {
 }
 
 for (const [entry, names] of Object.entries(requiredSubpathExports)) {
-  const jsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.js`);
+  const jsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", `${entry}.js`);
   if (!existsSync(jsPath)) {
     continue;
   }
