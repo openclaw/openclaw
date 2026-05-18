@@ -373,10 +373,13 @@ describe("gateway run option collisions", () => {
             return request;
           },
           end() {
-            callback({
+            const response = {
               statusCode: 200,
-              resume() {},
-            });
+              resume() {
+                return response as unknown as IncomingMessage;
+              },
+            };
+            callback(response);
             return request;
           },
         } as unknown as ClientRequest;
