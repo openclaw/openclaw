@@ -15,6 +15,11 @@ type DoctorConfigResult = {
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
+  repairBlockedByFutureConfig?: boolean;
+  futureConfigVersionSkew?: {
+    currentVersion: string;
+    touchedVersion: string;
+  };
 };
 
 type DoctorHealthFlowContext = {
@@ -583,6 +588,23 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
     ctx.configResult.shouldWriteConfig ||
     JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (shouldWriteConfig) {
+    if (ctx.configResult.futureConfigVersionSkew) {
+      const { formatFutureConfigActionBlock } = await import("../config/future-version-guard.js");
+      const { note } = await import("../terminal/note.js");
+      note(
+        formatFutureConfigActionBlock({
+          action: "write doctor repairs",
+          message: `Refusing to write doctor repairs because this OpenClaw binary (${ctx.configResult.futureConfigVersionSkew.currentVersion}) is older than the config last written by OpenClaw ${ctx.configResult.futureConfigVersionSkew.touchedVersion}.`,
+          hints: [
+            "Run the newer openclaw binary on PATH, or reinstall the intended gateway service from the newer install.",
+            "Set OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 only for an intentional downgrade or recovery action.",
+          ],
+          ...ctx.configResult.futureConfigVersionSkew,
+        }),
+        "OpenClaw version mismatch",
+      );
+      return;
+    }
     ctx.cfg = applyWizardMetadata(ctx.cfg, {
       command: "doctor",
       mode: resolveDoctorMode(ctx.cfg),
@@ -606,7 +628,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
     }
     return;
   }
-  if (!ctx.prompter.shouldRepair) {
+  if (!ctx.prompter.shouldRepair && !ctx.configResult.futureConfigVersionSkew) {
     ctx.runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
   }
 }

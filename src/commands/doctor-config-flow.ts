@@ -1,5 +1,9 @@
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
+import {
+  formatFutureConfigActionBlock,
+  resolveFutureConfigActionBlock,
+} from "../config/future-version-guard.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -67,7 +71,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   runtime?: RuntimeEnv;
   prompter?: DoctorPrompter;
 }) {
-  const shouldRepair = params.options.repair === true || params.options.yes === true;
+  const requestedRepair =
+    params.options.repair === true ||
+    params.options.yes === true ||
+    params.options.generateGatewayToken === true;
+  let shouldRepair = requestedRepair;
   const preflight = await runDoctorConfigPreflight({ repairPrefixedConfig: shouldRepair });
   let snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
@@ -79,6 +87,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const sourceMeta = (snapshot.sourceConfig as { meta?: { lastTouchedVersion?: unknown } })?.meta;
   const sourceLastTouchedVersion =
     typeof sourceMeta?.lastTouchedVersion === "string" ? sourceMeta.lastTouchedVersion : undefined;
+  const futureConfigBlock = resolveFutureConfigActionBlock({
+    action: "run doctor repairs",
+    snapshot,
+  });
+  if (futureConfigBlock) {
+    if (requestedRepair) {
+      note(formatFutureConfigActionBlock(futureConfigBlock), "OpenClaw version mismatch");
+    }
+    shouldRepair = false;
+  }
+  const confirmConfigRepair = futureConfigBlock ? async () => false : params.confirm;
 
   const legacyStep = applyLegacyCompatibilityStep({
     snapshot,
@@ -276,8 +295,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     candidate,
     pendingChanges,
     shouldRepair,
-    fixHints,
-    confirm: params.confirm,
+    fixHints: futureConfigBlock ? [] : fixHints,
+    confirm: confirmConfigRepair,
     note,
   });
   cfg = finalized.cfg;
@@ -289,6 +308,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
+    ...(futureConfigBlock
+      ? {
+          repairBlockedByFutureConfig: requestedRepair,
+          futureConfigVersionSkew: {
+            currentVersion: futureConfigBlock.currentVersion,
+            touchedVersion: futureConfigBlock.touchedVersion,
+          },
+        }
+      : {}),
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
   };

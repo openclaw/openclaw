@@ -55,11 +55,22 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
     runtime: effectiveRuntime,
     prompter,
   });
+  const effectivePrompter =
+    configResult.repairBlockedByFutureConfig === true
+      ? {
+          ...prompter,
+          shouldRepair: false,
+          confirm: async () => false,
+          confirmAutoFix: async () => false,
+          confirmAggressiveAutoFix: async () => false,
+          confirmRuntimeRepair: async () => false,
+        }
+      : prompter;
   const { CONFIG_PATH } = await import("../config/config.js");
   const ctx = {
     runtime: effectiveRuntime,
     options,
-    prompter,
+    prompter: effectivePrompter,
     configResult,
     cfg: configResult.cfg,
     cfgForPersistence: structuredClone(configResult.cfg),

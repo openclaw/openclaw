@@ -141,4 +141,30 @@ describe("doctor health contributions", () => {
       }),
     ).toBe(false);
   });
+
+  it("does not suggest doctor --fix when config version skew blocks repairs", async () => {
+    const contribution = requireDoctorContribution("doctor:write-config");
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const ctx = {
+      cfg: {},
+      cfgForPersistence: {},
+      configResult: {
+        cfg: {},
+        futureConfigVersionSkew: {
+          currentVersion: "2026.5.2-test",
+          touchedVersion: "9999.1.1",
+        },
+      },
+      prompter: { shouldRepair: false },
+      runtime,
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+  });
 });

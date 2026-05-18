@@ -2565,6 +2565,35 @@ describe("doctor config flow", () => {
     }
   });
 
+  it("blocks doctor repair mode when config was written by a newer OpenClaw", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      preflightMode: "fast",
+      config: {
+        meta: { lastTouchedVersion: "9999.1.1" },
+        bridge: { enabled: true },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.repairBlockedByFutureConfig).toBe(true);
+    expect(result.futureConfigVersionSkew?.touchedVersion).toBe("9999.1.1");
+    expect(result.shouldWriteConfig).toBe(false);
+    expect((result.cfg as { bridge?: unknown }).bridge).toEqual({ enabled: true });
+    expect(
+      terminalNoteMock.mock.calls.some(
+        ([message, title]) =>
+          title === "OpenClaw version mismatch" &&
+          message.includes("Refusing to run doctor repairs"),
+      ),
+    ).toBe(true);
+    expect(
+      terminalNoteMock.mock.calls.some(
+        ([message, title]) => title === "Doctor" && message.includes('Run "openclaw doctor --fix"'),
+      ),
+    ).toBe(false);
+  });
+
   it("recovers from stale googlechat top-level allowFrom by repairing dm.allowFrom", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
