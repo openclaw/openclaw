@@ -17,6 +17,7 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
@@ -1523,6 +1524,22 @@ export async function runAgentTurnWithFallback(params: {
         runId,
         sessionId: params.followupRun.run.sessionId,
         lane: runLane,
+        resolveAgentHarnessRuntimeOverride: (provider) =>
+          resolveSessionRuntimeOverrideForProvider({
+            provider,
+            entry: params.getActiveSessionEntry(),
+          }),
+        prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
+          await ensureSelectedAgentHarnessPlugin({
+            config: runtimeConfig,
+            provider,
+            modelId: model,
+            agentId: params.followupRun.run.agentId,
+            sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
+            agentHarnessRuntimeOverride,
+            workspaceDir: params.followupRun.run.workspaceDir,
+          });
+        },
         onFallbackStep: (step) => {
           emitModelFallbackStepLifecycle({
             runId,

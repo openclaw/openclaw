@@ -58,6 +58,7 @@ import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../d
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { coerceToFailoverError, describeFailoverError } from "../failover-error.js";
+import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
@@ -425,6 +426,11 @@ export async function compactEmbeddedPiSessionDirect(
   const primaryProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
   const primaryModel = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
   const fallbacksOverride = resolveCompactionFallbacksOverride(params);
+  const fallbackAgentId = resolveSessionAgentIds({
+    sessionKey: params.sandboxSessionKey ?? params.sessionKey,
+    config: params.config,
+  }).sessionAgentId;
+  const fallbackSessionKey = params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
   try {
     const fallbackResult = await runWithModelFallback<EmbeddedPiCompactResult>({
       cfg: params.config,
@@ -432,6 +438,19 @@ export async function compactEmbeddedPiSessionDirect(
       model: primaryModel,
       runId: params.runId ?? params.sessionId,
       agentDir: params.agentDir,
+      agentId: fallbackAgentId,
+      sessionKey: fallbackSessionKey,
+      prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
+        await ensureSelectedAgentHarnessPlugin({
+          config: params.config,
+          provider,
+          modelId: model,
+          agentId: fallbackAgentId,
+          sessionKey: fallbackSessionKey,
+          agentHarnessRuntimeOverride,
+          workspaceDir: params.workspaceDir,
+        });
+      },
       fallbacksOverride,
       classifyResult: ({ result, provider, model }) =>
         classifyCompactionFallbackResult(result, provider, model),

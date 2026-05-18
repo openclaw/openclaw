@@ -45,6 +45,8 @@ export function resolveModelFallbackOptions(
     provider: run.provider,
     model: run.model,
     agentDir: run.agentDir,
+    agentId: run.agentId,
+    sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
     fallbacksOverride,
   };
 }
