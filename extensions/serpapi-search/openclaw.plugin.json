@@ -37,6 +37,7 @@
       "serpapi_jobs",
       "serpapi_lens",
       "serpapi_youtube",
+      "serpapi_youtube_transcript",
       "serpapi_trends",
       "serpapi_flights",
       "serpapi_hotels",

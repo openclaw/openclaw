@@ -20,6 +20,7 @@ import {
   createSerpApiShoppingTool,
   createSerpApiTrendsTool,
   createSerpApiYouTubeTool,
+  createSerpApiYouTubeTranscriptTool,
 } from "./src/tools/index.js";
 
 export default definePluginEntry({
@@ -42,6 +43,7 @@ export default definePluginEntry({
     api.registerTool((ctx) => createSerpApiJobsTool(api, ctx), { name: "serpapi_jobs" });
     api.registerTool((ctx) => createSerpApiLensTool(api, ctx), { name: "serpapi_lens" });
     api.registerTool((ctx) => createSerpApiYouTubeTool(api, ctx), { name: "serpapi_youtube" });
+    api.registerTool((ctx) => createSerpApiYouTubeTranscriptTool(api, ctx), { name: "serpapi_youtube_transcript" });
     api.registerTool((ctx) => createSerpApiTrendsTool(api, ctx), { name: "serpapi_trends" });
     api.registerTool((ctx) => createSerpApiFlightsTool(api, ctx), { name: "serpapi_flights" });
     api.registerTool((ctx) => createSerpApiHotelsTool(api, ctx), { name: "serpapi_hotels" });

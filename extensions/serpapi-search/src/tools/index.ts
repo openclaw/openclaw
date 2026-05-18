@@ -17,3 +17,4 @@ export { createSerpApiScholarTool } from "./scholar.js";
 export { createSerpApiShoppingTool } from "./shopping.js";
 export { createSerpApiTrendsTool } from "./trends.js";
 export { createSerpApiYouTubeTool } from "./youtube.js";
+export { createSerpApiYouTubeTranscriptTool } from "./youtube-transcript.js";
