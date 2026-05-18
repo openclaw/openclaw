@@ -33,6 +33,7 @@ import {
   resolveThinkingDefaultForModel,
 } from "../thinking.ts";
 import type { GatewayThinkingLevelOption, SessionsListResult } from "../types.ts";
+import { viDashboardI18nText as i18nText } from "../vi-dashboard-text.ts";
 
 type ChatSessionSwitchHandler = (state: AppViewState, nextSessionKey: string) => void;
 
@@ -65,7 +66,7 @@ export function renderChatSessionSelect(
       <label class="field chat-controls__session chat-controls__session-picker">
         <select
           data-chat-session-select="true"
-          aria-label=${t("chat.selectors.session")}
+          aria-label=${i18nText("chat.selectors.session", "Phiên chat")}
           .value=${state.sessionKey}
           title=${selectedSessionLabel}
           ?disabled=${!state.connected || sessionGroups.length === 0}
@@ -170,7 +171,7 @@ function renderChatAgentSelect(
     <label class="field chat-controls__session chat-controls__agent">
       <select
         data-chat-agent-filter="true"
-        aria-label=${t("chat.selectors.agentFilter")}
+        aria-label=${i18nText("chat.selectors.agentFilter", "Lọc phiên theo agent")}
         title=${selectedLabel}
         .value=${activeAgentId}
         ?disabled=${!state.connected}
@@ -234,7 +235,7 @@ function renderChatModelSelect(state: AppViewState) {
     <label class="field chat-controls__session chat-controls__model">
       <select
         data-chat-model-select="true"
-        aria-label=${t("chat.selectors.model")}
+        aria-label=${i18nText("chat.selectors.model", "Mô hình chat")}
         title=${selectedLabel}
         ?disabled=${disabled}
         @change=${async (e: Event) => {
@@ -377,7 +378,7 @@ export function renderChatThinkingSelect(state: AppViewState) {
       <select
         class="chat-controls__thinking-select-full"
         data-chat-thinking-select="true"
-        aria-label=${t("chat.selectors.thinkingLevel")}
+        aria-label=${i18nText("chat.selectors.thinkingLevel", "Mức thinking của chat")}
         title=${selectedLabel}
         ?disabled=${disabled}
         @change=${onChange}

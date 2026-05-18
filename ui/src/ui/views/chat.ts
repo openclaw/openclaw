@@ -55,6 +55,7 @@ import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { resolveLocalUserName } from "../user-identity.ts";
+import { viDashboardI18nText as i18nText } from "../vi-dashboard-text.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
@@ -1001,9 +1002,11 @@ export function renderChat(props: ChatProps) {
 
   const placeholder = props.connected
     ? hasAttachments
-      ? t("chat.composer.placeholderWithAttachments")
-      : t("chat.composer.placeholder", { name: props.assistantName || "agent" })
-    : t("chat.composer.placeholderDisconnected");
+      ? i18nText("chat.composer.placeholderWithAttachments", "Thêm tin nhắn hoặc dán thêm ảnh...")
+      : i18nText("chat.composer.placeholder", "Nhắn cho {name} (Enter để gửi)", {
+          name: props.assistantName || "agent",
+        })
+    : i18nText("chat.composer.placeholderDisconnected", "Kết nối tới gateway để bắt đầu chat...");
 
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
@@ -1490,8 +1493,8 @@ export function renderChat(props: ChatProps) {
               @click=${() => {
                 document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
               }}
-              title=${t("chat.composer.attachFile")}
-              aria-label=${t("chat.composer.attachFile")}
+              title=${i18nText("chat.composer.attachFile", "Đính kèm tệp")}
+              aria-label=${i18nText("chat.composer.attachFile", "Đính kèm tệp")}
               ?disabled=${!props.connected}
             >
               ${icons.paperclip}
@@ -1506,11 +1509,11 @@ export function renderChat(props: ChatProps) {
                       : ""}"
                     @click=${props.onToggleRealtimeTalk}
                     title=${props.realtimeTalkActive
-                      ? t("chat.composer.stopTalk")
-                      : t("chat.composer.startTalk")}
+                      ? i18nText("chat.composer.stopTalk", "Dừng Talk")
+                      : i18nText("chat.composer.startTalk", "Bắt đầu Talk")}
                     aria-label=${props.realtimeTalkActive
-                      ? t("chat.composer.stopTalk")
-                      : t("chat.composer.startTalk")}
+                      ? i18nText("chat.composer.stopTalk", "Dừng Talk")
+                      : i18nText("chat.composer.startTalk", "Bắt đầu Talk")}
                     ?disabled=${!props.connected}
                   >
                     ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
