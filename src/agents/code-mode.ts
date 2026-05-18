@@ -109,7 +109,7 @@ type CodeModeWorkerResult =
   | {
       status: "failed";
       error: string;
-      code: "invalid_input" | "internal_error";
+      code: "invalid_input" | "internal_error" | "runtime_unavailable" | "timeout";
       output: unknown[];
     };
 
@@ -488,6 +488,18 @@ function codeModeWorkerUrl(): URL {
   return resolveCodeModeWorkerUrl(import.meta.url);
 }
 
+function mapCodeModeWorkerErrorCode(error: unknown): "internal_error" | "runtime_unavailable" {
+  const message = errorMessage(error).toLowerCase();
+  return message.includes("cannot find module") ||
+    message.includes("cannot find package") ||
+    message.includes("module not found") ||
+    message.includes("failed to load") ||
+    message.includes("quickjs-wasi") ||
+    message.includes("code-mode.worker")
+    ? "runtime_unavailable"
+    : "internal_error";
+}
+
 async function runCodeModeWorker(
   workerData: unknown,
   timeoutMs: number,
@@ -511,7 +523,7 @@ async function runCodeModeWorker(
         finish({
           status: "failed",
           error: "code mode worker timeout exceeded",
-          code: "internal_error",
+          code: "timeout",
           output: [],
         });
       }, timeoutMs);
@@ -532,7 +544,7 @@ async function runCodeModeWorker(
         finish({
           status: "failed",
           error: errorMessage(error),
-          code: "internal_error",
+          code: mapCodeModeWorkerErrorCode(error),
           output: [],
         });
       });
@@ -921,5 +933,6 @@ export const __testing = {
   codeModeWorkerUrl,
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,
+  mapCodeModeWorkerErrorCode,
   getTypescriptRuntimePromise: () => typescriptRuntimePromise,
 };

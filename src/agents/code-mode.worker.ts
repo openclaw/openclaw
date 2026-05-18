@@ -53,7 +53,7 @@ type CodeModeWorkerResult =
   | {
       status: "failed";
       error: string;
-      code: "invalid_input" | "internal_error";
+      code: "invalid_input" | "internal_error" | "runtime_unavailable" | "timeout";
       output: unknown[];
     };
 
@@ -493,10 +493,11 @@ async function main(): Promise<CodeModeWorkerResult> {
       output: [],
     };
   } catch (error) {
+    const message = errorMessage(error);
     return {
       status: "failed",
-      error: errorMessage(error),
-      code: "internal_error",
+      error: message,
+      code: message.includes("code mode timeout exceeded") ? "timeout" : "internal_error",
       output: [],
     };
   }

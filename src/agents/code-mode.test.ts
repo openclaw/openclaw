@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { pathToFileURL } from "node:url";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import {
   applyCodeModeCatalog,
@@ -129,12 +130,21 @@ describe("Code Mode", () => {
   });
 
   it("resolves the packaged worker URL from stable and hashed dist modules", () => {
-    expect(
-      __testing.resolveCodeModeWorkerUrl("file:///repo/dist/agents/code-mode.js").pathname,
-    ).toBe("/repo/dist/agents/code-mode.worker.js");
-    expect(
-      __testing.resolveCodeModeWorkerUrl("file:///repo/dist/selection-abc123.js").pathname,
-    ).toBe("/repo/dist/agents/code-mode.worker.js");
+    const stableModuleUrl =
+      process.platform === "win32"
+        ? pathToFileURL("C:\\repo\\dist\\agents\\code-mode.js").href
+        : pathToFileURL("/repo/dist/agents/code-mode.js").href;
+    const hashedModuleUrl =
+      process.platform === "win32"
+        ? pathToFileURL("C:\\repo\\dist\\selection-abc123.js").href
+        : pathToFileURL("/repo/dist/selection-abc123.js").href;
+
+    expect(__testing.resolveCodeModeWorkerUrl(stableModuleUrl).href).toBe(
+      stableModuleUrl.replace(/\/code-mode\.js$/, "/code-mode.worker.js"),
+    );
+    expect(__testing.resolveCodeModeWorkerUrl(hashedModuleUrl).href).toBe(
+      hashedModuleUrl.replace(/selection-abc123\.js$/, "agents/code-mode.worker.js"),
+    );
   });
 
   it("hides all normal tools behind exec and wait", () => {
@@ -694,5 +704,14 @@ describe("Code Mode", () => {
     await expect(heartbeat).resolves.toBe("main-event-loop-alive");
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("timeout exceeded");
+    expect(details.code).toBe("timeout");
+  });
+
+  it("classifies missing worker module failures as runtime_unavailable", () => {
+    const missingWorkerError = new Error(
+      "Cannot find module '/tmp/openclaw/dist/agents/code-mode.worker.js'",
+    );
+
+    expect(__testing.mapCodeModeWorkerErrorCode(missingWorkerError)).toBe("runtime_unavailable");
   });
 });
