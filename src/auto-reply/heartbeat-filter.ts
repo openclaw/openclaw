@@ -24,6 +24,8 @@ const TOOL_RESULT_BLOCK_TYPES = new Set([
   "function_call_output",
 ]);
 
+type HeartbeatTranscriptMessage = { role: string; content?: unknown };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -49,7 +51,7 @@ function collectToolCallBlocks(content: unknown): Array<Record<string, unknown>>
   }
   return content.filter(
     (block): block is Record<string, unknown> =>
-      isRecord(block) && TOOL_CALL_BLOCK_TYPES.has(String(block.type ?? "")),
+      isRecord(block) && TOOL_CALL_BLOCK_TYPES.has(readString(block.type) ?? ""),
   );
 }
 
@@ -59,7 +61,7 @@ function collectToolResultBlocks(content: unknown): Array<Record<string, unknown
   }
   return content.filter(
     (block): block is Record<string, unknown> =>
-      isRecord(block) && TOOL_RESULT_BLOCK_TYPES.has(String(block.type ?? "")),
+      isRecord(block) && TOOL_RESULT_BLOCK_TYPES.has(readString(block.type) ?? ""),
   );
 }
 
@@ -176,7 +178,7 @@ function isEmbeddedToolResultOnlyContent(content: unknown): boolean {
     Array.isArray(content) &&
     content.length > 0 &&
     content.every(
-      (block) => isRecord(block) && TOOL_RESULT_BLOCK_TYPES.has(String(block.type ?? "")),
+      (block) => isRecord(block) && TOOL_RESULT_BLOCK_TYPES.has(readString(block.type) ?? ""),
     )
   );
 }
@@ -193,7 +195,7 @@ function isFailedToolResultRecord(record: Record<string, unknown>): boolean {
   return (
     record.isError === true ||
     record.is_error === true ||
-    String(record.type ?? "") === "tool_result_error"
+    readString(record.type) === "tool_result_error"
   );
 }
 
@@ -336,8 +338,8 @@ export function isHeartbeatOkResponse(
   return stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars: ackMaxChars }).shouldSkip;
 }
 
-function advancePastAdjacentToolResults<T extends { role: string; content?: unknown }>(
-  messages: T[],
+function advancePastAdjacentToolResults(
+  messages: HeartbeatTranscriptMessage[],
   startIndex: number,
 ): number {
   let index = startIndex;
@@ -351,9 +353,10 @@ function isToolResultCompletionCandidate(message: { role: string; content?: unkn
   return isToolResultMessage(message) || collectToolResultBlocks(message.content).length > 0;
 }
 
-function hasCompletedVisibleHeartbeatResponseToolCall<
-  T extends { role: string; content?: unknown },
->(messages: T[], index: number): boolean {
+function hasCompletedVisibleHeartbeatResponseToolCall(
+  messages: HeartbeatTranscriptMessage[],
+  index: number,
+): boolean {
   const visibleCalls = collectVisibleHeartbeatResponseToolCalls(messages[index]);
   if (visibleCalls.length === 0) {
     return false;
@@ -380,8 +383,8 @@ function hasCompletedVisibleHeartbeatResponseToolCall<
   return false;
 }
 
-function resolveHeartbeatArtifactSpanEnd<T extends { role: string; content?: unknown }>(
-  messages: T[],
+function resolveHeartbeatArtifactSpanEnd(
+  messages: HeartbeatTranscriptMessage[],
   startIndex: number,
   ackMaxChars?: number,
   heartbeatPrompt?: string,
