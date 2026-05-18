@@ -46,6 +46,10 @@ Status: branch-local checkpoint, not release notes.
   The sample passed and recorded heap checkpoints plus RSS trace: wall
   `20112ms`, gateway RSS `655036416 -> 953790464`, peak `1051258880`, heap
   snapshots `154M` and `165M`.
+- After rebasing onto `b5046968f61`, a fresh Testbox `pnpm check:changed`
+  attempt on `tbx_01krwbsg15xvjdgpcz8fxq1htz` was blocked before reaching the
+  changed gate: pnpm install rejected newly published
+  `@earendil-works/pi-ai@0.74.1` under `minimumReleaseAge`.
 
 ## Still weak
 
