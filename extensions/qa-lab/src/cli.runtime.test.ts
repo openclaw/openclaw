@@ -979,7 +979,7 @@ describe("qa cli runtime", () => {
     expectWriteContains(stdoutWrite, "codex-native-workspace");
   });
 
-  it("exits nonzero when tool coverage summary has required drift", async () => {
+  it("exits nonzero when tool coverage summary is missing a required runtime tool call", async () => {
     const priorExitCode = process.exitCode;
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-tool-coverage-"));
     try {
@@ -1030,7 +1030,7 @@ describe("qa cli runtime", () => {
 
       expect(process.exitCode).toBe(1);
       expectWriteContains(stdoutWrite, "- Verdict: fail");
-      expectWriteContains(stdoutWrite, "web-search drift=tool-call-shape");
+      expectWriteContains(stdoutWrite, "web-search missing codex tool call web_search");
     } finally {
       process.exitCode = priorExitCode;
       await fs.rm(repoRoot, { recursive: true, force: true });
