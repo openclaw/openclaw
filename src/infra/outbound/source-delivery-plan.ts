@@ -1,6 +1,5 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import { normalizeTargetForProvider } from "./target-normalization.js";
 
 export type SourceVisibleDeliveryOwner =
   | "automatic_source"
