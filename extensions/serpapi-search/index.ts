@@ -1,24 +1,26 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createSerpApiWebSearchProvider } from "./src/serpapi-search-provider.js";
-import { createSerpApiAiOverviewTool } from "./src/tools/ai-overview.js";
-import { createSerpApiAmazonTool } from "./src/tools/amazon.js";
-import { createSerpApiBingTool } from "./src/tools/bing.js";
-import { createSerpApiDuckDuckGoTool } from "./src/tools/duckduckgo.js";
-import { createSerpApiEventsTool } from "./src/tools/events.js";
-import { createSerpApiFacebookProfileTool } from "./src/tools/facebook-profile.js";
-import { createSerpApiImmersiveProductTool } from "./src/tools/immersive-product.js";
-import { createSerpApiFinanceTool } from "./src/tools/finance.js";
-import { createSerpApiFlightsTool } from "./src/tools/flights.js";
-import { createSerpApiHotelsTool } from "./src/tools/hotels.js";
-import { createSerpApiJobsTool } from "./src/tools/jobs.js";
-import { createSerpApiLensTool } from "./src/tools/lens.js";
-import { createSerpApiMapsTool } from "./src/tools/maps.js";
-import { createSerpApiMapsReviewsTool } from "./src/tools/maps-reviews.js";
-import { createSerpApiNewsTool } from "./src/tools/news.js";
-import { createSerpApiScholarTool } from "./src/tools/scholar.js";
-import { createSerpApiShoppingTool } from "./src/tools/shopping.js";
-import { createSerpApiTrendsTool } from "./src/tools/trends.js";
-import { createSerpApiYouTubeTool } from "./src/tools/youtube.js";
+import {
+  createSerpApiAiOverviewTool,
+  createSerpApiAmazonTool,
+  createSerpApiBingTool,
+  createSerpApiDuckDuckGoTool,
+  createSerpApiEventsTool,
+  createSerpApiFacebookProfileTool,
+  createSerpApiFinanceTool,
+  createSerpApiFlightsTool,
+  createSerpApiHotelsTool,
+  createSerpApiImmersiveProductTool,
+  createSerpApiJobsTool,
+  createSerpApiLensTool,
+  createSerpApiMapsTool,
+  createSerpApiMapsReviewsTool,
+  createSerpApiNewsTool,
+  createSerpApiScholarTool,
+  createSerpApiShoppingTool,
+  createSerpApiTrendsTool,
+  createSerpApiYouTubeTool,
+} from "./src/tools/index.js";
 
 export default definePluginEntry({
   id: "serpapi-search",
