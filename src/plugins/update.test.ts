@@ -60,6 +60,7 @@ vi.mock("./clawhub.js", () => ({
     PACKAGE_NOT_FOUND: "package_not_found",
     VERSION_NOT_FOUND: "version_not_found",
     ARCHIVE_INTEGRITY_MISMATCH: "archive_integrity_mismatch",
+    ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
   },
   installPluginFromClawHub: (...args: unknown[]) => installPluginFromClawHubMock(...args),
 }));
@@ -3182,12 +3183,12 @@ describe("syncPluginsForUpdateChannel", () => {
     ]);
   });
 
-  it("marks official externalized ClawHub-to-npm fallbacks as trusted", async () => {
+  it("falls back from official ClawHub artifact misses to trusted npm packages", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     installPluginFromClawHubMock.mockResolvedValue({
       ok: false,
-      code: "package_not_found",
-      error: "Package not found on ClawHub.",
+      code: "artifact_download_unavailable",
+      error: "ClawHub ClawPack artifact is unavailable.",
     });
     installPluginFromNpmSpecMock.mockResolvedValue(
       createSuccessfulNpmUpdateResult({
