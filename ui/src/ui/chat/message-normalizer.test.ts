@@ -299,6 +299,25 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("infers M2A MEDIA attachments as audio", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "MEDIA:https://example.com/voice.m2a",
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://example.com/voice.m2a",
+            kind: "audio",
+            label: "voice.m2a",
+            mimeType: "audio/mpeg",
+          },
+        },
+      ]);
+    });
+
     it("keeps valid local MEDIA paths as assistant attachments", () => {
       const result = normalizeMessage({
         role: "assistant",

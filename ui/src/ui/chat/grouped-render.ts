@@ -180,7 +180,8 @@ function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   }
   const ext = getFileExtension(path);
   return (
-    ext !== undefined && ["aac", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav"].includes(ext)
+    ext !== undefined &&
+    ["aac", "flac", "m2a", "m4a", "mp3", "oga", "ogg", "opus", "wav"].includes(ext)
   );
 }
 

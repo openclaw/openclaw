@@ -117,11 +117,14 @@ describe("memory host SDK package internals", () => {
     const tmpDir = getTmpDir();
     const notePath = path.join(tmpDir, "note.md");
     const imagePath = path.join(tmpDir, "diagram.png");
+    const audioPath = path.join(tmpDir, "voice.m2a");
     fsSync.writeFileSync(notePath, "hello", "utf-8");
     fsSync.writeFileSync(imagePath, Buffer.from("png"));
+    fsSync.writeFileSync(audioPath, Buffer.from("audio"));
 
     const note = await buildFileEntry(notePath, tmpDir);
     const image = await buildFileEntry(imagePath, tmpDir, multimodal);
+    const audio = await buildFileEntry(audioPath, tmpDir, multimodal);
 
     const noteEntry = expectFileEntry(note);
     expect(noteEntry.path).toBe("note.md");
@@ -132,6 +135,12 @@ describe("memory host SDK package internals", () => {
     expect(imageEntry.modality).toBe("image");
     expect(imageEntry.mimeType).toBe("image/png");
     expect(imageEntry.contentText).toBe("Image file: diagram.png");
+    const audioEntry = expectFileEntry(audio);
+    expect(audioEntry.path).toBe("voice.m2a");
+    expect(audioEntry.kind).toBe("multimodal");
+    expect(audioEntry.modality).toBe("audio");
+    expect(audioEntry.mimeType).toBe("audio/mpeg");
+    expect(audioEntry.contentText).toBe("Audio file: voice.m2a");
   });
 
   it("builds multimodal chunks lazily and rejects changed files", async () => {

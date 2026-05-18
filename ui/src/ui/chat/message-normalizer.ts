@@ -86,6 +86,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ogg: "audio/ogg",
   oga: "audio/ogg",
   mp3: "audio/mpeg",
+  m2a: "audio/mpeg",
   wav: "audio/wav",
   flac: "audio/flac",
   aac: "audio/aac",

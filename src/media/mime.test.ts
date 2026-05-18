@@ -143,6 +143,11 @@ describe("mime detection", () => {
     expect(mime).toBe("audio/aac");
   });
 
+  it("detects M2A audio from a bare filename when buffer sniffing is inconclusive", async () => {
+    const mime = await detectMime({ buffer: Buffer.alloc(16), filePath: "voice.m2a" });
+    expect(mime).toBe("audio/mpeg");
+  });
+
   it("detects Apple CAF audio by magic bytes when file-type does not recognize the container", async () => {
     // CAF files start with the four-byte ASCII tag "caff". `file-type` v22 has
     // no native CAF detector, so without the manual magic-byte fallback the
@@ -175,6 +180,7 @@ describe("mimeTypeFromFilePath", () => {
     { filePath: "photo.jpg", expected: "image/jpeg" },
     { filePath: "photo.JPG", expected: "image/jpeg" },
     { filePath: "voice.mp3", expected: "audio/mpeg" },
+    { filePath: "voice.m2a", expected: "audio/mpeg" },
     { filePath: "voice.wav", expected: "audio/wav" },
     { filePath: "clip.avi", expected: "video/x-msvideo" },
     { filePath: "clip.mkv", expected: "video/x-matroska" },
@@ -246,6 +252,7 @@ describe("isAudioFileName", () => {
 
   it.each([
     { fileName: "voice.mp3", expected: true },
+    { fileName: "voice.m2a", expected: true },
     { fileName: "voice.caf", expected: true },
     { fileName: "voice.bin", expected: false },
   ] as const)("matches audio extension for $fileName", ({ fileName, expected }) => {

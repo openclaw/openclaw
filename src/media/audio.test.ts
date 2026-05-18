@@ -70,6 +70,10 @@ describe("isVoiceCompatibleAudio", () => {
           opts: { contentType: "audio/mpeg", fileName: "file.wav" },
           expected: true,
         },
+        {
+          opts: { fileName: "voice.m2a" },
+          expected: true,
+        },
       ],
     },
   ])("$name", ({ cases }) => {

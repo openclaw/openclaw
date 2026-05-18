@@ -137,6 +137,25 @@ describe("buildInboundMediaNote", () => {
     );
   });
 
+  it("strips M2A attachments when transcription succeeded via MediaUnderstanding", () => {
+    const note = buildInboundMediaNote({
+      MediaPaths: ["/tmp/voice.m2a", "/tmp/image.png"],
+      MediaUrls: ["https://example.com/voice.m2a", "https://example.com/image.png"],
+      MediaTypes: ["audio/mpeg", "image/png"],
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "Hello world",
+          provider: "whisper",
+        },
+      ],
+    });
+    expect(note).toBe(
+      "[media attached: /tmp/image.png (image/png) | https://example.com/image.png]",
+    );
+  });
+
   it("strips audio attachments when transcription succeeded via decisions", () => {
     const note = buildInboundMediaNote({
       MediaPaths: ["/tmp/voice.ogg", "/tmp/image.png"],
