@@ -195,7 +195,7 @@ function pruneInMemoryEntriesIfNeeded(manager: MutableSessionManager): void {
   }
 
   manager.fileEntries = prunedEntries;
-  manager._buildIndex?.();
+  manager["_buildIndex"]?.();
   restoreRetainedLabels(manager, retainedLabels);
 }
 
@@ -205,9 +205,9 @@ export function installPiSessionManagerMemoryBound(): void {
     return;
   }
 
-  const originalAppendEntry = prototype._appendEntry;
+  const originalAppendEntry = prototype["_appendEntry"];
   if (originalAppendEntry) {
-    prototype._appendEntry = function appendEntryWithMemoryBound(
+    prototype["_appendEntry"] = function appendEntryWithMemoryBound(
       this: MutableSessionManager,
       entry: SessionEntry,
     ) {

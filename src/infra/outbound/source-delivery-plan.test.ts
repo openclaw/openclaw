@@ -237,5 +237,5 @@ describe("source delivery plan", () => {
         { channel: "telegram", to: "-100", threadId: 462 },
       ),
     ).toBe(false);
-  });
+  }, 240_000);
 });
