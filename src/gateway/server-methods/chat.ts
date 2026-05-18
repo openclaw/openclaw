@@ -181,10 +181,6 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return false;
 }
 
-function stripVisibleTextFromMediaSupplement(payload: ReplyPayload): ReplyPayload {
-  return isMediaBearingPayload(payload) ? { ...payload, text: undefined } : payload;
-}
-
 function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyPayload {
   return isReplyPayloadTtsSupplement(payload) ? buildTtsSupplementMediaPayload(payload) : payload;
 }
@@ -1519,6 +1515,34 @@ function areMediaSourcesEquivalent(left: string, right: string): boolean {
   return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
 }
 
+function rawMediaDirectiveCandidates(text: string): string[] {
+  return Array.from(text.matchAll(/\bMEDIA:\s*`?([^\n`]+)`?/gi))
+    .flatMap((match) => (match[1] ?? "").split(/\s+/))
+    .map((candidate) => candidate.trim())
+    .filter(Boolean);
+}
+
+function payloadHasMediaDirectiveText(text: string, payloadMediaUrls: Set<string>): boolean {
+  return rawMediaDirectiveCandidates(text).some((candidate) =>
+    [...payloadMediaUrls].some((payloadUrl) => areMediaSourcesEquivalent(candidate, payloadUrl)),
+  );
+}
+
+function stripMediaDirectiveTextFromMediaSupplement(payload: ReplyPayload): ReplyPayload {
+  if (!isMediaBearingPayload(payload) || typeof payload.text !== "string") {
+    return payload;
+  }
+  const payloadMediaUrls = payloadMediaUrlSet(payload);
+  if (payloadMediaUrls.size === 0 || !payloadHasMediaDirectiveText(payload.text, payloadMediaUrls)) {
+    return payload;
+  }
+  const lines = payload.text.split("\n").filter((line) => {
+    const trimmed = line.trimStart();
+    return !trimmed.toUpperCase().startsWith("MEDIA:");
+  });
+  return { ...payload, text: lines.join("\n").trimEnd() || undefined };
+}
+
 function isAssistantMediaDirectiveMessage(message: unknown, payload: ReplyPayload): boolean {
   if (!message || typeof message !== "object") {
     return false;
@@ -1533,7 +1557,8 @@ function isAssistantMediaDirectiveMessage(message: unknown, payload: ReplyPayloa
   const parsed = splitMediaFromOutput(text);
   const parsedMediaUrls = (parsed.mediaUrls ?? []).map((url) => url.trim()).filter(Boolean);
   if (parsedMediaUrls.length === 0) {
-    return false;
+    const payloadMediaUrls = payloadMediaUrlSet(payload);
+    return payloadHasMediaDirectiveText(text, payloadMediaUrls);
   }
   const payloadMediaUrls = payloadMediaUrlSet(payload);
   if (
@@ -1564,11 +1589,17 @@ async function replaceLatestAssistantMediaDirectiveTranscriptMessage(params: {
   try {
     const index = await readSessionTranscriptIndex(params.transcriptPath);
     const matchPayload = params.matchPayload ?? params.payload;
-    const latest = [...(index?.entries ?? [])]
+    const latest = index?.entries
       .toReversed()
-      .find((entry) => isAssistantMediaDirectiveMessage(entry.record.message, matchPayload));
-    const latestMessage = latest?.record.message as Record<string, unknown> | undefined;
-    if (!latest?.id || !latestMessage) {
+      .find((entry) => (entry.record.message as { role?: unknown } | undefined)?.role === "assistant");
+    if (!latest?.id) {
+      return { replaced: false };
+    }
+    if (!isAssistantMediaDirectiveMessage(latest.record.message, matchPayload)) {
+      return { replaced: false };
+    }
+    const latestMessage = latest.record.message as Record<string, unknown>;
+    if (!latestMessage) {
       return { replaced: false };
     }
     const replacement: Record<string, unknown> = {
@@ -2692,7 +2723,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           return;
         }
         const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
-        const transcriptSourcePayload = stripVisibleTextFromMediaSupplement(
+        const transcriptSourcePayload = stripMediaDirectiveTextFromMediaSupplement(
           stripVisibleTextFromTtsSupplement(payload),
         );
         const [transcriptPayload] = await normalizeWebchatReplyMediaPathsForDisplay({
@@ -2780,14 +2811,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               await attachManagedOutgoingImagesToMessage({
                 messageId: replaced.messageId,
                 blocks: assistantContent,
-              });
-            }
-            if (replaced.message && resolvedTranscriptPath) {
-              emitSessionTranscriptUpdate({
-                sessionFile: resolvedTranscriptPath,
-                sessionKey,
-                message: replaced.message,
-                messageId: replaced.messageId,
               });
             }
             appendedWebchatAgentMedia = true;

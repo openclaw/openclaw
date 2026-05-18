@@ -1050,6 +1050,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: rawText,
       content: [{ type: "text", text: rawText }],
     });
+    mockState.emittedTranscriptUpdates = [];
     mockState.triggerAgentRunStart = true;
     mockState.finalPayload = {
       text: rawText,
@@ -1073,6 +1074,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           entry.type === "message" && entry.message.role === "assistant",
       );
       expect(assistantMessages).toHaveLength(1);
+      expect(JSON.stringify(assistantMessages[0]?.message)).toContain("Here is the image.");
+      expect(JSON.stringify(assistantMessages[0]?.message)).not.toContain(`MEDIA:${mediaUrl}`);
+      expect(
+        mockState.emittedTranscriptUpdates.filter(
+          (update) =>
+            typeof update.message === "object" &&
+            update.message !== null &&
+            (update.message as { role?: unknown }).role === "assistant",
+        ),
+      ).toStrictEqual([]);
     }, 5000);
 
     await runNonStreamingChatSend({
@@ -1089,6 +1100,80 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         entry.type === "message" && entry.message.role === "assistant",
     );
     expect(assistantMessagesAfterRetry).toHaveLength(1);
+  });
+
+  it("does not replace older matching MEDIA transcript replies after a newer assistant turn", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-media-current-only-");
+    const mediaUrl = path.join(transcriptDir, "reply.png");
+    fs.writeFileSync(
+      mediaUrl,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    const rawText = `Earlier image.\nMEDIA:${mediaUrl}`;
+    const rawAssistantMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawText }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: Date.now(),
+      stopReason: "stop",
+    };
+    const newerAssistantMessage: AssistantMessage = {
+      ...rawAssistantMessage,
+      content: [{ type: "text", text: "A newer assistant turn." }],
+      timestamp: Date.now() + 1,
+    };
+    const sessionManager = SessionManager.open(mockState.transcriptPath);
+    sessionManager.appendMessage(rawAssistantMessage);
+    sessionManager.appendMessage(newerAssistantMessage);
+    mockState.triggerAgentRunStart = true;
+    mockState.finalPayload = {
+      text: "Current image.",
+      mediaUrl: `file://${mediaUrl}`,
+      trustedLocalMedia: true,
+    };
+    const respond = vi.fn();
+
+    await runNonStreamingChatSend({
+      context: createChatContext(),
+      respond,
+      idempotencyKey: "idem-agent-media-current-only",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const branch = SessionManager.open(mockState.transcriptPath).getBranch();
+    const assistantMessages = branch.filter(
+      (entry): entry is SessionMessageEntry =>
+        entry.type === "message" && entry.message.role === "assistant",
+    );
+    expect(assistantMessages).toHaveLength(2);
+    expect(JSON.stringify(assistantMessages[0]?.message)).toContain(`MEDIA:${mediaUrl}`);
+    expect(JSON.stringify(assistantMessages[0]?.message)).toContain("Earlier image.");
+    expect(JSON.stringify(assistantMessages[1]?.message)).toContain("A newer assistant turn.");
+    expect(JSON.stringify(assistantMessages)).not.toContain(
+      "idem-agent-media-current-only:assistant-media",
+    );
+    expect(JSON.stringify(assistantMessages)).not.toContain("Current image.");
   });
 
   it("does not replace raw agent MEDIA replies with WebChat audio blocks", async () => {
@@ -1155,7 +1240,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         model: "gateway-injected",
         idempotencyKey: "idem-agent-audio-no-replace:assistant-media",
         content: [
-          { type: "text", text: "Audio reply" },
+          { type: "text", text: "Here is the audio." },
           {
             type: "attachment",
             attachment: {
