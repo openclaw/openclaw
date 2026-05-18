@@ -700,9 +700,9 @@ async function dispatchUpload(
         fileName: fileName ?? source.fileName,
       });
     default: {
-      const _exhaustive: never = source;
+      const exhaustive: never = source;
       throw new Error(
-        `dispatchUpload: unsupported MediaSource kind: ${JSON.stringify(_exhaustive)}`,
+        `dispatchUpload: unsupported MediaSource kind: ${JSON.stringify(exhaustive)}`,
       );
     }
   }
