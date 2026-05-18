@@ -957,7 +957,6 @@
     "namespace": "openclaw"
   },
   {
-    "deferLoading": true,
     "description": "Spawn clean child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background work. Subagents inherit parent workspace. Native subagents get task in first visible `[Subagent Task]` message. Native only: `context=\"fork\"` only when child needs current transcript; else omit or `isolated`. Use for fresh child-session work.",
     "inputSchema": {
       "properties": {
@@ -1051,8 +1050,7 @@
       "required": ["task"],
       "type": "object"
     },
-    "name": "sessions_spawn",
-    "namespace": "openclaw"
+    "name": "sessions_spawn"
   },
   {
     "description": "End current turn. Use after spawning subagents; results arrive as next message.",

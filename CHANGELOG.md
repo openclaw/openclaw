@@ -28,7 +28,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Codex app-server: keep `sessions_spawn` direct in Codex dynamic tool payloads so Codex harness turns can delegate subagents without first discovering the searchable OpenClaw tool namespace.
 - Mac app: keep app-level menu commands and Dashboard failure states reachable when the remote Gateway is disconnected, and keep the Settings sidebar toggle in the leading titlebar area.
 - Mac app: align the Sessions settings pane with the standard Settings page gutter and row spacing.
 - Codex app-server: preserve streamed native command output in mirrored transcripts and trajectory exports when final snapshots omit aggregated output. (#83200) Thanks @rozmiarD.
