@@ -458,6 +458,35 @@ describe("executeNodeHostCommand", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
+  it("blocks Windows node drive-root denied paths", async () => {
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+        platform: "win32",
+      },
+    ]);
+
+    await expect(
+      executeNodeHostCommand({
+        command: "C:\\Users\\agent\\secret.txt",
+        workdir: "D:\\Work",
+        env: {},
+        security: "full",
+        ask: "off",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+        deniedPaths: ["C:\\**"],
+      }),
+    ).rejects.toThrow(
+      "Security Violation: exec command references denied path C:\\Users\\agent\\secret.txt",
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
   it("rejects config-loaded home-relative denied paths for Windows node without trusted HOME", async () => {
     const config = normalizeConfigPaths({
       tools: {

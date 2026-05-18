@@ -35,6 +35,21 @@ function getExecCommandAnalysisPlatform(namespace: ExecDeniedPathNamespace): Nod
   return namespace === "win32" ? "win32" : "linux";
 }
 
+function parseDeniedExecPathPatternRoot(
+  trimmed: string,
+  namespace: ExecDeniedPathNamespace,
+): { rawRoot: string; recursive: boolean } {
+  const recursive = trimmed.endsWith("/**") || trimmed.endsWith("\\**");
+  if (!recursive) {
+    return { rawRoot: trimmed, recursive };
+  }
+  const rawRoot = trimmed.slice(0, -3);
+  if (namespace === "win32" && /^[A-Za-z]:$/u.test(rawRoot)) {
+    return { rawRoot: `${rawRoot}\\`, recursive };
+  }
+  return { rawRoot, recursive };
+}
+
 function normalizeDeniedExecPathPatterns(
   entries: string[] | undefined,
   workdir: string | undefined,
@@ -48,8 +63,7 @@ function normalizeDeniedExecPathPatterns(
     if (!trimmed) {
       continue;
     }
-    const recursive = trimmed.endsWith("/**") || trimmed.endsWith("\\**");
-    const rawRoot = recursive ? trimmed.slice(0, -3) : trimmed;
+    const { rawRoot, recursive } = parseDeniedExecPathPatternRoot(trimmed, namespace);
     const rootInput =
       rawRoot || (trimmed.startsWith("/") ? pathOps.parse(pathOps.resolve("/")).root : "");
     if (!rootInput) {
