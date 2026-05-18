@@ -1,6 +1,5 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import { normalizeTargetForProvider } from "./target-normalization.js";
 
 export type SourceVisibleDeliveryOwner =
   | "automatic_source"
@@ -77,8 +76,8 @@ function isMessageToolOwnedDelivery(owner: SourceVisibleDeliveryOwner): boolean 
 }
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
-  const toTrimmed = to.trim();
-  return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
+  void channel;
+  return to.trim();
 }
 
 const caseSensitivePrefixedTargetProviders = new Set(["googlechat", "mattermost", "matrix"]);
