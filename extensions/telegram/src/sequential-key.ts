@@ -11,7 +11,15 @@ import {
 } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 
-const TELEGRAM_NON_READ_ONLY_STATUS_COMMAND_KEYS = new Set(["export-session", "export-trajectory"]);
+const TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS = new Set([
+  "commands",
+  "context",
+  "help",
+  "status",
+  "tasks",
+  "tools",
+  "whoami",
+]);
 
 type TelegramSequentialKeyContext = {
   chat?: { id?: number };
@@ -34,8 +42,8 @@ export function isTelegramReadOnlyControlLaneText(params: {
   rawText?: string;
   botUsername?: string;
 }): boolean {
-  // Only read-only status commands should bypass the per-topic lane. Export
-  // commands materialize mutable session state and should not interleave with an active turn.
+  // Only read-only status commands should bypass the per-topic lane.
+  // Diagnostics and export commands materialize state and should not interleave with an active turn.
   const normalizedBody = normalizeCommandBody(
     params.rawText?.trim() ?? "",
     params.botUsername ? { botUsername: params.botUsername } : undefined,
@@ -47,9 +55,7 @@ export function isTelegramReadOnlyControlLaneText(params: {
   const command = listChatCommands().find((entry) =>
     entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
   );
-  return (
-    command?.category === "status" && !TELEGRAM_NON_READ_ONLY_STATUS_COMMAND_KEYS.has(command.key)
-  );
+  return command?.category === "status" && TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS.has(command.key);
 }
 
 function isTelegramTargetedStopCommand(rawText?: string, botUsername?: string): boolean {

@@ -48,6 +48,12 @@ describe("shouldSupersedeTelegramReplyFence", () => {
         CommandAuthorized: true,
       }),
     ).toBe(true);
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        CommandBody: "/diagnostics confirm abc123def456",
+        CommandAuthorized: true,
+      }),
+    ).toBe(true);
   });
 });
 
