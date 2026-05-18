@@ -382,7 +382,7 @@ function createInteractionRequest(params: {
       );
       return this;
     },
-  } as IncomingMessage & { emitTest: (event: string, ...args: unknown[]) => void };
+  } as unknown as IncomingMessage & { emitTest: (event: string, ...args: unknown[]) => void };
 
   req.emitTest = (event: string, ...args: unknown[]) => {
     const handlers = listeners.get(event) ?? [];
