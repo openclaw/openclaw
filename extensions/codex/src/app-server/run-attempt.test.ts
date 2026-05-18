@@ -1055,7 +1055,7 @@ describe("runCodexAppServerAttempt", () => {
     await harness.waitForMethod("turn/start");
     await new Promise<void>((resolve) => setImmediate(resolve));
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    const result = await run;
 
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string };
@@ -1069,6 +1069,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("## OpenClaw Skills");
     expect(inputText).toContain("<available_skills>");
     expect(inputText).toContain("Current user request:\nhello");
+    expect(result.systemPromptReport?.skills.promptChars).toBe(params.skillsSnapshot.prompt.length);
+    expect(result.systemPromptReport?.skills.entries).toEqual([
+      { name: "demo", blockChars: "<skill><name>demo</name></skill>".length },
+    ]);
   });
 
   it("keeps forced message dynamic tool when toolsAllow omits it", async () => {
@@ -3860,7 +3864,7 @@ describe("runCodexAppServerAttempt", () => {
     await harness.waitForMethod("turn/start");
     await new Promise<void>((resolve) => setImmediate(resolve));
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    const result = await run;
 
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as {
@@ -3877,6 +3881,7 @@ describe("runCodexAppServerAttempt", () => {
       input?: Array<{ text?: string }>;
     };
     expect(turnStartParams.input?.[0]?.text).toBe(exactCommand);
+    expect(result.systemPromptReport?.skills).toEqual({ promptChars: 0, entries: [] });
   });
 
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
