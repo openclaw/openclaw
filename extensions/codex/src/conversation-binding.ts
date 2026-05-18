@@ -432,14 +432,31 @@ async function runBoundTurn(params: {
   });
   const dynamicToolsFingerprint = codexDynamicToolsFingerprint(toolBridge.specs);
   // Older bound sidecars predate dynamic-tool fingerprints and were started
-  // without a dynamic tool catalog, so refresh them once onto a tool-aware
-  // thread before preserving future compatible fingerprints.
+  // without a dynamic tool catalog, so refresh only when a catalog exists.
+  // Empty catalogs are recorded in place to avoid losing bound thread context.
+  if (binding.dynamicToolsFingerprint === undefined && toolBridge.specs.length === 0) {
+    await writeCodexAppServerBinding(
+      params.data.sessionFile,
+      {
+        ...binding,
+        dynamicToolsFingerprint,
+      },
+      agentLookup,
+    );
+    binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
+    if (!binding) {
+      throw new Error(
+        "bound Codex conversation has no sidecar binding after dynamic tool fingerprint update",
+      );
+    }
+  }
   const shouldRefreshDynamicTools =
-    binding.dynamicToolsFingerprint === undefined ||
-    !areCodexDynamicToolFingerprintsCompatible({
-      previous: binding.dynamicToolsFingerprint,
-      next: dynamicToolsFingerprint,
-    });
+    (binding.dynamicToolsFingerprint === undefined && toolBridge.specs.length > 0) ||
+    (binding.dynamicToolsFingerprint !== undefined &&
+      !areCodexDynamicToolFingerprintsCompatible({
+        previous: binding.dynamicToolsFingerprint,
+        next: dynamicToolsFingerprint,
+      }));
   if (shouldRefreshDynamicTools) {
     await createThread({
       pluginConfig: params.pluginConfig,

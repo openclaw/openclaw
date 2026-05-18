@@ -739,6 +739,89 @@ describe("codex conversation binding", () => {
     expect(savedBinding.dynamicToolsFingerprint).toContain("test_plugin_echo");
   });
 
+  it("preserves older native bound Codex threads when no dynamic tools are available", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile + ".codex-app-server.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-old",
+        cwd: tempDir,
+        model: "gpt-5.4-mini",
+      }),
+    );
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        if (method === "turn/start") {
+          setImmediate(() => {
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-old",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "preserved" }],
+                },
+              },
+            });
+          });
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue",
+        bodyForAgent: "continue",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+        conversationId: "5185575566",
+      },
+      {
+        channelId: "telegram",
+        conversationId: "5185575566",
+        sessionKey: "telegram:direct:5185575566",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 500 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "preserved" } });
+    expect(requests.map((request) => request.method)).toEqual(["turn/start"]);
+    expect(requests[0]?.params.threadId).toBe("thread-old");
+    const savedBinding = JSON.parse(
+      await fs.readFile(sessionFile + ".codex-app-server.json", "utf8"),
+    );
+    expect(savedBinding.threadId).toBe("thread-old");
+    expect(savedBinding.dynamicToolsFingerprint).toBe("[]");
+  });
+
   it("recreates a missing bound thread and preserves auth plus turn overrides", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     agentRuntimeMocks.ensureAuthProfileStore.mockReturnValue({
