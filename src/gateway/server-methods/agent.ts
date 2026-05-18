@@ -124,7 +124,10 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
-import { performGatewaySessionReset } from "../session-reset-service.js";
+import {
+  emitGatewaySessionStartPluginHook,
+  performGatewaySessionReset,
+} from "../session-reset-service.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   canonicalizeSpawnedByForAgent,
@@ -1518,6 +1521,23 @@ export const agentHandlers: GatewayRequestHandlers = {
             emitSessionsChanged(context, {
               sessionKey: resolvedSessionKey,
               reason: "create",
+            });
+            // #83507: every other session-creation path
+            // (sessions.reset, sessions.create with emitCommandHooks=true,
+            // /new and /reset slash commands) emits the session_start
+            // plugin hook. agent.send's auto-rotation branch (daily reset
+            // boundary OR client-supplied new sessionId) previously bypassed
+            // it, so plugins listening on session_start silently missed the
+            // most common new-session trigger — a user resuming a chat
+            // after the daily boundary. Emit the hook here so the contract
+            // is consistent across all session-creation paths.
+            emitGatewaySessionStartPluginHook({
+              cfg,
+              sessionKey: resolvedSessionKey,
+              sessionId: resolvedSessionId,
+              storePath,
+              sessionFile: sessionEntry?.sessionFile,
+              agentId: resolveAgentIdFromSessionKey(resolvedSessionKey),
             });
           }
           if (resolvedSessionKey) {
