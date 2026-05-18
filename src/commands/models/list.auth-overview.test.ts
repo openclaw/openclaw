@@ -61,6 +61,12 @@ vi.mock("../../agents/model-auth.js", () => {
         if (!apiKey || apiKey === "secretref-managed") {
           return null;
         }
+        // #83732: OAuth delegation markers (e.g. "oauth:openai-codex") have
+        // no concrete env/local key to surface, so production's
+        // resolveUsableCustomProviderApiKey returns null. Mirror that here.
+        if (apiKey.startsWith("oauth:")) {
+          return null;
+        }
         if (apiKey === "OPENAI_API_KEY") {
           return process.env.OPENAI_API_KEY?.trim()
             ? { apiKey: process.env.OPENAI_API_KEY, source: "env: OPENAI_API_KEY" }
@@ -188,6 +194,20 @@ describe("resolveProviderAuthOverview", () => {
     expect(overview.effective.kind).toBe("missing");
     expect(overview.effective.detail).toBe("missing");
     expect(overview.modelsJson?.value).toContain(`marker(${NON_ENV_SECRETREF_MARKER})`);
+  });
+
+  it("renders OAuth delegation marker as models.json effective auth (#83732)", () => {
+    // The runtime resolves `oauth:openai-codex` through the linked auth
+    // profile, so the openai provider is NOT effectively missing — its
+    // auth is delegated. The display should reflect that, not say
+    // `effective=missing`.
+    const overview = withEnv({ OPENAI_API_KEY: undefined }, () =>
+      resolveOpenAiOverview("oauth:openai-codex"),
+    );
+
+    expect(overview.effective.kind).toBe("models.json");
+    expect(overview.effective.detail).toContain("oauth:openai-codex");
+    expect(overview.modelsJson?.value).toContain("marker(oauth:openai-codex)");
   });
 
   it("keeps env-var-shaped models.json values masked to avoid accidental plaintext exposure", () => {

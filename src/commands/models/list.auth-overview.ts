@@ -5,7 +5,10 @@ import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persis
 import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
-import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
+import {
+  isNonSecretApiKeyMarker,
+  isOAuthApiKeyMarker,
+} from "../../agents/model-auth-markers.js";
 import {
   getCustomProviderApiKey,
   resolveEnvApiKey,
@@ -173,6 +176,16 @@ export function resolveProviderAuthOverview(params: {
     }
     if (usableCustomKey) {
       return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
+    }
+    // #83732: an OAuth delegation marker (e.g. `oauth:openai-codex`) is
+    // intentional non-secret auth evidence — the runtime resolves it through
+    // the linked auth profile. `resolveUsableCustomProviderApiKey` returns
+    // null for these markers because there's no concrete env/local key to
+    // surface, but the provider is NOT effectively missing — its auth is
+    // delegated. Treat the marker as models.json evidence for the display so
+    // a healthy Codex-runtime setup doesn't show `effective=missing`.
+    if (customKey && isOAuthApiKeyMarker(customKey)) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(customKey) };
     }
     if (params.syntheticAuth) {
       return { kind: "synthetic", detail: params.syntheticAuth.source };
