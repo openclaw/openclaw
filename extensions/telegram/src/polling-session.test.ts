@@ -1892,11 +1892,11 @@ describe("TelegramPollingSession", () => {
     const regularTurnDone = new Promise<void>((resolve) => {
       releaseRegularTurn = resolve;
     });
-    const originalWriteFile = fs.writeFile.bind(fs) as typeof fs.writeFile;
+    const originalWriteFile = fs.writeFile.bind(fs);
     const writeFileSpy = vi
       .spyOn(fs, "writeFile")
       .mockImplementation(async (...args: Parameters<typeof fs.writeFile>) => {
-        if (String(args[0]).includes(".json.failed.")) {
+        if (typeof args[0] === "string" && args[0].includes(".json.failed.")) {
           throw new Error("disk full");
         }
         return await originalWriteFile(...args);
