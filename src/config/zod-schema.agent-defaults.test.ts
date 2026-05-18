@@ -342,6 +342,48 @@ describe("agent defaults schema", () => {
     expect(config.agents?.list?.[0]?.contextTokens).toBe(1_048_576);
   });
 
+  it("accepts per-agent tools.codeMode.enabled (#83388)", () => {
+    // docs/reference/code-mode.md describes `tools.codeMode.enabled: true` as
+    // settable at the agent level. Pre-fix AgentToolsSchema was .strict() and
+    // didn't include codeMode, so gateway startup rejected the documented
+    // shape with `agents.list.0.tools: Unrecognized key: "codeMode"`.
+    expectSchemaSuccess(
+      AgentEntrySchema.safeParse({
+        id: "test-agent",
+        tools: { codeMode: { enabled: true } },
+      }),
+    );
+    // Boolean form should also work, mirroring the top-level CodeModeSchema union.
+    expectSchemaSuccess(
+      AgentEntrySchema.safeParse({
+        id: "test-agent",
+        tools: { codeMode: true },
+      }),
+    );
+    // Full object form with documented options.
+    expectSchemaSuccess(
+      AgentEntrySchema.safeParse({
+        id: "test-agent",
+        tools: {
+          codeMode: {
+            enabled: true,
+            runtime: "quickjs-wasi",
+            timeoutMs: 5000,
+            languages: ["javascript"],
+          },
+        },
+      }),
+    );
+    // Unknown nested key still rejected (strict() preserved on the inner schema).
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({
+        id: "test-agent",
+        tools: { codeMode: { unknownKey: 1 } },
+      }),
+      "tools.codeMode",
+    );
+  });
+
   it("rejects non-positive contextTokens on agent entries and defaults", () => {
     expectSchemaFailurePath(
       AgentEntrySchema.safeParse({ id: "ops", contextTokens: 0 }),

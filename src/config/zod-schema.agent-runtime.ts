@@ -703,6 +703,12 @@ const MessageToolConfigSchema = z
 const AgentToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
+    // #83388: per-agent code-mode enablement matches the doc surface
+    // (`docs/reference/code-mode.md` describes `tools.codeMode.enabled` as
+    // an "agent or runtime" config). The top-level ToolsSchema already
+    // accepts `codeMode`; mirror it here so a per-agent override can be
+    // tested without forcing fleet-wide behavior change.
+    codeMode: CodeModeSchema,
     elevated: z
       .object({
         enabled: z.boolean().optional(),
