@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import type { AgentEventPayload } from "../infra/agent-events.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  registerAgentRunContext,
+  resetAgentRunContextForTest,
+  type AgentEventPayload,
+} from "../infra/agent-events.js";
 import { createAgentEventChannelMirror } from "./agent-event-channel-mirror.js";
 
 function event(overrides: Partial<AgentEventPayload>): AgentEventPayload {
@@ -41,6 +45,9 @@ function createHarness() {
 }
 
 describe("agent event channel mirror", () => {
+  afterEach(() => {
+    resetAgentRunContextForTest();
+  });
   it("mirrors thread-bound subagent progress, tool, command output, and thinking events to the Telegram topic", async () => {
     const { mirror, sendDurableMessageBatch } = createHarness();
 
@@ -105,6 +112,29 @@ describe("agent event channel mirror", () => {
     );
 
     expect(sendDurableMessageBatch).not.toHaveBeenCalled();
+  });
+
+  it("resolves hidden cron run session keys from agent run context", async () => {
+    const { mirror, sendDurableMessageBatch } = createHarness();
+    registerAgentRunContext("run-hidden-cron", {
+      sessionKey: "agent:main:cron:job-1:run:run-hidden-cron",
+      isControlUiVisible: false,
+    });
+
+    await mirror(
+      event({
+        runId: "run-hidden-cron",
+        sessionKey: undefined,
+        data: { text: "hidden cron progress", delta: "hidden cron progress" },
+      }),
+    );
+
+    expect(sendDurableMessageBatch).toHaveBeenCalledTimes(1);
+    expect(sendDurableMessageBatch.mock.calls[0]?.[0]).toMatchObject({
+      channel: "telegram",
+      threadId: "1189",
+      payloads: [{ text: "💬 hidden cron progress" }],
+    });
   });
 
   it("mirrors any session with an explicit Telegram thread route, including cron proof sessions", async () => {

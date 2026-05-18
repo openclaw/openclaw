@@ -2,7 +2,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { sendDurableMessageBatch as defaultSendDurableMessageBatch } from "../channels/message/runtime.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/send.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { onAgentEvent } from "../infra/agent-events.js";
+import { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { loadSessionEntry as defaultLoadSessionEntry } from "./session-utils.js";
@@ -238,7 +238,9 @@ export function createAgentEventChannelMirror(deps: AgentEventChannelMirrorDeps 
   const delayMs = deps.delayMs ?? DEFAULT_DELAY_MS;
 
   return async (evt: AgentEventPayload): Promise<void> => {
-    const sessionKey = normalizeOptionalString(evt.sessionKey);
+    const sessionKey =
+      normalizeOptionalString(evt.sessionKey) ??
+      normalizeOptionalString(getAgentRunContext(evt.runId)?.sessionKey);
     if (!hasSessionKey(sessionKey)) {
       return;
     }
