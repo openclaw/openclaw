@@ -79,6 +79,9 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
         readAllowFromStore: options.readAllowFromStore ?? vi.fn(async () => []),
         upsertPairingRequest: options.upsertPairingRequest ?? vi.fn(async () => null),
       },
+      commands: {
+        isControlCommandMessage: options.hasControlCommand ?? (() => false),
+      },
       text: {
         hasControlCommand: options.hasControlCommand ?? (() => false),
         resolveChunkMode: () => "length",

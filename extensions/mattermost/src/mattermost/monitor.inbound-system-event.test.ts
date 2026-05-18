@@ -230,6 +230,7 @@ function createRuntimeCore(
         record: vi.fn(),
       },
       commands: {
+        isControlCommandMessage: () => false,
         shouldHandleTextCommands: () => false,
       },
       debounce: {
