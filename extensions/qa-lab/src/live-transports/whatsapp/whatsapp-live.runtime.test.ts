@@ -145,8 +145,38 @@ describe("WhatsApp QA live runtime", () => {
         sutAccountId: "sut",
       },
     );
+    expect(cfg.agents?.defaults?.skipBootstrap).toBe(true);
     expect(cfg.messages?.groupChat?.visibleReplies).toBe("automatic");
     expect(cfg.messages?.groupChat?.mentionPatterns).toContain("\\bopenclawqa\\b");
+  });
+
+  it("renders WhatsApp live phase timings in the QA report", () => {
+    const report = __testing.renderWhatsAppQaMarkdown({
+      cleanupIssues: [],
+      credentialSource: "convex",
+      finishedAt: "2026-05-18T10:00:05.000Z",
+      redactMetadata: true,
+      scenarios: [
+        {
+          id: "whatsapp-canary",
+          title: "WhatsApp DM canary",
+          status: "pass",
+          details: "reply matched in 3210ms",
+          rttMs: 3210,
+          timings: {
+            gatewayStartMs: 1200,
+            channelReadyMs: 21000,
+            sendTextMs: 450,
+            waitForReplyMs: 2760,
+          },
+        },
+      ],
+      startedAt: "2026-05-18T10:00:00.000Z",
+    });
+
+    expect(report).toContain(
+      "- Timing: gatewayStart=1200ms, channelReady=21000ms, sendText=450ms, waitForReply=2760ms",
+    );
   });
 
   it("fails explicitly requested group scenarios when group credentials are missing", () => {

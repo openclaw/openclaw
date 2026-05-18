@@ -95,6 +95,14 @@ type WhatsAppObservedMessageArtifact = {
   text?: string;
 };
 
+type WhatsAppQaScenarioTimings = {
+  channelReadyMs?: number;
+  gatewayStartMs?: number;
+  quietWindowMs?: number;
+  sendTextMs?: number;
+  waitForReplyMs?: number;
+};
+
 type WhatsAppQaScenarioResult = {
   details: string;
   id: string;
@@ -108,6 +116,7 @@ type WhatsAppQaScenarioResult = {
     source: "request-to-observed-message";
   };
   status: "fail" | "pass" | "skip";
+  timings?: WhatsAppQaScenarioTimings;
   title: string;
 };
 
@@ -326,6 +335,13 @@ function buildWhatsAppQaConfig(
   const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "whatsapp"]);
   return {
     ...baseCfg,
+    agents: {
+      ...baseCfg.agents,
+      defaults: {
+        ...baseCfg.agents?.defaults,
+        skipBootstrap: true,
+      },
+    },
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,
@@ -567,6 +583,7 @@ async function runWhatsAppScenario(params: {
   const allowFrom =
     scenarioRun.configMode === "allowlist" ? [params.driverPhoneE164] : ["+15550000000"];
   const dmPolicy = scenarioRun.configMode === "allowlist" ? "allowlist" : "pairing";
+  const gatewayStartStartedAtMs = Date.now();
   const gatewayHarness = await startQaLiveLaneGateway({
     repoRoot: params.repoRoot,
     transport: {
@@ -593,13 +610,19 @@ async function runWhatsAppScenario(params: {
         sutAccountId: params.sutAccountId,
       }),
   });
+  const gatewayStartMs = Date.now() - gatewayStartStartedAtMs;
   let preservedGatewayDebug = false;
   try {
+    const channelReadyStartedAtMs = Date.now();
     await waitForWhatsAppChannelStable(gatewayHarness.gateway, params.sutAccountId);
+    const channelReadyMs = Date.now() - channelReadyStartedAtMs;
+    let quietWindowMs: number | undefined;
     if (scenarioRun.quietInput) {
       const quietStartedAt = new Date();
+      const quietStartedAtMs = quietStartedAt.getTime();
       await params.driver.sendText(target, scenarioRun.quietInput);
       await new Promise((resolve) => setTimeout(resolve, scenarioRun.quietWindowMs ?? 5_000));
+      quietWindowMs = Date.now() - quietStartedAtMs;
       const unexpectedReply = params.driver.getObservedMessages().find((message) => {
         if (new Date(message.observedAt).getTime() < quietStartedAt.getTime()) {
           return false;
@@ -616,16 +639,28 @@ async function runWhatsAppScenario(params: {
       }
     }
     const requestStartedAt = new Date();
+    const requestStartedAtMs = requestStartedAt.getTime();
+    const sendTextStartedAtMs = Date.now();
     await params.driver.sendText(target, scenarioRun.input);
+    const sendTextMs = Date.now() - sendTextStartedAtMs;
     if (!scenarioRun.expectReply) {
+      const waitStartedAtMs = Date.now();
       await new Promise((resolve) => setTimeout(resolve, params.scenario.timeoutMs));
       return {
         id: params.scenario.id,
         title: params.scenario.title,
         status: "pass" as const,
         details: "no reply",
+        timings: {
+          channelReadyMs,
+          gatewayStartMs,
+          ...(quietWindowMs === undefined ? {} : { quietWindowMs }),
+          sendTextMs,
+          waitForReplyMs: Date.now() - waitStartedAtMs,
+        },
       };
     }
+    const waitStartedAtMs = Date.now();
     const reply = await params.driver.waitForMessage({
       timeoutMs: params.scenario.timeoutMs,
       match: (message) =>
@@ -642,7 +677,8 @@ async function runWhatsAppScenario(params: {
     };
     params.observedMessages.push(observed);
     const responseObservedAt = new Date(reply.observedAt);
-    const rttMs = responseObservedAt.getTime() - requestStartedAt.getTime();
+    const waitForReplyMs = Date.now() - waitStartedAtMs;
+    const rttMs = responseObservedAt.getTime() - requestStartedAtMs;
     return {
       id: params.scenario.id,
       title: params.scenario.title,
@@ -656,6 +692,13 @@ async function runWhatsAppScenario(params: {
         requestStartedAt: requestStartedAt.toISOString(),
         responseObservedAt: responseObservedAt.toISOString(),
         source: "request-to-observed-message" as const,
+      },
+      timings: {
+        channelReadyMs,
+        gatewayStartMs,
+        ...(quietWindowMs === undefined ? {} : { quietWindowMs }),
+        sendTextMs,
+        waitForReplyMs,
       },
     };
   } catch (error) {
@@ -685,6 +728,23 @@ function toObservedWhatsAppArtifacts(params: {
     scenarioTitle: message.scenarioTitle,
     text: params.includeContent ? message.text : undefined,
   }));
+}
+
+function formatWhatsAppScenarioTimings(timings: WhatsAppQaScenarioTimings | undefined) {
+  if (!timings) {
+    return undefined;
+  }
+  const entries: Array<[string, number | undefined]> = [
+    ["gatewayStart", timings.gatewayStartMs],
+    ["channelReady", timings.channelReadyMs],
+    ["quietWindow", timings.quietWindowMs],
+    ["sendText", timings.sendTextMs],
+    ["waitForReply", timings.waitForReplyMs],
+  ];
+  const parts = entries
+    .filter((entry): entry is [string, number] => typeof entry[1] === "number")
+    .map(([label, value]) => `${label}=${Math.max(0, Math.round(value))}ms`);
+  return parts.length > 0 ? parts.join(", ") : undefined;
 }
 
 function renderWhatsAppQaMarkdown(params: {
@@ -722,6 +782,10 @@ function renderWhatsAppQaMarkdown(params: {
     lines.push(`- Details: ${scenario.details}`);
     if (scenario.rttMs !== undefined) {
       lines.push(`- RTT: ${scenario.rttMs}ms`);
+    }
+    const timingSummary = formatWhatsAppScenarioTimings(scenario.timings);
+    if (timingSummary) {
+      lines.push(`- Timing: ${timingSummary}`);
     }
     lines.push("");
   }
@@ -1038,8 +1102,10 @@ export const testing = {
   buildWhatsAppQaConfig,
   createMissingGroupJidScenarioResult,
   findScenarios,
+  formatWhatsAppScenarioTimings,
   isTransientWhatsAppQaDriverError,
   parseWhatsAppQaCredentialPayload,
+  renderWhatsAppQaMarkdown,
   resolveWhatsAppQaRuntimeEnv,
   resolveWhatsAppMetadataRedaction,
   toObservedWhatsAppArtifacts,
