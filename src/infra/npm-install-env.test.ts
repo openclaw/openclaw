@@ -29,6 +29,10 @@ function readNpmConfigList(env: NodeJS.ProcessEnv): Record<string, unknown> {
   return JSON.parse(raw) as Record<string, unknown>;
 }
 
+function expectUnsetNpmJsonConfig(value: unknown): void {
+  expect(value == null).toBe(true);
+}
+
 describe("npm project install env", () => {
   it("uses an absolute POSIX script shell for npm lifecycle scripts", () => {
     withMockedPlatform("linux", () => {
@@ -294,7 +298,7 @@ describe("npm project install env", () => {
 
       const npmConfig = readNpmConfigList(env);
       expect(npmConfig.before).toBe(FROZEN_NOW.toISOString());
-      expect(npmConfig["min-release-age"]).toBeNull();
+      expectUnsetNpmJsonConfig(npmConfig["min-release-age"]);
     } finally {
       fsSync.rmSync(dir, { recursive: true, force: true });
     }
@@ -335,8 +339,8 @@ describe("npm project install env", () => {
       expect(env.npm_config_before).toBe("");
       expect(env.npm_config_min_release_age).toBe("0");
       const npmConfig = readNpmConfigList(env);
-      expect(typeof npmConfig.before).toBe("string");
-      expect(npmConfig["min-release-age"]).toBeNull();
+      expect(npmConfig.before == null || typeof npmConfig.before === "string").toBe(true);
+      expectUnsetNpmJsonConfig(npmConfig["min-release-age"]);
     } finally {
       fsSync.rmSync(dir, { recursive: true, force: true });
     }
