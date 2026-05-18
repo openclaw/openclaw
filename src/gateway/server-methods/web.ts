@@ -1,10 +1,7 @@
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { hasExplicitChannelConfig } from "../../plugins/channel-plugin-ids.js";
-import {
-  resolveMissingOfficialExternalChannelPluginRepairHint,
-  resolveOfficialExternalPluginRepairHint,
-} from "../../plugins/official-external-plugin-repair-hints.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
 import {
   ErrorCodes,
   errorShape,
@@ -44,11 +41,10 @@ function resolveMissingWebLoginProviderRepairHint(
       if (!hasExplicitChannelConfig({ config, channelId })) {
         continue;
       }
-      const hint =
-        resolveMissingOfficialExternalChannelPluginRepairHint({
-          config,
-          channelId,
-        }) ?? resolveOfficialExternalPluginRepairHint(channelId);
+      const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
+        config,
+        channelId,
+      });
       if (hint) {
         return `Configured official external channel ${hint.label} is missing its plugin. ${hint.repairHint}`;
       }
