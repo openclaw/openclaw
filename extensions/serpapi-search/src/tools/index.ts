@@ -5,6 +5,7 @@ export { createSerpApiAmazonProductTool } from "./amazon-product.js";
 export { createSerpApiBingTool } from "./bing.js";
 export { createSerpApiDuckDuckGoTool } from "./duckduckgo.js";
 export { createSerpApiEbayTool } from "./ebay.js";
+export { createSerpApiEbayProductTool } from "./ebay-product.js";
 export { createSerpApiEventsTool } from "./events.js";
 export { createSerpApiFacebookProfileTool } from "./facebook-profile.js";
 export { createSerpApiFinanceTool } from "./finance.js";

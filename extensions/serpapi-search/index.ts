@@ -8,6 +8,7 @@ import {
   createSerpApiBingTool,
   createSerpApiDuckDuckGoTool,
   createSerpApiEbayTool,
+  createSerpApiEbayProductTool,
   createSerpApiEventsTool,
   createSerpApiFacebookProfileTool,
   createSerpApiFinanceTool,
@@ -47,6 +48,7 @@ export default definePluginEntry({
     api.registerTool((ctx) => createSerpApiBingTool(api, ctx), { name: "serpapi_bing" });
     api.registerTool((ctx) => createSerpApiDuckDuckGoTool(api, ctx), { name: "serpapi_duckduckgo" });
     api.registerTool((ctx) => createSerpApiEbayTool(api, ctx), { name: "serpapi_ebay" });
+    api.registerTool((ctx) => createSerpApiEbayProductTool(api, ctx), { name: "serpapi_ebay_product" });
     api.registerTool((ctx) => createSerpApiImmersiveProductTool(api, ctx), { name: "serpapi_immersive_product" });
     api.registerTool((ctx) => createSerpApiJobsTool(api, ctx), { name: "serpapi_jobs" });
     api.registerTool((ctx) => createSerpApiLensTool(api, ctx), { name: "serpapi_lens" });
