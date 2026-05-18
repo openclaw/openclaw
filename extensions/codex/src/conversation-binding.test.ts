@@ -542,6 +542,85 @@ describe("codex conversation binding", () => {
     });
   });
 
+  it("scopes bound turn dynamic tools to the binding conversation, not the provider channel", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile + ".codex-app-server.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        dynamicToolsFingerprint: "[]",
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string) => {
+        if (method === "turn/start") {
+          setImmediate(() =>
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+                },
+              },
+            }),
+          );
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error("unexpected method: " + method);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "scope check",
+        bodyForAgent: "scope check",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "conv-scoped-77",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 50 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    const toolFactoryOptions = mockCallArg(agentHarnessMocks.createOpenClawCodingTools) as {
+      currentChannelId?: unknown;
+      messageTo?: unknown;
+      sessionId?: unknown;
+    };
+    expect(toolFactoryOptions.sessionId).toBe("conv-scoped-77");
+    expect(toolFactoryOptions.messageTo).toBe("conv-scoped-77");
+    expect(toolFactoryOptions.currentChannelId).toBe("conv-scoped-77");
+  });
+
   it("upgrades older native bound Codex threads without dynamic tool fingerprints", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     agentHarnessMocks.createOpenClawCodingTools.mockReturnValue([createEchoTool()] as never);

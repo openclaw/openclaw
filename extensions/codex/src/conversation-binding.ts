@@ -612,8 +612,13 @@ async function buildConversationDynamicToolBridge(params: {
   const signal = params.signal ?? new AbortController().signal;
   const codexConfig = readCodexPluginConfig(params.pluginConfig);
   const { createOpenClawCodingTools } = await import("openclaw/plugin-sdk/agent-harness");
+  // The bound conversation is the security boundary for tool replies and
+  // session state. ctx.channelId is only the provider id (for example,
+  // "telegram"), so it must never be used as a conversation fallback.
   const boundConversationId =
-    params.ctx?.conversationId ?? params.event?.conversationId ?? params.ctx?.channelId;
+    params.ctx?.pluginBinding?.conversationId ??
+    params.ctx?.conversationId ??
+    params.event?.conversationId;
   const allTools = createOpenClawCodingTools({
     includeCoreTools: false,
     config: params.config,
