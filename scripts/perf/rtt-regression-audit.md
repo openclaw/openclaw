@@ -50,14 +50,18 @@ Status: branch-local checkpoint, not release notes.
   attempt on `tbx_01krwbsg15xvjdgpcz8fxq1htz` was blocked before reaching the
   changed gate: pnpm install rejected newly published
   `@earendil-works/pi-ai@0.74.1` under `minimumReleaseAge`.
+- Follow-up branch `perf/discord-rtt-summary-import` in `openclaw-rtt` updates
+  `scripts/import-discord-rtt.mjs` to prefer the new summary `rttMs` field
+  before observed-message or summary-duration fallback. `npm test -- scripts/import-discord-rtt.test.mjs`
+  passed 19 tests and `npm run check` passed.
 
 ## Still weak
 
 - No retained-heap regression has been proven. The first heap-checkpoint sample
   grew by about 11M on disk across the scenario, which is worth comparing
   across repeated warm samples before calling it a leak.
-- The branch fixes OpenClaw artifact quality. `openclaw-rtt` still needs an
-  importer/report follow-up to prefer summary `rttMs` and optionally ingest
-  gateway RSS fields.
+- The branch fixes OpenClaw artifact quality. `openclaw-rtt` has a paired
+  importer branch for summary `rttMs`; gateway RSS import remains a later
+  schema/reporting decision.
 - Gitcrawl data was stale for the newest RTT window, so live `gh` history was
   the source of truth for 2026-05-16 and 2026-05-17 PR attribution.
