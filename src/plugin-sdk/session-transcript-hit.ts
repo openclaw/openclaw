@@ -64,6 +64,13 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
     if (!mdStem) {
       return null;
     }
+    for (const reason of ["reset", "deleted"] as const) {
+      const marker = `.jsonl.${reason}.`;
+      const index = mdStem.lastIndexOf(marker);
+      if (index > 0) {
+        return { stem: mdStem.slice(0, index), ownerAgentId, archived: true };
+      }
+    }
     const restoredArchiveName = restoreQmdNormalizedArchiveName(mdStem);
     if (restoredArchiveName) {
       const archivedStem = parseUsageCountedSessionIdFromFileName(restoredArchiveName);

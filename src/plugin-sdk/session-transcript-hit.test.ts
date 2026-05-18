@@ -76,6 +76,32 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     });
   });
 
+  it("recognizes QMD-exported dot-form archived reset .md paths", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/abc-uuid.jsonl.reset.2026-02-16T22-26-33.000Z.md",
+      ),
+    ).toBe("abc-uuid");
+  });
+
+  it("recognizes QMD-exported dot-form archived deleted .md paths", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/def-uuid.jsonl.deleted.2026-02-16T22-27-33.000Z.md",
+      ),
+    ).toBe("def-uuid");
+  });
+
+  it("returns archived identity for QMD-exported dot-form reset .md paths", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "qmd/sessions-main/abc-uuid.jsonl.reset.2026-02-16T22-26-33.000Z.md",
+    );
+    expect(identity).toEqual({
+      stem: "abc-uuid",
+      archived: true,
+    });
+  });
+
   it("does not mistake arbitrary suffixes containing .jsonl. for archives", () => {
     // Not a real archive pattern: suffix after .jsonl. must be `reset` or `deleted`.
     expect(
