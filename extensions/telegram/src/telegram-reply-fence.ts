@@ -1,4 +1,8 @@
-import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
+import {
+  isAbortRequestText,
+  isBtwRequestText,
+} from "openclaw/plugin-sdk/command-primitives-runtime";
+import { isTelegramReadOnlyControlLaneText } from "./sequential-key.js";
 
 type TelegramReplyFenceState = {
   generation: number;
@@ -164,7 +168,16 @@ export function shouldSupersedeTelegramReplyFence(ctxPayload: {
   CommandAuthorized: boolean;
 }): boolean {
   const dispatchText = ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body ?? "";
-  return !isAbortRequestText(dispatchText) || ctxPayload.CommandAuthorized;
+  if (isAbortRequestText(dispatchText)) {
+    return ctxPayload.CommandAuthorized;
+  }
+  if (
+    isBtwRequestText(dispatchText) ||
+    isTelegramReadOnlyControlLaneText({ rawText: dispatchText })
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function getTelegramReplyFenceSizeForTests(): number {
