@@ -976,6 +976,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       let resolvedSessionStorePath: string | undefined;
       let resolvedSessionKey = requestedSessionKey;
       let isNewSession = false;
+      // #83507 follow-up: carry the replaced session ID across the auto-rotation
+      // branch so emitGatewaySessionStartPluginHook can pass `resumedFrom` and
+      // plugins can link the old → new session lifecycle. Defaults to undefined
+      // when no prior session was rotated.
+      let previousSessionId: string | undefined;
       let skipTimestampInjection = false;
       let shouldPrependStartupContext = false;
 
@@ -1120,6 +1125,12 @@ export const agentHandlers: GatewayRequestHandlers = {
           (!canReuseSession && !usableRequestedSessionId) ||
           Boolean(usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId);
         const rotatedSessionId = Boolean(entry?.sessionId && entry.sessionId !== sessionId);
+        // #83507 follow-up: capture the replaced session ID so the start-hook
+        // call below can pass it as `resumedFrom`, matching the canonical
+        // sessions.reset path which already carries this lifecycle linkage.
+        if (rotatedSessionId && entry?.sessionId) {
+          previousSessionId = entry.sessionId;
+        }
         const touchInteraction =
           request.bootstrapContextRunKind !== "cron" &&
           request.bootstrapContextRunKind !== "heartbeat" &&
@@ -1545,6 +1556,9 @@ export const agentHandlers: GatewayRequestHandlers = {
               cfg: resolvedSessionCfg,
               sessionKey: resolvedSessionKey,
               sessionId: resolvedSessionId,
+              // #83507 follow-up: pass the replaced session ID so plugins can
+              // link the old → new lifecycle, matching sessions.reset.
+              resumedFrom: previousSessionId,
               storePath: resolvedSessionStorePath,
               sessionFile: sessionEntry?.sessionFile,
               agentId: resolveAgentIdFromSessionKey(resolvedSessionKey),
