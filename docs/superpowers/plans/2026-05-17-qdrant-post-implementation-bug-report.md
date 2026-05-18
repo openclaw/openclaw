@@ -5,7 +5,7 @@
 **Related plan:** `docs/superpowers/plans/2026-05-17-qdrant-workspace-reconciliation.md`
 **Trigger:** OpenClaw agent reported `Error calling tool 'qdrant-find': 'document'` after the workspace-reconciler rollout
 
-This document tracks the **8 open issues** uncovered during the post-rollout verification session. Two additional P1 bugs (`qdrant-find` missing `document` key and reconciler EPIPE on first upsert) were found and fixed in the same session via commits `be224c265c` and `e27ac4cab7` — see the related plan's _Post-Rollout Corrections_ section for that record.
+This document tracks the **5 open issues** uncovered during the post-rollout verification session. Five earlier issues are now worked off: the two initial P1 bugs (`qdrant-find` missing `document` key and reconciler EPIPE on first upsert) plus the Sprint 1 cleanup items (`pnpm build` bind-mount orphan, the stale local `web-tree-sitter` install that broke the dts step, and the Qdrant server/client version mismatch). See Appendix B for the fix record.
 
 Severity legend:
 
@@ -19,14 +19,11 @@ Severity legend:
 
 | #   | Title                                                                                             | Severity           |
 | --- | ------------------------------------------------------------------------------------------------- | ------------------ |
-| 1   | `pnpm build` orphans the Docker bind-mount (`dist//deleted`)                                      | P2                 |
-| 2   | `pnpm build` dts step fails on missing `web-tree-sitter` types                                    | P2                 |
-| 3   | qdrant-client v1.18 vs server v1.12.4 minor version mismatch warning                              | P3                 |
-| 4   | Reconciler vs MCP `agent-memory` ownership invariant is implicit                                  | P2                 |
-| 5   | `classifyWorkspacePoints` ignores payload-schema changes, so schema migrations need manual delete | P2                 |
-| 6   | FastEmbed Python bridge re-loads the ONNX model on every spawn                                    | P2                 |
-| 7   | `indexed_vectors_count` is 0 because HNSW indexing threshold is 20000                             | Informational / P3 |
-| 8   | Stale `agents/main/sessions/sessions.json` and large session history may bloat search corpora     | Informational / P3 |
+| 1   | Reconciler vs MCP `agent-memory` ownership invariant is implicit                                  | P2                 |
+| 2   | `classifyWorkspacePoints` ignores payload-schema changes, so schema migrations need manual delete | P2                 |
+| 3   | FastEmbed Python bridge re-loads the ONNX model on every spawn                                    | P2                 |
+| 4   | `indexed_vectors_count` is 0 because HNSW indexing threshold is 20000                             | Informational / P3 |
+| 5   | Stale `agents/main/sessions/sessions.json` and large session history may bloat search corpora     | Informational / P3 |
 
 ---
 
@@ -143,7 +140,7 @@ Option 1 is the longer-term direction; option 2 is the immediate compatibility p
 
 ---
 
-## 4. Reconciler vs MCP `agent-memory` ownership invariant is implicit
+## 1. Reconciler vs MCP `agent-memory` ownership invariant is implicit
 
 ### Symptom
 
@@ -168,7 +165,7 @@ The `agent-memory` collection is written by two independent producers:
 
 ---
 
-## 5. `classifyWorkspacePoints` ignores payload-schema changes
+## 2. `classifyWorkspacePoints` ignores payload-schema changes
 
 ### Symptom
 
@@ -211,7 +208,7 @@ if (sameHash && sameSchema) {
 
 ---
 
-## 6. FastEmbed Python bridge re-loads the ONNX model on every spawn
+## 3. FastEmbed Python bridge re-loads the ONNX model on every spawn
 
 ### Symptom
 
@@ -254,7 +251,7 @@ For workspaces that grow beyond a few thousand chunks, switch to a persistent em
 
 ---
 
-## 7. `indexed_vectors_count: 0` because HNSW threshold is 20000
+## 4. `indexed_vectors_count: 0` because HNSW threshold is 20000
 
 ### Observation
 
@@ -281,7 +278,7 @@ optimizer_config:
 
 ---
 
-## 8. Stale `agents/main/sessions/sessions.json` and large session corpora
+## 5. Stale `agents/main/sessions/sessions.json` and large session corpora
 
 ### Observation
 
@@ -298,18 +295,7 @@ If/when a future memory feature ingests session corpora into Qdrant, these files
 
 ## Appendix A — Diagnosis recipes useful for the open items
 
-1. **Bind-mount inode check (issue #1):**
-
-   ```bash
-   docker exec openclaw-openclaw-gateway-1 findmnt /app/dist
-   # if SOURCE column ends in "//deleted", the bind-mount is orphaned and
-   # `docker compose restart openclaw-gateway` is required after every build
-   stat -c '%i' /home/ubuntu/godwind-team-docker/openclaw/dist
-   docker exec openclaw-openclaw-gateway-1 stat -c '%i' /app/dist
-   # different inodes ⇒ mount is stale
-   ```
-
-2. **Live state inspection of the `agent-memory` collection:**
+1. **Live state inspection of the `agent-memory` collection:**
 
    ```bash
    curl -s http://127.0.0.1:6333/collections/agent-memory | jq .result
@@ -318,9 +304,9 @@ If/when a future memory feature ingests session corpora into Qdrant, these files
      -d '{"limit":1000,"with_payload":true,"with_vector":false}' | jq
    ```
 
-   Use this to audit the writers issue #4 talks about — the `managed_by` distribution tells you who owns each point.
+   Use this to audit the writers issue #1 talks about — the `managed_by` distribution tells you who owns each point.
 
-3. **Undici tracing for reconciler HTTP behavior:**
+2. **Undici tracing for reconciler HTTP behavior:**
 
    ```bash
    docker exec -u node openclaw-openclaw-gateway-1 sh -c \
@@ -329,7 +315,7 @@ If/when a future memory feature ingests session corpora into Qdrant, these files
 
    Useful for catching socket-lifecycle issues like the EPIPE class of bugs.
 
-4. **Source archaeology pointers for ownership/schema work (issues #4, #5):**
+3. **Source archaeology pointers for ownership/schema work (issues #1, #2):**
    - Deletion filter: `packages/memory-host-sdk/src/host/workspace-reconcile.ts:411`
    - Classification logic: `packages/memory-host-sdk/src/host/workspace-reconcile.ts` (`classifyWorkspacePoints`)
    - Embed bridge: `src/commands/qdrant-workspace-reconcile.ts:81-89` and `:365` (`embedWorkspaceTexts`)
@@ -337,11 +323,14 @@ If/when a future memory feature ingests session corpora into Qdrant, these files
 
 ## Appendix B — Already-fixed bugs from the same session (for cross-reference)
 
-The two P1 bugs that triggered this audit were resolved before this document was published. They are recorded in:
+The initial P1 bugs and Sprint 1 cleanup items were resolved before Sprint 2 work started. They are recorded in:
 
 - `docs/superpowers/plans/2026-05-17-qdrant-workspace-reconciliation.md` § _Post-Rollout Corrections_
 - Commit `be224c265c` — `fix(memory): add document payload key and retry EPIPE in qdrant reconciler`
 - Commit `e27ac4cab7` — `docs: qdrant post-implementation bug report and plan corrections`
+- Commit `65bc177037` — `fix(build): preserve dist bind mounts and add deploy wrapper`
+- Host stack change on 2026-05-18 — upgraded `/home/ubuntu/.qdrant/docker-compose.yml` from `qdrant/qdrant:v1.12.4` to `qdrant/qdrant:v1.18.0` via consecutive minor hops after taking a volume snapshot and re-verifying `qdrant-find`
+- Local environment repair on 2026-05-18 — `pnpm install` restored the already-declared `web-tree-sitter@0.26.8`, after which `pnpm build:plugin-sdk:dts` passed cleanly with no manifest delta
 
 Files touched by those fixes:
 
