@@ -198,7 +198,7 @@ vi.mock("./server-tailscale.js", () => ({
   startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
 }));
 
-const { startGatewayPostAttachRuntime, startGatewaySidecars, __testing } =
+const { startGatewayPostAttachRuntime, startGatewaySidecars, testing } =
   await import("./server-startup-post-attach.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-descriptors.js");
 
@@ -525,7 +525,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-no-sentinel-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
-    const result = await __testing.refreshLatestUpdateRestartSentinelIfPresent();
+    const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
 
     expect(result).toBeNull();
     expect(hoisted.refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
@@ -539,7 +539,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const sentinel = { kind: "update", status: "ok", ts: 1 } as const;
     hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
 
-    const result = await __testing.refreshLatestUpdateRestartSentinelIfPresent();
+    const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
 
     expect(result).toBe(sentinel);
     expect(hoisted.refreshLatestUpdateRestartSentinel).toHaveBeenCalledOnce();
@@ -555,7 +555,7 @@ describe("startGatewayPostAttachRuntime", () => {
       fs.writeFileSync(path.join(stateDirFromHome, "restart-sentinel.json"), "{}\n");
 
       expect(
-        await __testing.hasRestartSentinelFileFast({
+        await testing.hasRestartSentinelFileFast({
           HOME: osHome,
           OPENCLAW_HOME: "~/openclaw-home",
         } as NodeJS.ProcessEnv),
@@ -566,7 +566,7 @@ describe("startGatewayPostAttachRuntime", () => {
       fs.writeFileSync(path.join(backslashStateDir, "restart-sentinel.json"), "{}\n");
 
       expect(
-        await __testing.hasRestartSentinelFileFast({
+        await testing.hasRestartSentinelFileFast({
           HOME: osHome,
           OPENCLAW_STATE_DIR: "~\\openclaw-state",
         } as NodeJS.ProcessEnv),
@@ -589,7 +589,7 @@ describe("startGatewayPostAttachRuntime", () => {
       });
       try {
         await expect(
-          __testing.hasRestartSentinelFileFast({
+          testing.hasRestartSentinelFileFast({
             OPENCLAW_STATE_DIR: stateDir,
           } as NodeJS.ProcessEnv),
         ).resolves.toBe(true);
@@ -734,10 +734,10 @@ describe("startGatewayPostAttachRuntime", () => {
 
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
     expect(
-      __testing.resolveGatewayMemoryStartupPolicy({ memory: { backend: "qmd" } } as never),
+      testing.resolveGatewayMemoryStartupPolicy({ memory: { backend: "qmd" } } as never),
     ).toEqual({ mode: "off" });
     expect(
-      __testing.resolveGatewayMemoryStartupPolicy({
+      testing.resolveGatewayMemoryStartupPolicy({
         memory: { backend: "qmd", qmd: { update: { startup: "immediate", onBoot: false } } },
       } as never),
     ).toEqual({ mode: "off" });
@@ -835,7 +835,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
 
     try {
-      const promise = __testing.prewarmConfiguredPrimaryModelWithTimeout(
+      const promise = testing.prewarmConfiguredPrimaryModelWithTimeout(
         {
           cfg: {} as never,
           log,
@@ -866,7 +866,7 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.resolveAgentModelPrimaryValue.mockReturnValue("openai/gpt-5.4");
     hoisted.resolveDefaultAgentDir.mockReturnValue("/tmp/openclaw-state/agents/ops/agent");
 
-    await __testing.prewarmConfiguredPrimaryModel({
+    await testing.prewarmConfiguredPrimaryModel({
       cfg,
       workspaceDir: "/tmp/openclaw-workspace",
       log: { warn: vi.fn() },
@@ -1095,7 +1095,7 @@ describe("startGatewayPostAttachRuntime", () => {
   it("stops post-ready sidecars registered after close started", () => {
     const postReadySidecar = { stop: vi.fn() };
 
-    __testing.stopPostReadySidecarsAfterCloseStarted({
+    testing.stopPostReadySidecarsAfterCloseStarted({
       postReadySidecars: [postReadySidecar],
       closeStarted: true,
     });
@@ -1106,7 +1106,7 @@ describe("startGatewayPostAttachRuntime", () => {
   it("keeps post-ready sidecars running when close has not started", () => {
     const postReadySidecar = { stop: vi.fn() };
 
-    __testing.stopPostReadySidecarsAfterCloseStarted({
+    testing.stopPostReadySidecarsAfterCloseStarted({
       postReadySidecars: [postReadySidecar],
       closeStarted: false,
     });

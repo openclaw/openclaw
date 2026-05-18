@@ -251,8 +251,9 @@ export async function recoverStuckDiagnosticSession(
   }
 }
 
-export const __testing = {
+export const testing = {
   resetRecoveriesInFlight(): void {
     recoveriesInFlight.clear();
   },
 };
+export { testing as __testing };

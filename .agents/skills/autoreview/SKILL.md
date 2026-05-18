@@ -136,3 +136,10 @@ Include:
 - the clean review result from the final helper/review run, or why a remaining finding was consciously rejected
 
 Do not run another Codex review solely to improve the final report wording. If the final helper run exited 0 and produced no accepted/actionable findings, report that exact run as clean.
+
+## PR / CI Closeout
+
+- Prefer direct run/job APIs after CI starts: `gh run view <run-id> --json jobs`; use PR rollup only for final mergeability.
+- After rebase, compare `origin/main..HEAD`; drop CI-fix commits already upstream before pushing.
+- For prompt snapshot CI failures, prove/generate with Linux Node 24 before rerunning the failed job.
+- Update PR body once near the final head unless proof labels are missing or stale enough to block CI.

@@ -139,6 +139,7 @@ import {
   resolveSubagentToolPolicyForSession,
 } from "../../pi-tools.policy.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
@@ -217,6 +218,7 @@ import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
+import { createCodexNativeWebSearchWrapper } from "../openai-stream-wrappers.js";
 import {
   collectPromptCacheToolNames,
   beginPromptCacheObservation,
@@ -771,7 +773,7 @@ async function cancelQueuedSteeringMessage(
   return true;
 }
 
-export const __testing = {
+export const testing = {
   cancelQueuedSteeringMessage,
   steerAndWaitForTranscriptCommit,
 };
@@ -980,7 +982,7 @@ function sessionMessagesContainIdempotencyKey(
 }
 
 function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionManager>): void {
-  (sessionManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
+  (sessionManager as unknown as { _rewriteFile?: () => void })["_rewriteFile"]?.();
 }
 
 export function shouldRunLlmOutputHooksForAttempt(params: { promptErrorSource: string | null }) {
@@ -1033,7 +1035,7 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
     }
     return;
   }
-  if (typeof mutableSessionManager._rewriteFile !== "function") {
+  if (typeof mutableSessionManager["_rewriteFile"] !== "function") {
     log.warn(
       "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but SessionManager rewrite hook is unavailable",
     );
@@ -1044,7 +1046,7 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
     mutableSessionManager.byId?.delete(lastEntry.id);
   }
   mutableSessionManager.leafId = lastEntry.parentId ?? null;
-  mutableSessionManager._rewriteFile();
+  mutableSessionManager["_rewriteFile"]();
 }
 
 export function resolveAttemptToolPolicyMessageProvider(params: {
@@ -1322,7 +1324,7 @@ export async function runEmbeddedAttempt(
       toolsAllow: toolsAllowWithForcedRuntimeTools,
     });
     const toolsEnabled = supportsModelTools(params.model);
-    const codeModeConfig = resolveCodeModeConfig(params.config);
+    const codeModeConfig = resolveCodeModeConfig(params.config, sessionAgentId);
     const codeModeControlsEnabledForRun =
       toolsEnabled &&
       params.disableTools !== true &&
@@ -1877,6 +1879,7 @@ export async function runEmbeddedAttempt(
     const promptMode =
       params.promptMode ??
       (isRawModelRun ? "none" : resolvePromptModeForSession(params.sessionKey));
+    const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
 
     // When toolsAllow is set, use minimal prompt and strip skills catalog
     const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
@@ -1954,7 +1957,10 @@ export async function runEmbeddedAttempt(
           config: params.config,
           sandboxed: sandboxInfo?.enabled === true,
         }),
-        nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
+        promptSurface,
+        nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+          surface: promptSurface,
+        }),
         runtimeInfo,
         messageToolHints,
         sandboxInfo,
@@ -2078,8 +2084,12 @@ export async function runEmbeddedAttempt(
         suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
         suppressTranscriptOnlyAssistantPersistence:
           params.suppressTranscriptOnlyAssistantPersistence,
+        suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
         onUserMessagePersisted: (message) => {
           params.onUserMessagePersisted?.(message);
+        },
+        onAssistantErrorMessagePersisted: (message) => {
+          params.onAssistantErrorMessagePersisted?.(message);
         },
       });
       trackSessionManagerAccess(params.sessionFile);
@@ -2642,6 +2652,16 @@ export async function runEmbeddedAttempt(
         resolvedTransport,
         { preparedExtraParams: effectiveExtraParams },
       );
+      if (codeModeControlsEnabledForRun) {
+        activeSession.agent.streamFn = createCodexNativeWebSearchWrapper(
+          activeSession.agent.streamFn,
+          {
+            config: params.config,
+            agentDir,
+            codeModeToolSurfaceEnabled: true,
+          },
+        );
+      }
       const effectivePromptCacheRetention = resolveCacheRetention(
         effectiveExtraParams,
         params.provider,
@@ -4832,3 +4852,4 @@ export async function runEmbeddedAttempt(
     restoreSkillEnv?.();
   }
 }
+export { testing as __testing };

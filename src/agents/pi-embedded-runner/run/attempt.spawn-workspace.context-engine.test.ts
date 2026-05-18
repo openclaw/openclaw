@@ -21,6 +21,7 @@ import {
 } from "./attempt.context-engine-helpers.js";
 import {
   cleanupTempPaths,
+  createDefaultEmbeddedSession,
   createContextEngineBootstrapAndAssemble,
   createContextEngineAttemptRunner,
   expectCalledWithSessionKey,
@@ -233,6 +234,85 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
     expect(options.includeToolSearchControls).toBe(true);
     expect(options.toolSearchCatalogRef).toEqual({});
+  });
+
+  it("enforces code-mode payload surface from active-agent config during an embedded attempt", async () => {
+    const observedOptions: Array<Record<string, unknown>> = [];
+    const payloads: Array<Record<string, unknown>> = [];
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:ops:guildchat:channel:test-code-mode",
+      tempPaths,
+      attemptOverrides: {
+        agentId: "ops",
+        disableTools: false,
+        config: {
+          tools: {
+            codeMode: { enabled: false },
+          },
+          agents: {
+            list: [{ id: "ops", tools: { codeMode: true } }],
+          },
+        } as OpenClawConfig,
+        model: {
+          api: "openai-codex-responses",
+          provider: "gateway",
+          id: "gpt-5.5",
+          contextWindow: 8192,
+          input: ["text"],
+        } as never,
+      },
+      createSession: () => {
+        const session = createDefaultEmbeddedSession();
+        session.agent.streamFn = async (_model, _context, options) => {
+          observedOptions.push(options as Record<string, unknown>);
+          const payload: Record<string, unknown> = {
+            tools: [
+              { type: "function", name: "exec" },
+              { type: "function", name: "wait" },
+              { type: "function", name: "read" },
+            ],
+          };
+          (
+            options as { onPayload?: (payload: Record<string, unknown>) => void } | undefined
+          )?.onPayload?.(payload);
+          payloads.push(structuredClone(payload));
+          return {
+            async result() {
+              return { role: "assistant", content: "done" };
+            },
+            [Symbol.asyncIterator]() {
+              return (async function* () {})();
+            },
+          };
+        };
+        session.prompt = async () => {
+          await session.agent.streamFn?.(
+            {} as never,
+            {
+              messages: [],
+              tools: [
+                { name: "exec", description: "", parameters: {} },
+                { name: "wait", description: "", parameters: {} },
+              ],
+            } as never,
+            {},
+          );
+          session.messages = [
+            ...session.messages,
+            { role: "assistant", content: "done", timestamp: 2 },
+          ];
+        };
+        return session;
+      },
+    });
+
+    expect(observedOptions.at(-1)?.openclawCodeModeToolSurface).toBe(true);
+    expect(payloads.at(-1)?.tools).toEqual([
+      { type: "function", name: "exec" },
+      { type: "function", name: "wait" },
+    ]);
   });
 
   it("sends transcriptPrompt visibly and queues runtime context as hidden custom context", async () => {

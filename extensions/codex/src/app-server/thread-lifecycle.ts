@@ -4,10 +4,8 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
-import {
-  CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
-  renderCodexPromptOverlay,
-} from "../../prompt-overlay.js";
+import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
+import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
@@ -71,7 +69,7 @@ export type CodexPluginThreadConfigProvider = {
 
 export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
-  "features.code_mode_only": true,
+  "features.code_mode_only": false,
 };
 
 export const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
@@ -94,6 +92,7 @@ export async function startOrResumeThread(params: {
   config?: JsonObject;
   finalConfigPatch?: JsonObject;
   nativeCodeModeEnabled?: boolean;
+  nativeCodeModeOnlyEnabled?: boolean;
   userMcpServersEnabled?: boolean;
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
@@ -265,6 +264,7 @@ export async function startOrResumeThread(params: {
               developerInstructions: params.developerInstructions,
               config: resumeConfig,
               nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+              nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
             }),
           ),
         );
@@ -361,6 +361,7 @@ export async function startOrResumeThread(params: {
         developerInstructions: params.developerInstructions,
         config,
         nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+        nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
       }),
     ),
   );
@@ -560,6 +561,7 @@ export function buildThreadStartParams(
     developerInstructions?: string;
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
+    nativeCodeModeOnlyEnabled?: boolean;
   },
 ): CodexThreadStartParams {
   const modelProvider = resolveCodexAppServerModelProvider({
@@ -580,6 +582,7 @@ export function buildThreadStartParams(
     serviceName: "OpenClaw",
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
+      nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
     }),
     ...(options.nativeCodeModeEnabled === false ? { environments: [] } : {}),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
@@ -598,6 +601,7 @@ export function buildThreadResumeParams(
     developerInstructions?: string;
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
+    nativeCodeModeOnlyEnabled?: boolean;
   },
 ): CodexThreadResumeParams {
   const modelProvider = resolveCodexAppServerModelProvider({
@@ -617,6 +621,7 @@ export function buildThreadResumeParams(
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
+      nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
     }),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     persistExtendedHistory: true,
@@ -625,22 +630,40 @@ export function buildThreadResumeParams(
 
 export function buildCodexRuntimeThreadConfig(
   config: JsonObject | undefined,
-  options: { nativeCodeModeEnabled?: boolean } = {},
+  options: { nativeCodeModeEnabled?: boolean; nativeCodeModeOnlyEnabled?: boolean } = {},
 ): JsonObject {
-  const codeModeConfig =
-    options.nativeCodeModeEnabled === false
-      ? CODEX_CODE_MODE_DISABLED_THREAD_CONFIG
-      : CODEX_CODE_MODE_THREAD_CONFIG;
-  const runtimeConfig = mergeCodexThreadConfigs(config, codeModeConfig) ?? {
-    ...codeModeConfig,
+  const codeModeConfig: JsonObject = {
+    ...CODEX_CODE_MODE_THREAD_CONFIG,
+    "features.code_mode_only": options.nativeCodeModeOnlyEnabled === true,
   };
-  return runtimeConfig;
+  if (options.nativeCodeModeEnabled === false) {
+    return (
+      mergeCodexThreadConfigs(codeModeConfig, config, CODEX_CODE_MODE_DISABLED_THREAD_CONFIG) ?? {
+        ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+      }
+    );
+  }
+  if (options.nativeCodeModeOnlyEnabled === true) {
+    return (
+      mergeCodexThreadConfigs(codeModeConfig, config, {
+        "features.code_mode_only": true,
+      }) ?? {
+        ...codeModeConfig,
+        "features.code_mode_only": true,
+      }
+    );
+  }
+  return (
+    mergeCodexThreadConfigs(codeModeConfig, config) ?? {
+      ...codeModeConfig,
+    }
+  );
 }
 
 function buildCodexRuntimeThreadConfigForRun(
   params: EmbeddedRunAttemptParams,
   config: JsonObject | undefined,
-  options: { nativeCodeModeEnabled?: boolean } = {},
+  options: { nativeCodeModeEnabled?: boolean; nativeCodeModeOnlyEnabled?: boolean } = {},
 ): JsonObject {
   const runtimeConfig = buildCodexRuntimeThreadConfig(config, options);
   if (params.bootstrapContextMode !== "lightweight") {
@@ -798,44 +821,25 @@ function compareJsonFingerprint(left: JsonValue, right: JsonValue): number {
 }
 
 export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
-  const promptOverlay = renderCodexRuntimePromptOverlay(params);
+  const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
+    surface: "codex_app_server",
+    includeLegacyGlobalGuidance: false,
+  }).join("\n");
   const sections = [
-    "Running inside OpenClaw. Use dynamic tools for messaging, cron, sessions, media, gateway, and nodes when available.",
+    "Running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes capabilities when available.",
     "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation; if it is not already loaded, search for `sessions_spawn` in the `openclaw` dynamic tool namespace before calling it.",
-    "Preserve channel/session context. Visible channel replies: use `message`, do not describe would-reply.",
-    promptOverlay,
+    buildVisibleReplyInstruction(params),
+    nativeCommandGuidance,
     params.extraSystemPrompt,
-    params.skillsSnapshot?.prompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
 }
 
-function renderCodexRuntimePromptOverlay(params: EmbeddedRunAttemptParams): string | undefined {
-  const contribution = params.runtimePlan?.prompt.resolveSystemPromptContribution({
-    config: params.config,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    provider: params.provider,
-    modelId: params.modelId,
-    promptMode: "full",
-    agentId: params.agentId,
-  });
-  if (!contribution) {
-    return renderCodexPromptOverlay({
-      config: params.config,
-      providerId: params.provider,
-      modelId: params.modelId,
-    });
+function buildVisibleReplyInstruction(params: EmbeddedRunAttemptParams): string {
+  if (params.sourceReplyDeliveryMode === "message_tool_only") {
+    return "Preserve channel/session context. Visible channel replies: use `message`, do not describe would-reply.";
   }
-  return [
-    contribution.stablePrefix,
-    ...Object.values(contribution.sectionOverrides ?? {}),
-    contribution.dynamicSuffix,
-  ]
-    .filter(
-      (section): section is string => typeof section === "string" && section.trim().length > 0,
-    )
-    .join("\n\n");
+  return "Preserve channel/session context. Visible channel replies should use the active Codex delivery path; do not describe would-reply.";
 }
 
 function buildUserInput(

@@ -1617,7 +1617,10 @@ export async function agentCommandFromIngress(
   );
 }
 
-export const __testing = {
+export const testing = {
   resolveAgentRuntimeConfig,
   prepareAgentCommandExecution,
 };
+
+/** @deprecated Use `testing`. */
+export { testing as __testing };

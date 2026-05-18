@@ -72,11 +72,13 @@ const mocks = vi.hoisted(() => {
   });
   return {
     loadConfigMock: vi.fn(() => ({})),
-    resolveDefaultAgentIdMock: vi.fn((_config: unknown) => "main"),
+    resolveDefaultAgentIdMock: vi.fn((configForTest: unknown) => "main"),
     resolveAgentIdByWorkspacePathMock: vi.fn(
-      (_config: unknown, _workspacePath: string): string | undefined => undefined,
+      (configForTest: unknown, _workspacePath: string): string | undefined => undefined,
     ),
-    resolveAgentWorkspaceDirMock: vi.fn((_config: unknown, _agentId: string) => "/tmp/workspace"),
+    resolveAgentWorkspaceDirMock: vi.fn(
+      (configForTest: unknown, _agentId: string) => "/tmp/workspace",
+    ),
     searchSkillsFromClawHubMock: vi.fn(),
     installSkillFromClawHubMock: vi.fn(),
     updateSkillsFromClawHubMock: vi.fn(),
@@ -239,7 +241,7 @@ describe("skills cli commands", () => {
 
   function routeWorkspaceByAgent() {
     resolveAgentWorkspaceDirMock.mockImplementation(
-      (_config: unknown, agentId: string) => `/tmp/workspace-${agentId}`,
+      (configForTest: unknown, agentId: string) => `/tmp/workspace-${agentId}`,
     );
   }
 
