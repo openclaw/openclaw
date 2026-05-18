@@ -1,13 +1,16 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 const PROOF_SCRIPT = "scripts/e2e/telegram-user-crabbox-proof.ts";
+const CREDENTIAL_SCRIPT = "scripts/e2e/telegram-user-credential.ts";
 const USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
+const QA_LAB_RUNTIME_API = "extensions/qa-lab/runtime-api.ts";
 const PACKAGE_JSON = "package.json";
 const WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof.yml";
 const LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 const PROMPT = ".github/codex/prompts/mantis-telegram-desktop-proof.md";
+const DOCS = ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"];
 
 type WorkflowStep = {
   env?: Record<string, string>;
@@ -74,6 +77,13 @@ function jobStep(workflowFile: string, jobName: string, stepName: string): Workf
     throw new Error(`Missing workflow step: ${workflowFile} ${jobName} ${stepName}`);
   }
   return step;
+}
+
+function filesUnder(root: string): string[] {
+  return readdirSync(root).flatMap((name) => {
+    const file = `${root}/${name}`;
+    return statSync(file).isDirectory() ? filesUnder(file) : [file];
+  });
 }
 
 describe("Mantis Telegram Desktop proof workflow", () => {
@@ -169,6 +179,30 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       'const DEFAULT_USER_DRIVER = "scripts/e2e/telegram-user-driver.py";',
     );
     expect(readFileSync(USER_DRIVER, "utf8")).toContain("/usr/local/lib/libtdjson.so");
+  });
+
+  it("keeps Telegram Desktop proof credentials out of the generic qa-lab API", () => {
+    const packageJson = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    const workflowFiles = filesUnder(".github/workflows").filter((file) => file.endsWith(".yml"));
+    const telegramUserWorkflows = workflowFiles.filter((file) =>
+      readFileSync(file, "utf8").includes("telegram-user"),
+    );
+
+    expect(readFileSync(QA_LAB_RUNTIME_API, "utf8")).not.toContain("telegram-user");
+    expect(packageJson.scripts).not.toHaveProperty("qa:telegram-user:crabbox");
+    expect(telegramUserWorkflows).toEqual([WORKFLOW]);
+    for (const doc of DOCS) {
+      expect(readFileSync(doc, "utf8")).not.toContain("pnpm qa:telegram-user:crabbox");
+    }
+    expect(readFileSync(PROOF_SCRIPT, "utf8")).not.toContain("pnpm qa:telegram-user:crabbox");
+    expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).toContain(
+      'const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";',
+    );
+    expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).toContain(
+      "../qa/convex-credential-broker/convex/payload-validation.js",
+    );
   });
 
   it("authorizes Telegram Desktop from the leased TDLib user session", () => {

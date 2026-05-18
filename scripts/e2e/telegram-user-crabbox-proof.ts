@@ -1697,10 +1697,10 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       },
       webvnc: `${opts.crabboxBin} webvnc --provider ${opts.provider} --target ${opts.target} --id ${leaseId} --open`,
       commands: {
-        send: `pnpm qa:telegram-user:crabbox -- send --session ${path.relative(root, pathname)} --text '/status'`,
-        view: `pnpm qa:telegram-user:crabbox -- view --session ${path.relative(root, pathname)} --message-id <message-id>`,
-        run: `pnpm qa:telegram-user:crabbox -- run --session ${path.relative(root, pathname)} -- bash -lc 'source ${REMOTE_ROOT}/env.sh && python3 ${REMOTE_ROOT}/user-driver.py transcript --limit 20 --json'`,
-        finish: `pnpm qa:telegram-user:crabbox -- finish --session ${path.relative(root, pathname)} --preview-crop telegram-window`,
+        send: `openclaw-telegram-user-crabbox-proof send --session ${path.relative(root, pathname)} --text '/status'`,
+        view: `openclaw-telegram-user-crabbox-proof view --session ${path.relative(root, pathname)} --message-id <message-id>`,
+        run: `openclaw-telegram-user-crabbox-proof run --session ${path.relative(root, pathname)} -- bash -lc 'source ${REMOTE_ROOT}/env.sh && python3 ${REMOTE_ROOT}/user-driver.py transcript --limit 20 --json'`,
+        finish: `openclaw-telegram-user-crabbox-proof finish --session ${path.relative(root, pathname)} --preview-crop telegram-window`,
       },
     };
   } catch (error) {
