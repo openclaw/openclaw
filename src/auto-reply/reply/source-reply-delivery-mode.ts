@@ -27,7 +27,7 @@ function isUnauthorizedTextSlashCommand(ctx: SourceReplyDeliveryModeContext): bo
   return (
     commandTurn.kind === "text-slash" &&
     !commandTurn.authorized &&
-    (commandTurn.commandName || commandTurn.body?.trim().startsWith("/") === true)
+    (commandTurn.commandName !== undefined || commandTurn.body?.trim().startsWith("/") === true)
   );
 }
 
