@@ -1,6 +1,5 @@
-import path from "node:path";
-import { CONFIG_DIR } from "../../utils.js";
 import { evaluateChromeMcpScript, uploadChromeMcpFile } from "../chrome-mcp.js";
+import { resolveExistingUploadPaths } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
@@ -10,10 +9,7 @@ import {
   withRouteTabContext,
 } from "./agent.shared.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
-import { DEFAULT_UPLOAD_DIR, pathScope } from "./path-output.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-
-const DEFAULT_INBOUND_MEDIA_DIR = path.join(CONFIG_DIR, "media", "inbound");
 import {
   asyncBrowserRoute,
   jsonError,
@@ -47,15 +43,7 @@ export function registerBrowserAgentActHookRoutes(
         ctx,
         targetId,
         run: async ({ profileCtx, cdpUrl, tab }) => {
-          const uploadPathsResult = await pathScope(DEFAULT_UPLOAD_DIR, {
-            label: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-          }).existing(paths);
-          const inboundPathsResult = uploadPathsResult.ok
-            ? undefined
-            : await pathScope(DEFAULT_INBOUND_MEDIA_DIR, {
-                label: `inbound media directory (${DEFAULT_INBOUND_MEDIA_DIR})`,
-              }).existing(paths);
-          const resolvedResult = uploadPathsResult.ok ? uploadPathsResult : inboundPathsResult!;
+          const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
           if (!resolvedResult.ok) {
             res.status(400).json({ error: resolvedResult.error });
             return;

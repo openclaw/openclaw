@@ -1,9 +1,7 @@
-import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Frame, Page } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { CONFIG_DIR } from "../utils.js";
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_BATCH_DEPTH,
@@ -18,9 +16,7 @@ import {
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
-
-const DEFAULT_INBOUND_MEDIA_DIR = path.join(CONFIG_DIR, "media", "inbound");
+import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
   assertPageNavigationCompletedSafely,
   createObservedDialogAbortSignalForPage,
@@ -1399,19 +1395,7 @@ export async function setInputFilesViaPlaywright(opts: {
   }
 
   const locator = inputRef ? refLocator(page, inputRef) : page.locator(element).first();
-  const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
-    rootDir: DEFAULT_UPLOAD_DIR,
-    requestedPaths: opts.paths,
-    scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-  });
-  const inboundPathsResult = uploadPathsResult.ok
-    ? undefined
-    : await resolveStrictExistingPathsWithinRoot({
-        rootDir: DEFAULT_INBOUND_MEDIA_DIR,
-        requestedPaths: opts.paths,
-        scopeLabel: `inbound media directory (${DEFAULT_INBOUND_MEDIA_DIR})`,
-      });
-  const resolvedResult = uploadPathsResult.ok ? uploadPathsResult : inboundPathsResult!;
+  const resolvedResult = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
   if (!resolvedResult.ok) {
     throw new Error(resolvedResult.error);
   }

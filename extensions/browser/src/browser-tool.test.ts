@@ -138,9 +138,8 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
 });
 
 const pathValidationMocks = vi.hoisted(() => ({
-  resolveExistingPathsWithinRoot: vi.fn<
+  resolveExistingUploadPaths: vi.fn<
     (args: {
-      rootDir: string;
       requestedPaths: string[];
     }) => Promise<{ ok: true; paths: string[] } | { ok: false; error: string }>
   >(async ({ requestedPaths }) => ({
@@ -218,7 +217,7 @@ vi.mock("./browser-tool.runtime.js", () => {
     persistBrowserProxyFiles: vi.fn(async () => new Map<string, string>()),
     readStringParam,
     readStringValue,
-    resolveExistingPathsWithinRoot: pathValidationMocks.resolveExistingPathsWithinRoot,
+    resolveExistingUploadPaths: pathValidationMocks.resolveExistingUploadPaths,
     resolveNodeIdFromList: (nodes: Array<Record<string, unknown>>, requested: string) => {
       const node = nodes.find(
         (entry) => entry.nodeId === requested || entry.displayName === requested,
@@ -1429,16 +1428,12 @@ describe("browser tool upload inbound media fallback (#83544)", () => {
   beforeEach(resetBrowserToolMocks);
   afterEach(() => vi.restoreAllMocks());
 
-  it("accepts files from inbound media directory when uploads directory rejects them", async () => {
+  it("resolves upload paths before arming the file chooser", async () => {
     const inboundPath = "/home/user/.openclaw/media/inbound/report.pdf";
-    pathValidationMocks.resolveExistingPathsWithinRoot.mockImplementation(
-      async ({ rootDir, requestedPaths }: { rootDir: string; requestedPaths: string[] }) => {
-        if (rootDir.includes("uploads")) {
-          return { ok: false as const, error: `not inside ${rootDir}` };
-        }
-        return { ok: true as const, paths: requestedPaths };
-      },
-    );
+    pathValidationMocks.resolveExistingUploadPaths.mockResolvedValue({
+      ok: true,
+      paths: [inboundPath],
+    });
     browserActionsMocks.browserArmFileChooser.mockResolvedValue({ ok: true });
 
     const tool = createBrowserTool();
@@ -1448,12 +1443,14 @@ describe("browser tool upload inbound media fallback (#83544)", () => {
       ref: "file-input-1",
     });
 
-    expect(pathValidationMocks.resolveExistingPathsWithinRoot).toHaveBeenCalledTimes(2);
+    expect(pathValidationMocks.resolveExistingUploadPaths).toHaveBeenCalledWith({
+      requestedPaths: [inboundPath],
+    });
     expect(result?.content[0]).toHaveProperty("type", "text");
   });
 
   it("rejects files outside both uploads and inbound media directories", async () => {
-    pathValidationMocks.resolveExistingPathsWithinRoot.mockResolvedValue({
+    pathValidationMocks.resolveExistingUploadPaths.mockResolvedValue({
       ok: false as const,
       error: "path outside allowed directories",
     });

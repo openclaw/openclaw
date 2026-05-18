@@ -4,21 +4,29 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   resolveExistingPathsWithinRoot,
+  resolveExistingUploadPaths,
   resolvePathsWithinRoot,
   resolvePathWithinRoot,
   resolveStrictExistingPathsWithinRoot,
+  resolveStrictExistingUploadPaths,
   resolveWritablePathWithinRoot,
 } from "./paths.js";
 
-async function createFixtureRoot(): Promise<{ baseDir: string; uploadsDir: string }> {
+async function createFixtureRoot(): Promise<{
+  baseDir: string;
+  inboundMediaDir: string;
+  uploadsDir: string;
+}> {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-paths-"));
   const uploadsDir = path.join(baseDir, "uploads");
+  const inboundMediaDir = path.join(baseDir, "media", "inbound");
   await fs.mkdir(uploadsDir, { recursive: true });
-  return { baseDir, uploadsDir };
+  await fs.mkdir(inboundMediaDir, { recursive: true });
+  return { baseDir, inboundMediaDir, uploadsDir };
 }
 
 async function withFixtureRoot<T>(
-  run: (ctx: { baseDir: string; uploadsDir: string }) => Promise<T>,
+  run: (ctx: { baseDir: string; inboundMediaDir: string; uploadsDir: string }) => Promise<T>,
 ): Promise<T> {
   const fixture = await createFixtureRoot();
   try {
@@ -223,6 +231,44 @@ describe("resolveExistingPathsWithinRoot", () => {
   );
 });
 
+describe("resolveExistingUploadPaths", () => {
+  it("falls back to inbound media when the uploads root rejects the file", async () => {
+    await withFixtureRoot(async ({ inboundMediaDir, uploadsDir }) => {
+      const inboundFile = path.join(inboundMediaDir, "report.pdf");
+      await fs.writeFile(inboundFile, "pdf", "utf8");
+
+      const result = await resolveExistingUploadPaths({
+        uploadDir: uploadsDir,
+        inboundMediaDir,
+        requestedPaths: [inboundFile],
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.paths).toEqual([await fs.realpath(inboundFile)]);
+      }
+    });
+  });
+
+  it("rejects files outside both managed upload roots", async () => {
+    await withFixtureRoot(async ({ baseDir, inboundMediaDir, uploadsDir }) => {
+      const outsideFile = path.join(baseDir, "secret.txt");
+      await fs.writeFile(outsideFile, "secret", "utf8");
+
+      const result = await resolveExistingUploadPaths({
+        uploadDir: uploadsDir,
+        inboundMediaDir,
+        requestedPaths: [outsideFile],
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("inbound media directory");
+      }
+    });
+  });
+});
+
 describe("resolveStrictExistingPathsWithinRoot", () => {
   function expectInvalidResult(
     result: Awaited<ReturnType<typeof resolveStrictExistingPathsWithinRoot>>,
@@ -242,6 +288,41 @@ describe("resolveStrictExistingPathsWithinRoot", () => {
         scopeLabel: "uploads directory",
       });
       expectInvalidResult(result, "regular non-symlink file");
+    });
+  });
+});
+
+describe("resolveStrictExistingUploadPaths", () => {
+  it("falls back to inbound media for use-time upload validation", async () => {
+    await withFixtureRoot(async ({ inboundMediaDir, uploadsDir }) => {
+      const inboundFile = path.join(inboundMediaDir, "report.pdf");
+      await fs.writeFile(inboundFile, "pdf", "utf8");
+
+      const result = await resolveStrictExistingUploadPaths({
+        uploadDir: uploadsDir,
+        inboundMediaDir,
+        requestedPaths: [inboundFile],
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.paths).toEqual([await fs.realpath(inboundFile)]);
+      }
+    });
+  });
+
+  it("rejects files missing from both managed upload roots", async () => {
+    await withFixtureRoot(async ({ inboundMediaDir, uploadsDir }) => {
+      const result = await resolveStrictExistingUploadPaths({
+        uploadDir: uploadsDir,
+        inboundMediaDir,
+        requestedPaths: ["missing.txt"],
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("regular non-symlink file");
+      }
     });
   });
 });

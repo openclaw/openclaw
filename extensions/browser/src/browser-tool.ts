@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import path from "node:path";
 import {
   executeActAction,
   executeConsoleAction,
@@ -9,7 +8,6 @@ import {
 import {
   type AnyAgentTool,
   type NodeListNode,
-  DEFAULT_UPLOAD_DIR,
   BrowserToolSchema,
   applyBrowserProxyPaths,
   browserAct,
@@ -37,8 +35,8 @@ import {
   readStringParam,
   readStringValue,
   resolveBrowserConfig,
+  resolveExistingUploadPaths,
   resolveRuntimeImageSanitization,
-  resolveExistingPathsWithinRoot,
   resolveNodeIdFromList,
   resolveProfile,
   selectDefaultNodeFromList,
@@ -47,9 +45,6 @@ import {
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
-import { CONFIG_DIR } from "./utils.js";
-
-const DEFAULT_INBOUND_MEDIA_DIR = path.join(CONFIG_DIR, "media", "inbound");
 
 const browserToolDeps = {
   browserAct,
@@ -829,19 +824,7 @@ export function createBrowserTool(opts?: {
           if (paths.length === 0) {
             throw new Error("paths required");
           }
-          const uploadPathsResult = await resolveExistingPathsWithinRoot({
-            rootDir: DEFAULT_UPLOAD_DIR,
-            requestedPaths: paths,
-            scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-          });
-          const inboundPathsResult = uploadPathsResult.ok
-            ? undefined
-            : await resolveExistingPathsWithinRoot({
-                rootDir: DEFAULT_INBOUND_MEDIA_DIR,
-                requestedPaths: paths,
-                scopeLabel: `inbound media directory (${DEFAULT_INBOUND_MEDIA_DIR})`,
-              });
-          const resolvedResult = uploadPathsResult.ok ? uploadPathsResult : inboundPathsResult!;
+          const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
           if (!resolvedResult.ok) {
             throw new Error(resolvedResult.error);
           }
