@@ -1,12 +1,50 @@
 {
   "id": "serpapi-search",
   "name": "SerpApi Search",
-  "description": "1 universal search tool covering web, news, flights, hotels, maps, shopping, Amazon, YouTube, scholar, finance, events and 100+ engines via SerpApi",
+  "description": "Universal search plugin covering web, news, flights, hotels, maps, shopping, YouTube, scholar, finance, events and 100+ engines via SerpApi",
+  "activation": {
+    "onStartup": false
+  },
+  "skills": ["./skills"],
+  "providerAuthEnvVars": {
+    "serpapi": ["SERPAPI_API_KEY"]
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "SerpApi API Key",
+      "help": "SerpApi API key for all search engines (fallback: SERPAPI_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "..."
+    },
+    "hl": {
+      "label": "Default Language",
+      "help": "Default language code for all searches (e.g. en, de, uk). Defaults to en."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["serpapi"],
+    "tools": [
+      "serpapi_news",
+      "serpapi_scholar",
+      "serpapi_maps",
+      "serpapi_shopping",
+      "serpapi_amazon",
+      "serpapi_jobs",
+      "serpapi_youtube",
+      "serpapi_trends",
+      "serpapi_flights",
+      "serpapi_hotels",
+      "serpapi_events",
+      "serpapi_finance"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "apiKey": { "type": "string" },
+      "apiKey": {
+        "type": "string"
+      },
       "hl": {
         "type": "string",
         "description": "Default language code for all searches (e.g. en, de, ja). Defaults to en."
@@ -15,7 +53,9 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "apiKey": { "type": "string" }
+          "apiKey": {
+            "type": "string"
+          }
         }
       }
     }

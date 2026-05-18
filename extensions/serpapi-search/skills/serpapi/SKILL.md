@@ -16,6 +16,7 @@ metadata:
 | Academic papers / citations | `serpapi_scholar`   |
 | Local businesses / places   | `serpapi_maps`      |
 | Product prices / shopping   | `serpapi_shopping`  |
+| Amazon product search       | `serpapi_amazon`    |
 | Job listings                | `serpapi_jobs`      |
 | YouTube videos / channels   | `serpapi_youtube`   |
 | Search trend data           | `serpapi_trends`    |
@@ -89,6 +90,28 @@ Response includes `serpapi_pagination.next` for fetching the next page.
 ### Tips
 - Use `ll` for precise GPS-based search.
 - Use `nearby` when the query contains "near me" phrases.
+
+## serpapi_amazon
+
+Search Amazon for products across any marketplace.
+
+| Parameter       | Description                                                                                      |
+| --------------- | ------------------------------------------------------------------------------------------------ |
+| `query`         | Product search query                                                                             |
+| `count`         | Number of results (1–20, default: 5)                                                             |
+| `amazon_domain` | Marketplace domain (e.g. `amazon.com`, `amazon.de`, `amazon.co.uk`, `amazon.co.jp`)             |
+| `language`      | Locale code (e.g. `en_US`, `de_DE`, `ja_JP`)                                                    |
+| `s`             | Sort: `price-asc-rank`, `price-desc-rank`, `review-rank`, `date-desc-rank`, `exact-aware-popularity-rank` |
+| `node`          | Category node ID (from Amazon URL or `filters[].node` in a previous response)                   |
+| `rh`            | Attribute filter string from `filters[].rh` in a previous response                              |
+| `page`          | Page number for pagination (default: 1)                                                          |
+
+Response includes `organic_results` (with `asin`, `title`, `price`, `rating`, `reviews`, `prime`, `delivery`), `filters`, and `serpapi_pagination`.
+
+### Tips
+- Use `amazon_domain` + `language` together for non-US marketplaces.
+- Use `node` or `rh` from a previous response's `filters` to narrow by category or attribute.
+- Each `organic_results[].asin` can be used with the Amazon Product API for full product details.
 
 ## serpapi_shopping
 
