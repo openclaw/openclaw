@@ -731,6 +731,40 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+  it("does not dispatch announce delivery for fatal error payloads", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [
+        {
+          text: 'Codex error: {"type":"error","error":{"type":"server_error"}}',
+          isError: true,
+        },
+      ],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob({
+        id: "fatal-error-payload",
+        name: "Fatal Error Payload",
+      }),
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("cron isolated run returned an error payload");
+    expect(result.delivered).toBe(false);
+    expect(result.deliveryAttempted).toBe(false);
+    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+    expectDeliveryFields(result.delivery, {
+      intended: { channel: "messagechat", to: "123", source: "explicit" },
+      resolved: { ok: true, channel: "messagechat", to: "123", source: "explicit" },
+      fallbackUsed: false,
+      delivered: false,
+    });
+  });
+
   it("skips cron fallback delivery when the message tool already sent to the same target", async () => {
     await expectCronFallbackSkippedForMessageToolDelivery({
       sentTargets: [{ tool: "message", provider: "messagechat", to: "123" }],

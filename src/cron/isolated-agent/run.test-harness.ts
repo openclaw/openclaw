@@ -477,6 +477,7 @@ function resetRunOutcomeMocks(): void {
         errorPayloadMessage !== undefined ||
         failureMessage !== undefined ||
         runLevelErrorMessage !== undefined;
+      const hasFatalStructuredErrorPayload = errorPayloadMessage !== undefined;
       const deliveryPayload =
         errorPayloadMessage || failureMessage || runLevelErrorMessage
           ? { text: errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage, isError: true }
@@ -493,8 +494,8 @@ function resetRunOutcomeMocks(): void {
             : [],
         deliveryPayloadHasStructuredContent: false,
         hasFatalErrorPayload,
-        embeddedRunError:
-          errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage ?? undefined,
+        hasFatalStructuredErrorPayload,
+        embeddedRunError: errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage ?? undefined,
       };
     },
   );
