@@ -102,6 +102,7 @@ class TalkModeManager internal constructor(
     private const val chatFinalWaitWithSubscribeMs = 45_000L
     private const val chatFinalWaitWithoutSubscribeMs = 6_000L
     private const val maxCachedRunCompletions = 128
+    private const val maxConversationEntries = 40
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -120,6 +121,9 @@ class TalkModeManager internal constructor(
 
   private val _lastAssistantText = MutableStateFlow<String?>(null)
   val lastAssistantText: StateFlow<String?> = _lastAssistantText
+
+  private val _conversation = MutableStateFlow<List<VoiceConversationEntry>>(emptyList())
+  val conversation: StateFlow<List<VoiceConversationEntry>> = _conversation
 
   private var recognizer: SpeechRecognizer? = null
   private var restartJob: Job? = null
@@ -158,6 +162,8 @@ class TalkModeManager internal constructor(
   private val realtimeToolRuns = LinkedHashMap<String, RealtimeToolRun>()
   private val pendingRealtimeToolCalls = LinkedHashSet<String>()
   private val pendingRealtimeToolCompletions = LinkedHashMap<String, RealtimeToolCompletion>()
+  private var realtimeUserEntryId: String? = null
+  private var realtimeAssistantEntryId: String? = null
   private val realtimePlaybackLock = Any()
   private var realtimeAudioTrack: AudioTrack? = null
   private var realtimePlaybackIdleJob: Job? = null
@@ -791,6 +797,12 @@ class TalkModeManager internal constructor(
         val role = obj["role"].asStringOrNull()
         val text = obj["text"].asStringOrNull()?.trim().orEmpty()
         val isFinal = obj["final"].asBooleanOrNull() == true
+        if (text.isNotEmpty()) {
+          when (role) {
+            "user" -> upsertRealtimeConversation(VoiceConversationRole.User, text, isFinal)
+            "assistant" -> upsertRealtimeConversation(VoiceConversationRole.Assistant, text, isFinal)
+          }
+        }
         if (role == "assistant" && text.isNotEmpty()) {
           _lastAssistantText.value = text
         }
@@ -936,6 +948,8 @@ class TalkModeManager internal constructor(
     realtimeToolRuns.clear()
     pendingRealtimeToolCalls.clear()
     pendingRealtimeToolCompletions.clear()
+    realtimeUserEntryId = null
+    realtimeAssistantEntryId = null
     stopRealtimePlayback()
     if (preserveStatus) {
       _statusText.value = status
@@ -1082,6 +1096,61 @@ class TalkModeManager internal constructor(
       if (err is CancellationException) throw err
       Log.w(tag, "realtime submitToolResult failed: ${err.message ?: err::class.simpleName}")
     }
+  }
+
+  private fun upsertRealtimeConversation(
+    role: VoiceConversationRole,
+    text: String,
+    isFinal: Boolean,
+  ) {
+    val entryId =
+      when (role) {
+        VoiceConversationRole.User -> realtimeUserEntryId
+        VoiceConversationRole.Assistant -> realtimeAssistantEntryId
+      }
+    val resolvedEntryId =
+      if (entryId == null) {
+        appendConversation(role = role, text = text, isStreaming = !isFinal)
+      } else {
+        updateConversationEntry(id = entryId, text = text, isStreaming = !isFinal)
+        entryId
+      }
+    when (role) {
+      VoiceConversationRole.User -> realtimeUserEntryId = if (isFinal) null else resolvedEntryId
+      VoiceConversationRole.Assistant -> realtimeAssistantEntryId = if (isFinal) null else resolvedEntryId
+    }
+  }
+
+  private fun appendConversation(
+    role: VoiceConversationRole,
+    text: String,
+    isStreaming: Boolean,
+  ): String {
+    val id = UUID.randomUUID().toString()
+    _conversation.value =
+      (_conversation.value + VoiceConversationEntry(id = id, role = role, text = text, isStreaming = isStreaming))
+        .takeLast(maxConversationEntries)
+    return id
+  }
+
+  private fun updateConversationEntry(
+    id: String,
+    text: String,
+    isStreaming: Boolean,
+  ) {
+    val current = _conversation.value
+    val targetIndex =
+      when {
+        current.isEmpty() -> -1
+        current[current.lastIndex].id == id -> current.lastIndex
+        else -> current.indexOfFirst { it.id == id }
+      }
+    if (targetIndex < 0) return
+    val entry = current[targetIndex]
+    if (entry.text == text && entry.isStreaming == isStreaming) return
+    val updated = current.toMutableList()
+    updated[targetIndex] = entry.copy(text = text, isStreaming = isStreaming)
+    _conversation.value = updated
   }
 
   private fun startListeningInternal(markListening: Boolean) {

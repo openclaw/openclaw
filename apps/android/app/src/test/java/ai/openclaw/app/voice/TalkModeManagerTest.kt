@@ -111,6 +111,34 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeTranscriptsPopulateVoiceConversation() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello"))
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello world", final = true))
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "assistant", text = "hi"))
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "assistant", text = "hi there", final = true))
+
+    assertEquals(
+      listOf(
+        VoiceConversationEntry(
+          id = manager.conversation.value[0].id,
+          role = VoiceConversationRole.User,
+          text = "hello world",
+        ),
+        VoiceConversationEntry(
+          id = manager.conversation.value[1].id,
+          role = VoiceConversationRole.Assistant,
+          text = "hi there",
+        ),
+      ),
+      manager.conversation.value,
+    )
+  }
+
+  @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun realtimeStartWithoutGatewayTurnsTalkOff() =
     runTest {
@@ -285,6 +313,21 @@ class TalkModeManagerTest {
           { "type": "text", "text": "$text" }
         ]
       }
+    }
+    """.trimIndent()
+
+  private fun realtimeTranscriptPayload(
+    role: String,
+    text: String,
+    final: Boolean = false,
+  ): String =
+    """
+    {
+      "relaySessionId": "relay-1",
+      "type": "transcript",
+      "role": "$role",
+      "text": "$text",
+      "final": $final
     }
     """.trimIndent()
 }
