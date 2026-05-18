@@ -84,6 +84,27 @@ describe("openai responses payload policy", () => {
     expect(payload).not.toHaveProperty("prompt_cache_retention");
   });
 
+  it("strips max_output_tokens when responses compat declares it unsupported", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openai-responses",
+        provider: "openai-compatible",
+        baseUrl: "https://proxy.example.com/v1",
+        compat: { supportsMaxOutputTokens: false },
+      },
+      {
+        storeMode: "provider-policy",
+      },
+    );
+    const payload = {
+      max_output_tokens: 1024,
+    } satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(payload, policy);
+
+    expect(payload).not.toHaveProperty("max_output_tokens");
+  });
+
   it("keeps disabled reasoning payloads on native OpenAI responses models that support none", () => {
     const payload = {
       reasoning: {

@@ -65,6 +65,8 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     visibleReasoningDetailTypes?: string[];
     supportsTools?: boolean;
     supportsPromptCacheKey?: boolean;
+    supportsMaxOutputTokens?: boolean;
+    requiresResponsesInstructions?: boolean;
     requiresStringContent?: boolean;
     strictMessageKeys?: boolean;
     toolSchemaProfile?: string;

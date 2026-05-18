@@ -46,6 +46,7 @@ type OpenAIResponsesPayloadPolicy = {
   compactThreshold: number;
   explicitStore: boolean | undefined;
   shouldStripDisabledReasoningPayload: boolean;
+  shouldStripMaxOutputTokens: boolean;
   shouldStripPromptCache: boolean;
   shouldStripStore: boolean;
   useServerCompaction: boolean;
@@ -208,7 +209,7 @@ function isOpenAIResponsesApi(api: string | undefined): boolean {
 
 function readCompatPayloadBoolean(
   compat: unknown,
-  key: "supportsPromptCacheKey" | "supportsStore",
+  key: "supportsMaxOutputTokens" | "supportsPromptCacheKey" | "supportsStore",
 ): boolean | undefined {
   if (!compat || typeof compat !== "object") {
     return undefined;
@@ -344,6 +345,8 @@ export function resolveOpenAIResponsesPayloadPolicy(
       resolveOpenAIResponsesCompactThreshold(model),
     explicitStore,
     shouldStripDisabledReasoningPayload,
+    shouldStripMaxOutputTokens:
+      isResponsesApi && readCompatPayloadBoolean(model.compat, "supportsMaxOutputTokens") === false,
     shouldStripPromptCache:
       options.enablePromptCacheStripping === true && capabilities.shouldStripResponsesPromptCache,
     shouldStripStore:
@@ -373,6 +376,9 @@ export function applyOpenAIResponsesPayloadPolicy(
   if (policy.shouldStripPromptCache) {
     delete payloadObj.prompt_cache_key;
     delete payloadObj.prompt_cache_retention;
+  }
+  if (policy.shouldStripMaxOutputTokens) {
+    delete payloadObj.max_output_tokens;
   }
   if (policy.useServerCompaction && payloadObj.context_management === undefined) {
     payloadObj.context_management = [

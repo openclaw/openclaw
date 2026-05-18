@@ -1938,6 +1938,45 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("top_p");
   });
 
+  it("uses top-level instructions for strict Responses-compatible providers", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "strict-responses",
+        name: "Strict Responses",
+        api: "openai-responses",
+        provider: "openai-compatible",
+        baseUrl: "https://proxy.example.com/v1",
+        compat: {
+          requiresResponsesInstructions: true,
+          supportsMaxOutputTokens: false,
+        },
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 1024,
+      },
+    ) as Record<string, unknown> & {
+      input?: Array<{ role?: string }>;
+      instructions?: string;
+    };
+
+    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
+    expect(params.input?.map((item) => item.role)).toEqual(["user"]);
+    expect(
+      params.input?.filter((item) => item.role === "system" || item.role === "developer"),
+    ).toStrictEqual([]);
+    expect(params).not.toHaveProperty("max_output_tokens");
+  });
+
   it("sanitizes Codex responses params after payload hooks mutate them without stripping cache identity", () => {
     const payload = {
       model: "gpt-5.4",

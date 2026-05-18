@@ -1698,6 +1698,7 @@ export function buildOpenAIResponsesParams(
   const isCodexResponses = isOpenAICodexResponsesModel(model);
   const isNativeCodexResponses = usesNativeOpenAICodexResponsesBackend(model);
   const compat = getCompat(model as OpenAIModeModel);
+  const usesTopLevelInstructions = isCodexResponses || compat.requiresResponsesInstructions;
   const supportsDeveloperRole =
     typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
   const messages = convertResponsesMessages(
@@ -1705,7 +1706,7 @@ export function buildOpenAIResponsesParams(
     context,
     new Set(["openai", "openai-codex", "opencode", "azure-openai-responses", "github-copilot"]),
     {
-      includeSystemPrompt: !isCodexResponses,
+      includeSystemPrompt: !usesTopLevelInstructions,
       supportsDeveloperRole,
       replayReasoningItems: true,
       replayResponsesItemIds: !isNativeCodexResponses,
@@ -1724,7 +1725,9 @@ export function buildOpenAIResponsesParams(
     stream: true,
     prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
-    ...(isCodexResponses ? { instructions: buildOpenAICodexResponsesInstructions(context) } : {}),
+    ...(usesTopLevelInstructions
+      ? { instructions: buildOpenAICodexResponsesInstructions(context) }
+      : {}),
     ...(metadata ? { metadata } : {}),
   };
   const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
@@ -2541,6 +2544,7 @@ function getCompat(model: OpenAIModeModel): {
   vercelGatewayRouting: Record<string, unknown>;
   supportsStrictMode: boolean;
   supportsPromptCacheKey: boolean;
+  requiresResponsesInstructions: boolean;
   requiresStringContent: boolean;
   strictMessageKeys: boolean;
   visibleReasoningDetailTypes: string[];
@@ -2572,6 +2576,7 @@ function getCompat(model: OpenAIModeModel): {
       detected.vercelGatewayRouting,
     supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode,
     supportsPromptCacheKey: compat.supportsPromptCacheKey === true,
+    requiresResponsesInstructions: compat.requiresResponsesInstructions === true,
     requiresStringContent: compat.requiresStringContent ?? false,
     strictMessageKeys: compat.strictMessageKeys === true,
     visibleReasoningDetailTypes:
