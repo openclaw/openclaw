@@ -44,12 +44,36 @@ type NpmFreshnessConfigScope = {
 const NPM_CONFIG_PATH_PROBE_PARENT_ENV_KEYS = ["PATH", "Path", "PATHEXT", "SystemRoot", "ComSpec"];
 
 function resolveEnvPath(env: NodeJS.ProcessEnv, upperKey: string, lowerKey: string): string | null {
-  return env[upperKey]?.trim() || env[lowerKey]?.trim() || null;
+  const raw = env[upperKey]?.trim() || env[lowerKey]?.trim();
+  return raw ? resolveNpmConfigPath(raw, env) : null;
 }
 
 function resolveHomeNpmrc(env: NodeJS.ProcessEnv): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
   return path.join(home, ".npmrc");
+}
+
+function replaceNpmEnvRefs(value: string, env: NodeJS.ProcessEnv): string {
+  return value.replace(
+    /(?<!\\)(\\*)\$\{([^${}?]+)(\?)?\}/gu,
+    (original, escapes, name, modifier) => {
+      const fallback = modifier === "?" ? "" : `\${${name}}`;
+      const resolved = env[name] !== undefined ? env[name] : fallback;
+      if (escapes.length % 2) {
+        return original.slice((escapes.length + 1) / 2);
+      }
+      return `${escapes.slice(escapes.length / 2)}${resolved}`;
+    },
+  );
+}
+
+function resolveNpmConfigPath(rawPath: string, env: NodeJS.ProcessEnv): string {
+  const expanded = replaceNpmEnvRefs(rawPath, env);
+  const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
+  const homePattern = process.platform === "win32" ? /^~(\/|\\)/u : /^~\//u;
+  return homePattern.test(expanded) && home
+    ? path.resolve(home, expanded.slice(2))
+    : path.resolve(expanded);
 }
 
 function createNpmConfigPathProbeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

@@ -208,6 +208,34 @@ describe("npm project install env", () => {
     }
   });
 
+  it("uses before args for expanded npm userconfig paths", () => {
+    const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-home-npmrc-"));
+    try {
+      fsSync.writeFileSync(path.join(dir, ".npmrc"), "before=2026-01-01T00:00:00.000Z\n", "utf-8");
+
+      expect(
+        createNpmFreshnessBypassArgs(
+          {
+            HOME: dir,
+            NPM_CONFIG_USERCONFIG: "~/.npmrc",
+          },
+          FROZEN_NOW,
+        ),
+      ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
+      expect(
+        createNpmFreshnessBypassArgs(
+          {
+            HOME: dir,
+            NPM_CONFIG_USERCONFIG: "${HOME}/.npmrc",
+          },
+          FROZEN_NOW,
+        ),
+      ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
+    } finally {
+      fsSync.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("uses before args for npm default globalconfig before policies", () => {
     const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-npm-prefix-"));
     try {
