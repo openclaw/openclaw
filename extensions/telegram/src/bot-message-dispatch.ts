@@ -157,6 +157,10 @@ type DispatchTelegramMessageParams = {
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
   opts: Pick<TelegramBotOptions, "token">;
+  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+  guestDelivery?: {
+    answerText: (text: string) => Promise<boolean>;
+  };
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
@@ -382,6 +386,8 @@ export const dispatchTelegramMessage = async ({
   telegramCfg,
   telegramDeps: injectedTelegramDeps,
   opts,
+  sourceReplyDeliveryMode,
+  guestDelivery,
 }: DispatchTelegramMessageParams) => {
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
@@ -1020,6 +1026,18 @@ export const dispatchTelegramMessage = async ({
       }
       const deliverablePayload = applyQuoteReplyTarget(payload);
       const silent = options?.silent ?? (silentErrorReplies && payload.isError === true);
+      if (guestDelivery) {
+        const reply = resolveSendableOutboundReplyParts(deliverablePayload);
+        const text = (reply.text || deliverablePayload.text || "").trim();
+        if (!text || text.toUpperCase() === "NO_REPLY") {
+          return false;
+        }
+        const delivered = await guestDelivery.answerText(text);
+        if (delivered) {
+          deliveryState.markDelivered();
+        }
+        return delivered;
+      }
       const durableDelivery = telegramDeps.deliverInboundReplyWithMessageSendContext;
       if (options?.durable && durableDelivery) {
         const durable = await durableDelivery({
@@ -1435,6 +1453,7 @@ export const dispatchTelegramMessage = async ({
                 replyOptions: {
                   skillFilter,
                   disableBlockStreaming,
+                  sourceReplyDeliveryMode,
                   onPartialReply:
                     answerLane.stream || reasoningLane.stream
                       ? (payload) =>
@@ -1667,13 +1686,20 @@ export const dispatchTelegramMessage = async ({
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."
       : EMPTY_RESPONSE_FALLBACK;
-    const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
-      replies: [{ text: fallbackText }],
-      ...deliveryBaseOptions,
-      silent: silentErrorReplies && (dispatchError != null || hadErrorReplyFailureOrSkip),
-      mediaLoader: telegramDeps.loadWebMedia,
-    });
-    sentFallback = result.delivered;
+    if (guestDelivery) {
+      sentFallback = await guestDelivery.answerText(fallbackText);
+      if (sentFallback) {
+        deliveryState.markDelivered();
+      }
+    } else {
+      const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
+        replies: [{ text: fallbackText }],
+        ...deliveryBaseOptions,
+        silent: silentErrorReplies && (dispatchError != null || hadErrorReplyFailureOrSkip),
+        mediaLoader: telegramDeps.loadWebMedia,
+      });
+      sentFallback = result.delivered;
+    }
   }
 
   if (
@@ -1682,7 +1708,8 @@ export const dispatchTelegramMessage = async ({
     !deliverySummary.delivered &&
     !suppressSilentReplyFallback &&
     !queuedFinal &&
-    isGroup
+    isGroup &&
+    !guestDelivery
   ) {
     const policySessionKey =
       ctxPayload.CommandSource === "native"

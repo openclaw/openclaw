@@ -33,6 +33,10 @@ describe("resolveTelegramAllowedUpdates", () => {
       "chat_boost",
       "removed_chat_boost",
     ]);
-    expect(updates).toEqual([...DEFAULT_TELEGRAM_UPDATE_TYPES, "message_reaction"]);
+    expect(updates).toEqual([
+      ...DEFAULT_TELEGRAM_UPDATE_TYPES,
+      "message_reaction",
+      "guest_message",
+    ]);
   });
 });

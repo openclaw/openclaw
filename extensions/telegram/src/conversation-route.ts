@@ -29,6 +29,7 @@ export function resolveTelegramConversationRoute(params: {
   replyThreadId?: number;
   senderId?: string | number | null;
   topicAgentId?: string | null;
+  skipBindings?: boolean;
 }): {
   route: ReturnType<typeof resolveAgentRoute>;
   configuredBinding: ConfiguredBindingRouteResult["bindingResolution"];
@@ -89,6 +90,14 @@ export function resolveTelegramConversationRoute(params: {
     logVerbose(
       `telegram: topic route override: topic=${params.resolvedThreadId ?? params.replyThreadId} agent=${topicAgentId} sessionKey=${route.sessionKey}`,
     );
+  }
+
+  if (params.skipBindings === true) {
+    return {
+      route,
+      configuredBinding: null,
+      configuredBindingSessionKey: "",
+    };
   }
 
   const configuredRoute = resolveConfiguredBindingRoute({

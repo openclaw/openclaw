@@ -395,6 +395,15 @@ export async function buildTelegramInboundContextPayload(params: {
     groupConfig,
     topicConfig,
   });
+  const sourceChatIsGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+  const bodyForAgent =
+    sourceChatIsGroup && options?.conversationKindOverride === "direct"
+      ? `${buildSenderLabel(msg, senderId || chatId)}: ${bodyText}`
+      : bodyText;
+  const systemPromptPrefix = options?.systemPromptPrefix?.trim();
+  const effectiveGroupSystemPrompt = [systemPromptPrefix, groupSystemPrompt]
+    .filter((entry): entry is string => Boolean(entry))
+    .join("\n\n");
   const commandBody = normalizeCommandBody(rawBody, {
     botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
   });
@@ -409,12 +418,13 @@ export async function buildTelegramInboundContextPayload(params: {
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
   const contextMedia = [...currentMediaForContext, ...replyMedia];
   const replyHead = visibleReplyChain[0];
-  const telegramFrom = isGroup
-    ? buildTelegramGroupFrom(chatId, resolvedThreadId)
-    : `telegram:${chatId}`;
-  const telegramTo = `telegram:${chatId}`;
+  const telegramFrom =
+    options?.fromOverride ??
+    (isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`);
+  const telegramTo = options?.originatingToOverride ?? `telegram:${chatId}`;
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
   const commandSource = options?.commandSource;
+  const conversationKind = options?.conversationKindOverride ?? (isGroup ? "group" : "direct");
   const ctxPayload = sessionRuntime.buildChannelTurnContext({
     channel: "telegram",
     accountId: route.accountId,
@@ -429,13 +439,13 @@ export async function buildTelegramInboundContextPayload(params: {
       username: senderUsername || undefined,
     },
     conversation: {
-      kind: isGroup ? "group" : "direct",
-      id: String(chatId),
-      label: conversationLabel,
+      kind: conversationKind,
+      id: options?.conversationIdOverride ?? String(chatId),
+      label: options?.conversationLabelOverride ?? conversationLabel,
       threadId: threadSpec.id != null ? String(threadSpec.id) : undefined,
       routePeer: {
-        kind: isGroup ? "group" : "direct",
-        id: String(chatId),
+        kind: conversationKind,
+        id: options?.conversationIdOverride ?? String(chatId),
       },
     },
     route: {
@@ -453,7 +463,7 @@ export async function buildTelegramInboundContextPayload(params: {
     message: {
       body: combinedBody,
       rawBody,
-      bodyForAgent: bodyText,
+      bodyForAgent,
       commandBody,
       envelopeFrom: conversationLabel,
       inboundHistory,
@@ -507,13 +517,17 @@ export async function buildTelegramInboundContextPayload(params: {
             senderAllowed: true,
           }
         : undefined,
-      groupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
+      groupSystemPrompt:
+        isGroup || (!isGroup && groupConfig) || effectiveGroupSystemPrompt
+          ? effectiveGroupSystemPrompt || undefined
+          : undefined,
       untrustedContext: promptContext.length > 0 ? promptContext : undefined,
     },
     contextVisibility: contextVisibilityMode,
     extra: {
       BotUsername: primaryCtx.me?.username ?? undefined,
-      GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
+      GroupSubject:
+        conversationKind !== "direct" && isGroup ? (msg.chat.title ?? undefined) : undefined,
       ReplyChain: visibleReplyChain.length > 0 ? visibleReplyChain : undefined,
       ReplyToIsExternal: visibleReplyTarget?.source === "external_reply" ? true : undefined,
       ReplyToQuoteText: visibleReplyTarget?.quoteText,
@@ -534,7 +548,7 @@ export async function buildTelegramInboundContextPayload(params: {
       ForwardedFromSignature: visibleForwardOrigin?.fromSignature,
       ForwardedFromChatType: visibleForwardOrigin?.fromChatType,
       ForwardedFromMessageId: visibleForwardOrigin?.fromMessageId,
-      WasMentioned: isGroup ? effectiveWasMentioned : undefined,
+      WasMentioned: conversationKind !== "direct" && isGroup ? effectiveWasMentioned : undefined,
       Sticker: allMedia[0]?.stickerMetadata,
       StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
       ...locationContext,
@@ -568,8 +582,9 @@ export async function buildTelegramInboundContextPayload(params: {
       ? {
           sessionKey: updateLastRouteSessionKey,
           channel: "telegram" as const,
-          to:
-            isGroup && updateLastRouteThreadId != null
+          to: options?.originatingToOverride
+            ? options.originatingToOverride
+            : isGroup && updateLastRouteThreadId != null
               ? `telegram:${chatId}:topic:${updateLastRouteThreadId}`
               : `telegram:${chatId}`,
           accountId: route.accountId,

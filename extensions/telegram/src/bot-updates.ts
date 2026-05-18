@@ -19,12 +19,14 @@ export type TelegramUpdateKeyContext = {
   update?: {
     update_id?: number;
     message?: Message;
+    guest_message?: Message;
     edited_message?: Message;
     channel_post?: Message;
     edited_channel_post?: Message;
   };
   update_id?: number;
   message?: Message;
+  guestMessage?: Message;
   channelPost?: Message;
   editedMessage?: Message;
   editedChannelPost?: Message;
@@ -56,7 +58,9 @@ export const buildTelegramUpdateKey = (ctx: TelegramUpdateKeyContext) => {
   const msg =
     ctx.message ??
     ctx.channelPost ??
+    ctx.guestMessage ??
     ctx.update?.message ??
+    ctx.update?.guest_message ??
     ctx.update?.channel_post ??
     ctx.callbackQuery?.message;
   const chatId = msg?.chat?.id;

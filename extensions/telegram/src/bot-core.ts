@@ -24,6 +24,7 @@ import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import { registerTelegramGuestHandlers } from "./bot-guest.js";
 import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
@@ -365,8 +366,8 @@ export function createTelegramBotCore(
     resolveGroupActivation,
     resolveGroupRequireMention,
     resolveTelegramGroupConfig,
-    loadFreshConfig: () => telegramDeps.getRuntimeConfig(),
     sendChatActionHandler,
+    loadFreshConfig: () => telegramDeps.getRuntimeConfig(),
     runtime,
     replyToMode,
     streamMode,
@@ -392,6 +393,26 @@ export function createTelegramBotCore(
     resolveGroupPolicy,
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
+    opts,
+    telegramDeps,
+  });
+
+  registerTelegramGuestHandlers({
+    cfg,
+    bot,
+    account,
+    telegramCfg,
+    historyLimit,
+    groupHistories,
+    dmPolicy,
+    allowFrom,
+    groupAllowFrom,
+    logger,
+    resolveGroupActivation,
+    loadFreshConfig: () => telegramDeps.getRuntimeConfig(),
+    runtime,
+    replyToMode,
+    textLimit,
     opts,
     telegramDeps,
   });
