@@ -12,7 +12,11 @@ import {
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { rememberFollowupDrainCallback } from "./queue/drain.js";
-import { restoreFollowupQueues } from "./queue/persist.js";
+import {
+  clearFollowupQueuesRestoredFlagForTest,
+  clearRestoredPendingDrainKeysForTest,
+  restoreFollowupQueues,
+} from "./queue/persist.js";
 import { FOLLOWUP_QUEUES } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
@@ -425,6 +429,8 @@ describe("followup queue drain restart after idle window", () => {
         false,
       );
       FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
       restoreFollowupQueues();
 
       rememberFollowupDrainCallback(key, async (run) => {
@@ -435,6 +441,8 @@ describe("followup queue drain restart after idle window", () => {
       await drained.promise;
     } finally {
       FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
       if (originalStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {
