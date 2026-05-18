@@ -317,7 +317,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `streaming.preview.commandText` controls command/exec detail inside those tool-progress lines: `raw` (default, preserves released behavior) or `status` (tool label only)
     - legacy `channels.telegram.streamMode` and boolean `streaming` values are detected; run `openclaw doctor --fix` to migrate them to `channels.telegram.streaming.mode`
 
-    Tool-progress preview updates are the short status lines shown while tools run, for example command execution, file reads, planning updates, patch summaries, or Codex preamble/commentary text in Codex app-server mode. Telegram keeps these enabled by default to match released OpenClaw behavior from `v2026.4.22` and later. To keep the edited preview for answer text but hide tool-progress lines, set:
+    Tool-progress preview updates are the short status lines shown while tools run, for example command execution, file reads, planning updates, patch summaries, or Codex preamble/commentary text in Codex app-server mode. Telegram keeps these enabled by default to match released OpenClaw behavior from `v2026.4.22` and later.
 
     In direct chats, supported Telegram Bot API clients can use native ephemeral drafts for these tool-progress lines. This shows an immediate Telegram-native Thinking/status preview without persisting tool chatter into the chat history. As soon as assistant answer text starts, OpenClaw stops updating the native draft and continues with the normal persistent answer preview/final delivery path. If `sendMessageDraft` is unavailable or rejected, OpenClaw silently falls back to the edited preview behavior. This native draft lane is off by default; enable it only for trusted DM canaries first:
 
@@ -337,6 +337,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
       }
     }
     ```
+
+    To keep the edited preview for answer text but hide tool-progress lines, set:
 
     ```json
     {
