@@ -921,6 +921,41 @@ describe("feishuPlugin actions", () => {
     ).rejects.toThrow("Feishu delete/unsend actions are disabled via tools.messages.");
   });
 
+  it("does not read fallback sent-message state when message tools are disabled", async () => {
+    const disabledCfg = {
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: "cli_main",
+          appSecret: "secret_main",
+          tools: {
+            messages: false,
+          },
+        },
+      },
+      session: {
+        store: feishuSentMessageTestStorePath,
+      },
+    } as OpenClawConfig;
+    recordFeishuSentMessage({
+      cfg: disabledCfg,
+      accountId: "default",
+      chatId: "oc_group_1",
+      messageId: "om_last_bot",
+    });
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "delete",
+        params: {},
+        cfg: disabledCfg,
+        accountId: undefined,
+        toolContext: { currentChannelId: "oc_group_1" },
+      } as never),
+    ).rejects.toThrow("Feishu delete/unsend actions are disabled via tools.messages.");
+    expect(deleteFeishuMessageMock).not.toHaveBeenCalled();
+  });
+
   it("sends explicit thread replies with reply_in_thread semantics", async () => {
     sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_reply", chatId: "oc_group_1" });
 

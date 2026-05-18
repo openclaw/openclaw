@@ -1,7 +1,4 @@
-import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { replaceFileAtomicSync } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
@@ -16,12 +13,12 @@ type SentMessageEntry = {
 type SentMessageStore = Map<string, SentMessageEntry[]>;
 
 type SentMessageBucket = {
-  persistedPath: string;
+  storeKey: string;
   store: SentMessageStore;
 };
 
 type SentMessageState = {
-  bucketsByPath: Map<string, SentMessageBucket>;
+  bucketsByKey: Map<string, SentMessageBucket>;
 };
 
 function getSentMessageState(): SentMessageState {
@@ -31,14 +28,14 @@ function getSentMessageState(): SentMessageState {
     return existing;
   }
   const state: SentMessageState = {
-    bucketsByPath: new Map(),
+    bucketsByKey: new Map(),
   };
   globalStore[FEISHU_SENT_MESSAGES_STATE_KEY] = state;
   return state;
 }
 
-function resolveSentMessageStorePath(cfg?: Pick<OpenClawConfig, "session">): string {
-  return `${resolveStorePath(cfg?.session?.store)}.feishu-sent-messages.json`;
+function resolveSentMessageStoreKey(cfg?: Pick<OpenClawConfig, "session">): string {
+  return resolveStorePath(cfg?.session?.store);
 }
 
 function scopeKey(params: { accountId?: string | null; chatId: string }): string {
@@ -54,69 +51,23 @@ function cleanupExpiredEntries(entries: SentMessageEntry[], now: number): SentMe
   );
 }
 
-function readPersistedSentMessages(filePath: string): SentMessageStore {
-  if (!fs.existsSync(filePath)) {
-    return new Map();
-  }
-  try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as Record<string, SentMessageEntry[]>;
-    const now = Date.now();
-    const store: SentMessageStore = new Map();
-    for (const [key, entries] of Object.entries(parsed)) {
-      if (!Array.isArray(entries)) {
-        continue;
-      }
-      const cleaned = cleanupExpiredEntries(entries, now).slice(-MAX_MESSAGES_PER_SCOPE);
-      if (cleaned.length > 0) {
-        store.set(key, cleaned);
-      }
-    }
-    return store;
-  } catch (error) {
-    logVerbose(`feishu: failed to read sent-message cache: ${String(error)}`);
-    return new Map();
-  }
-}
-
 function getSentMessageBucket(cfg?: Pick<OpenClawConfig, "session">): SentMessageBucket {
   const state = getSentMessageState();
-  const persistedPath = resolveSentMessageStorePath(cfg);
-  const existing = state.bucketsByPath.get(persistedPath);
+  const storeKey = resolveSentMessageStoreKey(cfg);
+  const existing = state.bucketsByKey.get(storeKey);
   if (existing) {
     return existing;
   }
   const bucket = {
-    persistedPath,
-    store: readPersistedSentMessages(persistedPath),
+    storeKey,
+    store: new Map(),
   };
-  state.bucketsByPath.set(persistedPath, bucket);
+  state.bucketsByKey.set(storeKey, bucket);
   return bucket;
 }
 
-function persistSentMessages(bucket: SentMessageBucket): void {
-  const now = Date.now();
-  const serialized: Record<string, SentMessageEntry[]> = {};
-  for (const [key, entries] of bucket.store) {
-    const cleaned = cleanupExpiredEntries(entries, now).slice(-MAX_MESSAGES_PER_SCOPE);
-    if (cleaned.length > 0) {
-      serialized[key] = cleaned;
-      bucket.store.set(key, cleaned);
-    } else {
-      bucket.store.delete(key);
-    }
-  }
-  if (Object.keys(serialized).length === 0) {
-    fs.rmSync(bucket.persistedPath, { force: true });
-    return;
-  }
-  replaceFileAtomicSync({
-    filePath: bucket.persistedPath,
-    content: JSON.stringify(serialized),
-    tempPrefix: ".feishu-sent-message-cache",
-  });
-}
-
+// Intentionally process-local. Message IDs are sensitive message-management
+// state, so ordinary Feishu sends must not persist this fallback cache to disk.
 export function recordFeishuSentMessage(params: {
   cfg?: Pick<OpenClawConfig, "session">;
   accountId?: string | null;
@@ -136,11 +87,6 @@ export function recordFeishuSentMessage(params: {
   );
   entries.push({ messageId, timestamp: now });
   bucket.store.set(key, entries.slice(-MAX_MESSAGES_PER_SCOPE));
-  try {
-    persistSentMessages(bucket);
-  } catch (error) {
-    logVerbose(`feishu: failed to persist sent-message cache: ${String(error)}`);
-  }
 }
 
 export function getLastFeishuSentMessage(params: {
@@ -184,13 +130,8 @@ export function forgetFeishuSentMessage(params: {
   } else {
     bucket.store.delete(key);
   }
-  try {
-    persistSentMessages(bucket);
-  } catch (error) {
-    logVerbose(`feishu: failed to persist sent-message cache: ${String(error)}`);
-  }
 }
 
 export function resetFeishuSentMessageCacheForTest(): void {
-  getSentMessageState().bucketsByPath.clear();
+  getSentMessageState().bucketsByKey.clear();
 }
