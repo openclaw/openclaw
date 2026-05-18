@@ -3962,7 +3962,7 @@ extension NodeAppModel {
         switch route {
         case let .agent(link):
             await self.handleAgentDeepLink(link, originalURL: url)
-        case .gateway:
+        case .gateway, .dashboard:
             break
         }
     }
