@@ -990,6 +990,23 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBe("false");
     });
 
+    it("bypasses retry-after values equal to the default max wait", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 429,
+          headers: { "retry-after": "60" },
+        }),
+        finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(openaiModel)(
+        "https://openrouter.ai/api/v1/chat/completions",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBe("false");
+    });
+
     it("injects x-should-retry:false for terminal 429 responses without retry-after", async () => {
       fetchWithSsrFGuardMock.mockResolvedValue({
         response: new Response("Sorry, you've exceeded your weekly rate limit.", {
