@@ -22,6 +22,7 @@ export function mockAgentPayloads(
   payloads: Array<Record<string, unknown>>,
   extra: Partial<Awaited<ReturnType<typeof runEmbeddedPiAgent>>> = {},
 ): void {
+  vi.mocked(runEmbeddedPiAgent).mockReset();
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
     payloads,
     meta: {
