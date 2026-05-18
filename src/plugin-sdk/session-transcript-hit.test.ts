@@ -102,6 +102,16 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     });
   });
 
+  it("does not treat QMD .md names with invalid archive timestamps as archives", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "qmd/sessions-main/abc.jsonl.reset.not-a-timestamp.md",
+    );
+    expect(identity).toEqual({
+      stem: "abc.jsonl.reset.not-a-timestamp",
+      archived: false,
+    });
+  });
+
   it("does not mistake arbitrary suffixes containing .jsonl. for archives", () => {
     // Not a real archive pattern: suffix after .jsonl. must be `reset` or `deleted`.
     expect(
