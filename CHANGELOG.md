@@ -1,5 +1,11 @@
 ﻿# Changelog
 
+## 2026.5.18
+
+### Fixes
+
+- **max_tokens**: Dynamically calculate maxTokens based on estimated prompt tokens, preventing API "max_tokens is too large" errors. The fix computes `maxTokens = min(configuredCap, contextWindow - estimatedInputTokens)` at request construction time, ensuring output token budget never exceeds remaining context. Fixes #83086.
+
 Docs: https://docs.openclaw.ai
 
 ## 2026.5.19

@@ -66,7 +66,11 @@ import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
 } from "./provider-transport-fetch.js";
+<<<<<<< HEAD
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
+=======
+import { estimateMessagesTokens } from "../compaction.js";
+>>>>>>> 1447022165 (fix(agents): dynamically calculate maxTokens from serialized payload)
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
@@ -3040,7 +3044,45 @@ export function buildOpenAICompletionsParams(
     params.prompt_cache_key = options.sessionId;
   }
   {
-    const effectiveMaxTokens = resolveOpenAICompletionsMaxTokens(model, options);
+    const configuredMaxTokens = resolveOpenAICompletionsMaxTokens(model, options);
+    const contextWindow = model.contextWindow;
+    const messages = completionsContext.messages;
+    
+    // Dynamic maxTokens calculation: estimate tokens from serialized payload
+    let effectiveMaxTokens = configuredMaxTokens;
+    if (typeof contextWindow === "number" && Array.isArray(messages) && messages.length > 0) {
+      // Use Pi framework's estimateMessagesTokens for accurate estimation
+      // Falls back to rough estimation if types don't match
+      let promptTokensEstimate: number;
+      try {
+        // Try using Pi framework's accurate estimation
+        promptTokensEstimate = estimateMessagesTokens(messages as never);
+      } catch {
+        // Fallback: estimate from serialized JSON payload size
+        const serializedPayload = JSON.stringify(messages);
+        // OpenAI tokenization: ~4 chars per token on average
+        promptTokensEstimate = Math.ceil(serializedPayload.length / 4);
+      }
+      
+      // Add system prompt estimate
+      const systemPromptTokens = completionsContext.systemPrompt 
+        ? Math.ceil(completionsContext.systemPrompt.length / 4) 
+        : 0;
+      
+      // Add safety margin (20%) for estimation inaccuracy
+      const totalInputEstimate = Math.ceil((promptTokensEstimate + systemPromptTokens) * 1.2);
+      
+      // Reserve tokens for output: contextWindow - inputTokens
+      const remainingBudget = Math.max(1, contextWindow - totalInputEstimate);
+      
+      // Cap maxTokens to remaining budget
+      if (typeof configuredMaxTokens === "number") {
+        effectiveMaxTokens = Math.min(configuredMaxTokens, remainingBudget);
+      } else {
+        effectiveMaxTokens = remainingBudget;
+      }
+    }
+    
     if (effectiveMaxTokens) {
       if (compat.maxTokensField === "max_tokens") {
         params.max_tokens = effectiveMaxTokens;
