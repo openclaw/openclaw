@@ -1,5 +1,6 @@
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
+import { tryChmodSync } from "../infra/chmod.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import { resolvePluginStateDir, resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
@@ -284,11 +285,11 @@ function createStatements(db: DatabaseSync): PluginStateStatements {
 function ensurePluginStatePermissions(pathname: string) {
   const dir = resolvePluginStateDir(process.env);
   mkdirSync(dir, { recursive: true, mode: PLUGIN_STATE_DIR_MODE });
-  chmodSync(dir, PLUGIN_STATE_DIR_MODE);
+  tryChmodSync(dir, PLUGIN_STATE_DIR_MODE);
   for (const suffix of PLUGIN_STATE_SIDECAR_SUFFIXES) {
     const candidate = `${pathname}${suffix}`;
     if (existsSync(candidate)) {
-      chmodSync(candidate, PLUGIN_STATE_FILE_MODE);
+      tryChmodSync(candidate, PLUGIN_STATE_FILE_MODE);
     }
   }
 }

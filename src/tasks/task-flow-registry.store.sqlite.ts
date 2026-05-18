@@ -1,5 +1,6 @@
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
+import { tryChmodSync } from "../infra/chmod.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import { isRecord } from "../utils.js";
@@ -339,13 +340,13 @@ function ensureSchema(db: DatabaseSync) {
 function ensureFlowRegistryPermissions(pathname: string) {
   const dir = resolveTaskFlowRegistryDir(process.env);
   mkdirSync(dir, { recursive: true, mode: FLOW_REGISTRY_DIR_MODE });
-  chmodSync(dir, FLOW_REGISTRY_DIR_MODE);
+  tryChmodSync(dir, FLOW_REGISTRY_DIR_MODE);
   for (const suffix of FLOW_REGISTRY_SIDECAR_SUFFIXES) {
     const candidate = `${pathname}${suffix}`;
     if (!existsSync(candidate)) {
       continue;
     }
-    chmodSync(candidate, FLOW_REGISTRY_FILE_MODE);
+    tryChmodSync(candidate, FLOW_REGISTRY_FILE_MODE);
   }
 }
 

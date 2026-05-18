@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
+import { tryChmodSync } from "./chmod.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
@@ -271,12 +272,8 @@ function ensureDir(filePath: string) {
   if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
     throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
   }
-  try {
-    fs.chmodSync(dir, 0o700);
-  } catch (err) {
-    if (process.platform !== "win32") {
-      throw err;
-    }
+  if (process.platform !== "win32") {
+    tryChmodSync(dir, 0o700);
   }
   return dir;
 }
