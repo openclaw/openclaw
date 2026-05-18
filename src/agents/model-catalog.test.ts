@@ -29,28 +29,11 @@ function isSuppressedModel(provider?: string, id?: string): boolean {
   if (!modelId) {
     return false;
   }
-  if (
+  return (
     (provider === "openai" ||
       provider === "azure-openai-responses" ||
       provider === "openai-codex") &&
     modelId === "gpt-5.3-codex-spark"
-  ) {
-    return true;
-  }
-  return (
-    provider === "openai-codex" &&
-    [
-      "gpt-5.1",
-      "gpt-5.1-codex",
-      "gpt-5.1-codex-mini",
-      "gpt-5.1-codex-max",
-      "gpt-5.2",
-      "gpt-5.2-codex",
-      "gpt-5.2-pro",
-      "gpt-5.3",
-      "gpt-5.3-codex",
-      "gpt-5.3-chat-latest",
-    ].includes(modelId)
   );
 }
 
@@ -790,7 +773,7 @@ describe("loadModelCatalog", () => {
     expectNoCatalogEntry(result, "openai-codex", "gpt-5.3-codex-spark");
   });
 
-  it("filters stale openai-codex 5.1/5.2/5.3 built-ins from the catalog", async () => {
+  it("keeps available openai-codex 5.1/5.2/5.3 built-ins in the catalog", async () => {
     mockPiDiscoveryModels([
       {
         id: "gpt-5.1-codex-mini",
@@ -827,9 +810,11 @@ describe("loadModelCatalog", () => {
     ]);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-    expectNoCatalogEntry(result, "openai-codex", "gpt-5.1-codex-mini");
-    expectNoCatalogEntry(result, "openai-codex", "gpt-5.2-codex");
-    expectNoCatalogEntry(result, "openai-codex", "gpt-5.3-codex");
+    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.1-codex-mini").name).toBe(
+      "GPT-5.1 Codex Mini",
+    );
+    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.2-codex").name).toBe("GPT-5.2 Codex");
+    expect(requireCatalogEntry(result, "openai-codex", "gpt-5.3-codex").name).toBe("GPT-5.3 Codex");
     expect(requireCatalogEntry(result, "openai-codex", "gpt-5.5").name).toBe("GPT-5.5");
   });
 

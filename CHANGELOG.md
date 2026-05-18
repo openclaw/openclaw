@@ -29,7 +29,9 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Mac app: keep app-level menu commands and Dashboard failure states reachable when the remote Gateway is disconnected, and keep the Settings sidebar toggle in the leading titlebar area.
+- Gateway/webchat: hide internal runtime-context and other `display: false` transcript messages from Chat history and live message events. Fixes #83216. Thanks @EmpireCreator.
 - Mac app: align the Sessions settings pane with the standard Settings page gutter and row spacing.
+- OpenAI/Codex: stop rejecting available `openai-codex` GPT-5.1, GPT-5.2, and GPT-5.3 model refs during config validation, while keeping removed Spark aliases suppressed. Fixes #83303.
 - Codex app-server: preserve streamed native command output in mirrored transcripts and trajectory exports when final snapshots omit aggregated output. (#83200) Thanks @rozmiarD.
 - Codex app-server: fail closed when chat or sender policy denies tools, disabling native code, app, environment, and user MCP surfaces for restricted turns. (#82374) Thanks @VACInc.
 - Codex app-server: keep recent context-engine messages when oversized projected history is truncated, so short follow-ups in long channel sessions do not fall back to stale earlier turns. (#83127) Thanks @VACInc.
@@ -49,11 +51,13 @@ Docs: https://docs.openclaw.ai
 - Agents/OpenAI streams: yield via `setTimeout(0)` instead of `setImmediate` between bursty Responses chunks so abort timers can fire during the yield, keeping cancel-on-timeout responsive on hot streams. Refs #82462.
 - Agents/Codex: keep legacy `oauthRef`-backed OAuth profiles usable while `openclaw doctor --fix` migrates them back to inline credentials, without creating new sidecar credentials. (#83312) Thanks @joshavant.
 - CLI/config: send SecretRef diagnostics to stderr so JSON command stdout remains parseable.
+- CLI/doctor: seed Control UI allowed origins when migrating legacy non-loopback gateway bind host aliases like `0.0.0.0`. Fixes #83286. Thanks @giodl73-repo.
 - CLI/plugins: ship the bundled memory CLI as a package entry so package-installed `openclaw memory` commands register correctly.
 - CLI/update: defer doctor-time plugin package installs during package swaps and seed post-core repair from the updated install registry, preventing duplicate reinstall failures.
 - Feishu: detect SecretRef top-level credentials as a configured default account instead of treating object-backed app secrets as missing.
 - Gateway/restart: keep ordinary unmanaged SIGUSR1/config restarts in-process instead of detach-spawning an orphaned child, preserving custom supervisor PID tracking while leaving update restarts on the fresh-process path. Fixes #65668.
 - CLI/completion: resolve concrete PowerShell profile paths and reload commands during setup and doctor completion installation. Fixes #44296. (#83059) Thanks @yu-xin-c.
+- Telegram: keep isolated long polling below the hard `getUpdates` request guard so idle bot accounts with high `timeoutSeconds` do not false-disconnect and restart-loop. Fixes #83264. Thanks @riccodecarvalho.
 - Providers/Google: preserve and recover Gemini 3 tool-call thought signatures during native replay so function-calling turns no longer fail with missing `thought_signature` 400s. Fixes #72879. (#80358) Thanks @abnershang.
 - Memory/QMD: keep lexical search on raw hyphenated queries while normalizing semantic QMD sub-searches, avoiding fallback to the builtin index for dashed identifiers and dates. Fixes #81328.
 - Memory-core: distinguish sqlite-vec load failures from missing semantic vector embeddings in degraded `memory index` warnings, so vector recall diagnostics point at unresolved dimensions instead of blaming sqlite-vec when the store is ready. Fixes #75624. (#83056) Thanks @xuruiray and @Noah3521.
