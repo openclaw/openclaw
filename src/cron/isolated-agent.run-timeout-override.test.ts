@@ -20,7 +20,7 @@ describe("resolveCronRunTimeoutOverrideMs", () => {
     expect(resolveCronRunTimeoutOverrideMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("omits the signal when the cron payload has no positive numeric timeout", () => {
+  it("ignores missing, invalid, or non-positive timeout values", () => {
     expect(resolveCronRunTimeoutOverrideMs(undefined)).toBeUndefined();
     expect(resolveCronRunTimeoutOverrideMs(0)).toBeUndefined();
     expect(resolveCronRunTimeoutOverrideMs(-1)).toBeUndefined();
