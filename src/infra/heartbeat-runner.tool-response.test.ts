@@ -239,6 +239,32 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   });
 
+  it("strips a trailing notify=false marker followed by a final LF", async () => {
+    const { result, sendTelegram, cfg } = await runWithPlainReply(
+      "No interruption needed.\n\nnotify=false\n",
+    );
+
+    expect(result.status).toBe("ran");
+    expectTelegramSend(sendTelegram, {
+      text: "No interruption needed.",
+      cfg,
+      silent: true,
+    });
+  });
+
+  it("strips a trailing notify=false marker followed by a final CRLF", async () => {
+    const { result, sendTelegram, cfg } = await runWithPlainReply(
+      "No interruption needed.\r\n\r\nnotify=false\r\n",
+    );
+
+    expect(result.status).toBe("ran");
+    expectTelegramSend(sendTelegram, {
+      text: "No interruption needed.",
+      cfg,
+      silent: true,
+    });
+  });
+
   it("treats a plain trailing notify=false marker as a quiet heartbeat ack", async () => {
     const { result, sendTelegram } = await runWithPlainReply("notify=false");
 

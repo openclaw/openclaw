@@ -769,7 +769,7 @@ function stripLeadingHeartbeatResponsePrefix(
 }
 
 const TRAILING_HEARTBEAT_NOTIFY_FALSE_PATTERN =
-  /(?:^|\r?\n)[^\S\r\n]*notify[^\S\r\n]*=[^\S\r\n]*false[^\S\r\n]*$/i;
+  /(?:^|\r?\n)[^\S\r\n]*notify[^\S\r\n]*=[^\S\r\n]*false[^\S\r\n]*(?:\r?\n[^\S\r\n]*)*$/i;
 
 function stripTrailingHeartbeatNotifyFalse(text: string): { text: string; notifyFalse: boolean } {
   const match = TRAILING_HEARTBEAT_NOTIFY_FALSE_PATTERN.exec(text);
