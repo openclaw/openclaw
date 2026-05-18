@@ -19,6 +19,12 @@ const mockState = vi.hoisted(() => ({
   resolveCommandText: vi.fn((_trigger: string, text: string) => text),
   buildModelsProviderData: vi.fn(async () => ({ providers: [], modelNames: new Map() })),
   resolveMattermostModelPickerEntry: vi.fn(() => ({ kind: "summary" })),
+  buildMattermostModelPickerDialog: vi.fn(() => ({
+    callback_id: "oc_model_picker",
+    title: "Model Picker",
+    elements: [],
+  })),
+  resolveMattermostModelPickerCurrentRuntime: vi.fn(() => "auto"),
   authorizeMattermostCommandInvocation: vi.fn(() => ({
     ok: true,
     commandAuthorized: true,
@@ -30,6 +36,7 @@ const mockState = vi.hoisted(() => ({
     roomLabel: "#town-square",
   })),
   createMattermostClient: vi.fn(() => ({})),
+  openMattermostInteractiveDialog: vi.fn(async () => undefined),
   fetchMattermostChannel: vi.fn(async () => ({
     id: "chan-1",
     type: "O",
@@ -104,15 +111,18 @@ vi.mock("./client.js", async () => {
     createMattermostClient: mockState.createMattermostClient,
     fetchMattermostChannel: mockState.fetchMattermostChannel,
     normalizeMattermostBaseUrl: vi.fn((value: string | undefined) => value?.trim() ?? ""),
+    openMattermostInteractiveDialog: mockState.openMattermostInteractiveDialog,
     sendMattermostTyping: vi.fn(),
   };
 });
 
 vi.mock("./model-picker.js", () => ({
+  buildMattermostModelPickerDialog: mockState.buildMattermostModelPickerDialog,
   renderMattermostModelSummaryView: vi.fn(),
   renderMattermostModelsPickerView: vi.fn(),
   renderMattermostProviderPickerView: vi.fn(),
   resolveMattermostModelPickerCurrentModel: vi.fn(),
+  resolveMattermostModelPickerCurrentRuntime: mockState.resolveMattermostModelPickerCurrentRuntime,
   resolveMattermostModelPickerEntry: mockState.resolveMattermostModelPickerEntry,
 }));
 
@@ -216,9 +226,12 @@ describe("slash-http cfg threading", () => {
     mockState.parseSlashCommandPayload.mockClear();
     mockState.resolveCommandText.mockClear();
     mockState.buildModelsProviderData.mockClear();
+    mockState.buildMattermostModelPickerDialog.mockClear();
     mockState.resolveMattermostModelPickerEntry.mockClear();
+    mockState.resolveMattermostModelPickerCurrentRuntime.mockClear();
     mockState.authorizeMattermostCommandInvocation.mockClear();
     mockState.createMattermostClient.mockClear();
+    mockState.openMattermostInteractiveDialog.mockClear();
     mockState.fetchMattermostChannel.mockClear();
     mockState.sendMessageMattermost.mockClear();
     mockState.normalizeMattermostAllowList.mockClear();
@@ -264,6 +277,220 @@ describe("slash-http cfg threading", () => {
         accountId: "default",
       },
     );
+  });
+
+  it("opens the dialog-backed picker synchronously when Mattermost provides a trigger id", async () => {
+    mockState.parseSlashCommandPayload.mockReturnValueOnce({
+      token: "valid-token",
+      command: "/oc_models",
+      text: "models",
+      channel_id: "chan-1",
+      user_id: "user-1",
+      user_name: "alice",
+      team_id: "team-1",
+      trigger_id: "trigger-1",
+    });
+    mockState.buildModelsProviderData.mockResolvedValueOnce({
+      providers: ["openai"],
+      byProvider: new Map([["openai", new Set(["gpt-5"])]]),
+      resolvedDefault: {
+        provider: "openai",
+        model: "gpt-5",
+      },
+      modelNames: new Map(),
+    });
+    mockState.createMattermostClient.mockReturnValue({});
+
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+      registeredCommands: [
+        {
+          id: "cmd-1",
+          teamId: "team-1",
+          trigger: "oc_models",
+          token: "valid-token",
+          url: callbackUrlFixture,
+          managed: false,
+        },
+      ],
+    });
+    const response = createResponse();
+
+    await handler(createRequest(), response.res);
+
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain('"text":""');
+    expect(mockState.openMattermostInteractiveDialog).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        triggerId: "trigger-1",
+      }),
+    );
+    expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
+  });
+
+  it("falls back to payload-derived channel info when channel lookup is forbidden", async () => {
+    mockState.parseSlashCommandPayload.mockReturnValueOnce({
+      token: "valid-token",
+      command: "/oc_model",
+      text: "",
+      channel_id: "chan-private-1",
+      channel_name: "secret-planning",
+      user_id: "1a358pib8ffm9cwme4z8c1z5uc",
+      user_name: "alice",
+      team_id: "team-1",
+      trigger_id: "trigger-private-1",
+    });
+    mockState.fetchMattermostChannel.mockRejectedValueOnce(
+      new Error("Mattermost API 403 Forbidden: You do not have the appropriate permissions."),
+    );
+    mockState.getMattermostCommand.mockResolvedValueOnce({
+      id: "cmd-1",
+      token: "valid-token",
+      team_id: "team-1",
+      trigger: "oc_model",
+      method: "P",
+      url: callbackUrlFixture,
+      delete_at: 0,
+    });
+    mockState.authorizeMattermostCommandInvocation.mockImplementationOnce(
+      async ({ channelInfo }) => ({
+        ok: true,
+        commandAuthorized: true,
+        channelInfo,
+        kind: "channel",
+        chatType: "channel",
+        channelName: channelInfo?.name ?? "",
+        channelDisplay: channelInfo?.display_name ?? channelInfo?.name ?? "",
+        roomLabel: channelInfo?.name ? `#${channelInfo.name}` : "#chan-private-1",
+      }),
+    );
+    mockState.buildModelsProviderData.mockResolvedValueOnce({
+      providers: ["openai"],
+      byProvider: new Map([["openai", new Set(["gpt-5"])]]),
+      resolvedDefault: {
+        provider: "openai",
+        model: "gpt-5",
+      },
+      modelNames: new Map(),
+    });
+    mockState.createMattermostClient.mockReturnValue({});
+
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+      registeredCommands: [
+        {
+          id: "cmd-1",
+          teamId: "team-1",
+          trigger: "oc_model",
+          token: "valid-token",
+          url: callbackUrlFixture,
+          managed: false,
+        },
+      ],
+    });
+    const response = createResponse();
+
+    await handler(createRequest(), response.res);
+
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain('"text":""');
+    expect(mockState.authorizeMattermostCommandInvocation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelInfo: expect.objectContaining({
+          id: "chan-private-1",
+          name: "secret-planning",
+          type: "O",
+          team_id: "team-1",
+        }),
+      }),
+    );
+    expect(mockState.openMattermostInteractiveDialog).toHaveBeenCalled();
+  });
+
+  it("infers direct-message slash payloads without channel lookup access", async () => {
+    mockState.parseSlashCommandPayload.mockReturnValueOnce({
+      token: "valid-token",
+      command: "/oc_model",
+      text: "",
+      channel_id: "chan-dm-1",
+      channel_name: "1a358pib8ffm9cwme4z8c1z5uc__tnrrznrcsj81pqdi8kwoedrfby",
+      user_id: "1a358pib8ffm9cwme4z8c1z5uc",
+      user_name: "alice",
+      team_id: "team-1",
+      trigger_id: "trigger-dm-1",
+    });
+    mockState.fetchMattermostChannel.mockRejectedValueOnce(
+      new Error("Mattermost API 403 Forbidden: You do not have the appropriate permissions."),
+    );
+    mockState.getMattermostCommand.mockResolvedValueOnce({
+      id: "cmd-1",
+      token: "valid-token",
+      team_id: "team-1",
+      trigger: "oc_model",
+      method: "P",
+      url: callbackUrlFixture,
+      delete_at: 0,
+    });
+    mockState.authorizeMattermostCommandInvocation.mockImplementationOnce(
+      async ({ channelInfo }) => ({
+        ok: true,
+        commandAuthorized: true,
+        channelInfo,
+        kind: "direct",
+        chatType: "direct",
+        channelName: channelInfo?.name ?? "",
+        channelDisplay: channelInfo?.display_name ?? channelInfo?.name ?? "",
+        roomLabel: channelInfo?.name ? `#${channelInfo.name}` : "#chan-dm-1",
+      }),
+    );
+    mockState.buildModelsProviderData.mockResolvedValueOnce({
+      providers: ["openai"],
+      byProvider: new Map([["openai", new Set(["gpt-5"])]]),
+      resolvedDefault: {
+        provider: "openai",
+        model: "gpt-5",
+      },
+      modelNames: new Map(),
+    });
+    mockState.createMattermostClient.mockReturnValue({});
+
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+      registeredCommands: [
+        {
+          id: "cmd-1",
+          teamId: "team-1",
+          trigger: "oc_model",
+          token: "valid-token",
+          url: callbackUrlFixture,
+          managed: false,
+        },
+      ],
+    });
+    const response = createResponse();
+
+    await handler(createRequest(), response.res);
+
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain('"text":""');
+    expect(mockState.authorizeMattermostCommandInvocation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelInfo: expect.objectContaining({
+          id: "chan-dm-1",
+          name: "1a358pib8ffm9cwme4z8c1z5uc__tnrrznrcsj81pqdi8kwoedrfby",
+          type: "D",
+          team_id: "team-1",
+        }),
+      }),
+    );
+    expect(mockState.openMattermostInteractiveDialog).toHaveBeenCalled();
   });
 
   it("rejects a callback when Mattermost reports a different current command token", async () => {
