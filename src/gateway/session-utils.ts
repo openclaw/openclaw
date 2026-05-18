@@ -889,6 +889,30 @@ export function pruneLegacyStoreKeys(params: {
   }
 }
 
+function resolvePreservedRawExternalStoreKey(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  canonicalKey: string;
+}): string | undefined {
+  const key = normalizeOptionalString(params.key) ?? "";
+  if (!key || key === params.canonicalKey || !key.includes(":")) {
+    return undefined;
+  }
+  const lowered = normalizeLowercaseStringOrEmpty(key);
+  const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
+  if (
+    lowered === "global" ||
+    lowered === "unknown" ||
+    lowered === "main" ||
+    lowered === mainKey ||
+    lowered.startsWith("agent:") ||
+    parseAgentSessionKey(key)
+  ) {
+    return undefined;
+  }
+  return lowered;
+}
+
 export function migrateAndPruneGatewaySessionStoreKey(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -900,6 +924,11 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
     store: params.store,
   });
   const primaryKey = target.canonicalKey;
+  const preservedRawKey = resolvePreservedRawExternalStoreKey({
+    cfg: params.cfg,
+    key: params.key,
+    canonicalKey: primaryKey,
+  });
   const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
     params.store,
     target.storeKeys,
@@ -913,8 +942,13 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
   pruneLegacyStoreKeys({
     store: params.store,
     canonicalKey: primaryKey,
-    candidates: target.storeKeys,
+    candidates: target.storeKeys.filter(
+      (key) => normalizeLowercaseStringOrEmpty(key) !== preservedRawKey,
+    ),
   });
+  if (preservedRawKey && params.store[primaryKey]) {
+    params.store[preservedRawKey] = params.store[primaryKey];
+  }
   return { target, primaryKey, entry: params.store[primaryKey] };
 }
 

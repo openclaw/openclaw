@@ -1085,6 +1085,32 @@ describe("gateway session utils", () => {
     expect(store["agent:main:MAIN"]).toBeUndefined();
   });
 
+  test("migrateAndPruneGatewaySessionStoreKey preserves raw structured external aliases", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+    const canonicalKey = `agent:main:${rawKey}`;
+    const store: Record<string, SessionEntry> = {
+      [rawKey]: {
+        sessionId: "sess-raw",
+        updatedAt: 2,
+      } as SessionEntry,
+    };
+
+    const result = migrateAndPruneGatewaySessionStoreKey({
+      cfg,
+      key: rawKey,
+      store,
+    });
+
+    expect(result.primaryKey).toBe(canonicalKey);
+    expect(result.entry?.sessionId).toBe("sess-raw");
+    expect(store[canonicalKey]?.sessionId).toBe("sess-raw");
+    expect(store[rawKey]?.sessionId).toBe("sess-raw");
+  });
+
   test("listAgentsForGateway rejects avatar symlink escapes outside workspace", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-avatar-outside-"));
     const workspace = path.join(root, "workspace");
