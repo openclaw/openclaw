@@ -340,6 +340,25 @@ const CodexUserLocationSchema = z
   })
   .optional();
 
+const LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS = new Set([
+  "brave",
+  "duckduckgo",
+  "exa",
+  "firecrawl",
+  "gemini",
+  "grok",
+  "kimi",
+  "minimax",
+  "ollama",
+  "perplexity",
+  "searxng",
+  "tavily",
+]);
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 const ToolsWebSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -360,6 +379,18 @@ const ToolsWebSearchSchema = z
       .optional(),
   })
   .catchall(z.unknown())
+  .superRefine((value, ctx) => {
+    for (const [key, entry] of Object.entries(value)) {
+      if (LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS.has(key) && isPlainRecord(entry)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message:
+            "legacy web_search provider config must use plugins.entries.<plugin>.config.webSearch",
+        });
+      }
+    }
+  })
   .optional();
 
 const ToolsWebFetchSchema = z
