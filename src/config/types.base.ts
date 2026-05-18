@@ -63,6 +63,13 @@ export type ChannelStreamingPreviewConfig = {
   toolProgress?: boolean;
   /** Command/exec progress detail in the preview. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
   commandText?: ChannelStreamingCommandTextMode;
+  /**
+   * Use channel-native ephemeral UI for preview tool progress when supported.
+   * Default: false.
+   */
+  nativeToolProgress?: boolean;
+  /** Optional sender/user ID allowlist for native preview tool progress. */
+  nativeToolProgressAllowFrom?: Array<string | number>;
 };
 
 export type ChannelStreamingBlockConfig = {
