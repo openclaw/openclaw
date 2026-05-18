@@ -4,10 +4,8 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
-import {
-  CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
-  renderCodexPromptOverlay,
-} from "../../prompt-overlay.js";
+import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
+import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
@@ -806,44 +804,25 @@ function compareJsonFingerprint(left: JsonValue, right: JsonValue): number {
 }
 
 export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
-  const promptOverlay = renderCodexRuntimePromptOverlay(params);
+  const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
+    surface: "codex_app_server",
+    includeLegacyGlobalGuidance: false,
+  }).join("\n");
   const sections = [
-    "Running inside OpenClaw. Use dynamic tools for messaging, cron, sessions, media, gateway, and nodes when available.",
+    "Running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes capabilities when available.",
     "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation; if it is not already loaded, search for `sessions_spawn` in the `openclaw` dynamic tool namespace before calling it.",
-    "Preserve channel/session context. Visible channel replies: use `message`, do not describe would-reply.",
-    promptOverlay,
+    buildVisibleReplyInstruction(params),
+    nativeCommandGuidance,
     params.extraSystemPrompt,
-    params.skillsSnapshot?.prompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
 }
 
-function renderCodexRuntimePromptOverlay(params: EmbeddedRunAttemptParams): string | undefined {
-  const contribution = params.runtimePlan?.prompt.resolveSystemPromptContribution({
-    config: params.config,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    provider: params.provider,
-    modelId: params.modelId,
-    promptMode: "full",
-    agentId: params.agentId,
-  });
-  if (!contribution) {
-    return renderCodexPromptOverlay({
-      config: params.config,
-      providerId: params.provider,
-      modelId: params.modelId,
-    });
+function buildVisibleReplyInstruction(params: EmbeddedRunAttemptParams): string {
+  if (params.sourceReplyDeliveryMode === "message_tool_only") {
+    return "Preserve channel/session context. Visible channel replies: use `message`, do not describe would-reply.";
   }
-  return [
-    contribution.stablePrefix,
-    ...Object.values(contribution.sectionOverrides ?? {}),
-    contribution.dynamicSuffix,
-  ]
-    .filter(
-      (section): section is string => typeof section === "string" && section.trim().length > 0,
-    )
-    .join("\n\n");
+  return "Preserve channel/session context. Visible channel replies should use the active Codex delivery path; do not describe would-reply.";
 }
 
 function buildUserInput(

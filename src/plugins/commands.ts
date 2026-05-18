@@ -22,6 +22,7 @@ import {
 } from "./command-registration.js";
 import {
   isTrustedReservedCommandOwner,
+  listRegisteredPluginAgentPromptGuidance,
   pluginCommands,
   setPluginCommandRegistryLocked,
   type RegisteredPluginCommand,
@@ -47,6 +48,7 @@ export {
   clearPluginCommandsForPlugin,
   getPluginCommandSpecs,
   listProviderPluginCommandSpecs,
+  listRegisteredPluginAgentPromptGuidance,
   registerPluginCommand,
   validateCommandName,
   validatePluginCommandDefinition,

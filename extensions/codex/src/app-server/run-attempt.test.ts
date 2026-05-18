@@ -16,6 +16,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -599,6 +600,7 @@ describe("runCodexAppServerAttempt", () => {
     __testing.resetOpenClawCodingToolsFactoryForTests();
     resetCodexRateLimitCacheForTests();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    clearPluginCommands();
     resetAgentEventsForTest();
     resetGlobalHookRunner();
     defaultCodexAppInventoryCache.clear();
@@ -991,6 +993,106 @@ describe("runCodexAppServerAttempt", () => {
 
     params.sourceReplyDeliveryMode = "automatic";
     expect(__testing.shouldForceMessageTool(params)).toBe(false);
+  });
+
+  it("scopes Codex developer reply instructions to message-tool-only delivery", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.sourceReplyDeliveryMode = "message_tool_only";
+
+    expect(__testing.buildDeveloperInstructions(params)).toContain(
+      "Visible channel replies: use `message`",
+    );
+
+    params.sourceReplyDeliveryMode = "automatic";
+    const automaticInstructions = __testing.buildDeveloperInstructions(params);
+    expect(automaticInstructions).toContain("active Codex delivery path");
+    expect(automaticInstructions).not.toContain("Visible channel replies: use `message`");
+  });
+
+  it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
+    registerPluginCommand("demo-plugin", {
+      name: "codex_demo",
+      description: "Codex demo command",
+      agentPromptGuidance: [
+        "Legacy global command guidance.",
+        {
+          text: "Codex app-server command guidance.",
+          surfaces: ["codex_app_server"],
+        },
+        {
+          text: "Unscoped structured command guidance.",
+        },
+        {
+          text: "PI main command guidance.",
+          surfaces: ["pi_main"],
+        },
+      ],
+      handler: async () => ({ text: "ok" }),
+    });
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+
+    const instructions = __testing.buildDeveloperInstructions(params);
+
+    expect(instructions).toContain("Codex app-server command guidance.");
+    expect(instructions).not.toContain("Legacy global command guidance.");
+    expect(instructions).not.toContain("Unscoped structured command guidance.");
+    expect(instructions).not.toContain("PI main command guidance.");
+  });
+
+  it("keeps OpenClaw skills out of Codex developer instructions", async () => {
+    const llmInput = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "llm_input", handler: llmInput }]),
+    );
+    vi.stubEnv("OPENCLAW_TRAJECTORY", "1");
+    vi.stubEnv("OPENCLAW_TRAJECTORY_DIR", path.join(tempDir, "trajectory"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.skillsSnapshot = {
+      prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+      skills: [],
+    };
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const threadStartParams = threadStart?.params as { developerInstructions?: string };
+    expect(threadStartParams.developerInstructions).not.toContain("<available_skills>");
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      input?: Array<{ text?: string }>;
+    };
+    const inputText = turnStartParams.input?.[0]?.text ?? "";
+    expect(inputText).toContain("## OpenClaw Skills");
+    expect(inputText).toContain("<available_skills>");
+    expect(inputText).toContain("Current user request:\nhello");
+    const [llmInputPayload] = mockCall(llmInput, "llm_input") as [{ prompt?: string }, unknown];
+    expect(llmInputPayload.prompt).toBe(inputText);
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempDir, "trajectory", "session-1.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { data?: { prompt?: string }; type?: string });
+    expect(trajectoryEvents.find((event) => event.type === "context.compiled")?.data?.prompt).toBe(
+      inputText,
+    );
+    expect(trajectoryEvents.find((event) => event.type === "prompt.submitted")?.data?.prompt).toBe(
+      inputText,
+    );
+    expect(result.systemPromptReport?.skills.promptChars).toBe(params.skillsSnapshot.prompt.length);
+    expect(result.systemPromptReport?.skills.entries).toEqual([
+      { name: "demo", blockChars: "<skill><name>demo</name></skill>".length },
+    ]);
   });
 
   it("keeps forced message dynamic tool when toolsAllow omits it", async () => {
@@ -3691,7 +3793,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
-  it("passes OpenClaw bootstrap files through Codex developer instructions", async () => {
+  it("passes OpenClaw bootstrap files through Codex turn context", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -3706,18 +3808,28 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
-    const params = threadStart?.params as {
+    const threadStartParams = threadStart?.params as {
       config?: { instructions?: string };
       developerInstructions?: string;
     };
-    const config = params.config;
+    const config = threadStartParams.config;
 
-    // Regression for #77363: persona/style bootstrap (SOUL.md) must reach the
-    // explicit developerInstructions field, not config.instructions.
-    expect(params.developerInstructions).toContain("Soul voice goes here.");
-    expect(params.developerInstructions).toContain("Codex loads AGENTS.md natively");
-    expect(params.developerInstructions).not.toContain("Follow AGENTS guidance.");
+    expect(threadStartParams.developerInstructions).not.toContain("Soul voice goes here.");
+    expect(threadStartParams.developerInstructions).not.toContain("Codex loads AGENTS.md natively");
+    expect(threadStartParams.developerInstructions).not.toContain("Follow AGENTS guidance.");
     expect(config?.instructions).toBeUndefined();
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      input?: Array<{ text?: string }>;
+    };
+    const inputText = turnStartParams.input?.[0]?.text ?? "";
+    expect(inputText).toContain("OpenClaw runtime context for this turn:");
+    expect(inputText).toContain("not developer policy");
+    expect(inputText).toContain("Soul voice goes here.");
+    expect(inputText).toContain("Codex loads AGENTS.md natively");
+    expect(inputText).not.toContain("Follow AGENTS guidance.");
+    expect(inputText).toContain("Current user request:\nhello");
   });
 
   it("remaps Codex bootstrap files under dot-prefixed workspace directories", () => {
@@ -3763,12 +3875,16 @@ describe("runCodexAppServerAttempt", () => {
     params.prompt = exactCommand;
     params.bootstrapContextMode = "lightweight";
     params.bootstrapContextRunKind = "cron";
+    params.skillsSnapshot = {
+      prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+      skills: [],
+    };
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await new Promise<void>((resolve) => setImmediate(resolve));
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    const result = await run;
 
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as {
@@ -3778,12 +3894,14 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadStartParams.config?.project_doc_max_bytes).toBe(0);
     expect(threadStartParams.developerInstructions).not.toContain("Soul voice goes here.");
     expect(threadStartParams.developerInstructions).not.toContain("Follow AGENTS guidance.");
+    expect(threadStartParams.developerInstructions).not.toContain("<available_skills>");
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
     };
     expect(turnStartParams.input?.[0]?.text).toBe(exactCommand);
+    expect(result.systemPromptReport?.skills).toEqual({ promptChars: 0, entries: [] });
   });
 
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
@@ -3834,7 +3952,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(llmInputPayload.prompt).toBe("hello");
     expect(llmInputPayload.imagesCount).toBe(0);
     expect(llmInputPayload.historyMessages?.[0]?.role).toBe("assistant");
-    expect(llmInputPayload.systemPrompt).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(llmInputPayload.systemPrompt).toContain("Running inside OpenClaw");
+    expect(llmInputPayload.systemPrompt).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     expect(llmInputContext.runId).toBe("run-1");
     expect(llmInputContext.sessionId).toBe("session-1");
     expect(llmInputContext.sessionKey).toBe("agent:main:session-1");
@@ -4960,7 +5079,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadStartParams?.approvalPolicy).toBe("never");
     expect(threadStartParams?.sandbox).toBe("danger-full-access");
     expect(threadStartParams?.approvalsReviewer).toBe("user");
-    expect(threadStartParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(threadStartParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const steer = requests.find((entry) => entry.method === "turn/steer");
     expect(steer?.params).toEqual({
       threadId: "thread-1",
@@ -6342,7 +6461,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
-    expect(resumeRequestParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
   });
 
   it("starts a fresh Codex thread before resume when the native rollout is over budget", async () => {
@@ -8058,7 +8177,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeConfig?.["features.hooks"]).toBe(true);
     expect(resumeConfig?.["features.code_mode"]).toBe(true);
     expect(resumeConfig?.["features.code_mode_only"]).toBe(false);
-    expect(resumeRequestParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnRequest = requests.find((request) => request.method === "turn/start");
     const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
     expect(turnRequestParams?.approvalPolicy).toBe("on-request");
@@ -8253,7 +8372,7 @@ describe("runCodexAppServerAttempt", () => {
       developerInstructions: resumeParams.developerInstructions,
       persistExtendedHistory: true,
     });
-    expect(resumeParams.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnParams = buildTurnStartParams(params, {
       threadId: "thread-1",
       cwd: "/tmp/workspace",
