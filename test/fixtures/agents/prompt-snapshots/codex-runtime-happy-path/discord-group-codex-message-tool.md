@@ -221,16 +221,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 10111
   },
   "openClawDeveloperInstructions": {
-    "chars": 5436,
-    "roughTokens": 1359
+    "chars": 5673,
+    "roughTokens": 1419
   },
   "totalTextOnly": {
-    "chars": 28516,
-    "roughTokens": 7129
+    "chars": 28753,
+    "roughTokens": 7189
   },
   "totalWithDynamicToolsJson": {
-    "chars": 68959,
-    "roughTokens": 17240
+    "chars": 69196,
+    "roughTokens": 17299
   },
   "userInputText": {
     "chars": 870,
@@ -433,6 +433,8 @@ SOUL.md: persona/tone. Follow it unless higher-priority instructions override.
 
 ````text
 Running inside OpenClaw. Use dynamic tools for messaging, cron, sessions, media, gateway, and nodes when available.
+
+Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation; if it is not already loaded, search for `sessions_spawn` in the `openclaw` dynamic tool namespace before calling it.
 
 Preserve channel/session context. Visible channel replies: use `message`, do not describe would-reply.
 

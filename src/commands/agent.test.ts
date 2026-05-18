@@ -381,13 +381,14 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledOnce();
-      const registryLoad = pluginRegistryMocks.ensurePluginRegistryLoaded.mock.calls[0]?.[0];
-      expect(registryLoad?.scope).toBe("all");
-      expect(registryLoad?.config).toBeTypeOf("object");
-      expect(registryLoad?.activationSourceConfig).toBeTypeOf("object");
-      expect(registryLoad?.workspaceDir).toBe(path.join(home, "openclaw"));
-      expect(registryLoad?.onlyPluginIds).toEqual(["codex"]);
+      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledTimes(2);
+      for (const [registryLoad] of pluginRegistryMocks.ensurePluginRegistryLoaded.mock.calls) {
+        expect(registryLoad?.scope).toBe("all");
+        expect(registryLoad?.config).toBeTypeOf("object");
+        expect(registryLoad?.activationSourceConfig).toBeTypeOf("object");
+        expect(registryLoad?.workspaceDir).toBe(path.join(home, "openclaw"));
+        expect(registryLoad?.onlyPluginIds).toEqual(["codex"]);
+      }
       expectLastRunProviderModel("openai", "gpt-5.2");
     });
   });

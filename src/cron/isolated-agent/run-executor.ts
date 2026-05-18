@@ -15,6 +15,7 @@ import {
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
   getCliSessionId,
+  ensureSelectedAgentHarnessPlugin,
   isCliProvider,
   LiveSessionModelSwitchError,
   logWarn,
@@ -167,6 +168,19 @@ export function createCronPromptExecutor(params: {
       sessionId: params.cronSession.sessionEntry.sessionId,
       lane: resolveCronAgentLane(params.lane),
       agentDir: params.agentDir,
+      agentId: params.agentId,
+      sessionKey: params.runSessionKey,
+      prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
+        await ensureSelectedAgentHarnessPlugin({
+          config: params.cfgWithAgentDefaults,
+          provider,
+          modelId: model,
+          agentId: params.agentId,
+          sessionKey: params.runSessionKey,
+          agentHarnessRuntimeOverride,
+          workspaceDir: params.workspaceDir,
+        });
+      },
       fallbacksOverride: cronFallbacksOverride,
       run: async (providerOverride, modelOverride, runOptions) => {
         if (params.abortSignal?.aborted) {
