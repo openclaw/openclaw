@@ -868,6 +868,15 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
     params.context.providerConfig,
     params.modelApi,
   );
+  for (const providerRef of providerRefs) {
+    const loadedResolved = resolveLoadedProviderRuntimePlugin({
+      ...params,
+      provider: providerRef,
+    })?.resolveSyntheticAuth?.(params.context);
+    if (loadedResolved) {
+      return loadedResolved;
+    }
+  }
   const discoveryPluginIds = [
     ...new Set(
       providerRefs.flatMap(

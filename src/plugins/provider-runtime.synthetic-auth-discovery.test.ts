@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveProviderRuntimePlugin = vi.hoisted(() => vi.fn(() => undefined));
+const resolveLoadedProviderRuntimePlugin = vi.hoisted(() => vi.fn(() => undefined));
 const resolvePluginDiscoveryProvidersRuntime = vi.hoisted(() =>
   vi.fn(() => [
     {
@@ -43,6 +44,7 @@ vi.mock("./provider-hook-runtime.js", async (importOriginal) => {
     prepareProviderExtraParams: vi.fn(),
     resolveProviderHookPlugin: vi.fn(),
     resolveProviderPluginsForHooks: vi.fn(() => []),
+    resolveLoadedProviderRuntimePlugin,
     resolveProviderRuntimePlugin,
     wrapProviderStreamFn: vi.fn(),
   };
@@ -68,6 +70,42 @@ vi.mock("./providers.js", () => ({
 import { resolveProviderSyntheticAuthWithPlugin } from "./provider-runtime.js";
 
 describe("resolveProviderSyntheticAuthWithPlugin", () => {
+  beforeEach(() => {
+    resolveLoadedProviderRuntimePlugin.mockReset();
+    resolveProviderRuntimePlugin.mockClear();
+    resolvePluginDiscoveryProvidersRuntime.mockClear();
+  });
+
+  it("uses already-loaded provider runtime hooks before discovery", () => {
+    resolveLoadedProviderRuntimePlugin.mockReturnValueOnce({
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      resolveSyntheticAuth: () => ({
+        apiKey: "loaded-runtime-key",
+        source: "loaded runtime",
+        mode: "api-key" as const,
+      }),
+    });
+
+    expect(
+      resolveProviderSyntheticAuthWithPlugin({
+        provider: "openai",
+        context: {
+          config: undefined,
+          provider: "openai",
+          providerConfig: undefined,
+        },
+      }),
+    ).toEqual({
+      apiKey: "loaded-runtime-key",
+      source: "loaded runtime",
+      mode: "api-key",
+    });
+    expect(resolvePluginDiscoveryProvidersRuntime).not.toHaveBeenCalled();
+    expect(resolveProviderRuntimePlugin).not.toHaveBeenCalled();
+  });
+
   it("falls back to lightweight discovery providers when runtime hooks are unavailable", () => {
     expect(
       resolveProviderSyntheticAuthWithPlugin({
@@ -83,6 +121,7 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
       source: "gcp-vertex-credentials (ADC)",
       mode: "api-key",
     });
+    expect(resolveLoadedProviderRuntimePlugin).toHaveBeenCalled();
     expect(resolveProviderRuntimePlugin).not.toHaveBeenCalled();
     expect(resolvePluginDiscoveryProvidersRuntime).toHaveBeenCalled();
   });
