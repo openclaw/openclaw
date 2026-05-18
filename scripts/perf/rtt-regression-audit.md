@@ -41,14 +41,19 @@ Status: branch-local checkpoint, not release notes.
 - Testbox `tbx_01krwb9k7cbktytpjprxcydfbk` ran `pnpm check:changed` and the
   command exited 0. The wrapper Actions run `26008757251` still reported
   `in_progress` after the box was stopped.
+- Testbox `tbx_01krwbsg15xvjdgpcz8fxq1htz` ran
+  `OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS=1 pnpm openclaw qa suite --scenario channel-chat-baseline`.
+  The sample passed and recorded heap checkpoints plus RSS trace: wall
+  `20112ms`, gateway RSS `655036416 -> 953790464`, peak `1051258880`, heap
+  snapshots `154M` and `165M`.
 
 ## Still weak
 
-- No retained-heap regression has been proven. Heap snapshots should be taken
-  only if the new gateway RSS samples grow across repeated warm samples.
+- No retained-heap regression has been proven. The first heap-checkpoint sample
+  grew by about 11M on disk across the scenario, which is worth comparing
+  across repeated warm samples before calling it a leak.
 - The branch fixes OpenClaw artifact quality. `openclaw-rtt` still needs an
   importer/report follow-up to prefer summary `rttMs` and optionally ingest
   gateway RSS fields.
 - Gitcrawl data was stale for the newest RTT window, so live `gh` history was
   the source of truth for 2026-05-16 and 2026-05-17 PR attribution.
-

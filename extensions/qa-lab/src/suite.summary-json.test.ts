@@ -170,6 +170,14 @@ describe("buildQaSuiteSummaryJson", () => {
             gatewayProcessRssBytes: 140_000_000,
           },
         ],
+        gatewayHeapSnapshots: [
+          {
+            label: "suite-start",
+            at: "2026-04-22T12:00:01.000Z",
+            path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
+            bytes: 12_345,
+          },
+        ],
       },
     });
     expect(json.metrics).toEqual({
@@ -191,6 +199,14 @@ describe("buildQaSuiteSummaryJson", () => {
           label: "scenario:canary:finish",
           at: "2026-04-22T12:00:10.000Z",
           gatewayProcessRssBytes: 140_000_000,
+        },
+      ],
+      gatewayHeapSnapshots: [
+        {
+          label: "suite-start",
+          at: "2026-04-22T12:00:01.000Z",
+          path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
+          bytes: 12_345,
         },
       ],
     });

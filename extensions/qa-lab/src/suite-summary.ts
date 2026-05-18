@@ -30,6 +30,12 @@ export type QaSuiteSummaryJson = {
       at: string;
       gatewayProcessRssBytes: number;
     }>;
+    gatewayHeapSnapshots?: Array<{
+      label: string;
+      at: string;
+      path: string;
+      bytes: number;
+    }>;
   };
   run: {
     startedAt: string;
