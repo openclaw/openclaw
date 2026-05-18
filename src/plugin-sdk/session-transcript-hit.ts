@@ -6,6 +6,15 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
+const QMD_ARCHIVE_STEM_RE = /^(.+)-jsonl-(reset|deleted)-(.+)$/;
+
+function restoreQmdNormalizedArchiveName(mdStem: string): string | null {
+  const match = QMD_ARCHIVE_STEM_RE.exec(mdStem);
+  if (!match) return null;
+  const [, sessionId, reason, timestamp] = match;
+  return `${sessionId}.jsonl.${reason}.${timestamp}`;
+}
+
 export type SessionTranscriptHitIdentity = {
   stem: string;
   ownerAgentId?: string;
@@ -49,8 +58,16 @@ export function extractTranscriptIdentityFromSessionsMemoryHit(
     return stem ? { stem, ownerAgentId, archived: false } : null;
   }
   if (base.endsWith(".md")) {
-    const stem = base.slice(0, -".md".length);
-    return stem ? { stem, archived: false } : null;
+    const mdStem = base.slice(0, -".md".length);
+    if (!mdStem) return null;
+    const restoredArchiveName = restoreQmdNormalizedArchiveName(mdStem);
+    if (restoredArchiveName) {
+      const archivedStem = parseUsageCountedSessionIdFromFileName(restoredArchiveName);
+      if (archivedStem && restoredArchiveName !== `${archivedStem}.jsonl`) {
+        return { stem: archivedStem, ownerAgentId, archived: true };
+      }
+    }
+    return { stem: mdStem, ownerAgentId, archived: false };
   }
   return null;
 }

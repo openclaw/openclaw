@@ -43,6 +43,39 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     ).toBe("ghi-thread");
   });
 
+  it("recognizes QMD-normalized archived reset transcript .md stems", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16T22-26-33.000Z.md",
+      ),
+    ).toBe("abc-uuid");
+  });
+
+  it("recognizes QMD-normalized archived deleted transcript .md stems", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/def-uuid-jsonl-deleted-2026-02-16T22-27-33.000Z.md",
+      ),
+    ).toBe("def-uuid");
+  });
+
+  it("returns non-archived identity for QMD .md stems that are not archive patterns", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "qmd/sessions-main/normal-session.md",
+    );
+    expect(identity).toEqual({ stem: "normal-session", archived: false });
+  });
+
+  it("returns archived identity for QMD-normalized reset .md stems", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16T22-26-33.000Z.md",
+    );
+    expect(identity).toEqual({
+      stem: "abc-uuid",
+      archived: true,
+    });
+  });
+
   it("does not mistake arbitrary suffixes containing .jsonl. for archives", () => {
     // Not a real archive pattern: suffix after .jsonl. must be `reset` or `deleted`.
     expect(
