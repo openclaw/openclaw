@@ -1776,7 +1776,10 @@ export async function dispatchReplyFromConfig(
                 payload.text && cleanBlockTtsDirectiveText && !isStatusNotice
                   ? (() => {
                       const text = cleanBlockTtsDirectiveText.push(payload.text);
-                      return { ...payload, text: text.trim() ? text : undefined };
+                      return copyReplyPayloadMetadata(payload, {
+                        ...payload,
+                        text: text.trim() ? text : undefined,
+                      });
                     })()
                   : payload;
               if (!hasOutboundReplyContent(visiblePayload, { trimText: true })) {
