@@ -489,12 +489,18 @@ describe("chat loading skeleton", () => {
     expect(container.querySelector(".agent-chat__welcome")).toBeNull();
   });
 
-  it("shows the reading indicator instead of the skeleton while an active run has no stream yet", () => {
+  it("shows the loading skeleton for an active run with no stream", () => {
     const container = renderChatView({ canAbort: true, loading: true });
 
-    expect(container.querySelector(".chat-loading-skeleton")).toBeNull();
-    expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
+    expect(container.querySelector(".chat-loading-skeleton")).not.toBeNull();
+    expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(0);
     expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+  });
+
+  it("shows the reading indicator when an active run has an empty stream", () => {
+    const container = renderChatView({ canAbort: true, stream: "" });
+
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
   });
 
   it("keeps existing messages visible without the skeleton during a background reload", () => {
