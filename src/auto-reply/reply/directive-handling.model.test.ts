@@ -113,6 +113,11 @@ import {
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  clearInternalHooks,
+  registerInternalHook,
+  type InternalHookEvent,
+} from "../../hooks/internal-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -243,11 +248,13 @@ beforeEach(() => {
   vi.mocked(enqueueSystemEvent).mockClear();
   liveModelSwitchMocks.requestLiveSessionModelSwitch.mockReset().mockReturnValue(false);
   queueMocks.refreshQueuedFollowupSession.mockReset();
+  clearInternalHooks();
 });
 
 afterEach(() => {
   setDirectiveTestProviders([]);
   clearRuntimeAuthProfileStoreSnapshots();
+  clearInternalHooks();
 });
 
 function setAuthProfiles(profiles: Record<string, AuthProfileForTest>) {
@@ -1120,9 +1127,9 @@ describe("/model chat UX", () => {
 
     expect(resolveSessionAgentId).toHaveBeenCalledWith({
       sessionKey: "agent:main:dm:1",
-      config: expect.any(Object),
+      config: baseConfig(),
     });
-    expect(resolveAgentDir).toHaveBeenCalledWith(expect.any(Object), "target");
+    expect(resolveAgentDir).toHaveBeenCalledWith(baseConfig(), "target");
   });
 
   it("persists explicit auth profiles after @YYYYMMDD version suffixes in mixed-content messages", async () => {
@@ -1264,6 +1271,34 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       to: "medium",
       provider: "openai",
       model: "gpt-4o",
+    });
+  });
+
+  it("fires session:patch when /model changes the persisted session model", async () => {
+    const events: InternalHookEvent[] = [];
+    registerInternalHook("session:patch", async (event) => {
+      events.push(event);
+    });
+    const sessionEntry = createSessionEntry();
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model openai/gpt-4o"),
+        sessionEntry,
+      }),
+    );
+
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const event = events[0];
+    expect(event.type).toBe("session");
+    expect(event.action).toBe("patch");
+    expect(event.sessionKey).toBe(sessionKey);
+    const context = event.context;
+    expect(context.patch).toMatchObject({ key: sessionKey, model: "openai/gpt-4o" });
+    expect(context.sessionEntry).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+      liveModelSwitchPending: true,
     });
   });
 
@@ -1507,6 +1542,55 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     expect(result?.text).toContain("Thinking level set to medium.");
     expect(sessionEntry.thinkingLevel).toBe("medium");
+  });
+
+  it.each([
+    ["openai", "gpt-5.5"],
+    ["openai-codex", "gpt-5.5"],
+  ])("accepts xhigh for %s/%s when catalog marks reasoning support", async (provider, model) => {
+    setDirectiveTestProviders([
+      {
+        id: provider,
+        label: provider,
+        auth: [],
+        resolveThinkingProfile: ({ modelId }) => ({
+          levels:
+            modelId === "gpt-5.5"
+              ? [
+                  { id: "off" },
+                  { id: "minimal" },
+                  { id: "low" },
+                  { id: "medium" },
+                  { id: "high" },
+                  { id: "xhigh" },
+                ]
+              : [{ id: "off" }],
+        }),
+      },
+    ]);
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const catalogEntry = {
+      provider,
+      id: model,
+      name: model,
+      reasoning: true,
+    };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/think xhigh"),
+        provider,
+        model,
+        allowedModelCatalog: [catalogEntry],
+        thinkingCatalog: [catalogEntry],
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Thinking level set to xhigh.");
+    expect(sessionEntry.thinkingLevel).toBe("xhigh");
   });
 
   it("persists verbose on and off directives", async () => {

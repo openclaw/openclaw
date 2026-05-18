@@ -3,8 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { findStaleOpenClawUpdateLaunchdJobs } from "../daemon/launchd.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
@@ -33,6 +35,35 @@ export async function noteMacLaunchAgentOverrides() {
     `  rm ${displayMarkerPath}`,
   ].filter((line): line is string => Boolean(line));
   note(lines.join("\n"), "Gateway (macOS)");
+}
+
+export async function noteMacStaleOpenClawUpdateLaunchdJobs(deps?: {
+  platform?: NodeJS.Platform;
+  findJobs?: typeof findStaleOpenClawUpdateLaunchdJobs;
+  noteFn?: typeof note;
+}) {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "darwin") {
+    return;
+  }
+  const jobs = await (deps?.findJobs ?? findStaleOpenClawUpdateLaunchdJobs)().catch(() => []);
+  if (jobs.length === 0) {
+    return;
+  }
+
+  const lines = [
+    "- Stale OpenClaw updater launchd job(s) detected.",
+    ...jobs.map((job) => {
+      const exitStatus =
+        job.lastExitStatus !== undefined ? `, last exit ${job.lastExitStatus}` : "";
+      const pid = job.pid !== undefined ? `, pid ${job.pid}` : "";
+      return `- ${job.label}${pid}${exitStatus}`;
+    }),
+    "- Fix after confirming no update is running:",
+    "  launchctl remove <label>",
+    `  ${formatCliCommand("openclaw gateway restart")}`,
+  ];
+  (deps?.noteFn ?? note)(lines.join("\n"), "Gateway (macOS)");
 }
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {
@@ -91,12 +122,13 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
   }
 
   const lines = [
-    "- launchctl environment overrides detected (can cause confusing unauthorized errors).",
+    "- Host-wide launchctl gateway auth overrides detected.",
+    "- Current managed Gateway installs do not need these values unless config intentionally references the env var.",
     envToken && envTokenKey
-      ? `- \`${envTokenKey}\` is set; it overrides config tokens.`
+      ? `- \`${envTokenKey}\` is set; it can make local clients use a different token than gateway.auth.token.`
       : undefined,
     envPassword
-      ? `- \`${envPasswordKey ?? "OPENCLAW_GATEWAY_PASSWORD"}\` is set; it overrides config passwords.`
+      ? `- \`${envPasswordKey ?? "OPENCLAW_GATEWAY_PASSWORD"}\` is set; it can make local clients use a different password than gateway.auth.password.`
       : undefined,
     "- Clear overrides and restart the app/gateway:",
     envTokenKey ? `  launchctl unsetenv ${envTokenKey}` : undefined,
@@ -165,7 +197,7 @@ export function noteStartupOptimizationHints(
 
   if (noRespawn !== "1") {
     lines.push(
-      "- OPENCLAW_NO_RESPAWN is not set to 1; set it to avoid extra startup overhead from self-respawn.",
+      "- OPENCLAW_NO_RESPAWN is not set to 1; set it when you want routine gateway restarts to stay in-process instead of handing off to a managed supervisor.",
     );
   }
 

@@ -2,7 +2,7 @@ import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
@@ -53,7 +53,8 @@ type SupportedAnthropicMessagesCompatFields = Pick<
 type SupportedThinkingFormat =
   | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>
   | "deepseek"
-  | "openrouter";
+  | "openrouter"
+  | "together";
 
 export type ModelCompatConfig = SupportedOpenAICompatFields &
   SupportedOpenAIResponsesCompatFields &

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { classifyEmbeddedPiRunResultForModelFallback } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -357,10 +357,12 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
       const result = await build();
 
       expect(result.agentHarnessResultClassification).toBe(classification);
-      expect(classifyProjectedAttemptResult(result)).toMatchObject({
-        reason: "format",
-        code: expectedCode,
-      });
+      const projected = classifyProjectedAttemptResult(result);
+      if (!projected || !("reason" in projected)) {
+        throw new Error("expected format fallback projection");
+      }
+      expect(projected.reason).toBe("format");
+      expect(projected.code).toBe(expectedCode);
     },
   );
 

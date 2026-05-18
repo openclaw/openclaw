@@ -303,7 +303,8 @@ function createDefaultAgentResult(params?: {
 }
 
 function getLastEmbeddedCall() {
-  return vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+  const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
+  return calls[calls.length - 1]?.[0];
 }
 
 function expectLastRunProviderModel(provider: string, model: string): void {
@@ -439,6 +440,26 @@ describe("agentCommand", () => {
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
   });
 
+  it("installs a local gateway request scope for embedded agent dispatch", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const { getPluginRuntimeGatewayRequestScope } =
+        await import("../plugins/runtime/gateway-request-scope.js");
+      vi.mocked(attemptExecutionRuntime.runAgentAttempt).mockImplementationOnce(async () => {
+        const scope = getPluginRuntimeGatewayRequestScope();
+        expect(scope?.context?.getRuntimeConfig()).toMatchObject({
+          session: { store },
+        });
+        return createDefaultAgentResult();
+      });
+
+      await agentCommand({ message: "ping", agentId: "main" }, runtime);
+
+      expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+    });
+  });
+
   it("persists local overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -470,14 +491,15 @@ describe("agentCommand", () => {
       expect(entry.thinkingLevel).toBe("high");
       expect(entry.verboseLevel).toBe("on");
 
-      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      const callArgs = getLastEmbeddedCall();
       expect(callArgs?.thinkLevel).toBe("high");
       expect(callArgs?.verboseLevel).toBe("on");
       expect(callArgs?.senderIsOwner).toBe(true);
       expect(callArgs?.prompt).toBe("ping");
       expect(callArgs?.agentAccountId).toBe("kev");
 
-      const logged = (runtime.log as unknown as MockInstance).mock.calls.at(-1)?.[0] as string;
+      const logCalls = (runtime.log as unknown as MockInstance).mock.calls;
+      const logged = logCalls[logCalls.length - 1]?.[0] as string;
       const parsed = JSON.parse(logged) as {
         payloads: Array<{ text: string; mediaUrl?: string | null }>;
         meta: { durationMs: number };
@@ -687,7 +709,7 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      const callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionId).toBe("session-123");
       expect(callArgs?.sessionFile).toContain(
         `${path.dirname(resumeStore)}${path.sep}agents${path.sep}main${path.sep}sessions${path.sep}session-123.jsonl`,

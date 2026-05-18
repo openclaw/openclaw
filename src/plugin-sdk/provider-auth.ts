@@ -33,7 +33,10 @@ export {
   upsertAuthProfileWithLock,
 } from "../agents/auth-profiles/profiles.js";
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
-export { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
+export {
+  readClaudeCliCredentialsCached,
+  readCodexCliCredentialsCached,
+} from "../agents/cli-credentials.js";
 export { suggestOAuthProfileIdForLegacyDefault } from "../agents/auth-profiles/repair.js";
 export {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -95,9 +98,9 @@ export {
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export const COPILOT_EDITOR_VERSION = "vscode/1.96.2";
+export const COPILOT_EDITOR_VERSION = "vscode/1.107.0";
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export const COPILOT_USER_AGENT = "GitHubCopilotChat/0.26.7";
+export const COPILOT_USER_AGENT = "GitHubCopilotChat/0.35.0";
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const COPILOT_EDITOR_PLUGIN_VERSION = "copilot-chat/0.35.0";
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
@@ -122,6 +125,7 @@ export function buildCopilotIdeHeaders(
   } = {},
 ): Record<string, string> {
   return {
+    "Accept-Encoding": "identity",
     "Editor-Version": COPILOT_EDITOR_VERSION,
     "Editor-Plugin-Version": COPILOT_EDITOR_PLUGIN_VERSION,
     "User-Agent": COPILOT_USER_AGENT,

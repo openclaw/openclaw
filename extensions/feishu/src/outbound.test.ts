@@ -77,19 +77,12 @@ import { feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
 
 async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<"pending">((resolve) => {
-        timer = setTimeout(() => resolve("pending"), 0);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return await Promise.race([
+    promise,
+    new Promise<"pending">((resolve) => {
+      setImmediate(() => resolve("pending"));
+    }),
+  ]);
 }
 
 type FeishuSendText = NonNullable<typeof feishuOutbound.sendText>;
@@ -501,7 +494,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(sendCardCall()?.cfg).toBe(emptyConfig);
     expect(sendCardCall()?.to).toBe("chat_1");
     expect(sendCardCall()?.accountId).toBe("main");
-    const card = sendCardFeishuMock.mock.calls[0][0].card;
+    const card = sendCardCall()?.card;
     expect(card.schema).toBe("2.0");
     expect(card.body.elements[0]).toEqual({ tag: "markdown", content: "Choose an action" });
     expect(card.body.elements[1]).toEqual({
@@ -548,7 +541,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
       },
     });
 
-    const card = sendCardFeishuMock.mock.calls[0][0].card;
+    const card = sendCardCall()?.card;
     expect(card.body.elements[0]).toEqual({
       tag: "markdown",
       content: 'Choose &lt;at id="ou_1"&gt;',
@@ -608,7 +601,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
       },
     });
 
-    const card = sendCardFeishuMock.mock.calls[0][0].card;
+    const card = sendCardCall()?.card;
     expect(card.header.template).toBe("blue");
     expect(card.body.elements).toEqual([
       { tag: "markdown", content: '&lt;at id="ou_1"&gt;ping&lt;/at&gt;' },
@@ -808,8 +801,11 @@ describe("feishuOutbound comment-thread routing", () => {
 
     expect(status).toBe("done");
     expect(deliverCommentThreadTextMock).toHaveBeenCalled();
-    expect(cleanupReactionCall()?.client).toBeDefined();
-    expect(cleanupReactionCall()?.deliveryContext).toEqual({
+    const cleanupCall = cleanupReactionCall();
+    if (!cleanupCall?.client) {
+      throw new Error("Expected cleanup reaction client");
+    }
+    expect(cleanupCall.deliveryContext).toEqual({
       channel: "feishu",
       to: "comment:docx:doxcn123:7623358762119646411",
       threadId: "reply_ambient_1",
@@ -863,7 +859,7 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
     expect(sendMessageCall()?.to).toBe("chat_1");
     expect(sendMessageCall()?.text).toBe("hello");
     expect(sendMessageCall()?.accountId).toBe("main");
-    expect(sendMessageFeishuMock.mock.calls[0][0].replyToMessageId).toBeUndefined();
+    expect(sendMessageCall()?.replyToMessageId).toBeUndefined();
   });
 
   it("propagates threadId as replyInThread=true to sendMessageFeishu", async () => {

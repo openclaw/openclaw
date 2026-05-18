@@ -1,5 +1,5 @@
 import path from "node:path";
-import { type Api, type Model } from "@mariozechner/pi-ai";
+import { type Api, type Model } from "@earendil-works/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
@@ -46,7 +46,11 @@ export {
   ensureAuthProfileStoreWithoutExternalProfiles,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-export { requireApiKey, resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
+export {
+  formatMissingAuthError,
+  requireApiKey,
+  resolveAwsSdkEnvVarName,
+} from "./model-auth-runtime-shared.js";
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 

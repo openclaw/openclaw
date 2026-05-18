@@ -1,10 +1,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   derivePromptTokens,
@@ -24,13 +26,15 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions } from "../types.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
@@ -44,10 +48,13 @@ import {
 } from "./memory-flush.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import { isRenderablePayload } from "./reply-payloads-base.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 type PiEmbeddedRuntime = typeof import("../../agents/pi-embedded.js");
+
+const MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS = 600;
 
 const piEmbeddedRuntimeLoader = createLazyImportLoader<PiEmbeddedRuntime>(
   () => import("../../agents/pi-embedded.js"),
@@ -155,6 +162,74 @@ function resolveMemoryFlushModelFallbackOptions(
     ...options,
     model: override,
     fallbacksOverride: [],
+  };
+}
+
+function resolveFollowupContextConfigProvider(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+}): string {
+  const provider = params.followupRun.run.provider;
+  const matchingSessionEntry =
+    params.sessionEntry?.sessionId === params.followupRun.run.sessionId
+      ? params.sessionEntry
+      : undefined;
+  const persistedRuntimeOverride = normalizeOptionalString(
+    matchingSessionEntry?.agentRuntimeOverride,
+  );
+  const persistedRuntimeId =
+    persistedRuntimeOverride &&
+    persistedRuntimeOverride !== "auto" &&
+    persistedRuntimeOverride !== "default"
+      ? persistedRuntimeOverride
+      : matchingSessionEntry?.agentHarnessId;
+  if (persistedRuntimeId) {
+    return resolveContextConfigProviderForRuntime({
+      provider,
+      runtimeId: persistedRuntimeId,
+    });
+  }
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider,
+    modelId: params.followupRun.run.model,
+    config: params.cfg,
+    agentId: params.followupRun.run.agentId,
+    sessionKey:
+      params.runtimePolicySessionKey ??
+      params.sessionKey ??
+      params.followupRun.run.runtimePolicySessionKey ??
+      params.followupRun.run.sessionKey,
+  });
+  return resolveContextConfigProviderForRuntime({
+    provider,
+    runtimeId: harnessPolicy.runtime,
+  });
+}
+
+function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): ReplyPayload[] {
+  return (payloads ?? []).filter(
+    (payload) => payload.isError === true && isRenderablePayload(payload),
+  );
+}
+
+function buildMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
+  if (isAbortError(err)) {
+    return undefined;
+  }
+  const message = normalizeOptionalString(formatErrorMessage(err));
+  if (!message) {
+    return undefined;
+  }
+  const visibleText = message.startsWith("⚠️") ? message : `⚠️ ${message}`;
+  return {
+    text:
+      visibleText.length > MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS
+        ? `${visibleText.slice(0, MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS - 1)}…`
+        : visibleText,
+    isError: true,
   };
 }
 
@@ -485,7 +560,13 @@ export async function runPreflightCompactionIfNeeded(params: {
 
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
-    provider: params.followupRun.run.provider,
+    provider: resolveFollowupContextConfigProvider({
+      cfg: params.cfg,
+      followupRun: params.followupRun,
+      sessionEntry: entry,
+      sessionKey: params.sessionKey,
+      runtimePolicySessionKey: params.runtimePolicySessionKey,
+    }),
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
@@ -691,6 +772,7 @@ export async function runMemoryFlushIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
+  onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
 }): Promise<SessionEntry | undefined> {
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
   if (!memoryFlushPlan) {
@@ -719,7 +801,13 @@ export async function runMemoryFlushIfNeeded(params: {
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
-    provider: params.followupRun.run.provider,
+    provider: resolveFollowupContextConfigProvider({
+      cfg: params.cfg,
+      followupRun: params.followupRun,
+      sessionEntry: entry,
+      sessionKey: params.sessionKey,
+      runtimePolicySessionKey: params.runtimePolicySessionKey,
+    }),
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
@@ -956,6 +1044,10 @@ export async function runMemoryFlushIfNeeded(params: {
             }
           },
         });
+        const visibleErrorPayloads = resolveVisibleMemoryFlushErrorPayloads(result.payloads);
+        if (visibleErrorPayloads.length > 0) {
+          params.onVisibleErrorPayloads?.(visibleErrorPayloads);
+        }
         if (result.meta?.agentMeta?.sessionId) {
           postCompactionSessionId = result.meta.agentMeta.sessionId;
         }
@@ -1026,6 +1118,10 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   } catch (err) {
     logVerbose(`memory flush run failed: ${String(err)}`);
+    const visibleErrorPayload = buildMemoryFlushErrorPayload(err);
+    if (visibleErrorPayload) {
+      params.onVisibleErrorPayloads?.([visibleErrorPayload]);
+    }
   }
 
   return activeSessionEntry;

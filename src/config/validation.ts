@@ -69,6 +69,20 @@ function stripDeprecatedValidationKeys(raw: unknown): unknown {
   };
 }
 
+function stripPreservedLegacyRootKeysForValidation(
+  raw: unknown,
+  keys?: readonly string[],
+): unknown {
+  if (!keys || keys.length === 0 || !isRecord(raw)) {
+    return raw;
+  }
+  const next = { ...raw };
+  for (const key of keys) {
+    delete next[key];
+  }
+  return next;
+}
+
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
 const bundledChannelSchemaById = new Map<string, unknown>(
@@ -98,7 +112,10 @@ function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
   return segments.join(".");
 }
 
-function formatMissingOfficialExternalPluginWarning(pluginId: string): string | null {
+function formatMissingOfficialExternalPluginWarning(
+  pluginId: string,
+  opts?: { selectedMissingMemorySlot?: boolean },
+): string | null {
   const catalogEntry = getOfficialExternalPluginCatalogEntry(pluginId);
   if (!catalogEntry) {
     return null;
@@ -110,6 +127,9 @@ function formatMissingOfficialExternalPluginWarning(pluginId: string): string | 
     install?.defaultChoice === "clawhub" ? (clawhubSpec ?? npmSpec) : (npmSpec ?? clawhubSpec);
   if (!installSpec) {
     return null;
+  }
+  if (pluginId === "memory-lancedb" && opts?.selectedMissingMemorySlot) {
+    return `plugin not installed: ${pluginId} — gateway will run without persistent memory until installed; install the official external plugin with: openclaw plugins install ${installSpec}`;
   }
   return `plugin not installed: ${pluginId} — install the official external plugin with: openclaw plugins install ${installSpec}`;
 }
@@ -644,9 +664,13 @@ export function validateConfigObjectRaw(
     sourceRaw?: unknown;
     touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
     validateBundledChannels?: boolean;
+    preservedLegacyRootKeys?: readonly string[];
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const normalizedRaw = stripDeprecatedValidationKeys(raw);
+  const normalizedRaw = stripPreservedLegacyRootKeysForValidation(
+    stripDeprecatedValidationKeys(raw),
+    opts?.preservedLegacyRootKeys,
+  );
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
   const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success) {
@@ -735,6 +759,7 @@ type ValidateConfigWithPluginsParams = {
     config: OpenClawConfig,
   ) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
   sourceRaw?: unknown;
+  preservedLegacyRootKeys?: readonly string[];
 };
 
 export function validateConfigObjectWithPlugins(
@@ -748,6 +773,7 @@ export function validateConfigObjectWithPlugins(
     pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
     loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
     sourceRaw: params?.sourceRaw,
+    preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
   });
 }
 
@@ -762,6 +788,7 @@ export function validateConfigObjectRawWithPlugins(
     pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
     loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
     sourceRaw: params?.sourceRaw,
+    preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
   });
 }
 
@@ -769,7 +796,10 @@ function validateConfigObjectWithPluginsBase(
   raw: unknown,
   opts: ValidateConfigWithPluginsParams & { applyDefaults: boolean },
 ): ValidateConfigWithPluginsResult {
-  const base = validateConfigObjectRaw(raw, { sourceRaw: opts.sourceRaw });
+  const base = validateConfigObjectRaw(raw, {
+    sourceRaw: opts.sourceRaw,
+    preservedLegacyRootKeys: opts.preservedLegacyRootKeys,
+  });
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }
@@ -1052,35 +1082,40 @@ function validateConfigObjectWithPluginsBase(
     ].toSorted((left, right) => left.localeCompare(right));
   };
 
+  const hasPluginEvidenceForWebSearchProvider = (
+    ...pluginOrProviderIds: readonly string[]
+  ): boolean => {
+    const candidateIds = new Set(
+      pluginOrProviderIds.map((id) => normalizePluginId(id)).filter((id) => id.length > 0),
+    );
+    if (candidateIds.size === 0) {
+      return false;
+    }
+    const matches = (pluginId: string) => candidateIds.has(normalizePluginId(pluginId));
+    const pluginConfig = config.plugins;
+    if (Array.isArray(pluginConfig?.allow) && pluginConfig.allow.some(matches)) {
+      return true;
+    }
+    if (isRecord(pluginConfig?.entries) && Object.keys(pluginConfig.entries).some(matches)) {
+      return true;
+    }
+    if (isRecord(pluginConfig?.installs) && Object.keys(pluginConfig.installs).some(matches)) {
+      return true;
+    }
+    for (const pluginId of candidateIds) {
+      if (ensureInstalledPluginRecordIds().has(pluginId)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   const hasStalePluginEvidenceForUnknownWebSearchProvider = (providerId: string): boolean => {
     const normalizedProviderId = normalizePluginId(providerId);
     if (!normalizedProviderId || ensureKnownIds().has(normalizedProviderId)) {
       return false;
     }
-    const pluginConfig = config.plugins;
-    if (
-      Array.isArray(pluginConfig?.allow) &&
-      pluginConfig.allow.some((pluginId) => normalizePluginId(pluginId) === normalizedProviderId)
-    ) {
-      return true;
-    }
-    if (
-      isRecord(pluginConfig?.entries) &&
-      Object.keys(pluginConfig.entries).some(
-        (pluginId) => normalizePluginId(pluginId) === normalizedProviderId,
-      )
-    ) {
-      return true;
-    }
-    if (
-      isRecord(pluginConfig?.installs) &&
-      Object.keys(pluginConfig.installs).some(
-        (pluginId) => normalizePluginId(pluginId) === normalizedProviderId,
-      )
-    ) {
-      return true;
-    }
-    return ensureInstalledPluginRecordIds().has(normalizedProviderId);
+    return hasPluginEvidenceForWebSearchProvider(providerId);
   };
 
   const validateWebSearchProvider = () => {
@@ -1102,11 +1137,19 @@ function validateConfigObjectWithPluginsBase(
       (entry) => entry.provider.id === trimmed,
     );
     if (installCatalogEntry) {
-      issues.push({
+      const issue = {
         path,
         message: `web_search provider is not available: ${trimmed} (install or enable plugin "${installCatalogEntry.pluginId}", then run openclaw doctor --fix)`,
         allowedValues: collectKnownWebSearchProviderIds(),
-      });
+      };
+      if (hasPluginEvidenceForWebSearchProvider(trimmed, installCatalogEntry.pluginId)) {
+        warnings.push({
+          ...issue,
+          message: `web_search provider is not available: ${trimmed} (configured plugin "${installCatalogEntry.pluginId}" is unavailable; Gateway will ignore this optional provider until the plugin is installed/enabled or openclaw doctor --fix repairs the config)`,
+        });
+        return;
+      }
+      issues.push(issue);
       return;
     }
     const allowedValues = collectKnownWebSearchProviderIds();
@@ -1442,7 +1485,7 @@ function validateConfigObjectWithPluginsBase(
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
-    opts?: { warnOnly?: boolean },
+    opts?: { warnOnly?: boolean; officialInstallHint?: boolean; missingMessage?: string | null },
   ) => {
     if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
       warnings.push({
@@ -1462,8 +1505,9 @@ function validateConfigObjectWithPluginsBase(
       }
       return;
     }
-    if (opts?.warnOnly) {
-      const externalInstallWarning = formatMissingOfficialExternalPluginWarning(pluginId);
+    if (opts?.warnOnly && opts.officialInstallHint !== false) {
+      const externalInstallWarning =
+        opts.missingMessage ?? formatMissingOfficialExternalPluginWarning(pluginId);
       if (externalInstallWarning) {
         warnings.push({
           path,
@@ -1526,7 +1570,10 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      pushMissingPluginIssue("plugins.deny", pluginId);
+      pushMissingPluginIssue("plugins.deny", pluginId, {
+        warnOnly: true,
+        officialInstallHint: false,
+      });
     }
   }
 
@@ -1541,7 +1588,19 @@ function validateConfigObjectWithPluginsBase(
     memorySlot.trim() &&
     !knownIds.has(memorySlot)
   ) {
-    pushMissingPluginIssue("plugins.slots.memory", memorySlot);
+    const isMissingOfficialExternalMemorySlot =
+      memorySlot === "memory-lancedb" &&
+      Boolean(
+        formatMissingOfficialExternalPluginWarning(memorySlot, {
+          selectedMissingMemorySlot: true,
+        }),
+      );
+    pushMissingPluginIssue("plugins.slots.memory", memorySlot, {
+      warnOnly: isMissingOfficialExternalMemorySlot && !findBlockedPluginDiagnostic(memorySlot),
+      missingMessage: formatMissingOfficialExternalPluginWarning(memorySlot, {
+        selectedMissingMemorySlot: true,
+      }),
+    });
   }
 
   let selectedMemoryPluginId: string | null = null;

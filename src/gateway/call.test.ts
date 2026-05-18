@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
@@ -137,6 +139,7 @@ const {
   callGateway,
   callGatewayCli,
   callGatewayScoped,
+  formatGatewayTransportErrorJson,
   isGatewayTransportError,
 } = await import("./call.js");
 
@@ -569,6 +572,28 @@ describe("callGateway url resolution", () => {
     ]);
   });
 
+  it("falls back to broad operator scopes for unresolved plugin session actions", async () => {
+    setLocalLoopbackGatewayConfig();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    await callGatewayCli({
+      method: "plugins.sessionAction",
+      params: {
+        pluginId: "remote-plugin",
+        actionId: "approve",
+      },
+    });
+
+    expect(lastClientOptions?.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
+  });
+
   it("passes explicit scopes through, including empty arrays", async () => {
     setLocalLoopbackGatewayConfig();
 
@@ -669,6 +694,21 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.remoteFallbackNote).toBeUndefined();
     expect(details.message).toContain("Gateway target: wss://example.com/ws");
     expect(details.message).toContain("Source: cli --url");
+  });
+
+  it("redacts credential-bearing target URLs from connection messages", () => {
+    setLocalLoopbackGatewayConfig(18800);
+
+    const details = buildGatewayConnectionDetails({
+      url: "wss://user:pass@example.com/ws?token=secret-token&keep=visible",
+    });
+
+    expect(details.url).toBe("wss://user:pass@example.com/ws?token=secret-token&keep=visible");
+    expect(details.message).toContain(
+      "Gateway target: wss://***:***@example.com/ws?token=***&keep=visible",
+    );
+    expect(details.message).not.toContain("user:pass");
+    expect(details.message).not.toContain("secret-token");
   });
 
   it("emits a remote fallback note when remote url is missing", () => {
@@ -800,8 +840,29 @@ describe("buildGatewayConnectionDetails", () => {
     expect((thrown as Error).message).toContain("openclaw doctor --fix");
   });
 
-  it("allows ws:// private remote URLs only when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
-    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+  it("redacts credential-bearing target URLs from insecure ws:// errors", () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        remote: { url: "ws://user:pass@remote.example.com:18789/ws?token=secret-token" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+
+    expect(() => buildGatewayConnectionDetails()).toThrow(
+      'Gateway URL "ws://***:***@remote.example.com:18789/ws?token=***" uses plaintext',
+    );
+    try {
+      buildGatewayConnectionDetails();
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).not.toContain("user:pass");
+      expect((error as Error).message).not.toContain("secret-token");
+    }
+  });
+
+  it("allows ws:// private remote URLs for trusted LAN and Tailnet configs", () => {
     getRuntimeConfig.mockReturnValue({
       gateway: {
         mode: "remote",
@@ -870,12 +931,16 @@ describe("callGateway error details", () => {
     expect(err?.message).toContain("Source: local loopback");
     expect(err?.message).toContain("Bind: loopback");
     expect(isGatewayTransportError(err)).toBe(true);
-    expect(err).toMatchObject({
-      name: "GatewayTransportError",
-      kind: "closed",
-      code: 1006,
-      reason: "no close reason",
-    });
+    const transportError = err as {
+      name?: string;
+      kind?: string;
+      code?: number;
+      reason?: string;
+    };
+    expect(transportError.name).toBe("GatewayTransportError");
+    expect(transportError.kind).toBe("closed");
+    expect(transportError.code).toBe(1006);
+    expect(transportError.reason).toBe("no close reason");
   });
 
   it("keeps the request alive through internally retried startup-unavailable handshakes", async () => {
@@ -920,10 +985,37 @@ describe("callGateway error details", () => {
     await promise;
 
     expect(isGatewayTransportError(err)).toBe(true);
-    expect(err).toMatchObject({
-      name: "GatewayTransportError",
-      kind: "timeout",
-      timeoutMs: 5,
+    const transportError = err as { name?: string; kind?: string; timeoutMs?: number };
+    expect(transportError.name).toBe("GatewayTransportError");
+    expect(transportError.kind).toBe("timeout");
+    expect(transportError.timeoutMs).toBe(5);
+  });
+
+  it("formats typed transport errors for CLI JSON output", async () => {
+    startMode = "close";
+    closeCode = 1006;
+    closeReason = "";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health" }).catch((caught) => {
+      err = caught;
+    });
+
+    expect(formatGatewayTransportErrorJson(err)).toEqual({
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+        code: 1006,
+        reason: "no close reason",
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        bindDetail: "Bind: loopback",
+      },
     });
   });
 
@@ -961,11 +1053,15 @@ describe("callGateway error details", () => {
       aborted: false,
     };
 
-    await expect(callGateway({ method: "health", timeoutMs: 5 })).rejects.toMatchObject({
-      name: "GatewayTransportError",
-      kind: "timeout",
-      timeoutMs: 5,
+    let err: unknown;
+    await callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+      err = caught;
     });
+    expect(isGatewayTransportError(err)).toBe(true);
+    const transportError = err as { name?: string; kind?: string; timeoutMs?: number };
+    expect(transportError.name).toBe("GatewayTransportError");
+    expect(transportError.kind).toBe("timeout");
+    expect(transportError.timeoutMs).toBe(5);
     expect(eventLoopReadyState.calls).toHaveLength(1);
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(5);
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");

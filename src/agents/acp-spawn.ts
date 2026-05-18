@@ -71,6 +71,14 @@ import {
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import {
+  findAcpUnsupportedInheritedToolAllow,
+  findAcpUnsupportedInheritedToolDeny,
+  formatAcpInheritedToolAllowError,
+  formatAcpInheritedToolDenyError,
+  inheritedToolAllowPatch,
+  inheritedToolDenyPatch,
+} from "./inherited-tool-deny.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
@@ -123,6 +131,8 @@ export type SpawnAcpContext = {
   /** Trusted provider role ids for the requester in this group turn. */
   agentMemberRoleIds?: string[];
   sandboxed?: boolean;
+  inheritedToolAllowlist?: string[];
+  inheritedToolDenylist?: string[];
 };
 
 export const ACP_SPAWN_ERROR_CODES = [
@@ -319,7 +329,7 @@ function isHeartbeatEnabledForSessionAgent(params: {
     return true;
   }
 
-  const agentEntries = params.cfg.agents?.list ?? [];
+  const agentEntries = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
   const hasExplicitHeartbeatAgents = agentEntries.some((entry) => Boolean(entry?.heartbeat));
   const enabledByPolicy = hasExplicitHeartbeatAgents
     ? agentEntries.some(
@@ -1157,6 +1167,26 @@ export async function spawnAcpDirect(
       error: runtimePolicyError,
     });
   }
+  const acpUnsupportedInheritedTool = findAcpUnsupportedInheritedToolDeny(
+    ctx.inheritedToolDenylist,
+  );
+  if (acpUnsupportedInheritedTool) {
+    return createAcpSpawnFailure({
+      status: "forbidden",
+      errorCode: "runtime_policy",
+      error: formatAcpInheritedToolDenyError(acpUnsupportedInheritedTool),
+    });
+  }
+  const acpUnsupportedInheritedAllow = findAcpUnsupportedInheritedToolAllow(
+    ctx.inheritedToolAllowlist,
+  );
+  if (acpUnsupportedInheritedAllow) {
+    return createAcpSpawnFailure({
+      status: "forbidden",
+      errorCode: "runtime_policy",
+      error: formatAcpInheritedToolAllowError(acpUnsupportedInheritedAllow),
+    });
+  }
 
   const spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
@@ -1291,6 +1321,8 @@ export async function spawnAcpDirect(
         key: sessionKey,
         spawnedBy: requesterInternalKey,
         ...subagentEnvelopeState.childSessionPatch,
+        ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
+        ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
         ...(params.label ? { label: params.label } : {}),
       },
       timeoutMs: 10_000,
@@ -1371,6 +1403,8 @@ export async function spawnAcpDirect(
       parentSessionKey,
       childSessionKey: sessionKey,
       agentId: targetAgentId,
+      mainKey: cfg.session?.mainKey,
+      sessionScope: cfg.session?.scope,
       logPath: streamLogPath,
       deliveryContext: parentDeliveryCtx,
       emitStartNotice: false,
@@ -1406,6 +1440,7 @@ export async function spawnAcpDirect(
       sessionKey,
       shouldDeleteSession: true,
       deleteTranscript: true,
+      runtimeCloseHandle: initializedRuntime,
     });
     return createAcpSpawnFailure({
       status: "error",
@@ -1424,6 +1459,8 @@ export async function spawnAcpDirect(
         parentSessionKey,
         childSessionKey: sessionKey,
         agentId: targetAgentId,
+        mainKey: cfg.session?.mainKey,
+        sessionScope: cfg.session?.scope,
         logPath: streamLogPath,
         deliveryContext: parentDeliveryCtx,
         emitStartNotice: false,

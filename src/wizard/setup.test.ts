@@ -184,6 +184,18 @@ function getMockCallArg(
   return call[argIndex];
 }
 
+function expectMockCallArgNotNull(
+  mock: { mock: { calls: readonly unknown[][] } },
+  callIndex: number,
+  argIndex: number,
+  label: string,
+): void {
+  const value = getMockCallArg(mock, callIndex, argIndex, label);
+  if (value === null) {
+    throw new Error(`expected ${label} arg ${argIndex} to be non-null`);
+  }
+}
+
 vi.mock("../commands/onboard-channels.js", () => ({
   setupChannels,
 }));
@@ -695,9 +707,9 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(getMockCallArg(setupChannels, 0, 0, "channel setup")).not.toBeNull();
-    expect(getMockCallArg(setupChannels, 0, 1, "channel setup")).not.toBeNull();
-    expect(getMockCallArg(setupChannels, 0, 2, "channel setup")).not.toBeNull();
+    expectMockCallArgNotNull(setupChannels, 0, 0, "channel setup");
+    expectMockCallArgNotNull(setupChannels, 0, 1, "channel setup");
+    expectMockCallArgNotNull(setupChannels, 0, 2, "channel setup");
     expectRecordFields(
       getMockCallArg(setupChannels, 0, 3, "channel setup"),
       {
@@ -764,8 +776,8 @@ describe("runSetupWizard", () => {
       },
       "default model prompt params",
     );
-    expect(getMockCallArg(warnIfModelConfigLooksOff, 0, 0, "model warning")).not.toBeNull();
-    expect(getMockCallArg(warnIfModelConfigLooksOff, 0, 1, "model warning")).not.toBeNull();
+    expectMockCallArgNotNull(warnIfModelConfigLooksOff, 0, 0, "model warning");
+    expectMockCallArgNotNull(warnIfModelConfigLooksOff, 0, 1, "model warning");
     expectRecordFields(
       getMockCallArg(warnIfModelConfigLooksOff, 0, 2, "model warning"),
       { validateCatalog: false },
@@ -840,6 +852,47 @@ describe("runSetupWizard", () => {
       },
       "retry auth choice params",
     );
+  });
+
+  it("forwards provider-specific auth flags to applyAuthChoice opts", async () => {
+    applyAuthChoice.mockReset();
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.5",
+            },
+          },
+        },
+      },
+    });
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "openai-codex-api-key",
+        openaiApiKey: "sk-flag-value",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        skipHooks: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledTimes(1);
+    const call = getMockCallArg(applyAuthChoice, 0, 0, "openai-codex auth choice");
+    const opts = (call as { opts?: Record<string, unknown> }).opts ?? {};
+    expect(opts.openaiApiKey).toBe("sk-flag-value");
   });
 
   it("shows plugin compatibility notices for an existing valid config", async () => {
@@ -1048,6 +1101,55 @@ describe("runSetupWizard", () => {
     expect(matchingQuickStartNotes.length).toBeGreaterThan(0);
   });
 
+  it("localizes the quickstart summary", async () => {
+    const previousPort = process.env.OPENCLAW_GATEWAY_PORT;
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_GATEWAY_PORT = "18791";
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({ note });
+    const runtime = createRuntime();
+
+    try {
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "skip",
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      );
+    } finally {
+      if (previousPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = previousPort;
+      }
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+
+    const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const matchingQuickStartNotes = calls.filter(
+      (call) =>
+        call?.[1] === "QuickStart" &&
+        typeof call?.[0] === "string" &&
+        call[0].includes("Gateway 端口：18791") &&
+        call[0].includes("Tailscale 暴露方式：关闭"),
+    );
+    expect(matchingQuickStartNotes.length).toBeGreaterThan(0);
+  });
+
   it("uses manifest setup metadata for post-auth model policy without loading provider runtime", async () => {
     promptDefaultModel.mockClear();
     resolvePluginProvidersRuntime.mockClear();
@@ -1056,7 +1158,7 @@ describe("runSetupWizard", () => {
       providerId: "openai-codex",
       methodId: "oauth",
       choiceId: "openai-codex",
-      choiceLabel: "OpenAI Codex Browser Login",
+      choiceLabel: "ChatGPT/Codex Browser Login",
     });
     resolvePluginSetupProvider.mockReturnValue({
       id: "openai-codex",
@@ -1064,7 +1166,7 @@ describe("runSetupWizard", () => {
       auth: [
         {
           id: "oauth",
-          label: "OpenAI Codex Browser Login",
+          label: "ChatGPT/Codex Browser Login",
           kind: "oauth",
           wizard: {
             modelSelection: {

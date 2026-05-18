@@ -21,7 +21,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readFirstPluginCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
-  const call = mock.mock.calls[0]?.[0];
+  const [mockCall] = mock.mock.calls;
+  const call = mockCall?.[0];
   if (!isRecord(call)) {
     throw new Error("expected plugin action call");
   }
@@ -32,7 +33,8 @@ function readPluginCall(
   mock: { mock: { calls: unknown[][] } },
   callIndex: number,
 ): Record<string, unknown> {
-  const call = mock.mock.calls[callIndex]?.[0];
+  const mockCall = mock.mock.calls[callIndex];
+  const call = mockCall?.[0];
   if (!isRecord(call)) {
     throw new Error(`expected plugin action call ${callIndex}`);
   }
@@ -49,7 +51,8 @@ function readMockCallArg(
   callIndex = 0,
   argIndex = 0,
 ): Record<string, unknown> {
-  const value = mock.mock.calls[callIndex]?.[argIndex];
+  const mockCall = mock.mock.calls[callIndex];
+  const value = mockCall?.[argIndex];
   if (!isRecord(value)) {
     throw new Error(`expected ${label}`);
   }
@@ -205,7 +208,14 @@ async function executePluginAction(params: {
   action: "send" | "poll";
   ctx: Pick<
     ChannelMessageActionContext,
-    "channel" | "cfg" | "params" | "mediaAccess" | "accountId" | "gateway" | "toolContext"
+    | "channel"
+    | "cfg"
+    | "params"
+    | "mediaAccess"
+    | "accountId"
+    | "gateway"
+    | "toolContext"
+    | "inboundEventKind"
   > & {
     dryRun: boolean;
     agentId?: string;
@@ -225,6 +235,7 @@ async function executePluginAction(params: {
     accountId: params.ctx.accountId ?? undefined,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,
+    inboundEventKind: params.ctx.inboundEventKind,
     dryRun: params.ctx.dryRun,
     agentId: params.ctx.agentId,
   });
@@ -382,6 +393,7 @@ describe("runMessageAction plugin dispatch", () => {
         sessionKey: "agent:alpha:main",
         sessionId: "session-123",
         agentId: "alpha",
+        inboundEventKind: "room_event",
         toolContext: {
           currentChannelId: "oc_123",
           currentChannelProvider: "actionhub",
@@ -400,6 +412,7 @@ describe("runMessageAction plugin dispatch", () => {
           requesterSenderId: "trusted-user",
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
+          inboundEventKind: "room_event",
           agentId: "alpha",
         },
         "plugin action call",
@@ -467,6 +480,7 @@ describe("runMessageAction plugin dispatch", () => {
         sessionKey: "agent:alpha:main",
         sessionId: "session-123",
         agentId: "alpha",
+        inboundEventKind: "room_event",
         toolContext: {
           currentChannelProvider: "gatewaychat",
           currentMessageId: "wamid.1",
@@ -493,6 +507,7 @@ describe("runMessageAction plugin dispatch", () => {
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
           agentId: "alpha",
+          inboundTurnKind: "room_event",
           idempotencyKey: "idem-gateway-action",
         },
         "gateway call params",

@@ -1,10 +1,14 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { ExtraGatewayService } from "../daemon/inspect.js";
 import * as launchd from "../daemon/launchd.js";
 import type { GatewayRestartHandoff } from "../infra/restart-handoff.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
-import { EXTERNAL_SERVICE_REPAIR_NOTE } from "./doctor-service-repair-policy.js";
+import {
+  EXTERNAL_SERVICE_REPAIR_NOTE,
+  SERVICE_REPAIR_POLICY_ENV,
+} from "./doctor-service-repair-policy.js";
 
 const service = vi.hoisted(() => ({
   isLoaded: vi.fn(),
@@ -17,6 +21,7 @@ const service = vi.hoisted(() => ({
 const note = vi.hoisted(() => vi.fn());
 const sleep = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
+const inspectPortConnections = vi.hoisted(() => vi.fn());
 const inspectPortUsage = vi.hoisted(() => vi.fn());
 const formatPortDiagnostics = vi.hoisted(() => vi.fn(() => ["Port 18789 is already in use."]));
 const isExpectedGatewayListeners = vi.hoisted(() => vi.fn(() => false));
@@ -84,6 +89,7 @@ vi.mock("../daemon/systemd.js", async () => {
 });
 
 vi.mock("../infra/ports.js", () => ({
+  inspectPortConnections,
   inspectPortUsage,
   formatPortDiagnostics,
   isExpectedGatewayListeners,
@@ -160,10 +166,15 @@ describe("maybeRepairGatewayDaemon", () => {
       listeners: [],
       hints: [],
     });
+    inspectPortConnections.mockResolvedValue({
+      port: 18789,
+      connections: [],
+    });
     isExpectedGatewayListeners.mockReturnValue(false);
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);
     }
@@ -266,6 +277,8 @@ describe("maybeRepairGatewayDaemon", () => {
   });
 
   it("reports recent restart handoffs during deep doctor", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(40_000);
     setPlatform("linux");
     service.readCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway"],
@@ -306,11 +319,7 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(handoffEnv?.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-service");
     expect(handoffEnv?.OPENCLAW_CONFIG_PATH).toBe("/tmp/openclaw-service/openclaw.json");
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Recent restart handoff: full-process via systemd"),
-      "Gateway",
-    );
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("reason=plugin source changed"),
+      "Recent restart handoff: full-process via systemd; source=plugin-change; reason=plugin source changed; pid=12345; age=30s; expiresIn=30s",
       "Gateway",
     );
   });
@@ -321,6 +330,72 @@ describe("maybeRepairGatewayDaemon", () => {
     await runNonInteractiveRepair();
 
     expect(readGatewayRestartHandoffSync).not.toHaveBeenCalled();
+    expect(inspectPortConnections).not.toHaveBeenCalled();
+  });
+
+  it("reports established gateway clients during deep doctor", async () => {
+    setPlatform("linux");
+    inspectPortConnections.mockResolvedValueOnce({
+      port: 18789,
+      connections: [
+        {
+          pid: 4242,
+          command: "node",
+          commandLine: "/tmp/newer-openclaw/bin/openclaw logs --follow",
+          address: "TCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)",
+          direction: "client",
+        },
+      ],
+    });
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: { deep: true, nonInteractive: true },
+      }),
+      options: { deep: true, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+    });
+
+    const gatewayClientNote = note.mock.calls.find(([, label]) => label === "Gateway clients");
+    expect(gatewayClientNote?.[0]).toContain("pid=4242");
+    expect(gatewayClientNote?.[0]).toContain("protocol mismatch after rollback");
+  });
+
+  it("reports established gateway clients during healthy deep doctor", async () => {
+    setPlatform("linux");
+    inspectPortConnections.mockResolvedValueOnce({
+      port: 18789,
+      connections: [
+        {
+          pid: 5151,
+          command: "node",
+          commandLine: "/tmp/newer-openclaw/bin/openclaw logs --follow",
+          address: "TCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)",
+          direction: "client",
+        },
+      ],
+    });
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: { deep: true, nonInteractive: true },
+      }),
+      options: { deep: true, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: true,
+    });
+
+    expect(inspectPortUsage).not.toHaveBeenCalled();
+    const gatewayClientNote = note.mock.calls.find(([, label]) => label === "Gateway clients");
+    expect(gatewayClientNote?.[0]).toContain("pid=5151");
+    expect(gatewayClientNote?.[0]).toContain("protocol mismatch after rollback");
   });
 
   it("suppresses busy-port note for expected Gateway listeners", async () => {
@@ -382,7 +457,7 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw gateway install"),
+      `Run ${formatCliCommand("openclaw gateway install")} when you want to install the gateway service.`,
       "Gateway",
     );
   });
@@ -428,7 +503,13 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("System-level OpenClaw gateway service detected"),
+      [
+        "System-level OpenClaw gateway service detected while the user gateway service is not installed.",
+        "- openclaw-gateway.service (unit: /etc/systemd/system/openclaw-gateway.service)",
+        "OpenClaw will not install a second user-level gateway service automatically.",
+        "Run `openclaw gateway status --deep` or `openclaw doctor --deep` to inspect duplicate services.",
+        `Set ${SERVICE_REPAIR_POLICY_ENV}=external if a system supervisor owns the gateway lifecycle.`,
+      ].join("\n"),
       "Gateway",
     );
   });

@@ -107,6 +107,10 @@ methods:
 
 ### Tools and commands
 
+Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
+with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
+or fully dynamic tool registration.
+
 | Method                          | What it registers                             |
 | ------------------------------- | --------------------------------------------- |
 | `api.registerTool(tool, opts?)` | Agent tool (required or `{ optional: true }`) |
@@ -140,18 +144,52 @@ generic contracts; Plan Mode can use them, but so can approval workflows,
 workspace policy gates, background monitors, setup wizards, and UI companion
 plugins.
 
-| Method                                                                   | Contract it owns                                                                                                                  |
-| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerSessionExtension(...)`                                      | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                    |
-| `api.enqueueNextTurnInjection(...)`                                      | Durable exactly-once context injected into the next agent turn for one session                                                    |
-| `api.registerTrustedToolPolicy(...)`                                     | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params                                                      |
-| `api.registerToolMetadata(...)`                                          | Tool catalog display metadata without changing the tool implementation                                                            |
-| `api.registerCommand(...)`                                               | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
-| `api.registerControlUiDescriptor(...)`                                   | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
-| `api.registerRuntimeLifecycle(...)`                                      | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                 |
-| `api.registerAgentEventSubscription(...)`                                | Sanitized event subscriptions for workflow state and monitors                                                                     |
-| `api.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)` | Per-run plugin scratch state cleared on terminal run lifecycle                                                                    |
-| `api.registerSessionSchedulerJob(...)`                                   | Plugin-owned session scheduler job records with deterministic cleanup                                                             |
+| Method                                                                               | Contract it owns                                                                                                                  |
+| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                    |
+| `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                    |
+| `api.registerTrustedToolPolicy(...)`                                                 | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params                                                      |
+| `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                            |
+| `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
+| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
+| `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                 |
+| `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                     |
+| `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                    |
+| `api.session.workflow.registerSessionSchedulerJob(...)`                              | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                   |
+| `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                   |
+| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                           |
+| `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                    |
+
+Use the grouped namespaces for new plugin code:
+
+- `api.session.state.registerSessionExtension(...)`
+- `api.session.workflow.enqueueNextTurnInjection(...)`
+- `api.session.workflow.registerSessionSchedulerJob(...)`
+- `api.session.workflow.sendSessionAttachment(...)`
+- `api.session.workflow.scheduleSessionTurn(...)`
+- `api.session.workflow.unscheduleSessionTurnsByTag(...)`
+- `api.session.controls.registerSessionAction(...)`
+- `api.session.controls.registerControlUiDescriptor(...)`
+- `api.agent.events.registerAgentEventSubscription(...)`
+- `api.agent.events.emitAgentEvent(...)`
+- `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`
+- `api.lifecycle.registerRuntimeLifecycle(...)`
+
+The equivalent flat methods remain available as deprecated compatibility
+aliases for existing plugins. Do not add new plugin code that calls
+`api.registerSessionExtension`, `api.enqueueNextTurnInjection`,
+`api.registerControlUiDescriptor`, `api.registerRuntimeLifecycle`,
+`api.registerAgentEventSubscription`, `api.emitAgentEvent`,
+`api.setRunContext`, `api.getRunContext`, `api.clearRunContext`,
+`api.registerSessionSchedulerJob`, `api.registerSessionAction`,
+`api.sendSessionAttachment`, `api.scheduleSessionTurn`, or
+`api.unscheduleSessionTurnsByTag` directly.
+
+`scheduleSessionTurn(...)` is a session-scoped convenience over the Gateway
+Cron scheduler. Cron owns timing and creates the background task record when the
+turn runs; the Plugin SDK only constrains the target session, plugin-owned
+naming, and cleanup. Use `api.runtime.tasks.managedFlows` inside the scheduled
+turn when the work itself needs durable multi-step Task Flow state.
 
 The contracts intentionally split authority:
 
@@ -286,9 +324,9 @@ descriptor-backed placeholders for parse-time lazy loading.
 ### CLI backend registration
 
 `api.registerCliBackend(...)` lets a plugin own the default config for a local
-AI CLI backend such as `codex-cli`.
+AI CLI backend such as `claude-cli` or `my-cli`.
 
-- The backend `id` becomes the provider prefix in model refs like `codex-cli/gpt-5`.
+- The backend `id` becomes the provider prefix in model refs like `my-cli/gpt-5`.
 - The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
 - User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
   plugin default before running the CLI.

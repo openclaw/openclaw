@@ -55,7 +55,6 @@ function expectOutboundAttachmentCall(
   mediaMaxBytes: number,
 ): Record<string, unknown> {
   const call = resolveOutboundAttachmentFromUrl.mock.calls[index] as unknown[] | undefined;
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`missing outbound attachment call ${index + 1}`);
   }
@@ -66,7 +65,6 @@ function expectOutboundAttachmentCall(
 
 function expectAgentScopedMediaAccessCall(): Record<string, unknown> {
   const call = resolveAgentScopedOutboundMediaAccess.mock.calls[0] as unknown[] | undefined;
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error("missing agent scoped media access call");
   }
@@ -403,6 +401,23 @@ describe("createReplyMediaPathNormalizer", () => {
 
     expect(result.text).toBe("WA_MEDIA_DM_07\n⚠️ Media failed.");
     expectNoMedia(result);
+  });
+
+  it("keeps surviving media and appends a warning when some reply media is dropped", async () => {
+    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("file not found"));
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      text: "Here is the surviving attachment",
+      mediaUrls: ["./out/missing.png", "https://example.com/ok.png"],
+    });
+
+    expect(result.text).toBe("Here is the surviving attachment\n⚠️ Media failed.");
+    expectMedia(result, "https://example.com/ok.png", ["https://example.com/ok.png"]);
   });
 
   it("returns a warning-only text reply when media-only output is dropped upstream", async () => {

@@ -13,6 +13,7 @@ function runAllowlistWarningStep(params: {
   label: string;
   suppressUnavailableCoreToolWarning?: boolean;
   suppressUnavailableCoreToolWarningAllowlist?: string[];
+  unavailableCoreToolReason?: string;
 }) {
   const warnings: string[] = [];
   const tools = [{ name: "exec" }] as unknown as DummyTool[];
@@ -28,6 +29,7 @@ function runAllowlistWarningStep(params: {
         suppressUnavailableCoreToolWarning: params.suppressUnavailableCoreToolWarning,
         suppressUnavailableCoreToolWarningAllowlist:
           params.suppressUnavailableCoreToolWarningAllowlist,
+        unavailableCoreToolReason: params.unavailableCoreToolReason,
       },
     ],
   });
@@ -72,8 +74,9 @@ describe("tool-policy-pipeline", () => {
         },
       ],
     });
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]).toContain("unknown entries (wat)");
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (wat). These entries won't match any tool unless the plugin is enabled.",
+    ]);
   });
 
   test("suppresses built-in profile warnings for unavailable gated core tools", () => {
@@ -91,12 +94,9 @@ describe("tool-policy-pipeline", () => {
       label: "tools.profile (coding)",
       suppressUnavailableCoreToolWarningAllowlist: ["apply_patch"],
     });
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]).toContain("unknown entries (browser)");
-    expect(warnings[0]).not.toContain("apply_patch");
-    expect(warnings[0]).toContain(
-      "shipped core tools but unavailable in the current runtime/provider/model/config",
-    );
+    expect(warnings).toEqual([
+      "tools: tools.profile (coding) allowlist contains unknown entries (browser). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+    ]);
   });
 
   test("still warns for explicit allowlists that mention unavailable gated core tools", () => {
@@ -104,13 +104,21 @@ describe("tool-policy-pipeline", () => {
       allow: ["apply_patch"],
       label: "tools.allow",
     });
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]).toContain("unknown entries (apply_patch)");
-    expect(warnings[0]).toContain(
-      "shipped core tools but unavailable in the current runtime/provider/model/config",
-    );
-    expect(warnings[0]).not.toContain("Allowlist contains only plugin entries");
-    expect(warnings[0]).not.toContain("unless the plugin is enabled");
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (apply_patch). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+    ]);
+  });
+
+  test("includes the active reason for unavailable core tool warnings", () => {
+    const warnings = runAllowlistWarningStep({
+      allow: ["apply_patch", "wat"],
+      label: "tools.allow",
+      unavailableCoreToolReason:
+        "memory-triggered compaction runs expose only read and append-only write",
+    });
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (apply_patch, wat). Some entries are shipped core tools but unavailable here: memory-triggered compaction runs expose only read and append-only write; other entries won't match any tool unless the plugin is enabled.",
+    ]);
   });
 
   test("default profile steps suppress unavailable baseline profile entries", () => {
@@ -229,8 +237,10 @@ describe("tool-policy-pipeline", () => {
       ],
     });
 
-    expect(warnings).toHaveLength(2);
-    expect(warnings[1]).toContain("unknown_0");
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (unknown_256). These entries won't match any tool unless the plugin is enabled.",
+      "tools: tools.allow allowlist contains unknown entries (unknown_0). These entries won't match any tool unless the plugin is enabled.",
+    ]);
   });
 
   test("applies allowlist filtering when core tools are explicitly listed", () => {

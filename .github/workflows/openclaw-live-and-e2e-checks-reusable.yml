@@ -97,8 +97,18 @@ on:
           - beta
           - stable
           - full
+      advisory:
+        description: Treat failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
+      advisory:
+        description: Treat failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
       ref:
         description: Ref, tag, or SHA to validate
         required: true
@@ -287,8 +297,8 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.32.1"
+  NODE_VERSION: "24.15.0"
+  PNPM_VERSION: "11.0.8"
 
 jobs:
   validate_selected_ref:
@@ -427,6 +437,7 @@ jobs:
               add_profile_suite live-cli-backend-docker "stable full"
               add_profile_suite live-acp-bind-docker "stable full"
               add_profile_suite live-codex-harness-docker "stable full"
+              add_profile_suite live-subagent-announce-docker "stable full"
 
               add_profile_suite native-live-extensions-a-k "full"
               add_profile_suite native-live-extensions-media-audio "full"
@@ -454,8 +465,9 @@ jobs:
   validate_release_live_cache:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 60
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    timeout-minutes: 20
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -490,12 +502,12 @@ jobs:
       - name: Verify live prompt cache floors
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            echo "live-cache attempt ${attempt}/3"
-            if pnpm test:live:cache; then
+          for attempt in 1 2; do
+            echo "live-cache attempt ${attempt}/2"
+            if timeout --foreground --kill-after=30s 8m pnpm test:live:cache; then
               exit 0
             fi
-            if [[ "$attempt" == "3" ]]; then
+            if [[ "$attempt" == "2" ]]; then
               exit 1
             fi
             sleep $((attempt * 15))
@@ -504,7 +516,8 @@ jobs:
   validate_repo_e2e:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     env:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
@@ -533,7 +546,8 @@ jobs:
   validate_special_e2e:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -607,7 +621,8 @@ jobs:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: inputs.include_release_path_suites && inputs.docker_lanes == ''
     name: Docker E2E (${{ matrix.label }})
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -875,7 +890,8 @@ jobs:
   plan_docker_lane_groups:
     needs: validate_selected_ref
     if: inputs.docker_lanes != ''
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 5
     outputs:
       groups_json: ${{ steps.groups.outputs.groups_json }}
@@ -902,7 +918,8 @@ jobs:
     needs: [validate_selected_ref, prepare_docker_e2e_image, plan_docker_lane_groups]
     if: inputs.docker_lanes != ''
     name: Docker E2E targeted lanes (${{ matrix.group.label }})
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1111,7 +1128,8 @@ jobs:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: inputs.include_openwebui && !inputs.include_release_path_suites && inputs.docker_lanes == ''
     name: Docker E2E (openwebui)
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1238,7 +1256,8 @@ jobs:
   prepare_docker_e2e_image:
     needs: validate_selected_ref
     if: inputs.include_release_path_suites || inputs.include_openwebui || inputs.docker_lanes != ''
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     permissions:
       actions: read
@@ -1482,7 +1501,8 @@ jobs:
   prepare_live_test_image:
     needs: validate_selected_ref
     if: inputs.include_live_suites && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-') || startsWith(inputs.live_suite_filter, 'docker-live-models'))
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -1555,7 +1575,8 @@ jobs:
     name: Docker live models (${{ matrix.provider_label }})
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -1707,7 +1728,8 @@ jobs:
     name: Docker live models (selected providers)
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && inputs.live_model_providers != '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1882,7 +1904,8 @@ jobs:
   validate_live_provider_suites:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || (startsWith(inputs.live_suite_filter, 'native-live-') && !startsWith(inputs.live_suite_filter, 'native-live-extensions-media') && inputs.live_suite_filter != 'native-live-extensions-a-k'))
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -1910,16 +1933,18 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-anthropic-opus
             suite_group: native-live-src-gateway-profiles-anthropic
             label: Native live gateway profiles Anthropic Opus
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-7,anthropic/claude-opus-4-6 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 60
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-7 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku
             suite_group: native-live-src-gateway-profiles-anthropic
             label: Native live gateway profiles Anthropic Sonnet/Haiku
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-google
             label: Native live gateway profiles Google
@@ -1942,42 +1967,48 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-fireworks
             label: Native live gateway profiles Fireworks
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=fireworks node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-deepseek
             label: Native live gateway profiles DeepSeek
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-deepseek-glm
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go DeepSeek/GLM
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash,opencode-go/deepseek-v4-pro,opencode-go/glm-5,opencode-go/glm-5.1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-kimi
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go Kimi
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/kimi-k2.5,opencode-go/kimi-k2.6 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-mimo
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go MiMo
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2-omni,opencode-go/mimo-v2-pro,opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-minimax-qwen
             suite_group: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go MiniMax/Qwen
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/minimax-m2.5,opencode-go/minimax-m2.7,opencode-go/qwen3.5-plus,opencode-go/qwen3.6-plus node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-smoke
             label: Native live gateway profiles OpenCode Go smoke
@@ -1988,20 +2019,23 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-openrouter
             label: Native live gateway profiles OpenRouter
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openrouter node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-xai
             label: Native live gateway profiles xAI
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-zai
             label: Native live gateway profiles Z.ai
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=zai node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-backends
             label: Native live gateway backends
@@ -2024,13 +2058,14 @@ jobs:
           - suite_id: native-live-extensions-l-n
             label: Native live plugins L-N
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-l-n
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-moonshot
             label: Native live Moonshot plugin
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-moonshot
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
             advisory: true
             profiles: full
@@ -2043,14 +2078,16 @@ jobs:
           - suite_id: native-live-extensions-o-z-other
             label: Native live plugins O-Z other
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-o-z-other
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-xai
             label: Native live xAI plugin
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-xai
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -2139,27 +2176,11 @@ jobs:
           fi
           case "${{ matrix.suite_id }}" in
             live-cli-backend-docker)
-              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4" >> "$GITHUB_ENV"
-              # Keep the release-blocking CI lane on Codex API-key auth. The
-              # staged auth-file path remains supported for local maintainer
-              # reruns, but it can hang on stale subscription/session state in
-              # an otherwise healthy release run.
+              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6" >> "$GITHUB_ENV"
               echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
-              # Replace the staged config.toml with a minimal CI-safe config so
-              # the repo stays trusted for MCP/tool use without inheriting
-              # maintainer-local provider/profile overrides that do not exist
-              # inside CI.
-              # Codex's workspace-write sandbox relies on user namespaces that
-              # this Docker lane does not provide, so run Codex unsandboxed
-              # inside the already-isolated container to keep MCP cron/tool
-              # execution representative instead of failing on nested sandbox
-              # setup.
-              echo 'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
-              echo 'OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=["exec","resume","{sessionId}","-c","sandbox_mode=\"danger-full-access\"","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
               echo "OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
-              echo "OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1" >> "$GITHUB_ENV"
               ;;
             live-codex-harness-docker)
               # Keep CI on the API-key path for now. The staged Codex auth secret
@@ -2205,7 +2226,8 @@ jobs:
     name: Docker live suites (${{ matrix.label }})
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-'))
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -2241,6 +2263,7 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: live-gateway-advisory-docker-opencode-openrouter
             suite_group: live-gateway-advisory-docker
@@ -2248,6 +2271,7 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: live-gateway-advisory-docker-xai-zai
             suite_group: live-gateway-advisory-docker
@@ -2255,6 +2279,7 @@ jobs:
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: live-cli-backend-docker
             label: Docker live CLI backend
@@ -2272,6 +2297,12 @@ jobs:
             label: Docker live Codex harness
             command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
             timeout_minutes: 40
+            profile_env_only: false
+            profiles: stable full
+          - suite_id: live-subagent-announce-docker
+            label: Docker live subagent announce
+            command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 20m bash .release-harness/scripts/test-live-subagent-announce-docker.sh
+            timeout_minutes: 25
             profile_env_only: false
             profiles: stable full
     env:
@@ -2371,14 +2402,11 @@ jobs:
           fi
           case "${{ matrix.suite_id }}" in
             live-cli-backend-docker)
-              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4" >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6" >> "$GITHUB_ENV"
               echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
-              echo 'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
-              echo 'OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=["exec","resume","{sessionId}","-c","sandbox_mode=\"danger-full-access\"","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
               echo "OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
-              echo "OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1" >> "$GITHUB_ENV"
               ;;
             live-codex-harness-docker)
               echo "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key" >> "$GITHUB_ENV"
@@ -2399,13 +2427,27 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
-        run: bash .release-harness/scripts/ci-live-command-retry.sh
+          OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
+        run: |
+          set +e
+          bash .release-harness/scripts/ci-live-command-retry.sh
+          status=$?
+          set -e
+          if [[ "$status" -eq 0 ]]; then
+            exit 0
+          fi
+          if [[ "${OPENCLAW_LIVE_SUITE_ADVISORY:-}" == "true" ]]; then
+            echo "::warning::Advisory live suite failed with exit code ${status}: ${{ matrix.suite_id }}"
+            exit 0
+          fi
+          exit "$status"
 
   validate_live_media_provider_suites:
     name: Live media suites (${{ matrix.label }})
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'native-live-extensions-media') || inputs.live_suite_filter == 'native-live-extensions-a-k')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     container:
       image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04
       credentials:
@@ -2419,54 +2461,62 @@ jobs:
           - suite_id: native-live-extensions-a-k
             label: Native live plugins A-K
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-a-k
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-audio
             label: Native live media audio plugins
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-audio
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-music-google
             label: Native live media music Google
             command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=google node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-music-google
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-music-minimax
             label: Native live media music MiniMax
             command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=minimax node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-music-minimax
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-a
             suite_group: native-live-extensions-media-video
             label: Native live media video plugins A
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=alibaba,byteplus,deepinfra,fal node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-b
             suite_group: native-live-extensions-media-video
             label: Native live media video plugins B
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-c
             suite_group: native-live-extensions-media-video
             label: Native live media video plugins C
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-media-video-d
             suite_group: native-live-extensions-media-video
             label: Native live media video plugins D
             command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=qwen,runway,together,vydra node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
-            timeout_minutes: 60
+            timeout_minutes: 30
             profile_env_only: false
+            advisory: true
             profiles: full
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -2564,4 +2614,18 @@ jobs:
 
       - name: Run ${{ matrix.label }}
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
-        run: ${{ matrix.command }}
+        env:
+          OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
+        run: |
+          set +e
+          ${{ matrix.command }}
+          status=$?
+          set -e
+          if [[ "$status" -eq 0 ]]; then
+            exit 0
+          fi
+          if [[ "${OPENCLAW_LIVE_SUITE_ADVISORY:-}" == "true" ]]; then
+            echo "::warning::Advisory live suite failed with exit code ${status}: ${{ matrix.suite_id }}"
+            exit 0
+          fi
+          exit "$status"

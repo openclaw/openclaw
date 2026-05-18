@@ -1,6 +1,7 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
+  buildTurnStartParams,
   buildThreadResumeParams,
   buildThreadStartParams,
   resolveReasoningEffort,
@@ -11,6 +12,9 @@ function createAttemptParams(params: {
   authProfileId?: string;
   authProfileProvider?: string;
   authProfileProviders?: Record<string, string>;
+  bootstrapContextMode?: "full" | "lightweight";
+  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  images?: EmbeddedRunAttemptParams["images"];
 }): EmbeddedRunAttemptParams {
   const authProfileProviders =
     params.authProfileProviders ??
@@ -20,7 +24,13 @@ function createAttemptParams(params: {
   return {
     provider: params.provider,
     modelId: "gpt-5.4",
+    prompt: "test prompt",
     authProfileId: params.authProfileId,
+    ...(params.bootstrapContextMode ? { bootstrapContextMode: params.bootstrapContextMode } : {}),
+    ...(params.bootstrapContextRunKind
+      ? { bootstrapContextRunKind: params.bootstrapContextRunKind }
+      : {}),
+    ...(params.images ? { images: params.images } : {}),
     authProfileStore: {
       version: 1,
       profiles: Object.fromEntries(
@@ -46,6 +56,146 @@ function createAppServerOptions() {
     sandbox: "workspace-write",
   } as const;
 }
+
+describe("Codex app-server native code mode config", () => {
+  it("enables Codex code-mode-only on thread/start without clobbering other config", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      config: {
+        "features.hooks": true,
+        apps: { _default: { enabled: false } },
+      },
+    });
+
+    expect(request.config).toEqual({
+      "features.hooks": true,
+      apps: { _default: { enabled: false } },
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
+  });
+
+  it("enables Codex code-mode-only on thread/resume", () => {
+    const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
+  });
+
+  it("disables Codex native code mode on thread/start when runtime policy denies it", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeCodeModeEnabled: false,
+      config: {
+        "features.code_mode": true,
+        "features.code_mode_only": true,
+      },
+    });
+
+    expect(request.config).toEqual({
+      "features.code_mode": false,
+      "features.code_mode_only": false,
+    });
+  });
+
+  it("disables Codex native code mode on thread/resume when runtime policy denies it", () => {
+    const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeCodeModeEnabled: false,
+    });
+
+    expect(request.config).toEqual({
+      "features.code_mode": false,
+      "features.code_mode_only": false,
+    });
+  });
+
+  it("disables native Codex project docs for lightweight context threads", () => {
+    const request = buildThreadStartParams(
+      createAttemptParams({
+        provider: "openai",
+        bootstrapContextMode: "lightweight",
+        bootstrapContextRunKind: "cron",
+      }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+        config: {
+          project_doc_max_bytes: 64_000,
+          "features.hooks": true,
+        },
+      },
+    );
+
+    expect(request.config).toEqual({
+      project_doc_max_bytes: 0,
+      "features.hooks": true,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
+  });
+
+  it("keeps native Codex project docs enabled when context is not lightweight", () => {
+    const request = buildThreadResumeParams(
+      createAttemptParams({ provider: "openai", bootstrapContextRunKind: "cron" }),
+      {
+        threadId: "thread-1",
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+        config: {
+          project_doc_max_bytes: 64_000,
+        },
+      },
+    );
+
+    expect(request.config).toEqual({
+      project_doc_max_bytes: 64_000,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
+  });
+});
+
+describe("Codex app-server turn input image sanitizing", () => {
+  it("replaces malformed inline images before turn/start", () => {
+    const request = buildTurnStartParams(
+      createAttemptParams({
+        provider: "openai",
+        images: [{ type: "image", mimeType: "image/jpeg", data: "not base64!" }] as never,
+      }),
+      {
+        threadId: "thread-1",
+        cwd: "/repo",
+        appServer: createAppServerOptions() as never,
+      },
+    );
+
+    expect(request.input).toEqual([
+      { type: "text", text: "test prompt", text_elements: [] },
+      {
+        type: "text",
+        text: "[codex user input] omitted image payload: invalid inline image data",
+        text_elements: [],
+      },
+    ]);
+  });
+});
 
 describe("Codex app-server model provider selection", () => {
   it.each(["openai", "openai-codex"])(
@@ -97,7 +247,7 @@ describe("Codex app-server model provider selection", () => {
       },
     );
 
-    expect(request).toMatchObject({ modelProvider: "openai" });
+    expect(request.modelProvider).toBe("openai");
   });
 
   it("keeps public OpenAI modelProvider when no native Codex auth profile is selected", () => {
@@ -108,7 +258,7 @@ describe("Codex app-server model provider selection", () => {
       developerInstructions: "test instructions",
     });
 
-    expect(request).toMatchObject({ modelProvider: "openai" });
+    expect(request.modelProvider).toBe("openai");
   });
 });
 

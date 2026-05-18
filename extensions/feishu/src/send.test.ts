@@ -137,8 +137,39 @@ describe("getMessageFeishu", () => {
       channel: "feishu",
     });
     expect(mockConvertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
-    expect(result).toMatchObject({ messageId: "om_send", chatId: "oc_send" });
-    expect(result.receipt.primaryPlatformMessageId).toBe("om_send");
+    expect(typeof result.receipt.sentAt).toBe("number");
+    expect(result).toEqual({
+      messageId: "om_send",
+      chatId: "oc_send",
+      receipt: {
+        primaryPlatformMessageId: "om_send",
+        platformMessageIds: ["om_send"],
+        parts: [
+          {
+            platformMessageId: "om_send",
+            kind: "text",
+            index: 0,
+            raw: {
+              channel: "feishu",
+              messageId: "om_send",
+              chatId: "oc_send",
+              conversationId: "oc_send",
+            },
+            threadId: "oc_send",
+          },
+        ],
+        threadId: "oc_send",
+        sentAt: result.receipt.sentAt,
+        raw: [
+          {
+            channel: "feishu",
+            messageId: "om_send",
+            chatId: "oc_send",
+            conversationId: "oc_send",
+          },
+        ],
+      },
+    });
   });
 
   it("extracts text content from interactive card elements", async () => {

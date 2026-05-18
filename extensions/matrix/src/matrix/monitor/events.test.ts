@@ -26,16 +26,14 @@ function getSentNoticeBodies(sendMessage: ReturnType<typeof vi.fn>): string[] {
 }
 
 function expectBodiesContain(bodies: string[], text: string) {
-  expect(bodies.some((body) => body.includes(text))).toBe(true);
+  expect(bodies.join("\n")).toContain(text);
 }
 
 function expectBodiesExclude(bodies: string[], text: string) {
-  expect(bodies.some((body) => body.includes(text))).toBe(false);
+  expect(bodies.join("\n")).not.toContain(text);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -489,7 +487,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
     await flushTasks();
     expect(logVerboseMessage).toHaveBeenCalledWith(
-      expect.stringContaining("blocked verification sender @alice:example.org"),
+      "matrix: blocked verification sender @alice:example.org (dmPolicy=pairing)",
     );
     expect(sendMessage).not.toHaveBeenCalled();
     expect(onRoomMessage).not.toHaveBeenCalled();
@@ -565,7 +563,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
     await flushTasks();
     expect(logVerboseMessage).toHaveBeenCalledWith(
-      expect.stringContaining("blocked verification sender @alice:example.org"),
+      "matrix: blocked verification sender @alice:example.org (dmPolicy=open, dmEnabled=false)",
     );
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -776,7 +774,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
     await flushTasks();
     expect(logVerboseMessage).toHaveBeenCalledWith(
-      expect.stringContaining("blocked verification sender @alice:example.org"),
+      "matrix: blocked verification sender @alice:example.org (dmPolicy=allowlist)",
     );
     expect(sendMessage).not.toHaveBeenCalled();
   });

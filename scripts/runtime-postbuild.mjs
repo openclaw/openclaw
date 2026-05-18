@@ -44,10 +44,16 @@ const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
   // gateway may resolve these only after an npm package tree replacement.
   ["server-close-DsVPJDIx.js", "server-close.runtime.js"],
   ["server-close-DvAvfgr8.js", "server-close.runtime.js"],
+  // v2026.5.12-beta.8 gateway shutdown hook chunks.
+  ["hook-runner-global-B8rMIo8I.js", "plugins/hook-runner-global.js"],
   // v2026.5.3 beta reply-dispatch lazy chunks.
   ["provider-dispatcher-6EQEtc-t.js", "provider-dispatcher.runtime.js"],
   ["provider-dispatcher-BpL2E92x.js", "provider-dispatcher.runtime.js"],
   ["provider-dispatcher-JG96SkLX.js", "provider-dispatcher.runtime.js"],
+  // v2026.5.4 tool/control-plane lazy chunks. These predate the stable
+  // nested dist entries, but live gateways may still import them after update.
+  ["manager-DzRWrKSA.js", "acp/control-plane/manager.js"],
+  ["runtime-CeGN4XUC.js", "web-fetch/runtime.js"],
 ];
 const LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS = [
   "scanPackageInstallSource",

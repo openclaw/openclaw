@@ -206,6 +206,7 @@ const ModelCompatSchema = z
         z.literal("openai"),
         z.literal("openrouter"),
         z.literal("deepseek"),
+        z.literal("together"),
         z.literal("qwen"),
         z.literal("qwen-chat-template"),
         z.literal("zai"),
@@ -225,11 +226,11 @@ const ModelCompatSchema = z
   .optional();
 
 type AssertAssignable<_T extends U, U> = true;
-type _ModelCompatSchemaAssignableToType = AssertAssignable<
+export type _ModelCompatSchemaAssignableToType = AssertAssignable<
   z.infer<typeof ModelCompatSchema>,
   ModelCompatConfig | undefined
 >;
-type _ModelCompatTypeAssignableToSchema = AssertAssignable<
+export type _ModelCompatTypeAssignableToSchema = AssertAssignable<
   ModelCompatConfig | undefined,
   z.infer<typeof ModelCompatSchema>
 >;
@@ -413,6 +414,7 @@ export const ModelsConfigSchema = z
   .optional();
 
 const VisibleRepliesValueSchema = z.enum(["automatic", "message_tool"]);
+const AmbientGroupInboundSchema = z.enum(["user_request", "room_event"]);
 
 export const VisibleRepliesSchema = z
   .union([VisibleRepliesValueSchema, z.boolean()])
@@ -430,6 +432,7 @@ export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().positive().optional(),
+    unmentionedInbound: AmbientGroupInboundSchema.optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
   })
   .strict()
@@ -455,9 +458,6 @@ const QueueModeSchema = z.union([
   z.literal("steer"),
   z.literal("followup"),
   z.literal("collect"),
-  z.literal("steer-backlog"),
-  z.literal("steer+backlog"),
-  z.literal("queue"),
   z.literal("interrupt"),
 ]);
 const QueueDropSchema = z.union([z.literal("old"), z.literal("new"), z.literal("summarize")]);
@@ -889,11 +889,11 @@ export const ToolsMediaSchema = z
   .optional();
 
 type ToolsMediaConfigFromSchema = NonNullable<z.infer<typeof ToolsMediaSchema>>;
-type _ToolsMediaAsyncCompletionSchemaAssignableToType = AssertAssignable<
+export type _ToolsMediaAsyncCompletionSchemaAssignableToType = AssertAssignable<
   ToolsMediaConfigFromSchema["asyncCompletion"],
   MediaToolsConfig["asyncCompletion"]
 >;
-type _ToolsMediaAsyncCompletionTypeAssignableToSchema = AssertAssignable<
+export type _ToolsMediaAsyncCompletionTypeAssignableToSchema = AssertAssignable<
   MediaToolsConfig["asyncCompletion"],
   ToolsMediaConfigFromSchema["asyncCompletion"]
 >;

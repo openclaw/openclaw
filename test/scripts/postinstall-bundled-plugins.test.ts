@@ -221,7 +221,7 @@ describe("bundled plugin postinstall", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("patches the Baileys rc10 upload helper dispatcher guard", async () => {
+  it("patches the Baileys upload helper dispatcher guard", async () => {
     const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
     const mediaFile = await writeBaileysMediaFile(
       packageRoot,
@@ -254,9 +254,10 @@ describe("bundled plugin postinstall", () => {
       ].join("\n"),
     );
 
-    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toMatchObject({
+    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toEqual({
       applied: true,
       reason: "patched",
+      targetPath: mediaFile,
     });
     const patchedText = await fs.readFile(mediaFile, "utf8");
     expect(patchedText).toContain(
@@ -265,7 +266,7 @@ describe("bundled plugin postinstall", () => {
     expect(patchedText).not.toContain("        dispatcher: agent,");
   });
 
-  it("recognizes already patched Baileys rc10 upload helpers", async () => {
+  it("recognizes already patched Baileys upload helpers", async () => {
     const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
     await writeBaileysMediaFile(
       packageRoot,
@@ -292,7 +293,7 @@ describe("bundled plugin postinstall", () => {
       ].join("\n"),
     );
 
-    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toMatchObject({
+    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toEqual({
       applied: false,
       reason: "already_patched",
     });
@@ -626,7 +627,12 @@ describe("bundled plugin postinstall", () => {
     await expectPathExists(thirdPartyNodeModules);
     expect(log.warn).not.toHaveBeenCalled();
     expect(log.log).toHaveBeenCalledWith(
-      expect.stringContaining("[postinstall] pruned legacy plugin runtime deps:"),
+      `[postinstall] pruned legacy plugin runtime deps: ${[
+        oldBrandLegacyRoot,
+        defaultLegacyRoot,
+        overrideLegacyRoot,
+        systemLegacyRoot,
+      ].join(", ")}`,
     );
   });
 
@@ -663,7 +669,7 @@ describe("bundled plugin postinstall", () => {
     await expectPathMissing(legacyRuntimeRoot);
     expect(log.warn).not.toHaveBeenCalled();
     expect(log.log).toHaveBeenCalledWith(
-      expect.stringContaining("[postinstall] pruned legacy plugin runtime deps symlinks:"),
+      `[postinstall] pruned legacy plugin runtime deps symlinks: ${slackLink}`,
     );
   });
 
@@ -682,10 +688,14 @@ describe("bundled plugin postinstall", () => {
       }),
     ).toStrictEqual([]);
 
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "[postinstall] could not prune legacy plugin runtime deps /home/alice/.openclaw/plugin-runtime-deps: Error: locked",
-      ),
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenNthCalledWith(
+      1,
+      "[postinstall] could not prune legacy plugin runtime deps /home/alice/.clawdbot/plugin-runtime-deps: Error: locked",
+    );
+    expect(warn).toHaveBeenNthCalledWith(
+      2,
+      "[postinstall] could not prune legacy plugin runtime deps /home/alice/.openclaw/plugin-runtime-deps: Error: locked",
     );
   });
 

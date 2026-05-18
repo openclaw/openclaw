@@ -1,8 +1,9 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
+import { redactTranscriptMessage } from "./transcript-redact.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -452,6 +453,53 @@ describe("installSessionToolResultGuard", () => {
     expect(text).toBe("rewritten by hook");
   });
 
+  it("applies before_message_write redaction to tool-result details before persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: ({ message }) => ({
+        message: redactTranscriptMessage(message, { logging: { redactSensitive: "tools" } }),
+      }),
+    });
+
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "result sk-abcdef1234567890xyz" }],
+        details: {
+          apiKey: "plainsecretvalue123",
+          password: "hunter2",
+          nested: { accessToken: ["nestedplainsecret123"] },
+          safe: "visible",
+        },
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = getPersistedMessages(sm);
+    const toolResult = messages.find((m) => m.role === "toolResult") as unknown as {
+      content: Array<{ text: string }>;
+      details: {
+        apiKey: string;
+        password: string;
+        nested: { accessToken: string[] };
+        safe: string;
+      };
+    };
+    const serializedToolResult = JSON.stringify(toolResult);
+    expect(toolResult.content[0].text).not.toContain("sk-abcdef1234567890xyz");
+    expect(serializedToolResult).not.toContain("plainsecretvalue123");
+    expect(serializedToolResult).not.toContain("hunter2");
+    expect(serializedToolResult).not.toContain("nestedplainsecret123");
+    expect(toolResult.details.apiKey).toBe("***");
+    expect(toolResult.details.password).toBe("***");
+    expect(toolResult.details.nested.accessToken[0]).toBe("***");
+    expect(serializedToolResult).toContain("visible");
+  });
+
   it("applies before_message_write to synthetic tool-result flushes", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm, {
@@ -524,6 +572,33 @@ describe("installSessionToolResultGuard", () => {
     const persisted = getPersistedMessages(sm);
     expect(persisted.map((message) => message.role)).toEqual(["user"]);
     expect((persisted[0] as { content?: unknown } | undefined)?.content).toBe("second");
+  });
+
+  it("suppresses transcript-only assistant messages when requested", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      suppressTranscriptOnlyAssistantPersistence: true,
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: "private room-event note",
+        timestamp: Date.now(),
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "message", arguments: {} }],
+        timestamp: Date.now() + 1,
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.role).toBe("assistant");
+    expect(JSON.stringify(persisted[0])).toContain("call_1");
   });
 
   // When an assistant message with toolCalls is aborted, no synthetic toolResult

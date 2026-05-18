@@ -1,6 +1,6 @@
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { OperatorScope } from "../gateway/operator-scopes.js";
+import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
@@ -15,6 +15,7 @@ import type {
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
   PluginRuntimeLifecycleRegistration,
+  PluginSessionActionRegistration,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginToolMetadataRegistration,
@@ -97,6 +98,7 @@ export type PluginHttpRouteRegistration = {
   auth: OpenClawPluginHttpRouteAuth;
   match: OpenClawPluginHttpRouteMatch;
   gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
+  gatewayMethodDispatchAllowed?: boolean;
   nodeCapability?: {
     surface: string;
     ttlMs?: number;
@@ -340,6 +342,14 @@ export type PluginSessionSchedulerJobRegistryRegistration = {
   rootDir?: string;
 };
 
+export type PluginSessionActionRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  action: PluginSessionActionRegistration;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginConversationBindingResolvedHandlerRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -394,7 +404,6 @@ export type PluginRecord = {
   contextEngineIds?: string[];
   memoryEmbeddingProviderIds: string[];
   agentHarnessIds: string[];
-  gatewayMethods: string[];
   cliCommands: string[];
   services: string[];
   gatewayDiscoveryServiceIds: string[];
@@ -435,8 +444,8 @@ export type PluginRegistry = {
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
+  gatewayMethodDescriptors: GatewayMethodDescriptor[];
   coreGatewayMethodNames?: string[];
-  gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
   httpRoutes: PluginHttpRouteRegistration[];
   hostedMediaResolvers?: PluginHostedMediaResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
@@ -454,6 +463,7 @@ export type PluginRegistry = {
   runtimeLifecycles?: PluginRuntimeLifecycleRegistryRegistration[];
   agentEventSubscriptions?: PluginAgentEventSubscriptionRegistryRegistration[];
   sessionSchedulerJobs?: PluginSessionSchedulerJobRegistryRegistration[];
+  sessionActions?: PluginSessionActionRegistryRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
 };
@@ -463,6 +473,10 @@ export type PluginRegistryParams = {
   coreGatewayHandlers?: GatewayRequestHandlers;
   coreGatewayMethodNames?: readonly string[];
   runtime: PluginRuntime;
+  hostServices?: {
+    /** May be a live accessor; plugin APIs must read it at call time. */
+    cron?: import("../cron/service-contract.js").CronServiceContract;
+  };
   activateGlobalSideEffects?: boolean;
 };
 

@@ -221,8 +221,13 @@ export const mockedGetApiKeyForModel = vi.fn(
   }),
 );
 export const mockedEnsureAuthProfileStore = vi.fn(() => ({}));
-export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn(() => ({}));
-export const mockedResolveAuthProfileOrder = vi.fn(() => [] as string[]);
+export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn(
+  (_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => ({}),
+);
+export const mockedResolveAuthProfileOrder = vi.fn<(_params?: unknown) => string[]>(
+  (_params?: unknown) => [],
+);
+export const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
 export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
 export const overflowBaseRunParams = {
@@ -407,6 +412,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({});
   mockedResolveAuthProfileOrder.mockReset();
   mockedResolveAuthProfileOrder.mockReturnValue([]);
+  mockedMarkAuthProfileSuccess.mockReset();
+  mockedMarkAuthProfileSuccess.mockResolvedValue(undefined);
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReset();
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReturnValue(false);
   mockedRunPostCompactionSideEffects.mockReset();
@@ -455,8 +462,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../auth-profiles.js", () => ({
     isProfileInCooldown: vi.fn(() => false),
     markAuthProfileFailure: vi.fn(async () => {}),
-    markAuthProfileGood: vi.fn(async () => {}),
-    markAuthProfileUsed: vi.fn(async () => {}),
+    markAuthProfileSuccess: mockedMarkAuthProfileSuccess,
     resolveProfilesUnavailableReason: vi.fn(() => undefined),
   }));
 

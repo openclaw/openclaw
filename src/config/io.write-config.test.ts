@@ -199,17 +199,8 @@ describe("config io write", () => {
       expect(snapshot.exists).toBe(true);
       expect(io.loadConfig().gateway).toEqual({ mode: "local" });
 
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `Config health-state write failed: ${healthPath}: health write failed`,
-        ),
-      );
-      expect(
-        warn.mock.calls.filter(
-          ([message]) =>
-            typeof message === "string" && message.includes("Config health-state write failed:"),
-        ),
-      ).toHaveLength(2);
+      const expectedHealthWarning = `Config health-state write failed: ${healthPath}: health write failed`;
+      expect(warn.mock.calls).toEqual([[expectedHealthWarning], [expectedHealthWarning]]);
     });
   });
 
@@ -505,9 +496,11 @@ describe("config io write", () => {
         spec: "demo@1.0.0",
         installPath: pluginDir,
       });
-      expect(warn).not.toHaveBeenCalledWith(
-        expect.stringContaining("could not migrate shipped plugins.installs records"),
-      );
+      expect(warn.mock.calls).toEqual([
+        [
+          "Config warnings:\n- plugins.entries.demo: plugin not found: demo (stale config entry ignored; remove it from plugins config)",
+        ],
+      ]);
 
       await expect(io.writeConfigFile({ gateway: { mode: "local" } })).rejects.toThrow(
         "Config write blocked: shipped plugins.installs records",
@@ -684,6 +677,36 @@ describe("config io write", () => {
     });
   });
 
+  it("does not print overwrite audit output by default when updating config", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: {
+          warn,
+          error: vi.fn(),
+        },
+      });
+
+      await io.writeConfigFile({
+        gateway: { mode: "local", port: 18790 },
+      });
+
+      const overwriteLogs = warn.mock.calls.filter(
+        (call) => typeof call[0] === "string" && call[0].startsWith("Config overwrite:"),
+      );
+      expect(overwriteLogs).toHaveLength(0);
+    });
+  });
+
   it("suppresses overwrite audit output when skipOutputLogs is set", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -774,16 +797,20 @@ describe("config io write", () => {
       ]);
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(cleanRaw);
       const entries = await fs.readdir(path.dirname(configPath));
-      expect(
-        entries.reduce((count, entry) => count + (entry.includes(".clobbered.") ? 1 : 0), 0),
-      ).toBe(1);
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("Config auto-stripped non-JSON prefix:"),
-      );
+      const clobberedEntries = entries.filter((entry) => entry.includes(".clobbered."));
+      expect(clobberedEntries).toHaveLength(1);
+      expect(warn.mock.calls).toEqual([
+        [
+          `Config auto-stripped non-JSON prefix: ${configPath} (original saved as ${path.join(
+            path.dirname(configPath),
+            clobberedEntries[0] ?? "",
+          )})`,
+        ],
+      ]);
     });
   });
 
-  it("caps repeated prefix-recovery clobber snapshots for doctor-style repair loops", async () => {
+  it("rotates repeated prefix-recovery clobber snapshots for doctor-style repair loops", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const cleanConfig = {
@@ -809,6 +836,13 @@ describe("config io write", () => {
       const entries = await fs.readdir(path.dirname(configPath));
       const clobbered = entries.filter((entry) => entry.includes(".clobbered."));
       expect(clobbered).toHaveLength(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
+      const clobberedContents = await Promise.all(
+        clobbered.map((entry) => fs.readFile(path.join(path.dirname(configPath), entry), "utf-8")),
+      );
+      expect(clobberedContents).not.toContain(`Found and updated: False 0\n${cleanRaw}`);
+      expect(clobberedContents).toContain(
+        `Found and updated: False ${CONFIG_CLOBBER_SNAPSHOT_LIMIT + 3}\n${cleanRaw}`,
+      );
       const capWarnings = warn.mock.calls.filter(
         ([message]) =>
           typeof message === "string" && message.includes("Config clobber snapshot cap reached"),
@@ -863,10 +897,16 @@ describe("config io write", () => {
 
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
       const entries = await fs.readdir(path.dirname(configPath));
-      expect(
-        entries.reduce((count, entry) => count + (entry.includes(".rejected.") ? 1 : 0), 0),
-      ).toBe(1);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Config write rejected:"));
+      const rejectedEntries = entries.filter((entry) => entry.includes(".rejected."));
+      expect(rejectedEntries).toHaveLength(1);
+      expect(warn.mock.calls).toEqual([
+        [
+          `Config write rejected: ${configPath} (gateway-mode-removed). Rejected payload saved to ${path.join(
+            path.dirname(configPath),
+            rejectedEntries[0] ?? "",
+          )}.`,
+        ],
+      ]);
     });
   });
 

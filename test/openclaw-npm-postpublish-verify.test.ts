@@ -7,6 +7,7 @@ import {
   buildPublishedInstallScenarios,
   collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
+  collectInstalledPluginSdkZodArtifactErrors,
   collectInstalledRootDependencyManifestErrors,
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
@@ -79,15 +80,15 @@ describe("collectInstalledPackageErrors", () => {
 
     try {
       writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
-      mkdirSync(join(packageRoot, "dist", "extensions", "slack"), { recursive: true });
+      mkdirSync(join(packageRoot, "dist", "extensions", "telegram"), { recursive: true });
       writeFileSync(
-        join(packageRoot, "dist", "extensions", "slack", "package.json"),
+        join(packageRoot, "dist", "extensions", "telegram", "package.json"),
         "{}\n",
         "utf8",
       );
 
       expect(collectInstalledBundledRuntimeSidecarPaths(packageRoot)).toContain(
-        "dist/extensions/slack/runtime-api.js",
+        "dist/extensions/telegram/runtime-api.js",
       );
       expect(
         collectInstalledPackageErrors({
@@ -96,7 +97,7 @@ describe("collectInstalledPackageErrors", () => {
           packageRoot,
         }),
       ).toContain(
-        "installed package is missing required bundled runtime sidecar: dist/extensions/slack/runtime-api.js",
+        "installed package is missing required bundled runtime sidecar: dist/extensions/telegram/runtime-api.js",
       );
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
@@ -146,11 +147,85 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
   });
 });
 
+describe("collectInstalledPluginSdkZodArtifactErrors", () => {
+  function withInstalledPackageRoot(run: (packageRoot: string) => void): void {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-postpublish-zod-sdk-"));
+    try {
+      run(packageRoot);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  }
+
+  function writeInstalledFile(packageRoot: string, relativePath: string, contents: string): void {
+    const filePath = join(packageRoot, ...relativePath.split("/"));
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, contents, "utf8");
+  }
+
+  it("requires the plugin-sdk zod artifact", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
+        "installed package is missing required plugin SDK artifact: dist/plugin-sdk/zod.js",
+      ]);
+    });
+  });
+
+  it("rejects plugin-sdk zod artifacts with a bare zod export", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/plugin-sdk/zod.js",
+        'import "../zod-D2c0iocA.js";\nexport * from "zod";\n',
+      );
+
+      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
+        "installed package plugin SDK zod artifact must be self-contained but dist/plugin-sdk/zod.js imports zod.",
+      ]);
+    });
+  });
+
+  it("rejects plugin-sdk zod artifacts when a reachable local chunk imports zod", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/plugin-sdk/zod.js",
+        'export { z } from "../zod-D2c0iocA.js";\n',
+      );
+      writeInstalledFile(
+        packageRoot,
+        "dist/zod-D2c0iocA.js",
+        'import * as zodCore from "zod/v4/core";\nexport const z = zodCore;\n',
+      );
+
+      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([
+        "installed package plugin SDK zod artifact must be self-contained but dist/zod-D2c0iocA.js imports zod/v4/core.",
+      ]);
+    });
+  });
+
+  it("accepts plugin-sdk zod artifacts that only import package-local chunks", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/plugin-sdk/zod.js",
+        'export { z } from "../zod-D2c0iocA.js";\n',
+      );
+      writeInstalledFile(packageRoot, "dist/zod-D2c0iocA.js", "export const z = {};\n");
+
+      expect(collectInstalledPluginSdkZodArtifactErrors(packageRoot)).toEqual([]);
+    });
+  });
+});
+
 describe("normalizeInstalledBinaryVersion", () => {
   it("accepts decorated CLI version output", () => {
     expect(normalizeInstalledBinaryVersion("OpenClaw 2026.4.8 (9ece252)")).toBe("2026.4.8");
     expect(normalizeInstalledBinaryVersion("OpenClaw 2026.4.8-beta.1 (9ece252)")).toBe(
       "2026.4.8-beta.1",
+    );
+    expect(normalizeInstalledBinaryVersion("OpenClaw 2026.4.8-alpha.1 (9ece252)")).toBe(
+      "2026.4.8-alpha.1",
     );
   });
 });
@@ -250,6 +325,12 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         'import * as lark from "@larksuiteoapi/node-sdk";\nexport { lark };\n',
         "utf8",
       );
+      mkdirSync(join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "plugin-sdk/channel-test-helpers.js"),
+        'import { expect, it } from "vitest";\nexport { expect, it };\n',
+        "utf8",
+      );
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
@@ -344,9 +425,10 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(join(packageRoot, "package.json"), "{not-json\n", "utf8");
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        expect.stringMatching(/^installed package\.json could not be parsed:/u),
-      ]);
+      const errors = collectInstalledRootDependencyManifestErrors(packageRoot);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.startsWith("installed package.json could not be parsed:")).toBe(true);
+      expect(errors[0]?.endsWith(".")).toBe(true);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -363,12 +445,12 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(
         join(packageRoot, "dist", "oversized.js"),
-        "x".repeat(4 * 1024 * 1024 + 1),
+        "x".repeat(6 * 1024 * 1024 + 1),
         "utf8",
       );
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        "installed package root dist file 'oversized.js' is invalid or exceeds 4194304 bytes.",
+        "installed package root dist file 'oversized.js' is invalid or exceeds 6291456 bytes.",
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });

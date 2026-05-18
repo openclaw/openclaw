@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { OPENROUTER_THINKING_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import {
@@ -54,6 +54,10 @@ function shouldPatchDeepSeekV4OpenRouterPayload(model: Parameters<StreamFn>[0]):
     isOpenRouterDeepSeekV4ModelId(model.id) &&
     isVerifiedOpenRouterRoute(model)
   );
+}
+
+function assistantMessageHasOpenAIToolCalls(message: Record<string, unknown>): boolean {
+  return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
 }
 
 function resolveOpenRouterDeepSeekV4ReasoningEffort(
@@ -188,6 +192,8 @@ function createOpenRouterDeepSeekV4ThinkingWrapper(
     thinkingLevel,
     shouldPatchModel: shouldPatchDeepSeekV4OpenRouterPayload,
     resolveReasoningEffort: resolveOpenRouterDeepSeekV4ReasoningEffort,
+    shouldBackfillAssistantReasoningContent: (message) =>
+      !assistantMessageHasOpenAIToolCalls(message),
   });
 }
 

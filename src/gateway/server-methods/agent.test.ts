@@ -156,6 +156,9 @@ const makeContext = (): GatewayRequestContext =>
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),
+    chatDeltaLastBroadcastText: new Map(),
+    agentDeltaSentAt: new Map(),
+    bufferedAgentEvents: new Map(),
     chatAbortedRuns: new Map(),
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
@@ -208,12 +211,23 @@ function requireValue<T>(value: T | null | undefined, message: string): T {
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
   }
   return actual;
+}
+
+function expectStringFieldContains(
+  record: Record<string, unknown>,
+  field: string,
+  expected: string,
+) {
+  expect(record[field]).toBeTypeOf("string");
+  expect(record[field]).toContain(expected);
 }
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
@@ -357,7 +371,9 @@ async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
 }
 
 function readLastAgentCommandCall(): AgentCommandCall | undefined {
-  return mocks.agentCommand.mock.calls.at(-1)?.[0] as AgentCommandCall | undefined;
+  const calls = mocks.agentCommand.mock.calls;
+  const call = calls[calls.length - 1];
+  return call?.[0] as AgentCommandCall | undefined;
 }
 
 function backendGatewayClient(): AgentHandlerArgs["client"] {
@@ -594,12 +610,11 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.groupId).toBe("C123");
     expect(capturedEntry?.groupChannel).toBe("#trusted");
     expect(capturedEntry?.space).toBe("TTRUSTED");
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+    const callArgs = await waitForAgentCommandCall<{
       groupChannel?: string;
       groupSpace?: string;
       runContext?: { groupChannel?: string; groupSpace?: string };
-    };
+    }>();
     expect(callArgs.groupChannel).toBe("#trusted");
     expect(callArgs.groupSpace).toBe("TTRUSTED");
     expect(callArgs.runContext?.groupChannel).toBe("#trusted");
@@ -646,12 +661,11 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.groupId).toBe("C123");
     expect(capturedEntry?.groupChannel).toBe("#general");
     expect(capturedEntry?.space).toBe("TWORKSPACE");
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+    const callArgs = await waitForAgentCommandCall<{
       groupChannel?: string;
       groupSpace?: string;
       runContext?: { groupChannel?: string; groupSpace?: string };
-    };
+    }>();
     expect(callArgs.groupChannel).toBe("#general");
     expect(callArgs.groupSpace).toBe("TWORKSPACE");
     expect(callArgs.runContext?.groupChannel).toBe("#general");
@@ -1155,7 +1169,7 @@ describe("gateway agent handler", () => {
     );
 
     const error = expectRespondError(respond, {});
-    expect(error.message).toEqual(expect.stringContaining("invalid agent params"));
+    expectStringFieldContains(error, "message", "invalid agent params");
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
@@ -1185,18 +1199,21 @@ describe("gateway agent handler", () => {
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     const error = expectRespondError(respond, {});
-    expect(error.message).toEqual(
-      expect.stringContaining("attachment broken.png: invalid base64 content"),
-    );
+    expectStringFieldContains(error, "message", "attachment broken.png: invalid base64 content");
     const logError = context.logGateway.error as unknown as ReturnType<typeof vi.fn>;
     expect(mockCallArg(logError)).toBe("agent attachment parse failed");
-    const logMeta = expectRecordFields(mockCallArg(logError, 0, 1), {
-      consoleMessage: expect.stringContaining(
-        "agent attachment parse failed: Error: attachment broken.png",
-      ),
-      error: expect.stringContaining("Error: attachment broken.png: invalid base64 content"),
-    });
-    expect(logMeta.error).toEqual(expect.stringContaining("\n    at "));
+    const logMeta = mockCallArg(logError, 0, 1) as Record<string, unknown>;
+    expectStringFieldContains(
+      logMeta,
+      "consoleMessage",
+      "agent attachment parse failed: Error: attachment broken.png",
+    );
+    expectStringFieldContains(
+      logMeta,
+      "error",
+      "Error: attachment broken.png: invalid base64 content",
+    );
+    expectStringFieldContains(logMeta, "error", "\n    at ");
   });
 
   it("keeps model-run gateway prompts undecorated and forwards raw-run flags", async () => {
@@ -1323,7 +1340,7 @@ describe("gateway agent handler", () => {
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     const error = expectRespondError(respond, {});
-    expect(error.message).toEqual(expect.stringContaining("requires target"));
+    expectStringFieldContains(error, "message", "requires target");
   });
 
   it("downgrades to session-only when bestEffortDeliver=true and no external channel is configured", async () => {
@@ -1367,8 +1384,8 @@ describe("gateway agent handler", () => {
     const rejected = respond.mock.calls.find((call: unknown[]) => call[0] === false);
     expect(rejected).toBeUndefined();
     expect(logInfo).toHaveBeenCalledTimes(1);
-    expect(mockCallArg(logInfo)).toEqual(
-      expect.stringContaining("agent delivery downgraded to session-only (bestEffortDeliver)"),
+    expect(mockCallArg(logInfo)).toContain(
+      "agent delivery downgraded to session-only (bestEffortDeliver)",
     );
   });
 
@@ -1390,7 +1407,7 @@ describe("gateway agent handler", () => {
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     const error = expectRespondError(respond, {});
-    expect(error.message).toEqual(expect.stringContaining("invalid agent params"));
+    expectStringFieldContains(error, "message", "invalid agent params");
   });
 
   it("forwards one-shot bundle MCP cleanup from agent RPC into the runner", async () => {
@@ -1410,7 +1427,9 @@ describe("gateway agent handler", () => {
 
   it.each(
     (["channel", "replyChannel"] as const).flatMap((field) =>
-      (["heartbeat", "cron", "webhook"] as const).map((channel) => [field, channel] as const),
+      (["heartbeat", "cron", "webhook", "voice"] as const).map(
+        (channel) => [field, channel] as const,
+      ),
     ),
   )("accepts internal non-delivery %s hint %s", async (field, channel) => {
     primeMainAgentRun();
@@ -1454,7 +1473,37 @@ describe("gateway agent handler", () => {
     );
 
     const error = expectRespondError(respond, {});
-    expect(error.message).toEqual(expect.stringContaining("unknown channel: not-a-real-channel"));
+    expectStringFieldContains(error, "message", "unknown channel: not-a-real-channel");
+  });
+
+  it("keeps voice-originated followups on the voice message channel without delivery", async () => {
+    mockMainSessionEntry({ sessionId: "voice-session-id" });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "exec approval followup",
+        sessionKey: "agent:main:main",
+        channel: "voice",
+        deliver: false,
+        idempotencyKey: "exec-approval-followup:req-voice",
+      } as AgentParams,
+      { reqId: "exec-approval-followup-voice-1", client: backendGatewayClient() },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      channel?: string;
+      deliver?: boolean;
+      messageChannel?: string;
+      runContext?: { messageChannel?: string };
+    }>();
+    expect(callArgs.channel).toBe("voice");
+    expect(callArgs.deliver).toBe(false);
+    expect(callArgs.messageChannel).toBe("voice");
+    expect(callArgs.runContext?.messageChannel).toBe("voice");
   });
 
   it("accepts music generation internal events", async () => {
@@ -1645,6 +1694,239 @@ describe("gateway agent handler", () => {
 
     const callArgs = await waitForAgentCommandCall<{ bashElevated?: unknown }>();
     expect(callArgs.bashElevated).toEqual(bashElevated);
+  });
+
+  it("dedupes elevated exec approval followups across nonce idempotency keys", async () => {
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    const firstRegistration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-duplicate",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    const secondRegistration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-duplicate",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    if (!firstRegistration || !secondRegistration) {
+      throw new Error("expected runtime handoff ids");
+    }
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    mocks.agentCommand.mockImplementation(() => new Promise(() => {}));
+    const context = makeContext();
+    const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+
+    await invokeAgent(
+      {
+        message: "exec followup",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: firstRegistration.idempotencyKey,
+        internalRuntimeHandoffId: firstRegistration.handoffId,
+      },
+      { reqId: "exec-followup-duplicate-1", client: backendGatewayClient(), context },
+    );
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore + 1);
+
+    const secondRespond = await invokeAgent(
+      {
+        message: "exec followup duplicate",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: secondRegistration.idempotencyKey,
+        internalRuntimeHandoffId: secondRegistration.handoffId,
+      },
+      {
+        reqId: "exec-followup-duplicate-2",
+        client: backendGatewayClient(),
+        context,
+        flushDispatch: false,
+      },
+    );
+    await flushScheduledDispatchStep();
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore + 1);
+    expect(mockCallArg(secondRespond, 0, 3)).toEqual({ cached: true });
+  });
+
+  it("reserves exec approval followup dedupe before awaited session work", async () => {
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    const firstRegistration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-overlap",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    const secondRegistration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-overlap",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    if (!firstRegistration || !secondRegistration) {
+      throw new Error("expected runtime handoff ids");
+    }
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    let releaseFirstSessionWrite: (() => void) | undefined;
+    let sessionWriteCalls = 0;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      sessionWriteCalls += 1;
+      if (sessionWriteCalls === 1) {
+        await new Promise<void>((resolve) => {
+          releaseFirstSessionWrite = resolve;
+        });
+      }
+      const store = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          lastChannel: "telegram",
+          lastTo: "123",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockImplementation(() => new Promise(() => {}));
+    const context = makeContext();
+    const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+
+    const first = invokeAgent(
+      {
+        message: "exec followup",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: firstRegistration.idempotencyKey,
+        internalRuntimeHandoffId: firstRegistration.handoffId,
+      },
+      {
+        reqId: "exec-followup-overlap-1",
+        client: backendGatewayClient(),
+        context,
+        flushDispatch: false,
+      },
+    );
+    await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
+
+    const secondRespond = await invokeAgent(
+      {
+        message: "exec followup duplicate",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: secondRegistration.idempotencyKey,
+        internalRuntimeHandoffId: secondRegistration.handoffId,
+      },
+      {
+        reqId: "exec-followup-overlap-2",
+        client: backendGatewayClient(),
+        context,
+        flushDispatch: false,
+      },
+    );
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore);
+    expect(sessionWriteCalls).toBe(1);
+    expect(mockCallArg(secondRespond, 0, 1)).toMatchObject({
+      runId: firstRegistration.idempotencyKey,
+      status: "accepted",
+    });
+    expect(mockCallArg(secondRespond, 0, 3)).toEqual({ cached: true });
+
+    releaseFirstSessionWrite?.();
+    await first;
+    await flushScheduledDispatchStep();
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore + 1);
+  });
+
+  it("clears reserved exec approval dedupe when pre-run session work fails", async () => {
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    const firstRegistration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-pre-run-fail",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    const secondRegistration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-pre-run-fail",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    if (!firstRegistration || !secondRegistration) {
+      throw new Error("expected runtime handoff ids");
+    }
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    const context = makeContext();
+    const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+    mocks.updateSessionStore.mockRejectedValueOnce(new Error("session write failed"));
+
+    await expect(
+      invokeAgent(
+        {
+          message: "exec followup",
+          sessionKey: "agent:main:telegram:direct:123",
+          channel: "telegram",
+          idempotencyKey: firstRegistration.idempotencyKey,
+          internalRuntimeHandoffId: firstRegistration.handoffId,
+        },
+        {
+          reqId: "exec-followup-pre-run-fail-1",
+          client: backendGatewayClient(),
+          context,
+          flushDispatch: false,
+        },
+      ),
+    ).rejects.toThrow("session write failed");
+
+    expect(context.dedupe.get(`agent:${firstRegistration.idempotencyKey}`)).toBeUndefined();
+    expect(
+      context.dedupe.get("agent:exec-approval-followup:req-elevated-pre-run-fail"),
+    ).toBeUndefined();
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore);
+
+    const secondRespond = await invokeAgent(
+      {
+        message: "exec followup retry",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: secondRegistration.idempotencyKey,
+        internalRuntimeHandoffId: secondRegistration.handoffId,
+      },
+      {
+        reqId: "exec-followup-pre-run-fail-2",
+        client: backendGatewayClient(),
+        context,
+        flushDispatch: false,
+      },
+    );
+
+    expect(mockCallArg(secondRespond, 0, 1)).toMatchObject({
+      runId: secondRegistration.idempotencyKey,
+      status: "accepted",
+    });
+    await flushScheduledDispatchStep();
+    await flushScheduledDispatchStep();
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore + 1);
   });
 
   it("does not consume exec approval runtime handoffs from non-backend callers", async () => {
@@ -2187,8 +2469,12 @@ describe("gateway agent handler", () => {
         runId: "task-registry-agent-seam",
         childSessionKey: "agent:main:main",
         sourceId: "task-registry-agent-seam",
-        task: expect.stringContaining("background cli seam task"),
       });
+      expectStringFieldContains(
+        mockCallArg(createRunningTaskRunSpy) as Record<string, unknown>,
+        "task",
+        "background cli seam task",
+      );
       expect(finalizeTaskRunByRunIdSpy).toHaveBeenCalledTimes(1);
       expectRecordFields(mockCallArg(finalizeTaskRunByRunIdSpy), {
         runtime: "cli",
@@ -2958,7 +3244,7 @@ describe("gateway agent handler", () => {
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     const error = expectRespondError(respond, {});
-    expect(error.message).toEqual(expect.stringContaining("malformed session key"));
+    expectStringFieldContains(error, "message", "malformed session key");
   });
 
   it("rejects /reset for write-scoped gateway callers", async () => {
@@ -2992,7 +3278,7 @@ describe("gateway agent handler", () => {
     );
 
     const error = expectRespondError(respond, {});
-    expect(error.message).toEqual(expect.stringContaining("malformed session key"));
+    expectStringFieldContains(error, "message", "malformed session key");
   });
 
   it("redacts unsafe avatar sources in agent.identity.get", async () => {
@@ -3201,7 +3487,7 @@ describe("gateway agent handler chat.abort integration", () => {
 
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-    await new Promise<void>((resolve) => setTimeout(resolve, 15));
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalledTimes(1));
     await pending;
 
     expect(mocks.agentCommand).toHaveBeenCalledTimes(1);

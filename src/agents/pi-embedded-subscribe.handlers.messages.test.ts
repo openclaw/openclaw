@@ -125,7 +125,7 @@ function createMessageEndContext(
     noteLastAssistant: vi.fn(),
     recordAssistantUsage: vi.fn(),
     commitAssistantUsage: vi.fn(),
-    log: { debug: vi.fn(), warn: params.warn ?? vi.fn() },
+    log: { debug: vi.fn(), info: vi.fn(), warn: params.warn ?? vi.fn() },
     builtinToolNames: params.builtinToolNames,
     stripBlockTags: (text: string) => text,
     finalizeAssistantTexts: params.finalizeAssistantTexts ?? vi.fn(),
@@ -135,6 +135,18 @@ function createMessageEndContext(
     flushBlockReplyBuffer: vi.fn(),
     blockChunker: null,
   } as unknown as EmbeddedPiSubscribeContext;
+}
+
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  return firstMockCall(mock, label)[0];
 }
 
 describe("resolveSilentReplyFallbackText", () => {
@@ -584,7 +596,7 @@ describe("handleMessageUpdate commentary phase", () => {
     );
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    const event = onAgentEvent.mock.calls[0]?.[0] as
+    const event = firstMockArg(onAgentEvent, "agent event") as
       | { stream?: string; data?: { text?: string; delta?: string } }
       | undefined;
     expect(event?.stream).toBe("assistant");
@@ -629,7 +641,7 @@ describe("handleMessageEnd", () => {
       },
     } as never);
 
-    const warnCall = warn.mock.calls[0];
+    const warnCall = firstMockCall(warn, "warning log");
     expect(warnCall?.[0]).toBe(
       "Assistant reply looks like a tool call, but no structured tool invocation was emitted; treating it as text.",
     );
@@ -839,7 +851,7 @@ describe("handleMessageEnd", () => {
     } as never);
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    const event = onAgentEvent.mock.calls[0]?.[0] as
+    const event = firstMockArg(onAgentEvent, "agent event") as
       | { stream?: string; data?: { text?: string; delta?: string; replace?: boolean } }
       | undefined;
     expect(event?.stream).toBe("assistant");

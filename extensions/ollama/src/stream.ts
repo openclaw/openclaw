@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type {
   AssistantMessage,
   StopReason,
@@ -8,8 +8,8 @@ import type {
   ToolCall,
   Tool,
   Usage,
-} from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, streamSimple } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawConfig,
@@ -278,6 +278,15 @@ function resolveOllamaThinkParamValue(
   return undefined;
 }
 
+function shouldForwardNativeOllamaThink(
+  model: ProviderRuntimeModel | undefined,
+  think: OllamaThinkValue,
+): boolean {
+  // Ollama accepts top-level `think` as the native chat contract, but rejects
+  // truthy values for models known not to expose thinking support.
+  return think === false || model?.reasoning !== false;
+}
+
 function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): number | undefined {
   const raw = model.params?.num_ctx;
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
@@ -341,7 +350,7 @@ function resolveOllamaTopLevelParams(
     }
   }
   const think = resolveOllamaThinkParamValue(params);
-  if (think !== undefined) {
+  if (think !== undefined && shouldForwardNativeOllamaThink(model, think)) {
     requestParams.think = think;
   }
   return Object.keys(requestParams).length > 0 ? requestParams : undefined;
@@ -390,7 +399,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
     runtimeThinkValue === false && configuredThinkValue !== undefined
       ? undefined
       : runtimeThinkValue;
-  if (ollamaThinkValue !== undefined) {
+  if (ollamaThinkValue !== undefined && shouldForwardNativeOllamaThink(model, ollamaThinkValue)) {
     streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
   }
 

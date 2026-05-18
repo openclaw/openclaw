@@ -239,7 +239,9 @@ describe("BaseInteraction", () => {
     );
 
     const result = await wait;
-    expect(result.success).toBe(true);
+    if (!result.success) {
+      throw new Error("expected component wait to succeed");
+    }
     expect(result.customId).toBe("button1");
     expect(result.message).toBeInstanceOf(Message);
     expect(result.message?.id).toBe("message1");

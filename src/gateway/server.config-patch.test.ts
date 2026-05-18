@@ -167,6 +167,39 @@ describe("gateway config methods", () => {
     requireConfigObject(res.payload?.config, "updated config");
   });
 
+  it("returns the persisted config from config.set responses", async () => {
+    const current = await rpcReq<{
+      hash?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+    expect(typeof current.payload?.hash).toBe("string");
+    const nextConfig = structuredClone(
+      requireConfigObject(current.payload?.config, "current config"),
+    );
+    delete nextConfig.meta;
+
+    const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
+    gateway.port = 19001;
+
+    const res = await rpcReq<{
+      ok?: boolean;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.set", {
+      raw: JSON.stringify(nextConfig, null, 2),
+      baseHash: current.payload?.hash,
+    });
+    expect(res.error).toBeUndefined();
+    expect(res.ok).toBe(true);
+
+    const after = await rpcReq<{
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(after.ok).toBe(true);
+    expect(res.payload?.config).toEqual(after.payload?.config);
+    requireConfigObject(res.payload?.config, "response config");
+  });
+
   it("redacts browser cdpUrl credentials from config.get responses", async () => {
     const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
     const configPath = createConfigIO().configPath;
@@ -288,11 +321,9 @@ describe("gateway config methods", () => {
     expect(res.payload?.path).toBe("gateway.auth");
     expect(res.payload?.hintPath).toBe("gateway.auth");
     const tokenChild = res.payload?.children?.find((child) => child.key === "token");
-    expect(tokenChild).toMatchObject({
-      key: "token",
-      path: "gateway.auth.token",
-      hintPath: "gateway.auth.token",
-    });
+    expect(tokenChild?.key).toBe("token");
+    expect(tokenChild?.path).toBe("gateway.auth.token");
+    expect(tokenChild?.hintPath).toBe("gateway.auth.token");
     expect(res.payload?.schema?.properties).toBeUndefined();
   });
 

@@ -56,21 +56,6 @@ function createModelsProviderData(entries: Record<string, string[]>): ModelsProv
   return createBaseModelsProviderData(entries, { defaultProviderOrder: "sorted" });
 }
 
-async function waitForCondition(
-  predicate: () => boolean,
-  opts?: { attempts?: number; delayMs?: number },
-): Promise<void> {
-  const attempts = opts?.attempts ?? 50;
-  const delayMs = opts?.delayMs ?? 0;
-  for (let index = 0; index < attempts; index += 1) {
-    if (predicate()) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-  throw new Error("condition not met");
-}
-
 function createModelPickerContext(): ModelPickerContext {
   const cfg = {
     session: {
@@ -187,6 +172,16 @@ function createDispatchSpy() {
   return vi.fn<DispatchDiscordCommandInteraction>().mockResolvedValue({ accepted: true });
 }
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockArg(mock: MockWithCalls, label: string) {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
 function createModelPickerFallbackButton(
   context: ModelPickerContext,
   dispatchCommandInteraction: DispatchDiscordCommandInteraction = createDispatchSpy(),
@@ -245,7 +240,9 @@ function expectDispatchedModelSelection(params: {
   model: string;
   runtime?: string;
 }) {
-  const dispatchCall = params.dispatchSpy.mock.calls[0]?.[0];
+  const dispatchCall = firstMockArg(params.dispatchSpy, "dispatchCommandInteraction") as
+    | Parameters<DispatchDiscordCommandInteraction>[0]
+    | undefined;
   expect(dispatchCall?.prompt).toBe(
     params.runtime
       ? `/model ${params.model} --runtime ${params.runtime}`
@@ -411,6 +408,142 @@ describe("Discord model picker interactions", () => {
     });
   });
 
+  it("persists the selected runtime outside the hidden /model pipeline", async () => {
+    const context = createModelPickerContext();
+    const pickerData = createDefaultModelPickerData();
+    pickerData.runtimeChoicesByProvider = new Map([
+      [
+        "openai",
+        [
+          { id: "codex", label: "Codex", description: "Use Codex." },
+          { id: "pi", label: "OpenClaw Pi Default", description: "Use Pi." },
+        ],
+      ],
+    ]);
+    const modelCommand = createModelCommandDefinition();
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+
+    const dispatchSpy = createDispatchSpy();
+    const submitInteraction = await runSubmitButton({
+      context,
+      data: { ...createModelsViewSubmitData(), r: "codex" },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+
+    expect(submitInteraction.editReply).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectDispatchedModelSelection({
+      dispatchSpy,
+      model: "openai/gpt-4o",
+    });
+    const store = loadSessionStore(
+      resolveStorePath(context.cfg.session?.store, { agentId: "main" }),
+      {
+        skipCache: true,
+      },
+    );
+    const entry = Object.values(store).find(
+      (candidate) =>
+        candidate.providerOverride === "openai" && candidate.modelOverride === "gpt-4o",
+    );
+    expect(typeof entry?.sessionId).toBe("string");
+    expect(entry?.sessionId).not.toBe("");
+    expect(entry?.agentRuntimeOverride).toBe("codex");
+  });
+
+  it("does not carry the current runtime to another provider", async () => {
+    const context = createModelPickerContext();
+    (context.cfg as { agents?: { defaults?: { agentRuntime?: { id: string } } } }).agents = {
+      defaults: { agentRuntime: { id: "codex" } },
+    };
+    const pickerData = createDefaultModelPickerData();
+    pickerData.runtimeChoicesByProvider = new Map([
+      [
+        "openai",
+        [
+          { id: "codex", label: "Codex", description: "Use Codex." },
+          { id: "pi", label: "OpenClaw Pi Default", description: "Use Pi." },
+        ],
+      ],
+    ]);
+    const modelCommand = createModelCommandDefinition();
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+
+    const dispatchSpy = createDispatchSpy();
+    await runSubmitButton({
+      context,
+      data: { ...createModelsViewSubmitData(), p: "anthropic", mi: "1" },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectDispatchedModelSelection({
+      dispatchSpy,
+      model: "anthropic/claude-sonnet-4-5",
+    });
+    const store = loadSessionStore(
+      resolveStorePath(context.cfg.session?.store, { agentId: "main" }),
+      {
+        skipCache: true,
+      },
+    );
+    const entry = Object.values(store).find(
+      (candidate) =>
+        candidate.providerOverride === "anthropic" &&
+        candidate.modelOverride === "claude-sonnet-4-5",
+    );
+    expect(entry?.agentRuntimeOverride).toBeUndefined();
+  });
+
+  it("does not treat legacy agentRuntime config as current picker state", async () => {
+    const context = createModelPickerContext();
+    (context.cfg as { agents?: { defaults?: { agentRuntime?: { id: string } } } }).agents = {
+      defaults: { agentRuntime: { id: "claude-cli" } },
+    };
+    const pickerData = createDefaultModelPickerData();
+    pickerData.runtimeChoicesByProvider = new Map([
+      [
+        "anthropic",
+        [
+          { id: "pi", label: "OpenClaw Pi Default", description: "Use Pi." },
+          { id: "claude-cli", label: "Claude CLI", description: "Use Claude CLI." },
+        ],
+      ],
+    ]);
+    const modelCommand = createModelCommandDefinition();
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+
+    const dispatchSpy = createDispatchSpy();
+    await runSubmitButton({
+      context,
+      data: { ...createModelsViewSubmitData(), p: "anthropic", mi: "1" },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+
+    expectDispatchedModelSelection({
+      dispatchSpy,
+      model: "anthropic/claude-sonnet-4-5",
+    });
+    const store = loadSessionStore(
+      resolveStorePath(context.cfg.session?.store, { agentId: "main" }),
+      {
+        skipCache: true,
+      },
+    );
+    const entry = Object.values(store).find(
+      (candidate) =>
+        candidate.providerOverride === "anthropic" &&
+        candidate.modelOverride === "claude-sonnet-4-5",
+    );
+    expect(entry?.agentRuntimeOverride).toBeUndefined();
+  });
+
   it("applies the selected model even when component thread parent.name throws on a partial channel", async () => {
     const context = createModelPickerContext();
     const pickerData = createDefaultModelPickerData();
@@ -449,49 +582,6 @@ describe("Discord model picker interactions", () => {
     expectDispatchedModelSelection({
       dispatchSpy,
       model: "openai/gpt-4o",
-    });
-  });
-
-  it("routes selected runtime through the /model pipeline", async () => {
-    const context = createModelPickerContext();
-    const pickerData = createDefaultModelPickerData();
-    pickerData.runtimeChoicesByProvider = new Map([
-      [
-        "openai",
-        [
-          {
-            id: "pi",
-            label: "OpenClaw Pi Default",
-            description: "Use the built-in OpenClaw Pi runtime.",
-          },
-          {
-            id: "codex",
-            label: "codex",
-            description: "Run openai models through the codex harness.",
-          },
-        ],
-      ],
-    ]);
-    const modelCommand = createModelCommandDefinition();
-
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    mockModelCommandPipeline(modelCommand);
-
-    const dispatchSpy = createDispatchSpy();
-    await runSubmitButton({
-      context,
-      data: {
-        ...createModelsViewSubmitData(),
-        r: "codex",
-      },
-      dispatchCommandInteraction: dispatchSpy,
-    });
-
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    expectDispatchedModelSelection({
-      dispatchSpy,
-      model: "openai/gpt-4o",
-      runtime: "codex",
     });
   });
 
@@ -541,9 +631,9 @@ describe("Discord model picker interactions", () => {
     await button.run(submitInteraction as unknown as PickerButtonInteraction, submitData);
 
     expect(withTimeoutSpy).toHaveBeenCalledTimes(1);
-    await waitForCondition(() => dispatchSpy.mock.calls.length === 1);
+    await vi.waitFor(() => expect(dispatchSpy).toHaveBeenCalledTimes(1));
     expect(submitInteraction.followUp).toHaveBeenCalledTimes(1);
-    const followUpPayload = submitInteraction.followUp.mock.calls[0]?.[0] as {
+    const followUpPayload = firstMockArg(submitInteraction.followUp, "interaction.followUp") as {
       components?: Array<{ components?: Array<{ content?: string }> }>;
     };
     const followUpText = JSON.stringify(followUpPayload);
@@ -579,10 +669,7 @@ describe("Discord model picker interactions", () => {
     await button.run(interaction as unknown as PickerButtonInteraction, data);
 
     expect(interaction.editReply).toHaveBeenCalledTimes(1);
-    const updatePayload = interaction.editReply.mock.calls[0]?.[0];
-    if (!updatePayload) {
-      throw new Error("recents button did not emit an update payload");
-    }
+    const updatePayload = firstMockArg(interaction.editReply, "interaction.editReply");
     const updateText = JSON.stringify(updatePayload);
     expect(updateText).toContain("gpt-4o");
     expect(updateText).toContain("claude-sonnet-4-5");
@@ -713,9 +800,9 @@ describe("Discord model picker interactions", () => {
       dispatchSpy,
       model: "lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs",
     });
-    expect(JSON.stringify(submitInteraction.followUp.mock.calls[0]?.[0])).toContain(
-      "✅ Model set to lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs.",
-    );
+    expect(
+      JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
+    ).toContain("✅ Model set to lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs.");
   });
 
   it("does not write a fallback override when hidden /model dispatch is rejected", async () => {
@@ -757,9 +844,9 @@ describe("Discord model picker interactions", () => {
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(store["agent:worker:subagent:bound"]?.providerOverride).toBeUndefined();
     expect(store["agent:worker:subagent:bound"]?.modelOverride).toBeUndefined();
-    expect(JSON.stringify(submitInteraction.followUp.mock.calls[0]?.[0])).toContain(
-      "❌ Failed to apply openai/gpt-4o.",
-    );
+    expect(
+      JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
+    ).toContain("❌ Failed to apply openai/gpt-4o.");
   });
 
   it("loads model picker data from the effective bound route", async () => {
@@ -835,7 +922,7 @@ describe("Discord model picker interactions", () => {
     });
 
     expect(loadSpy).toHaveBeenCalledWith(cfg, "main");
-    const payload = JSON.stringify(interaction.reply.mock.calls[0]?.[0]);
+    const payload = JSON.stringify(firstMockArg(interaction.reply, "interaction.reply"));
     expect(payload).toContain("openai-codex");
     expect(payload).toContain("gpt-5.5-codex");
     expect(payload).not.toContain("Provider not found");

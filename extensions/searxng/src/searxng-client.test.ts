@@ -133,9 +133,18 @@ describe("searxng client", () => {
     });
 
     expect(endpointMockState.calls).toHaveLength(1);
-    expect(result).toMatchObject({
+    const { tookMs, ...stableResult } = result;
+    expect(typeof tookMs).toBe("number");
+    expect(stableResult).toEqual({
+      query: "openclaw",
       provider: "searxng",
       count: 0,
+      externalContent: {
+        provider: "searxng",
+        source: "web_search",
+        untrusted: true,
+        wrapped: true,
+      },
       results: [],
     });
   });

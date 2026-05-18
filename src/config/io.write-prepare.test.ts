@@ -177,10 +177,45 @@ describe("config io write prepare", () => {
             primary: "google/gemini-3-pro-preview",
             fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
           },
+          heartbeat: { model: "google/gemini-3-pro-preview" },
+          subagents: {
+            model: {
+              primary: "google/gemini-3-pro-preview",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+          },
+          compaction: {
+            model: "google/gemini-3-pro-preview",
+            memoryFlush: { model: "google/gemini-3-pro-preview" },
+          },
           models: {
             "google/gemini-3-pro-preview": {
               alias: "Gemini",
             },
+          },
+        },
+        list: [
+          {
+            id: "ops",
+            model: {
+              primary: "google/gemini-3-pro-preview",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+            heartbeat: { model: "google/gemini-3-pro-preview" },
+            subagents: { model: "google/gemini-3-pro-preview" },
+            models: {
+              "google/gemini-3-pro-preview": {
+                alias: "Ops Gemini",
+              },
+            },
+          },
+        ],
+      },
+      tools: {
+        subagents: {
+          model: {
+            primary: "google/gemini-3-pro-preview",
+            fallbacks: ["google/gemini-3-pro-preview"],
           },
         },
       },
@@ -193,10 +228,45 @@ describe("config io write prepare", () => {
             primary: "google/gemini-3.1-pro-preview",
             fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
           },
+          heartbeat: { model: "google/gemini-3.1-pro-preview" },
+          subagents: {
+            model: {
+              primary: "google/gemini-3.1-pro-preview",
+              fallbacks: ["google/gemini-3.1-pro-preview"],
+            },
+          },
+          compaction: {
+            model: "google/gemini-3.1-pro-preview",
+            memoryFlush: { model: "google/gemini-3.1-pro-preview" },
+          },
           models: {
             "google/gemini-3.1-pro-preview": {
               alias: "Gemini",
             },
+          },
+        },
+        list: [
+          {
+            id: "ops",
+            model: {
+              primary: "google/gemini-3.1-pro-preview",
+              fallbacks: ["google/gemini-3.1-pro-preview"],
+            },
+            heartbeat: { model: "google/gemini-3.1-pro-preview" },
+            subagents: { model: "google/gemini-3.1-pro-preview" },
+            models: {
+              "google/gemini-3.1-pro-preview": {
+                alias: "Ops Gemini",
+              },
+            },
+          },
+        ],
+      },
+      tools: {
+        subagents: {
+          model: {
+            primary: "google/gemini-3.1-pro-preview",
+            fallbacks: ["google/gemini-3.1-pro-preview"],
           },
         },
       },
@@ -215,11 +285,93 @@ describe("config io write prepare", () => {
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
     });
+    expect(persisted.agents?.defaults?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.defaults?.subagents?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(persisted.agents?.defaults?.compaction?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.defaults?.compaction?.memoryFlush?.model).toBe(
+      "google/gemini-3.1-pro-preview",
+    );
     expect(persisted.agents?.defaults?.models).toEqual({
       "google/gemini-3.1-pro-preview": {
         alias: "Gemini",
       },
     });
+    expect(persisted.agents?.list?.[0]?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(persisted.agents?.list?.[0]?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.list?.[0]?.subagents?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.list?.[0]?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {
+        alias: "Ops Gemini",
+      },
+    });
+    expect(persisted.tools?.subagents?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(persisted.gateway?.port).toBe(18888);
+  });
+
+  it("normalizes retired Google provider catalog refs during unrelated config writes", () => {
+    const makeModel = (id: string, name: string) => ({
+      id,
+      name,
+      reasoning: true,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+    });
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            models: [makeModel("google/gemini-3-pro-preview", "Gemini 3 Pro")],
+          },
+          kilocode: {
+            baseUrl: "https://kilocode.test/v1",
+            models: [makeModel("google/gemini-3-pro-preview", "Gemini via Kilo")],
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            models: [makeModel("google/gemini-3.1-pro-preview", "Gemini 3 Pro")],
+          },
+          kilocode: {
+            baseUrl: "https://kilocode.test/v1",
+            models: [makeModel("google/gemini-3.1-pro-preview", "Gemini via Kilo")],
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: {
+        ...runtimeConfig,
+        gateway: { port: 18888 },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.models?.providers?.google?.models).toEqual([
+      makeModel("google/gemini-3.1-pro-preview", "Gemini 3 Pro"),
+    ]);
+    expect(persisted.models?.providers?.kilocode?.models).toEqual([
+      makeModel("google/gemini-3.1-pro-preview", "Gemini via Kilo"),
+    ]);
     expect(persisted.gateway?.port).toBe(18888);
   });
 
@@ -574,9 +726,7 @@ describe("config io write prepare", () => {
       auth: { mode: "token" },
     });
     const channels = persisted.channels as Record<string, Record<string, unknown>> | undefined;
-    expect(channels?.imessage).toMatchObject({
-      cliPath: "/usr/local/bin/imsg",
-    });
+    expect(channels?.imessage?.cliPath).toBe("/usr/local/bin/imsg");
     expect(channels?.imessage).not.toHaveProperty("runtimeOnlyDefault");
   });
 

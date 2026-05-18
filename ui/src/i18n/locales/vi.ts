@@ -348,6 +348,12 @@ export const vi: TranslationMap = {
     eventLogSubtitle: "Các sự kiện gateway mới nhất.",
     noEvents: "Chưa có sự kiện nào.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "hết hạn sau {time}",
     expired: "đã hết hạn",
@@ -691,9 +697,6 @@ export const vi: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Xem token đi đâu, khi nào phiên tăng đột biến và điều gì thúc đẩy chi phí.",
-    },
     common: {
       emptyValue: "—",
       unknown: "không rõ",
@@ -1033,6 +1036,10 @@ export const vi: TranslationMap = {
     settings: "Cài đặt trò chuyện",
     thinkingToggle: "Bật/tắt đầu ra suy nghĩ/đang xử lý của trợ lý",
     toolCallsToggle: "Bật/tắt lượt gọi công cụ và kết quả công cụ",
+    autoScrollMode: "Chế độ tự động cuộn",
+    autoScrollAlways: "Luôn luôn",
+    autoScrollNearBottom: "Gần cuối",
+    autoScrollOff: "Tắt",
     focusToggle: "Bật/tắt chế độ tập trung (ẩn thanh bên + tiêu đề trang)",
     hideCronSessions: "Ẩn phiên cron",
     showCronSessions: "Hiển thị phiên cron",
@@ -1048,6 +1055,42 @@ export const vi: TranslationMap = {
     updateNow: "Cập nhật ngay",
     dismissUpdateBanner: "Bỏ qua banner cập nhật",
     switchedSession: "Đã chuyển sang {session}",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "Xuất",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "Lọc phiên theo tác nhân",
+      session: "Chat session",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "English (Tiếng Anh)",
@@ -1157,6 +1200,9 @@ export const vi: TranslationMap = {
       ascending: "Tăng dần",
       descending: "Giảm dần",
       reset: "Đặt lại",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Không có tác vụ khớp.",
       loading: "Đang tải...",
       loadMore: "Tải thêm tác vụ",
@@ -1192,6 +1238,7 @@ export const vi: TranslationMap = {
     form: {
       editJob: "Chỉnh sửa tác vụ",
       newJob: "Tác vụ mới",
+      advancedJob: "Advanced job",
       updateSubtitle: "Cập nhật tác vụ đã lên lịch được chọn.",
       createSubtitle: "Tạo một lần đánh thức hoặc chạy agent theo lịch.",
       required: "Bắt buộc",

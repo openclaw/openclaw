@@ -109,14 +109,19 @@ describe("config schema", () => {
     expect(gatewayPortSchema?.description).toContain("TCP port used by the gateway listener");
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
-    expect(res.uiHints["channels.defaults.groupPolicy"]?.label).toEqual(
-      expect.stringMatching(/\S/),
-    );
+    const groupPolicyLabel = res.uiHints["channels.defaults.groupPolicy"]?.label;
+    expect(groupPolicyLabel).toBeTypeOf("string");
+    expect(groupPolicyLabel?.trim().length).toBeGreaterThan(0);
     expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
     expect(res.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["models.providers.*.baseUrl"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
-    expect(res.version).toEqual(expect.stringMatching(/\S/));
-    expect(res.generatedAt).toEqual(expect.stringMatching(/\S/));
+    expect(res.uiHints["proxy.tls.caFile"]?.tags).toEqual(
+      expect.arrayContaining(["security", "network", "storage"]),
+    );
+    expect(res.version).toBeTypeOf("string");
+    expect(res.version.trim().length).toBeGreaterThan(0);
+    expect(res.generatedAt).toBeTypeOf("string");
+    expect(res.generatedAt.trim().length).toBeGreaterThan(0);
   });
 
   it("includes MCP SSE header schema under mcp.servers entries", () => {
@@ -137,6 +142,49 @@ describe("config schema", () => {
       | undefined;
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("headers");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("transport");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("codex");
+  });
+
+  it("rejects empty Codex MCP agent scopes", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            scoped: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              codex: { agents: [] },
+            },
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            scoped: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              codex: { agents: ["  "] },
+            },
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            scoped: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              codex: { agents: ["!!!"] },
+            },
+          },
+        },
+      }),
+    ).toThrow();
   });
 
   it("merges plugin ui hints", () => {
@@ -293,6 +341,13 @@ describe("config schema", () => {
     expect(tags).toContain("auth");
   });
 
+  it("classifies managed proxy CA files as security-relevant config", () => {
+    const tags = deriveTagsForPath("proxy.tls.caFile");
+    expect(tags).toContain("security");
+    expect(tags).toContain("network");
+    expect(tags).toContain("storage");
+  });
+
   it("derives tools/performance tags for web fetch timeout paths", () => {
     const tags = deriveTagsForPath("tools.web.fetch.timeoutSeconds");
     expect(tags).toContain("tools");
@@ -325,6 +380,31 @@ describe("config schema", () => {
       maxAgeMs: 60_000,
       timeoutSeconds: 15,
     });
+  });
+
+  it("accepts exec command highlighting config in global and agent scopes", () => {
+    const tools = ToolsSchema.parse({
+      exec: {
+        commandHighlighting: false,
+      },
+    });
+    expect(tools?.exec?.commandHighlighting).toBe(false);
+
+    const config = OpenClawSchema.parse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              exec: {
+                commandHighlighting: false,
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(config.agents?.list?.[0]?.tools?.exec?.commandHighlighting).toBe(false);
   });
 
   it("accepts experimental tool flags in the runtime zod schema", () => {
@@ -364,6 +444,49 @@ describe("config schema", () => {
         toolSearch: {
           enabled: true,
           mode: "both",
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts Code Mode config in the runtime zod schema", () => {
+    expect(ToolsSchema.parse({ codeMode: true })?.codeMode).toBe(true);
+    expect(
+      ToolsSchema.parse({
+        codeMode: {
+          enabled: true,
+          runtime: "quickjs-wasi",
+          mode: "only",
+          languages: ["javascript", "typescript"],
+          timeoutMs: 5000,
+          memoryLimitBytes: 67_108_864,
+          maxOutputBytes: 65_536,
+          maxSnapshotBytes: 10_485_760,
+          maxPendingToolCalls: 8,
+          snapshotTtlSeconds: 900,
+          searchDefaultLimit: 4,
+          maxSearchLimit: 12,
+        },
+      })?.codeMode,
+    ).toEqual({
+      enabled: true,
+      runtime: "quickjs-wasi",
+      mode: "only",
+      languages: ["javascript", "typescript"],
+      timeoutMs: 5000,
+      memoryLimitBytes: 67_108_864,
+      maxOutputBytes: 65_536,
+      maxSnapshotBytes: 10_485_760,
+      maxPendingToolCalls: 8,
+      snapshotTtlSeconds: 900,
+      searchDefaultLimit: 4,
+      maxSearchLimit: 12,
+    });
+    expect(
+      ToolsSchema.safeParse({
+        codeMode: {
+          enabled: true,
+          runtime: "node",
         },
       }).success,
     ).toBe(false);
@@ -523,17 +646,52 @@ describe("config schema", () => {
     expect(schema?.properties).toBeUndefined();
   });
 
-  it("returns a shallow lookup schema without nested composition keywords", () => {
+  it("looks up root config schema children without returning the full schema tree", () => {
+    const lookup = lookupConfigSchema(baseSchema, ".");
+    expect(lookup?.path).toBe(".");
+    expect(lookup?.children.map((child) => child.key)).toContain("gateway");
+    expect(lookup?.children.find((child) => child.key === "gateway")?.path).toBe("gateway");
+    const schema = lookup?.schema as { properties?: unknown } | undefined;
+    expect(schema?.properties).toBeUndefined();
+  });
+
+  it("returns a shallow lookup schema with top-level composition for editing", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.list.0.runtime");
     expect(lookup?.path).toBe("agents.list.0.runtime");
     expect(lookup?.hintPath).toBe("agents.list[].runtime");
-    // The shallow lookup schema carries field docs, but should not expose
-    // nested composition keywords (allOf, oneOf, etc.).
     expect(lookup?.schema).not.toHaveProperty("allOf");
     expect(lookup?.schema).not.toHaveProperty("oneOf");
-    expect(lookup?.schema).not.toHaveProperty("anyOf");
+    const schema = lookup?.schema as { anyOf?: Array<{ properties?: Record<string, unknown> }> };
+    expect(schema.anyOf?.some((variant) => variant.properties?.type)).toBe(true);
     expect(lookup?.schema).toHaveProperty("title", "Agent Runtime");
     expect(lookup?.schema).toHaveProperty("description");
+  });
+
+  it("keeps scoped collection item schemas for form editing", () => {
+    const lookup = lookupConfigSchema(baseSchema, "agents.list");
+    expect(lookup?.schema).toHaveProperty("items");
+    const schema = lookup?.schema as
+      | {
+          items?: {
+            properties?: Record<
+              string,
+              { anyOf?: Array<{ properties?: Record<string, unknown> }> }
+            >;
+          };
+        }
+      | undefined;
+    expect(schema?.items?.properties).toHaveProperty("runtime");
+    const runtimeVariants = schema?.items?.properties?.runtime?.anyOf ?? [];
+    expect(runtimeVariants.length).toBeGreaterThan(0);
+    expect(runtimeVariants.some((variant) => variant.properties?.type)).toBe(true);
+  });
+
+  it("keeps scoped map properties for form editing", () => {
+    const lookup = lookupConfigSchema(baseSchema, "env");
+    expect(lookup?.children.map((child) => child.key)).toEqual(["shellEnv", "vars", "*"]);
+    const schema = lookup?.schema as { properties?: Record<string, unknown> } | undefined;
+    expect(schema?.properties).toHaveProperty("shellEnv");
+    expect(schema?.properties).toHaveProperty("vars");
   });
 
   it("matches wildcard ui hints for concrete lookup paths", () => {

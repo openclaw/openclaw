@@ -694,14 +694,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   const resolveCurrentConfig = (): OpenClawConfig =>
     (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
 
-  const resolveCurrentDreamingConfig = (): ShortTermPromotionDreamingConfig => {
-    const cfg = resolveCurrentConfig();
-    return resolveShortTermPromotionDreamingConfig({
-      pluginConfig: resolveMemoryCorePluginConfig(cfg),
-      cfg,
-    });
-  };
-
   const clearStartupCronRetry = (): void => {
     if (startupCronRetryTimer) {
       clearTimeout(startupCronRetryTimer);
@@ -717,6 +709,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       return false;
     }
   };
+
+  const hasCronManagementContext = (): boolean =>
+    Boolean(resolveStartupCron || gatewayContext?.getCron);
 
   const disposeStartupCronRetry = (): void => {
     disposed = true;
@@ -820,8 +815,8 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     return config;
   };
 
-  const scheduleStartupCronRetry = (config: ShortTermPromotionDreamingConfig): void => {
-    if (disposed || !config.enabled || hasStartupCron()) {
+  const scheduleStartupCronRetry = (): void => {
+    if (disposed || hasStartupCron()) {
       clearStartupCronRetry();
       return;
     }
@@ -835,12 +830,12 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       }
       startupCronRetryAttempts += 1;
       void reconcileManagedDreamingCron({ reason: "runtime" })
-        .then((latestConfig) => {
-          if (disposed || !latestConfig.enabled || hasStartupCron()) {
+        .then(() => {
+          if (disposed || hasStartupCron()) {
             clearStartupCronRetry();
             return;
           }
-          scheduleStartupCronRetry(latestConfig);
+          scheduleStartupCronRetry();
         })
         .catch((err) => {
           if (disposed) {
@@ -849,13 +844,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           api.logger.error(
             `memory-core: deferred dreaming cron retry failed: ${formatErrorMessage(err)}`,
           );
-          try {
-            scheduleStartupCronRetry(resolveCurrentDreamingConfig());
-          } catch (configErr) {
-            api.logger.error(
-              `memory-core: deferred dreaming cron retry config refresh failed: ${formatErrorMessage(configErr)}`,
-            );
-          }
+          scheduleStartupCronRetry();
         });
     }, STARTUP_CRON_RETRY_DELAY_MS);
   };
@@ -865,12 +854,12 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     // Store the gateway context for runtime cron resolution retries.
     gatewayContext = ctx as unknown as { getCron?: () => CronServiceLike | null };
     try {
-      const config = await reconcileManagedDreamingCron({
+      await reconcileManagedDreamingCron({
         reason: "startup",
         startupConfig: ctx.config,
         startupCron: () => resolveCronServiceFromGatewayContext(ctx),
       });
-      scheduleStartupCronRetry(config);
+      scheduleStartupCronRetry();
     } catch (err) {
       api.logger.error(
         `memory-core: dreaming startup reconciliation failed: ${formatErrorMessage(err)}`,
@@ -888,9 +877,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         return undefined;
       }
       const currentConfig = resolveCurrentConfig();
-      const config = await reconcileManagedDreamingCron({
-        reason: "runtime",
-      });
       const hasManagedDreamingToken = includesSystemEventToken(
         event.cleanedBody,
         DREAMING_SYSTEM_EVENT_TEXT,
@@ -898,7 +884,15 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       const isManagedHeartbeatTrigger =
         ctx.trigger === "heartbeat" && hasPendingManagedDreamingCronEvent(ctx.sessionKey);
       const isManagedCronTrigger = ctx.trigger === "cron";
-      if (!hasManagedDreamingToken || (!isManagedHeartbeatTrigger && !isManagedCronTrigger)) {
+      const shouldHandleManagedDreaming =
+        hasManagedDreamingToken && (isManagedHeartbeatTrigger || isManagedCronTrigger);
+      if (!shouldHandleManagedDreaming && !hasCronManagementContext()) {
+        return undefined;
+      }
+      const config = await reconcileManagedDreamingCron({
+        reason: "runtime",
+      });
+      if (!shouldHandleManagedDreaming) {
         return undefined;
       }
       return await runShortTermDreamingPromotionIfTriggered({

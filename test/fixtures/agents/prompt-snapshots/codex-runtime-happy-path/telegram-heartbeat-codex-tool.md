@@ -76,6 +76,8 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.code_mode": true,
+    "features.code_mode_only": true,
     "instructions": "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\nSOUL.md: persona/tone. Follow it unless higher-priority instructions override.\n\n## /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/TOOLS.md\n\n<TOOLS.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/HEARTBEAT.md\n\n<HEARTBEAT.md contents will be here>"
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
@@ -113,6 +115,8 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.code_mode": true,
+    "features.code_mode_only": true,
     "instructions": "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\nSOUL.md: persona/tone. Follow it unless higher-priority instructions override.\n\n## /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/TOOLS.md\n\n<TOOLS.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/HEARTBEAT.md\n\n<HEARTBEAT.md contents will be here>"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
@@ -214,8 +218,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 140
   },
   "dynamicToolsJson": {
-    "chars": 43869,
-    "roughTokens": 10968
+    "chars": 41311,
+    "roughTokens": 10328
   },
   "openClawDeveloperInstructions": {
     "chars": 4412,
@@ -226,8 +230,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 7155
   },
   "totalWithDynamicToolsJson": {
-    "chars": 72490,
-    "roughTokens": 18123
+    "chars": 69932,
+    "roughTokens": 17483
   },
   "userInputText": {
     "chars": 608,
@@ -581,7 +585,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
 ```json
 [
   {
-    "description": "Send, delete, and manage messages via channel plugins. Supports actions: send.",
+    "description": "Send/delete/manage channel messages. Supports actions: send.",
     "inputSchema": {
       "properties": {
         "accountId": {
@@ -592,17 +596,54 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "asDocument": {
-          "description": "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
+          "description": "Alias for forceDocument.",
           "type": "boolean"
         },
         "asVoice": {
           "type": "boolean"
         },
+        "attachments": {
+          "description": "Structured attachments; each needs media/mediaUrl/path/filePath/fileUrl/url.",
+          "items": {
+            "properties": {
+              "filePath": {
+                "type": "string"
+              },
+              "fileUrl": {
+                "type": "string"
+              },
+              "media": {
+                "type": "string"
+              },
+              "mediaUrl": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "type": {
+                "enum": ["image", "audio", "video", "file"],
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
         "bestEffort": {
           "type": "boolean"
         },
         "buffer": {
-          "description": "Base64 payload for attachments (optionally a data: URL).",
+          "description": "Base64 attachment payload; data URL ok.",
           "type": "string"
         },
         "caption": {
@@ -618,11 +659,11 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "boolean"
         },
         "effect": {
-          "description": "Alias for effectId (e.g., invisible-ink, balloons).",
+          "description": "Alias for effectId.",
           "type": "string"
         },
         "effectId": {
-          "description": "Message effect name/id for sendWithEffect (e.g., invisible ink).",
+          "description": "Effect id/name for sendWithEffect.",
           "type": "string"
         },
         "filename": {
@@ -632,7 +673,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "forceDocument": {
-          "description": "Send image/GIF as document to avoid Telegram compression (Telegram only).",
+          "description": "Send image/GIF/video as document; avoids compression.",
           "type": "boolean"
         },
         "gatewayToken": {
@@ -645,7 +686,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "boolean"
         },
         "media": {
-          "description": "Media URL or local path. data: URLs are not supported here, use buffer.",
+          "description": "Media URL/path. data: use buffer.",
           "type": "string"
         },
         "message": {
@@ -658,7 +699,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "quoteText": {
-          "description": "Quote text for Telegram reply_parameters",
+          "description": "Telegram reply quote text.",
           "type": "string"
         },
         "replyTo": {
@@ -692,7 +733,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   },
   {
     "deferLoading": true,
-    "description": "Record the result of a heartbeat run. Use notify=false when nothing should be sent visibly. Use notify=true with notificationText when the user should receive a concise heartbeat alert.",
+    "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {

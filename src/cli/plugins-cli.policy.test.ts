@@ -42,7 +42,11 @@ describe("plugins cli policy mutations", () => {
   }
 
   function requireFirstWrittenConfig(): OpenClawConfig {
-    const [config] = writeConfigFile.mock.calls[0] ?? [];
+    const call = writeConfigFile.mock.calls[0];
+    if (!call) {
+      throw new Error("expected writeConfigFile to be called");
+    }
+    const [config] = call;
     if (!config) {
       throw new Error("expected writeConfigFile to receive a config");
     }
@@ -122,7 +126,7 @@ describe("plugins cli policy mutations", () => {
 
     const nextConfig = requireFirstWrittenConfig();
     const entries = requirePluginEntries(nextConfig);
-    expect(entries.alpha).toMatchObject({ enabled: false });
+    expect(entries.alpha).toEqual({ enabled: false });
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: nextConfig,
       installRecords: {},
@@ -174,7 +178,7 @@ describe("plugins cli policy mutations", () => {
 
       const nextConfig = requireFirstWrittenConfig();
       const entries = requirePluginEntries(nextConfig);
-      expect(entries[pluginId]).toMatchObject({ enabled: false });
+      expect(entries[pluginId]).toEqual({ enabled: false });
       expect(entries[alias]).toBeUndefined();
     },
   );
@@ -205,7 +209,7 @@ describe("plugins cli policy mutations", () => {
 
     const nextConfig = requireFirstWrittenConfig();
     const entries = requirePluginEntries(nextConfig);
-    expect(entries.twitch).toMatchObject({ enabled: false });
+    expect(entries.twitch).toEqual({ enabled: false });
     expect(nextConfig.channels?.twitch).toBeUndefined();
   });
 });

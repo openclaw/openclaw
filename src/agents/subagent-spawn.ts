@@ -15,6 +15,12 @@ import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
 import {
+  inheritedToolAllowPatch,
+  inheritedToolDenyPatch,
+  normalizeInheritedToolAllowlist,
+  normalizeInheritedToolDenylist,
+} from "./inherited-tool-deny.js";
+import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
@@ -29,6 +35,7 @@ import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
+import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 export {
@@ -60,7 +67,6 @@ import {
   resolveParentForkDecision,
   resolveAgentConfig,
   resolveContextEngine,
-  resolveDisplaySessionKey,
   resolveGatewaySessionStoreTarget,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -121,6 +127,7 @@ export type SpawnSubagentParams = {
   model?: string;
   taskName?: string;
   thinking?: string;
+  cwd?: string;
   runTimeoutSeconds?: number;
   thread?: boolean;
   mode?: SpawnSubagentMode;
@@ -140,6 +147,8 @@ export type SpawnSubagentParams = {
 
 export type SpawnSubagentContext = {
   agentSessionKey?: string;
+  /** Separate key used only for completion routing, not sandbox policy. */
+  completionOwnerKey?: string;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
@@ -151,6 +160,8 @@ export type SpawnSubagentContext = {
   requesterAgentIdOverride?: string;
   /** Explicit workspace directory for subagent to inherit (optional). */
   workspaceDir?: string;
+  inheritedToolAllowlist?: string[];
+  inheritedToolDenylist?: string[];
 };
 
 export type SpawnSubagentResult = {
@@ -238,6 +249,14 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   }
   if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
     entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
+  }
+  const inheritedToolDeny = normalizeInheritedToolDenylist(patch.inheritedToolDeny);
+  if (inheritedToolDeny.length > 0) {
+    entry.inheritedToolDeny = inheritedToolDeny;
+  }
+  const inheritedToolAllow = normalizeInheritedToolAllowlist(patch.inheritedToolAllow);
+  if (inheritedToolAllow.length > 0) {
+    entry.inheritedToolAllow = inheritedToolAllow;
   }
   if (typeof patch.thinkingLevel === "string" && patch.thinkingLevel.trim()) {
     entry.thinkingLevel = patch.thinkingLevel.trim();
@@ -752,10 +771,10 @@ export async function spawnSubagentDirect(
         mainKey,
       })
     : alias;
-  const requesterDisplayKey = resolveDisplaySessionKey({
-    key: requesterInternalKey,
-    alias,
-    mainKey,
+  const ownership = resolveSubagentSpawnOwnership({
+    cfg,
+    agentSessionKey: ctx.agentSessionKey,
+    completionOwnerKey: ctx.completionOwnerKey,
   });
 
   const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
@@ -793,6 +812,7 @@ export async function spawnSubagentDirect(
     };
   }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  const explicitWorkspaceDir = normalizeOptionalString(params.cwd);
   const requesterOrigin = normalizeDeliveryContext({
     channel: ctx.agentChannel,
     accountId: ctx.agentAccountId,
@@ -899,6 +919,8 @@ export async function spawnSubagentDirect(
     spawnDepth: childDepth,
     subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
     subagentControlScope: childCapabilities.controlScope,
+    ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
+    ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
     ...plan.initialSessionPatch,
   };
 
@@ -960,7 +982,7 @@ export async function spawnSubagentDirect(
       agentId: targetAgentId,
       label: label || undefined,
       mode: spawnMode,
-      requesterSessionKey: requesterInternalKey,
+      requesterSessionKey: ownership.threadBindingRequesterSessionKey,
       requester: {
         channel: childSessionOrigin?.channel,
         accountId: childSessionOrigin?.accountId,
@@ -1017,9 +1039,24 @@ export async function spawnSubagentDirect(
     | undefined;
   let attachmentAbsDir: string | undefined;
   let attachmentRootDir: string | undefined;
+  const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
+    agentGroupId: ctx.agentGroupId,
+    agentGroupChannel: ctx.agentGroupChannel,
+    agentGroupSpace: ctx.agentGroupSpace,
+    workspaceDir: ctx.workspaceDir,
+  });
+  const inheritedWorkspaceDir =
+    targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir;
+  const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
+    config: cfg,
+    targetAgentId,
+    explicitWorkspaceDir: explicitWorkspaceDir ?? inheritedWorkspaceDir,
+  });
+
   const materializedAttachments = await materializeSubagentAttachments({
     config: cfg,
     targetAgentId,
+    workspaceDir: spawnedWorkspaceDir,
     attachments: params.attachments,
     mountPathHint,
   });
@@ -1049,25 +1086,13 @@ export async function spawnSubagentDirect(
     childDepth,
     maxSpawnDepth,
     persistentSession: spawnMode === "session",
+    task,
   });
 
-  const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
-    agentGroupId: ctx.agentGroupId,
-    agentGroupChannel: ctx.agentGroupChannel,
-    agentGroupSpace: ctx.agentGroupSpace,
-    workspaceDir: ctx.workspaceDir,
-  });
   const spawnedMetadata = normalizeSpawnedRunMetadata({
     spawnedBy: spawnedByKey,
     ...toolSpawnMetadata,
-    workspaceDir: resolveSpawnedWorkspaceInheritance({
-      config: cfg,
-      targetAgentId,
-      // For cross-agent spawns, ignore the caller's inherited workspace;
-      // let targetAgentId resolve the correct workspace instead.
-      explicitWorkspaceDir:
-        targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir,
-    }),
+    workspaceDir: spawnedWorkspaceDir,
   });
   const spawnLineagePatchError = await patchChildSession({
     spawnedBy: spawnedByKey,
@@ -1222,10 +1247,10 @@ export async function spawnSubagentDirect(
     registerSubagentRun({
       runId: childRunId,
       childSessionKey,
-      controllerSessionKey: requesterInternalKey,
-      requesterSessionKey: requesterInternalKey,
+      controllerSessionKey: ownership.controllerSessionKey,
+      requesterSessionKey: ownership.completionRequesterSessionKey,
       requesterOrigin,
-      requesterDisplayKey,
+      requesterDisplayKey: ownership.completionRequesterDisplayKey,
       task,
       taskName,
       cleanup,

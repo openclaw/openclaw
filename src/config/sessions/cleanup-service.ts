@@ -17,6 +17,7 @@ import {
   resolveStorePath,
 } from "./paths.js";
 import { cloneSessionStoreRecord } from "./store-cache.js";
+import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -205,10 +206,21 @@ function pruneMissingTranscriptEntries(params: {
   let removed = 0;
   for (const [key, entry] of Object.entries(params.store)) {
     if (!entry?.sessionId) {
+      if (parseAgentSessionKey(key)) {
+        continue;
+      }
+      delete params.store[key];
+      removed += 1;
+      params.onPruned?.(key);
       continue;
     }
-    const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
-    if (!fs.existsSync(transcriptPath)) {
+    let transcriptPath: string | undefined;
+    try {
+      transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
+    } catch {
+      // Malformed legacy rows cannot resolve a transcript path; --fix-missing prunes them.
+    }
+    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
       delete params.store[key];
       removed += 1;
       params.onPruned?.(key);
@@ -276,14 +288,17 @@ async function previewStoreCleanup(params: {
           },
         })
       : 0;
+  const preserveSessionKeys = collectSessionMaintenancePreserveKeys([params.activeKey]);
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
     log: false,
+    preserveKeys: preserveSessionKeys,
     onPruned: ({ key }) => {
       staleKeys.add(key);
     },
   });
   const capped = capEntryCount(previewStore, params.maintenance.maxEntries, {
     log: false,
+    preserveKeys: preserveSessionKeys,
     onCapped: ({ key }) => {
       cappedKeys.add(key);
     },
@@ -313,6 +328,7 @@ async function previewStoreCleanup(params: {
     store: previewStore,
     storePath: params.target.storePath,
     activeSessionKey: params.activeKey,
+    preserveKeys: preserveSessionKeys,
     maintenance: params.maintenance,
     warnOnly: false,
     dryRun: true,

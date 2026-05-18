@@ -8,6 +8,7 @@ import {
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
+import { replaceConfigFile } from "../../config/mutate.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
@@ -82,7 +83,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
 
-  const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
+  let { snapshot: configSnapshot, writeOptions: configWriteOptions } =
     await readConfigFileSnapshotForWrite();
   const futureBlock = resolveFutureConfigActionBlock({
     action: "install or rewrite the gateway service",
@@ -92,7 +93,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail(`Gateway install blocked: ${futureBlock.message}`, futureBlock.hints);
     return;
   }
-  const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
+  let cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     fail(formatInvalidPortOption("--port"));
@@ -119,6 +120,35 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     } catch (err) {
       fail(`Invalid --wrapper: ${String(err)}`);
       return;
+    }
+  }
+  if (configSnapshot.valid && cfg.gateway?.mode === undefined) {
+    const baseConfig = configSnapshot.sourceConfig ?? configSnapshot.config;
+    await replaceConfigFile({
+      nextConfig: {
+        ...baseConfig,
+        gateway: {
+          ...baseConfig.gateway,
+          mode: "local",
+        },
+      },
+      snapshot: configSnapshot,
+      writeOptions: {
+        baseSnapshot: configSnapshot,
+        ...configWriteOptions,
+        skipRuntimeSnapshotRefresh: true,
+      },
+      afterWrite: { mode: "auto" },
+    });
+    const refreshed = await readConfigFileSnapshotForWrite();
+    configSnapshot = refreshed.snapshot;
+    configWriteOptions = refreshed.writeOptions;
+    cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
+    const message = "No gateway.mode found. Set gateway.mode=local for managed gateway install.";
+    if (json) {
+      warnings.push(message);
+    } else {
+      defaultRuntime.log(message);
     }
   }
 
@@ -160,6 +190,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         runtime: runtimeRaw,
         wrapperPath,
         existingEnvironment: existingServiceEnv,
+        existingEnvironmentValueSources: existingServiceCommand?.environmentValueSources,
         config: cfg,
       });
       if (autoRefreshMessage) {
@@ -207,21 +238,23 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
 
-  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: installEnv,
-    port,
-    runtime: runtimeRaw,
-    wrapperPath,
-    existingEnvironment: existingServiceEnv,
-    warn: (message) => {
-      if (json) {
-        warnings.push(message);
-      } else {
-        defaultRuntime.log(message);
-      }
-    },
-    config: cfg,
-  });
+  const { programArguments, workingDirectory, environment, environmentValueSources } =
+    await buildGatewayInstallPlan({
+      env: installEnv,
+      port,
+      runtime: runtimeRaw,
+      wrapperPath,
+      existingEnvironment: existingServiceEnv,
+      existingEnvironmentValueSources: existingServiceCommand?.environmentValueSources,
+      warn: (message) => {
+        if (json) {
+          warnings.push(message);
+        } else {
+          defaultRuntime.log(message);
+        }
+      },
+      config: cfg,
+    });
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",
@@ -236,6 +269,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         programArguments,
         workingDirectory,
         environment,
+        environmentValueSources,
       });
     },
   });
@@ -249,6 +283,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
   runtime: GatewayDaemonRuntime;
   wrapperPath?: string;
   existingEnvironment?: Record<string, string | undefined>;
+  existingEnvironmentValueSources?: GatewayServiceCommandConfig["environmentValueSources"];
   config: OpenClawConfig;
 }): Promise<string | undefined> {
   try {
@@ -264,6 +299,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         runtime: params.runtime,
         wrapperPath: params.wrapperPath,
         existingEnvironment: params.existingEnvironment,
+        existingEnvironmentValueSources: params.existingEnvironmentValueSources,
         warn: () => undefined,
         config: params.config,
       });
@@ -284,6 +320,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         runtime: params.runtime,
         wrapperPath: params.wrapperPath,
         existingEnvironment: params.existingEnvironment,
+        existingEnvironmentValueSources: params.existingEnvironmentValueSources,
         warn: () => undefined,
         config: params.config,
       });

@@ -28,6 +28,17 @@ const {
   formatProviderAuthProfileApiKeyWithPluginMock,
 } = getOAuthProviderRuntimeMocks();
 
+function expectPersistedOpenAICodexProfile(
+  credential: AuthProfileStore["profiles"][string],
+  metadata: Record<string, unknown> = {},
+): void {
+  expect(credential?.type).toBe("oauth");
+  expect(credential?.provider).toBe("openai-codex");
+  for (const [key, value] of Object.entries(metadata)) {
+    expect((credential as Record<string, unknown> | undefined)?.[key]).toEqual(value);
+  }
+}
+
 function requireOAuthCredential(store: AuthProfileStore, profileId: string): OAuthCredential {
   const profile = store.profiles[profileId];
   if (!profile || profile.type !== "oauth") {
@@ -85,7 +96,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     await removeOAuthTestTempRoot(tempRoot);
   });
 
-  it("mirrors refreshed credentials into the main store so peers skip refresh", async () => {
+  it("mirrors refreshed Codex OAuth credentials into the main store", async () => {
     const profileId = "openai-codex:default";
     const provider = "openai-codex";
     const accountId = "acct-shared";
@@ -116,15 +127,17 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
 
     expect(result?.apiKey).toBe("sub-refreshed-access");
 
-    // Main store should now carry the refreshed credential, so a peer agent
-    // starting fresh will adopt rather than race.
+    // Main store should now carry refreshed metadata, so a peer agent
+    // starting fresh can resolve the runtime credential without token races.
     const mainRaw = JSON.parse(
       await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
-    const mainCredential = requireOAuthCredential(mainRaw, profileId);
-    expect(mainCredential.access).toBe("sub-refreshed-access");
-    expect(mainCredential.refresh).toBe("sub-refreshed-refresh");
-    expect(mainCredential.expires).toBe(freshExpiry);
+    expectPersistedOpenAICodexProfile(mainRaw.profiles[profileId], {
+      access: "sub-refreshed-access",
+      refresh: "sub-refreshed-refresh",
+      expires: freshExpiry,
+      accountId,
+    });
   });
 
   it("does not mirror when refresh was performed from the main agent itself", async () => {
@@ -161,10 +174,11 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     const mainRaw = JSON.parse(
       await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
-    const mainCredential = requireOAuthCredential(mainRaw, profileId);
-    expect(mainCredential.access).toBe("main-refreshed-access");
-    expect(mainCredential.refresh).toBe("main-refreshed-refresh");
-    expect(mainCredential.expires).toBe(freshExpiry);
+    expectPersistedOpenAICodexProfile(mainRaw.profiles[profileId], {
+      access: "main-refreshed-access",
+      refresh: "main-refreshed-refresh",
+      expires: freshExpiry,
+    });
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
@@ -332,17 +346,22 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     const subRaw = JSON.parse(
       await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
-    const subCredential = requireOAuthCredential(subRaw, profileId);
-    expect(subCredential.access).toBe("local-stale-access");
-    expect(subCredential.refresh).toBe("local-stale-refresh");
+    expectPersistedOpenAICodexProfile(subRaw.profiles[profileId], {
+      access: "local-stale-access",
+      refresh: "local-stale-refresh",
+      expires: now - 120_000,
+      accountId,
+    });
 
     const mainRaw = JSON.parse(
       await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
-    const mainCredential = requireOAuthCredential(mainRaw, profileId);
-    expect(mainCredential.access).toBe("main-owner-refreshed-access");
-    expect(mainCredential.refresh).toBe("main-owner-refreshed-refresh");
-    expect(mainCredential.expires).toBe(freshExpiry);
+    expectPersistedOpenAICodexProfile(mainRaw.profiles[profileId], {
+      access: "main-owner-refreshed-access",
+      refresh: "main-owner-refreshed-refresh",
+      expires: freshExpiry,
+      accountId,
+    });
   });
 
   it("inherits main-agent credentials via the catch-block fallback when refresh throws after main becomes fresh", async () => {
@@ -410,7 +429,53 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     const subRaw = JSON.parse(
       await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
-    expect(requireOAuthCredential(subRaw, profileId).access).toBe("cached-access-token");
+    expectPersistedOpenAICodexProfile(subRaw.profiles[profileId], {
+      access: "cached-access-token",
+      refresh: "refresh-token",
+      accountId: "acct-shared",
+    });
+  });
+
+  it("does not satisfy forced refresh from unchanged main-agent credentials after refresh fails", async () => {
+    const profileId = "openai-codex:default";
+    const provider = "openai-codex";
+    const accountId = "acct-shared";
+
+    const subAgentDir = path.join(tempRoot, "agents", "sub-force-catch", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider, accountId }), subAgentDir);
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider,
+            access: "main-existing-access",
+            refresh: "main-existing-refresh",
+            expires: Date.now() + 60 * 60 * 1000,
+            accountId,
+          },
+        },
+      },
+      mainAgentDir,
+    );
+
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async (params) => {
+      const context = params?.context as OAuthCredential;
+      expect(context.access).toBe("main-existing-access");
+      throw new Error("upstream 503 service unavailable");
+    });
+
+    await expect(
+      resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+        store: ensureAuthProfileStore(subAgentDir),
+        profileId,
+        agentDir: subAgentDir,
+        forceRefresh: true,
+      }),
+    ).rejects.toThrow(/OAuth token refresh failed for openai-codex/);
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
   it("mirrors refreshed credentials produced by the plugin-refresh path", async () => {

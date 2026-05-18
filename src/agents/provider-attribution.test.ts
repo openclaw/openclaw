@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -352,6 +354,22 @@ describe("provider attribution", () => {
     expectRecordFields(resolveProviderEndpoint("https://opencode.ai/api"), {
       endpointClass: "opencode-native",
       hostname: "opencode.ai",
+    });
+    expectRecordFields(resolveProviderEndpoint("https://api.xiaomimimo.com/v1"), {
+      endpointClass: "xiaomi-native",
+      hostname: "api.xiaomimimo.com",
+    });
+    expectRecordFields(resolveProviderEndpoint("https://token-plan-ams.xiaomimimo.com/v1"), {
+      endpointClass: "xiaomi-native",
+      hostname: "token-plan-ams.xiaomimimo.com",
+    });
+    expectRecordFields(resolveProviderEndpoint("https://token-plan-cn.xiaomimimo.com/v1"), {
+      endpointClass: "xiaomi-native",
+      hostname: "token-plan-cn.xiaomimimo.com",
+    });
+    expectRecordFields(resolveProviderEndpoint("https://token-plan-sgp.xiaomimimo.com/v1"), {
+      endpointClass: "xiaomi-native",
+      hostname: "token-plan-sgp.xiaomimimo.com",
     });
   });
 

@@ -129,6 +129,34 @@ function resolveMatrixSender(deps: DeliverOutboundArgs["deps"]): MatrixSendFn {
   return sender as MatrixSendFn;
 }
 
+function requireMockCallArg(
+  mockFn: { mock: { calls: unknown[][] } },
+  label: string,
+  index = 0,
+): Record<string, unknown> {
+  const arg = mockFn.mock.calls[index]?.[0] as Record<string, unknown> | undefined;
+  if (!arg) {
+    throw new Error(`expected ${label} call #${index + 1}`);
+  }
+  return arg;
+}
+
+function requireMockCall(
+  mockFn: { mock: { calls: unknown[][] } },
+  label: string,
+  index = 0,
+): unknown[] {
+  const call = mockFn.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected ${label} call #${index + 1}`);
+  }
+  return call;
+}
+
+function requireMatrixSendCall(sendMatrix: ReturnType<typeof vi.fn>, index = 0): unknown[] {
+  return requireMockCall(sendMatrix as { mock: { calls: unknown[][] } }, "matrix send", index);
+}
+
 function withMatrixChannel(result: Awaited<ReturnType<MatrixSendFn>>) {
   return {
     channel: "matrix" as const,
@@ -727,10 +755,9 @@ describe("deliverOutboundPayloads", () => {
     expect(failureParams?.kind).toBe("text");
     expect(failureParams?.attemptToken).toBe("pending-2");
     expect(failureParams?.error).toBeInstanceOf(Error);
-    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
-      "mock-queue-id",
-      expect.stringContaining("native send failed"),
-    );
+    const failDeliveryCall = requireMockCall(queueMocks.failDelivery, "failDelivery");
+    expect(failDeliveryCall[0]).toBe("mock-queue-id");
+    expect(String(failDeliveryCall[1])).toContain("native send failed");
   });
 
   it("preserves native send errors when failure cleanup throws", async () => {
@@ -784,10 +811,9 @@ describe("deliverOutboundPayloads", () => {
     expect(failureParams?.kind).toBe("text");
     expect(failureParams?.attemptToken).toBe("pending-2");
     expect(failureParams?.error).toBeInstanceOf(Error);
-    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
-      "mock-queue-id",
-      expect.stringContaining("native send failed"),
-    );
+    const failDeliveryCall = requireMockCall(queueMocks.failDelivery, "failDelivery");
+    expect(failDeliveryCall[0]).toBe("mock-queue-id");
+    expect(String(failDeliveryCall[1])).toContain("native send failed");
   });
 
   it("preserves successful sends when the success hook throws", async () => {
@@ -957,10 +983,9 @@ describe("deliverOutboundPayloads", () => {
 
     expect(queueMocks.markDeliveryPlatformSendAttemptStarted).toHaveBeenCalledWith("mock-queue-id");
     expect(sendMatrix).not.toHaveBeenCalled();
-    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
-      "mock-queue-id",
-      expect.stringContaining("marker offline"),
-    );
+    const failDeliveryCall = requireMockCall(queueMocks.failDelivery, "failDelivery");
+    expect(failDeliveryCall[0]).toBe("mock-queue-id");
+    expect(String(failDeliveryCall[1])).toContain("marker offline");
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
   });
 
@@ -1098,7 +1123,13 @@ describe("deliverOutboundPayloads", () => {
       },
     });
 
-    const [mediaAccessOptions] = resolveMediaAccessSpy.mock.calls[0] ?? [];
+    const [mediaAccessOptions] = requireMockCall(resolveMediaAccessSpy, "media access") as [
+      {
+        messageProvider?: unknown;
+        requesterSenderId?: unknown;
+        sessionKey?: unknown;
+      },
+    ];
     expect(mediaAccessOptions?.sessionKey).toBe("agent:main:matrix:room:ops");
     expect(mediaAccessOptions?.messageProvider).toBeUndefined();
     expect(mediaAccessOptions?.requesterSenderId).toBe("attacker");
@@ -1127,7 +1158,14 @@ describe("deliverOutboundPayloads", () => {
       },
     });
 
-    const [mediaAccessOptions] = resolveMediaAccessSpy.mock.calls[0] ?? [];
+    const [mediaAccessOptions] = requireMockCall(resolveMediaAccessSpy, "media access") as [
+      {
+        requesterSenderE164?: unknown;
+        requesterSenderId?: unknown;
+        requesterSenderName?: unknown;
+        requesterSenderUsername?: unknown;
+      },
+    ];
     expect(mediaAccessOptions?.requesterSenderId).toBe("id:matrix:123");
     expect(mediaAccessOptions?.requesterSenderName).toBe("Alice");
     expect(mediaAccessOptions?.requesterSenderUsername).toBe("alice_u");
@@ -1156,7 +1194,13 @@ describe("deliverOutboundPayloads", () => {
       },
     });
 
-    const [mediaAccessOptions] = resolveMediaAccessSpy.mock.calls[0] ?? [];
+    const [mediaAccessOptions] = requireMockCall(resolveMediaAccessSpy, "media access") as [
+      {
+        accountId?: unknown;
+        requesterSenderId?: unknown;
+        sessionKey?: unknown;
+      },
+    ];
     expect(mediaAccessOptions?.sessionKey).toBe("agent:main:matrix:room:ops");
     expect(mediaAccessOptions?.accountId).toBe("source-account");
     expect(mediaAccessOptions?.requesterSenderId).toBe("attacker");
@@ -1464,7 +1508,7 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "original" }],
     });
 
-    expect(sendText.mock.calls[0]?.[0]?.text).toBe("visible");
+    expect(requireMockCallArg(sendText, "sendText").text).toBe("visible");
   });
 
   it("strips internal runtime scaffolding before adapter payload normalization copies text", async () => {
@@ -1508,7 +1552,7 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "original" }],
     });
 
-    const deliveredPayload = sendPayload.mock.calls[0]?.[0]?.payload as
+    const deliveredPayload = requireMockCallArg(sendPayload, "sendPayload").payload as
       | { channelData?: unknown; text?: unknown }
       | undefined;
     expect(deliveredPayload?.text).toBe("visible");
@@ -1553,16 +1597,14 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "visible" }],
     });
 
-    expect(normalizePayload).toHaveBeenCalledWith({
-      accountId: "workspace-a",
-      cfg,
-      payload: expect.objectContaining({ text: "visible" }),
+    const normalizeParams = requireMockCallArg(normalizePayload, "normalizePayload");
+    expect(normalizeParams.accountId).toBe("workspace-a");
+    expect(normalizeParams.cfg).toBe(cfg);
+    expect((normalizeParams.payload as { text?: unknown }).text).toBe("visible");
+    const sendParams = requireMockCallArg(sendPayload, "sendPayload");
+    expect((sendParams.payload as { channelData?: unknown }).channelData).toEqual({
+      normalized: true,
     });
-    expect(sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({ channelData: { normalized: true } }),
-      }),
-    );
   });
 
   it("strips internal runtime scaffolding copied into rendered and normalized nested payloads", async () => {
@@ -1624,12 +1666,10 @@ describe("deliverOutboundPayloads", () => {
       ],
     });
 
-    expect(JSON.stringify(sendPayload.mock.calls[0]?.[0]?.payload)).not.toContain(
-      "previous_response",
-    );
-    const deliveredPayload = sendPayload.mock.calls[0]?.[0]?.payload as
+    const deliveredPayload = requireMockCallArg(sendPayload, "sendPayload").payload as
       | { channelData?: unknown; interactive?: unknown; text?: unknown }
       | undefined;
+    expect(JSON.stringify(deliveredPayload)).not.toContain("previous_response");
     expect(deliveredPayload?.text).toBe("visible");
     expect(deliveredPayload?.channelData).toStrictEqual({
       renderedText: "visible",
@@ -1638,6 +1678,87 @@ describe("deliverOutboundPayloads", () => {
     });
     expect(deliveredPayload?.interactive).toStrictEqual({
       blocks: [{ type: "text", text: "visible" }],
+    });
+  });
+
+  it("adapts presentation buttons to channel limits before rendering", async () => {
+    const renderPresentation = vi.fn(({ payload }) => ({
+      ...payload,
+      channelData: { rendered: true },
+    }));
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "adapted",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              presentationCapabilities: {
+                supported: true,
+                buttons: true,
+                limits: {
+                  actions: {
+                    maxActions: 1,
+                    maxLabelLength: 4,
+                    maxValueBytes: 8,
+                    supportsStyles: false,
+                  },
+                },
+              },
+              renderPresentation,
+              sendText: vi.fn(),
+              sendMedia: vi.fn(),
+              sendPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [
+        {
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  { label: "Reject", value: "reject", priority: 1, style: "danger" },
+                  { label: "Approve", value: "approve", priority: 10, style: "success" },
+                  { label: "Too long", value: "x".repeat(12), priority: 20 },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const renderArg = requireMockCallArg(renderPresentation, "renderPresentation") as {
+      presentation?: unknown;
+    };
+    expect(renderArg.presentation).toEqual({
+      tone: undefined,
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Appr", value: "approve", priority: 10, style: undefined }],
+        },
+        {
+          type: "context",
+          text: "Actions:\n- Reje\n- Too",
+        },
+      ],
     });
   });
 
@@ -1670,7 +1791,7 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "hello" }],
     });
 
-    const afterDeliveryOptions = afterDeliverPayload.mock.calls[0]?.[0] as
+    const afterDeliveryOptions = requireMockCallArg(afterDeliverPayload, "afterDeliverPayload") as
       | {
           payload?: { text?: unknown };
           results?: unknown;
@@ -1732,7 +1853,7 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendFormattedText).toHaveBeenCalledTimes(1);
-    const formattedTextOptions = sendFormattedText.mock.calls[0]?.[0] as
+    const formattedTextOptions = requireMockCallArg(sendFormattedText, "sendFormattedText") as
       | { accountId?: unknown; text?: unknown; to?: unknown }
       | undefined;
     expect(formattedTextOptions?.to).toBe("U123");
@@ -1754,7 +1875,7 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendFormattedMedia).toHaveBeenCalledTimes(1);
-    const sendFormattedMediaCall = sendFormattedMedia.mock.calls[0]?.[0] as
+    const sendFormattedMediaCall = requireMockCallArg(sendFormattedMedia, "sendFormattedMedia") as
       | { mediaLocalRoots?: string[]; mediaUrl?: unknown; text?: unknown; to?: unknown }
       | undefined;
     expect(sendFormattedMediaCall?.to).toBe("U123");
@@ -1780,11 +1901,10 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
-    expect(sendMatrix.mock.calls[0]?.[0]).toBe("!room:example");
-    expect(sendMatrix.mock.calls[0]?.[1]).toBe("hi");
-    const sendMatrixOptions = sendMatrix.mock.calls[0]?.[2] as
-      | { mediaLocalRoots?: string[] }
-      | undefined;
+    const sendMatrixCall = requireMatrixSendCall(sendMatrix);
+    expect(sendMatrixCall[0]).toBe("!room:example");
+    expect(sendMatrixCall[1]).toBe("hi");
+    const sendMatrixOptions = sendMatrixCall[2] as { mediaLocalRoots?: string[] } | undefined;
     expect(sendMatrixOptions?.mediaLocalRoots).toContain(expectedPreferredTmpRoot);
   });
 
@@ -1925,9 +2045,10 @@ describe("deliverOutboundPayloads", () => {
       ],
     });
 
-    const sendingCall = hookMocks.runner.runMessageSending.mock.calls[0] as
-      | [{ content?: unknown }, { channelId?: unknown }]
-      | undefined;
+    const sendingCall = requireMockCall(
+      hookMocks.runner.runMessageSending,
+      "message_sending hook",
+    ) as [{ content?: unknown }, { channelId?: unknown }] | undefined;
     expect(sendingCall?.[0]?.content).toBe("original hidden transcript");
     expect(sendingCall?.[1]?.channelId).toBe("matrix");
     const sendMediaOptions = (
@@ -1938,7 +2059,7 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMediaOptions?.text).toBe("");
     expect(sendMediaOptions?.mediaUrl).toBe("file:///tmp/clip.opus");
     expect(sendMediaOptions?.audioAsVoice).toBe(true);
-    const sentCall = hookMocks.runner.runMessageSent.mock.calls[0] as
+    const sentCall = requireMockCall(hookMocks.runner.runMessageSent, "message_sent hook") as
       | [{ content?: unknown; success?: unknown }, { channelId?: unknown }]
       | undefined;
     expect(sentCall?.[0]?.content).toBe("rewritten hidden transcript");
@@ -1970,7 +2091,7 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendMatrix).toHaveBeenCalledTimes(2);
-    const firstChunkCall = sendMatrix.mock.calls[0];
+    const firstChunkCall = requireMatrixSendCall(sendMatrix);
     expect(firstChunkCall?.[0]).toBe("!room:example");
     expect(firstChunkCall?.[1]).toBe("Line one");
     expect((firstChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
@@ -2143,6 +2264,46 @@ describe("deliverOutboundPayloads", () => {
     expect(chunker).toHaveBeenNthCalledWith(1, text, 4000);
   });
 
+  it("passes formatting overrides for pre-rendered chunker output", async () => {
+    const chunker = vi.fn(() => ["<b>bold</b>"]);
+    const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
+      channel: "matrix" as const,
+      messageId: text,
+      roomId: "r1",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              chunker,
+              chunkerMode: "markdown",
+              chunkedTextFormatting: { parseMode: "HTML" },
+              textChunkLimit: 4000,
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "**bold**" }],
+    });
+
+    expect(chunker).toHaveBeenCalledWith("**bold**", 4000);
+    const sendTextParams = requireMockCallArg(sendText, "sendText");
+    expect(sendTextParams.text).toBe("<b>bold</b>");
+    expect(sendTextParams.formatting).toEqual({ parseMode: "HTML" });
+  });
+
   it("passes config through for plugin media sends", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-media", roomId: "!room" });
     setActivePluginRegistry(
@@ -2166,11 +2327,12 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
-    const sendMatrixOptions = sendMatrix.mock.calls[0]?.[2] as
+    const sendMatrixCall = requireMatrixSendCall(sendMatrix);
+    const sendMatrixOptions = sendMatrixCall[2] as
       | { cfg?: unknown; mediaUrl?: unknown }
       | undefined;
-    expect(sendMatrix.mock.calls[0]?.[0]).toBe("!room:example");
-    expect(sendMatrix.mock.calls[0]?.[1]).toBe("hello");
+    expect(sendMatrixCall[0]).toBe("!room:example");
+    expect(sendMatrixCall[1]).toBe("hello");
     expect(sendMatrixOptions?.cfg).toBe(cfg);
     expect(sendMatrixOptions?.mediaUrl).toBe("https://example.com/a.png");
   });
@@ -2186,11 +2348,10 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
-    const sendMatrixOptions = sendMatrix.mock.calls[0]?.[2] as { mediaUrl?: unknown } | undefined;
-    expect(sendMatrix.mock.calls[0]?.[0]).toBe("!room:example");
-    expect(sendMatrix.mock.calls[0]?.[1]).toBe(
-      "Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)",
-    );
+    const sendMatrixCall = requireMatrixSendCall(sendMatrix);
+    const sendMatrixOptions = sendMatrixCall[2] as { mediaUrl?: unknown } | undefined;
+    expect(sendMatrixCall[0]).toBe("!room:example");
+    expect(sendMatrixCall[1]).toBe("Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)");
     expect(sendMatrixOptions?.mediaUrl).toBeUndefined();
   });
 
@@ -2217,9 +2378,10 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
-    const sendMatrixOptions = sendMatrix.mock.calls[0]?.[2] as { mediaUrl?: unknown } | undefined;
-    expect(sendMatrix.mock.calls[0]?.[0]).toBe("!room:example");
-    expect(sendMatrix.mock.calls[0]?.[1]).toBe("Chart now");
+    const sendMatrixCall = requireMatrixSendCall(sendMatrix);
+    const sendMatrixOptions = sendMatrixCall[2] as { mediaUrl?: unknown } | undefined;
+    expect(sendMatrixCall[0]).toBe("!room:example");
+    expect(sendMatrixCall[1]).toBe("Chart now");
     expect(sendMatrixOptions?.mediaUrl).toBe("https://example.com/chart.png");
   });
 
@@ -2254,7 +2416,10 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrix).toHaveBeenCalledTimes(2);
 
     expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
-    const createHookCall = internalHookMocks.createInternalHookEvent.mock.calls[0] as
+    const createHookCall = requireMockCall(
+      internalHookMocks.createInternalHookEvent,
+      "create internal hook event",
+    ) as
       | [
           unknown,
           unknown,
@@ -2296,7 +2461,10 @@ describe("deliverOutboundPayloads", () => {
     await deliverSingleMatrixForHookTest({ sessionKey: "agent:main:main" });
 
     expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
-    const createHookCall = internalHookMocks.createInternalHookEvent.mock.calls[0] as
+    const createHookCall = requireMockCall(
+      internalHookMocks.createInternalHookEvent,
+      "create internal hook event",
+    ) as
       | [
           unknown,
           unknown,
@@ -2336,10 +2504,11 @@ describe("deliverOutboundPayloads", () => {
       session: { agentId: "agent-main" },
     });
 
-    expect(logMocks.warn.mock.calls[0]?.[0]).toBe(
+    const warnCall = requireMockCall(logMocks.warn, "warn");
+    expect(warnCall[0]).toBe(
       "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
     );
-    const warnContext = logMocks.warn.mock.calls[0]?.[1] as
+    const warnContext = warnCall[1] as
       | { agentId?: unknown; channel?: unknown; to?: unknown }
       | undefined;
     expect(warnContext?.channel).toBe("matrix");
@@ -2516,13 +2685,12 @@ describe("deliverOutboundPayloads", () => {
     expect(queuedDelivery?.renderedBatchPlan).toBe(renderedBatchPlan);
   });
 
-  it("applies silent-reply rewrite policy from the outbound session", async () => {
+  it("suppresses direct silent replies from the outbound session", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-silent", roomId: "!room" });
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           silentReply: {
-            direct: "disallow",
             group: "allow",
             internal: "allow",
           },
@@ -2542,9 +2710,7 @@ describe("deliverOutboundPayloads", () => {
       },
     });
 
-    expect(sendMatrix).toHaveBeenCalledTimes(1);
-    const deliveredText = sendMatrix.mock.calls[0]?.[1];
-    expect(deliveredText).toBe("No extra update from me.");
+    expect(sendMatrix).not.toHaveBeenCalled();
   });
 
   it("keeps allowed group silent replies silent during outbound delivery", async () => {
@@ -2627,7 +2793,7 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(onError).toHaveBeenCalledTimes(1);
-    const [error, failedPayload] = onError.mock.calls[0] ?? [];
+    const [error, failedPayload] = requireMockCall(onError, "onError");
     expect(error).toBeInstanceOf(Error);
     expect((failedPayload as { text?: unknown } | undefined)?.text).toBe("hi");
     expect((failedPayload as { mediaUrls?: unknown } | undefined)?.mediaUrls).toStrictEqual([
@@ -2690,7 +2856,7 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
-    const sentCall = hookMocks.runner.runMessageSent.mock.calls[0] as
+    const sentCall = requireMockCall(hookMocks.runner.runMessageSent, "message_sent hook") as
       | [{ content?: unknown; success?: unknown; to?: unknown }, { channelId?: unknown }]
       | undefined;
     expect(sentCall?.[0]?.to).toBe("!room:example");
@@ -2765,7 +2931,7 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
-    expect(sendText.mock.calls[0]?.[0]?.text).toBe("provider exploded");
+    expect(requireMockCallArg(sendText, "sendText").text).toBe("provider exploded");
     expect(sendPayload).not.toHaveBeenCalled();
   });
 
@@ -2798,7 +2964,7 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
-    const sendPayloadOptions = sendPayload.mock.calls[0]?.[0] as
+    const sendPayloadOptions = requireMockCallArg(sendPayload, "sendPayload") as
       | { payload?: { isError?: unknown; text?: unknown }; text?: unknown }
       | undefined;
     expect(sendPayloadOptions?.text).toBe("provider exploded");
@@ -2873,7 +3039,7 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "payload text", channelData: { mode: "custom" } }],
     });
 
-    const sentCall = hookMocks.runner.runMessageSent.mock.calls[0] as
+    const sentCall = requireMockCall(hookMocks.runner.runMessageSent, "message_sent hook") as
       | [{ content?: unknown; success?: unknown; to?: unknown }, { channelId?: unknown }]
       | undefined;
     expect(sentCall?.[0]?.to).toBe("!room:1");
@@ -2907,10 +3073,11 @@ describe("deliverOutboundPayloads", () => {
 
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
     expect(pinDeliveredMessage).toHaveBeenCalledTimes(1);
-    expect(logMocks.warn.mock.calls[0]?.[0]).toBe(
+    const warnCall = requireMockCall(logMocks.warn, "warn");
+    expect(warnCall[0]).toBe(
       "Delivery pin requested, but channel failed to pin delivered message.",
     );
-    const warnContext = logMocks.warn.mock.calls[0]?.[1] as
+    const warnContext = warnCall[1] as
       | { channel?: unknown; error?: unknown; messageId?: unknown }
       | undefined;
     expect(warnContext?.channel).toBe("matrix");
@@ -3049,7 +3216,7 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendPayload).toHaveBeenCalledTimes(1);
-    const sendPayloadOptions = sendPayload.mock.calls[0]?.[0] as
+    const sendPayloadOptions = requireMockCallArg(sendPayload, "sendPayload") as
       | { payload?: { channelData?: unknown; text?: unknown } }
       | undefined;
     expect(sendPayloadOptions?.payload?.text).toBe("");
@@ -3080,13 +3247,12 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendText).toHaveBeenCalledTimes(1);
-    expect(sendText.mock.calls[0]?.[0]?.text).toBe("caption");
-    expect(logMocks.warn.mock.calls[0]?.[0]).toBe(
+    expect(requireMockCallArg(sendText, "sendText").text).toBe("caption");
+    const warnCall = requireMockCall(logMocks.warn, "warn");
+    expect(warnCall[0]).toBe(
       "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
     );
-    const warnContext = logMocks.warn.mock.calls[0]?.[1] as
-      | { channel?: unknown; mediaCount?: unknown }
-      | undefined;
+    const warnContext = warnCall[1] as { channel?: unknown; mediaCount?: unknown } | undefined;
     expect(warnContext?.channel).toBe("matrix");
     expect(warnContext?.mediaCount).toBe(1);
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
@@ -3120,13 +3286,12 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendText).toHaveBeenCalledTimes(1);
-    expect(sendText.mock.calls[0]?.[0]?.text).toBe("caption");
-    expect(logMocks.warn.mock.calls[0]?.[0]).toBe(
+    expect(requireMockCallArg(sendText, "sendText").text).toBe("caption");
+    const warnCall = requireMockCall(logMocks.warn, "warn");
+    expect(warnCall[0]).toBe(
       "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
     );
-    const warnContext = logMocks.warn.mock.calls[0]?.[1] as
-      | { channel?: unknown; mediaCount?: unknown }
-      | undefined;
+    const warnContext = warnCall[1] as { channel?: unknown; mediaCount?: unknown } | undefined;
     expect(warnContext?.channel).toBe("matrix");
     expect(warnContext?.mediaCount).toBe(2);
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-2" }]);
@@ -3160,15 +3325,14 @@ describe("deliverOutboundPayloads", () => {
     );
 
     expect(sendText).not.toHaveBeenCalled();
-    expect(logMocks.warn.mock.calls[0]?.[0]).toBe(
+    const warnCall = requireMockCall(logMocks.warn, "warn");
+    expect(warnCall[0]).toBe(
       "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
     );
-    const warnContext = logMocks.warn.mock.calls[0]?.[1] as
-      | { channel?: unknown; mediaCount?: unknown }
-      | undefined;
+    const warnContext = warnCall[1] as { channel?: unknown; mediaCount?: unknown } | undefined;
     expect(warnContext?.channel).toBe("matrix");
     expect(warnContext?.mediaCount).toBe(1);
-    const sentCall = hookMocks.runner.runMessageSent.mock.calls[0] as
+    const sentCall = requireMockCall(hookMocks.runner.runMessageSent, "message_sent hook") as
       | [
           { content?: unknown; error?: unknown; success?: unknown; to?: unknown },
           { channelId?: unknown },
@@ -3197,7 +3361,7 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow("downstream failed");
 
-    const sentCall = hookMocks.runner.runMessageSent.mock.calls[0] as
+    const sentCall = requireMockCall(hookMocks.runner.runMessageSent, "message_sent hook") as
       | [
           { content?: unknown; error?: unknown; success?: unknown; to?: unknown },
           { channelId?: unknown },

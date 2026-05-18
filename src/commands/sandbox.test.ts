@@ -79,11 +79,13 @@ function setupDefaultMocks() {
 }
 
 function expectLogContains(runtime: ReturnType<typeof createMockRuntime>, text: string) {
-  expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(text));
+  const loggedOutput = runtime.log.mock.calls.map(([message]) => String(message)).join("\n");
+  expect(loggedOutput).toContain(text);
 }
 
 function expectErrorContains(runtime: ReturnType<typeof createMockRuntime>, text: string) {
-  expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(text));
+  const errorOutput = runtime.error.mock.calls.map(([message]) => String(message)).join("\n");
+  expect(errorOutput).toContain(text);
 }
 
 // --- Tests ---
@@ -150,12 +152,13 @@ describe("sandboxListCommand", () => {
 
       await sandboxListCommand({ browser: false, json: true }, runtime as never);
 
-      const loggedJson = runtime.log.mock.calls[0][0];
+      const loggedJson = runtime.log.mock.calls[0]?.[0];
       const parsed = JSON.parse(loggedJson);
 
-      expect(parsed.containers).toHaveLength(1);
-      expect(parsed.containers[0].containerName).toBe(container.containerName);
-      expect(parsed.browsers).toHaveLength(0);
+      expect(parsed).toStrictEqual({
+        containers: [container],
+        browsers: [],
+      });
     });
   });
 

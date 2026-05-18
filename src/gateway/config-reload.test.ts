@@ -397,6 +397,13 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("diagnostics.stuckSessionAbortMs");
   });
 
+  it("hot-reloads diagnostics memory pressure snapshot toggles", () => {
+    const plan = buildGatewayReloadPlan(["diagnostics.memoryPressureSnapshot"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.hotReasons).toContain("diagnostics.memoryPressureSnapshot");
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
   it("restarts for gateway.auth.token changes", () => {
     const plan = buildGatewayReloadPlan(["gateway.auth.token"]);
     expect(plan.restartGateway).toBe(true);
@@ -650,6 +657,17 @@ function getOnlyHotReloadCall(harness: ReloaderHarness): [GatewayReloadPlan, Ope
   return call;
 }
 
+function getOnlyPromoteSnapshotCall(promoteSnapshot: {
+  mock: { calls: Array<readonly [ConfigFileSnapshot, string]> };
+}): readonly [ConfigFileSnapshot, string] {
+  expect(promoteSnapshot).toHaveBeenCalledTimes(1);
+  const call = promoteSnapshot.mock.calls[0];
+  if (!call) {
+    throw new Error("expected one promote snapshot call");
+  }
+  return call;
+}
+
 describe("startGatewayConfigReloader", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -874,6 +892,38 @@ describe("startGatewayConfigReloader", () => {
     await reloader.stop();
   });
 
+  it("hot-reloads direct diagnostics memory pressure snapshot edits", async () => {
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      diagnostics: { memoryPressureSnapshot: false },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        config: nextConfig,
+        sourceConfig: nextConfig,
+        runtimeConfig: nextConfig,
+        hash: "diagnostics-memory-pressure-snapshot-1",
+      }),
+    );
+    const previousConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      diagnostics: { memoryPressureSnapshot: true },
+    };
+    const harness = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    const [plan, hotConfig] = getOnlyHotReloadCall(harness);
+    expect(plan.hotReasons).toEqual(["diagnostics.memoryPressureSnapshot"]);
+    expect(hotConfig).toBe(nextConfig);
+
+    await harness.reloader.stop();
+  });
+
   it("does not promote external config edits when hot reload rejects them", async () => {
     const acceptedSnapshot = makeSnapshot({
       config: {
@@ -958,7 +1008,7 @@ describe("startGatewayConfigReloader", () => {
 
     expect(readSnapshot).toHaveBeenCalledTimes(1);
     expect(harness.onHotReload).toHaveBeenCalledTimes(1);
-    const [promotedSnapshot, promotionReason] = promoteSnapshot.mock.calls[0] ?? [];
+    const [promotedSnapshot, promotionReason] = getOnlyPromoteSnapshotCall(promoteSnapshot);
     expect(promotedSnapshot?.hash).toBe("internal-1");
     expect(promotionReason).toBe("in-process-write");
 
@@ -997,7 +1047,7 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.log.info).toHaveBeenCalledWith(
       "config reload skipped by writer intent (caller handles follow-up)",
     );
-    const [promotedSnapshot, promotionReason] = promoteSnapshot.mock.calls[0] ?? [];
+    const [promotedSnapshot, promotionReason] = getOnlyPromoteSnapshotCall(promoteSnapshot);
     expect(promotedSnapshot?.hash).toBe("internal-none");
     expect(promotionReason).toBe("in-process-write");
 

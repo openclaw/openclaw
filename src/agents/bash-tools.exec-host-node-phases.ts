@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
@@ -166,6 +166,7 @@ export function buildNodeSystemRunInvoke(params: {
 }): Record<string, unknown> {
   const timeoutMs =
     params.target.runTimeoutSec > 0 ? Math.floor(params.target.runTimeoutSec * 1000) : 0;
+  const runId = params.runId ?? crypto.randomUUID();
   return {
     nodeId: params.target.nodeId,
     command: "system.run",
@@ -188,7 +189,7 @@ export function buildNodeSystemRunInvoke(params: {
         : {}),
       approved: params.approved,
       approvalDecision: params.approvalDecision ?? undefined,
-      runId: params.runId ?? undefined,
+      runId,
       suppressNotifyOnExit:
         params.suppressNotifyOnExit === true || params.notifyOnExit === false ? true : undefined,
     },

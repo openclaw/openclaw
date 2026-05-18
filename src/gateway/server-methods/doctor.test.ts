@@ -159,7 +159,9 @@ const invokeDoctorMemoryRemHarness = async (
 };
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -230,7 +232,9 @@ describe("doctor.memory.status", () => {
     await invokeDoctorMemoryStatus(respond, { params: { probe: true } });
 
     const managerInput = mockCallArg(getMemorySearchManager);
-    expect(managerInput.cfg).toBeDefined();
+    if (managerInput.cfg === undefined) {
+      throw new Error("Expected memory search manager config");
+    }
     expectRecordFields(managerInput, {
       agentId: "main",
       purpose: "status",
@@ -1017,6 +1021,58 @@ describe("doctor.memory.dreamDiary", () => {
     }
   });
 
+  it("backfills the dream diary from slugged workspace memory files", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "doctor-dream-diary-backfill-slugged-"),
+    );
+    const sourcePath = path.join(workspaceDir, "memory", "2026-02-19-vendor-pitch.md");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(sourcePath, "source\n", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "# Dream Diary\n", "utf-8");
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    previewGroundedRemMarkdown.mockResolvedValue({
+      scannedFiles: 1,
+      files: [
+        {
+          path: sourcePath,
+          renderedMarkdown: "What Happened\n1. Vendor pitch — rejected\n",
+        },
+      ],
+    });
+    writeBackfillDiaryEntries.mockResolvedValue({
+      dreamsPath: path.join(workspaceDir, "DREAMS.md"),
+      written: 1,
+      replaced: 1,
+    });
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryBackfillDreamDiary(respond);
+      expect(previewGroundedRemMarkdown).toHaveBeenCalledWith({
+        workspaceDir,
+        inputPaths: [sourcePath],
+      });
+      const writeInput = mockCallArg(writeBackfillDiaryEntries);
+      expect(writeInput.workspaceDir).toBe(workspaceDir);
+      const entry = (writeInput.entries as Array<Record<string, unknown>>)[0];
+      expectRecordFields(entry, {
+        isoDay: "2026-02-19",
+        sourcePath,
+      });
+      expect(entry.bodyLines).toContain("What Happened");
+      expect(entry.bodyLines).toContain("1. Vendor pitch — rejected");
+      expectRecordFields(respondPayload(respond), {
+        agentId: "main",
+        action: "backfill",
+        scannedFiles: 1,
+        written: 1,
+        replaced: 1,
+      });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("no-ops backfill when the workspace has no daily memory files", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-empty-"));
     resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
@@ -1307,7 +1363,7 @@ describe("doctor.memory.remHarness", () => {
     await invokeDoctorMemoryRemHarness(respond);
 
     expectRecordFields(mockCallArg(previewRemHarness), { candidateLimit: 25 });
-    const payload = respond.mock.calls[0]?.[1] as {
+    const payload = respondPayload(respond) as {
       ok: boolean;
       deep: { candidateLimit: number; truncated: boolean; candidates: unknown[] };
     };
@@ -1323,7 +1379,7 @@ describe("doctor.memory.remHarness", () => {
     await invokeDoctorMemoryRemHarness(respond, { limit: 500 });
 
     expectRecordFields(mockCallArg(previewRemHarness), { candidateLimit: 100 });
-    const payload = respond.mock.calls[0]?.[1] as {
+    const payload = respondPayload(respond) as {
       deep: { candidateLimit: number };
     };
     expect(payload.deep.candidateLimit).toBe(100);

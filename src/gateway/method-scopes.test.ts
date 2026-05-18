@@ -6,19 +6,28 @@ import {
   isGatewayMethodClassified,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/registry.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
+import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
+const pluginHandler: GatewayRequestHandler = ({ respond }) => respond(true, {});
 
 function setPluginGatewayMethodScope(
   method: string,
   scope: "operator.read" | "operator.write" | "operator.admin",
 ) {
   const registry = createEmptyPluginRegistry();
-  registry.gatewayMethodScopes = {
-    [method]: scope,
-  };
+  registry.gatewayHandlers[method] = pluginHandler;
+  registry.gatewayMethodDescriptors.push(
+    createPluginGatewayMethodDescriptor({
+      pluginId: "test",
+      name: method,
+      handler: pluginHandler,
+      scope,
+    }),
+  );
   setActivePluginRegistry(registry);
 }
 
@@ -56,16 +65,128 @@ describe("method scope resolution", () => {
     ["talk.session.submitToolResult", ["operator.write"]],
     ["talk.session.close", ["operator.write"]],
     ["update.status", ["operator.admin"]],
+    ["config.schema", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
     ["update.run", ["operator.admin"]],
+    ["exec.approvals.get", ["operator.admin"]],
+    ["exec.approvals.set", ["operator.admin"]],
+    ["exec.approvals.node.get", ["operator.admin"]],
+    ["exec.approvals.node.set", ["operator.admin"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(expected);
   });
 
   it("leaves node-only pending drain outside operator scopes", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.drain")).toStrictEqual([]);
+  });
+
+  it("classifies plugin session actions with a CLI-safe default operator scope", () => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction")).toEqual([
+      "operator.write",
+    ]);
+    expect(isGatewayMethodClassified("plugins.sessionAction")).toBe(true);
+    expect(authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.write",
+    });
+  });
+
+  it("derives least-privilege scopes from registered plugin session action params", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.sessionActions = [
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+        action: {
+          id: "approve",
+          requiredScopes: ["operator.approvals"],
+          handler: () => ({ result: { ok: true } }),
+        },
+      },
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+        action: {
+          id: "view",
+          requiredScopes: ["operator.read"],
+          handler: () => ({ result: { ok: true } }),
+        },
+      },
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+        action: {
+          id: "default-write",
+          handler: () => ({ result: { ok: true } }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual(["operator.approvals"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: " scope-plugin ",
+        actionId: " view ",
+      }),
+    ).toEqual(["operator.read"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: "scope-plugin",
+        actionId: "default-write",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: "scope-plugin",
+        actionId: "missing",
+      }),
+    ).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
+    expect(
+      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.approvals"], {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.write"], {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.approvals" });
+  });
+
+  it("falls back to broad operator scopes when a dynamic session action is not locally registered", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: "remote-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
   });
 
   it("returns empty scopes for unknown methods", () => {
@@ -76,9 +197,15 @@ describe("method scope resolution", () => {
 
   it("reads plugin-registered gateway method scopes from the active plugin registry", () => {
     const registry = createEmptyPluginRegistry();
-    registry.gatewayMethodScopes = {
-      "browser.request": "operator.admin",
-    };
+    registry.gatewayHandlers["browser.request"] = pluginHandler;
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "browser",
+        name: "browser.request",
+        handler: pluginHandler,
+        scope: "operator.admin",
+      }),
+    );
     setActivePluginRegistry(registry);
 
     expect(resolveLeastPrivilegeOperatorScopesForMethod("browser.request")).toEqual([
@@ -100,6 +227,7 @@ describe("operator scope authorization", () => {
     ["health", ["operator.read"], { allowed: true }],
     ["health", ["operator.write"], { allowed: true }],
     ["config.schema.lookup", ["operator.read"], { allowed: true }],
+    ["config.schema", ["operator.read"], { allowed: false, missingScope: "operator.admin" }],
     ["config.patch", ["operator.admin"], { allowed: true }],
   ])("authorizes %s for scopes %j", (method, scopes, expected) => {
     expect(authorizeOperatorScopesForMethod(method, scopes)).toEqual(expected);
@@ -170,6 +298,21 @@ describe("operator scope authorization", () => {
       });
     },
   );
+
+  it.each([
+    "exec.approvals.get",
+    "exec.approvals.set",
+    "exec.approvals.node.get",
+    "exec.approvals.node.set",
+  ])("requires admin scope for exec approval policy method %s", (method) => {
+    expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+    expect(authorizeOperatorScopesForMethod(method, ["operator.admin"])).toEqual({
+      allowed: true,
+    });
+  });
 
   it.each([
     "plugin.approval.list",

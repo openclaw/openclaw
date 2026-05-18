@@ -19,8 +19,6 @@ function requestUrl(input: RequestInfo | URL | undefined): string {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -1680,7 +1678,7 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     await client.start();
 
-    const startOpts = matrixJsClient.startClient.mock.calls[0]?.[0] as
+    const startOpts = matrixJsClient.startClient.mock.calls.at(0)?.[0] as
       | { filter?: { getDefinition?: () => unknown } }
       | undefined;
     expect(startOpts?.filter?.getDefinition?.()).toEqual({
@@ -1705,7 +1703,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     await client.start();
 
     expect(databasesSpy).toHaveBeenCalled();
-    const intervalCall = setIntervalSpy.mock.calls[0] as unknown[];
+    const intervalCall = setIntervalSpy.mock.calls.at(0) as unknown[];
     expect(intervalCall[0]).toBeTypeOf("function");
     expect(intervalCall[1]).toBe(60_000);
     client.stop();
@@ -3106,10 +3104,13 @@ describe("MatrixClient crypto bootstrapping", () => {
       setupNewSecretStorage: true,
     });
     expect(loadSessionBackupPrivateKeyFromSecretStorage).toHaveBeenCalledTimes(1);
-    expect(doRequest).not.toHaveBeenCalledWith(
-      "DELETE",
-      expect.stringContaining("/room_keys/version/"),
+    const deleteRoomKeyVersionCalls = doRequest.mock.calls.filter(
+      ([method, endpoint]) =>
+        method === "DELETE" &&
+        typeof endpoint === "string" &&
+        endpoint.includes("/room_keys/version/"),
     );
+    expect(deleteRoomKeyVersionCalls).toStrictEqual([]);
   });
 
   it("forces SSSS recreation when backup-secret access returns a falsey callback error before reset", async () => {

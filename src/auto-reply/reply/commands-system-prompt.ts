@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
@@ -42,6 +42,7 @@ export async function resolveCommandsSystemPromptBundle(
     config: params.cfg,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
+    agentId: sessionAgentId,
   });
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,

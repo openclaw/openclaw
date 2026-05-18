@@ -56,8 +56,12 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/page" });
 
-    expect(fetchSpy).toHaveBeenCalled();
-    const [, init] = fetchSpy.mock.calls[0];
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const fetchCall = fetchSpy.mock.calls[0];
+    if (!fetchCall) {
+      throw new Error("expected fetch to be called");
+    }
+    const [, init] = fetchCall;
     expect(init.headers.Accept).toBe("text/markdown, text/html;q=0.9, */*;q=0.1");
   });
 
@@ -140,7 +144,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/runtime-firecrawl-off" });
 
-    expect(fetchSpy).toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/runtime-firecrawl-off");
   });
 
@@ -155,13 +159,10 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/tokens/private?token=secret" });
 
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("x-markdown-tokens: 1500 (https://example.com/...)"),
-    );
     const tokenLogs = logSpy.mock.calls
       .map(([message]) => message)
       .filter((message) => message.includes("x-markdown-tokens"));
-    expect(tokenLogs).toHaveLength(1);
+    expect(tokenLogs).toEqual(["[web-fetch] x-markdown-tokens: 1500 (https://example.com/...)"]);
     expect(tokenLogs[0]).not.toContain("token=secret");
     expect(tokenLogs[0]).not.toContain("/tokens/private");
   });

@@ -15,6 +15,41 @@ beforeAll(async () => {
 
 installProviderHttpMockCleanup();
 
+function firstPostJsonRequest() {
+  const [call] = postJsonRequestMock.mock.calls;
+  if (!call) {
+    throw new Error("expected Runway create request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object") {
+    throw new Error("expected Runway create request options");
+  }
+  return request as { url?: string; body?: Record<string, unknown> };
+}
+
+function firstFetchWithTimeoutCall() {
+  const [call] = fetchWithTimeoutMock.mock.calls;
+  if (!call) {
+    throw new Error("expected Runway poll request");
+  }
+  const [url, init, timeoutMs, requestFetch] = call;
+  if (typeof url !== "string") {
+    throw new Error("expected Runway poll request URL");
+  }
+  if (!init || typeof init !== "object" || Array.isArray(init)) {
+    throw new Error("expected Runway poll request init");
+  }
+  if (typeof timeoutMs !== "number") {
+    throw new Error("expected Runway poll request timeout");
+  }
+  return {
+    init: init as { method?: string; headers?: unknown },
+    requestFetch,
+    timeoutMs,
+    url,
+  };
+}
+
 describe("runway video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildRunwayVideoGenerationProvider());
@@ -54,23 +89,20 @@ describe("runway video generation provider", () => {
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
-    const createRequest = postJsonRequestMock.mock.calls[0]?.[0] as
-      | { url?: string; body?: unknown }
-      | undefined;
-    expect(createRequest?.url).toBe("https://api.dev.runwayml.com/v1/text_to_video");
-    expect(createRequest?.body).toEqual({
+    const createRequest = firstPostJsonRequest();
+    expect(createRequest.url).toBe("https://api.dev.runwayml.com/v1/text_to_video");
+    expect(createRequest.body).toEqual({
       model: "gen4.5",
       promptText: "a tiny lobster DJ under neon lights",
       ratio: "1280:720",
       duration: 4,
     });
-    const pollCall = fetchWithTimeoutMock.mock.calls[0];
-    expect(pollCall?.[0]).toBe("https://api.dev.runwayml.com/v1/tasks/task-1");
-    const pollInit = pollCall?.[1] as { method?: string; headers?: unknown } | undefined;
-    expect(pollInit?.method).toBe("GET");
-    expect(pollInit?.headers).toBeInstanceOf(Headers);
-    expect(pollCall?.[2]).toBe(120000);
-    expect(pollCall?.[3]).toBe(fetch);
+    const pollCall = firstFetchWithTimeoutCall();
+    expect(pollCall.url).toBe("https://api.dev.runwayml.com/v1/tasks/task-1");
+    expect(pollCall.init.method).toBe("GET");
+    expect(pollCall.init.headers).toBeInstanceOf(Headers);
+    expect(pollCall.timeoutMs).toBe(120000);
+    expect(pollCall.requestFetch).toBe(fetch);
     expect(result.videos).toHaveLength(1);
     const video = result.videos[0];
     if (!video) {
@@ -116,13 +148,11 @@ describe("runway video generation provider", () => {
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
-    const request = postJsonRequestMock.mock.calls[0]?.[0] as
-      | { url?: string; body?: Record<string, unknown> }
-      | undefined;
-    expect(request?.url).toBe("https://api.dev.runwayml.com/v1/image_to_video");
-    expect(request?.body?.promptImage).toMatch(/^data:image\/png;base64,/u);
-    expect(request?.body?.ratio).toBe("960:960");
-    expect(request?.body?.duration).toBe(6);
+    const request = firstPostJsonRequest();
+    expect(request.url).toBe("https://api.dev.runwayml.com/v1/image_to_video");
+    expect(request.body?.promptImage).toMatch(/^data:image\/png;base64,/u);
+    expect(request.body?.ratio).toBe("960:960");
+    expect(request.body?.duration).toBe(6);
   });
 
   it("requires gen4_aleph for video-to-video", async () => {
@@ -138,5 +168,81 @@ describe("runway video generation provider", () => {
       }),
     ).rejects.toThrow("Runway video-to-video currently requires model gen4_aleph.");
     expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("reports malformed create JSON with a provider-owned error", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => {
+          throw new SyntaxError("bad json");
+        },
+      },
+      release,
+    });
+
+    const provider = buildRunwayVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "runway",
+        model: "gen4.5",
+        prompt: "bad create response",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Runway video generation failed: malformed JSON response");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects status responses missing a task status", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ id: "task-missing-status" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      json: async () => ({
+        id: "task-missing-status",
+        output: ["https://example.com/out.mp4"],
+      }),
+      headers: new Headers(),
+    });
+
+    const provider = buildRunwayVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "runway",
+        model: "gen4.5",
+        prompt: "missing status",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Runway video status response missing task status");
+  });
+
+  it("rejects malformed completed output URLs", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ id: "task-malformed-output" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      json: async () => ({
+        id: "task-malformed-output",
+        status: "SUCCEEDED",
+        output: "https://example.com/out.mp4",
+      }),
+      headers: new Headers(),
+    });
+
+    const provider = buildRunwayVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "runway",
+        model: "gen4.5",
+        prompt: "malformed output",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Runway video generation completed with malformed output URLs");
   });
 });

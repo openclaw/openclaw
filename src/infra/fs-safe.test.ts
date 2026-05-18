@@ -20,13 +20,16 @@ const tempDirs = createTrackedTempDirs();
 
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await tempDirs.cleanup();
 });
 
 async function expectRejectCode(promise: Promise<unknown>, expected: string | RegExp) {
   const err = await promise.catch((caught: unknown) => caught);
-  expect(err).toBeDefined();
+  if (err === undefined) {
+    throw new Error("Expected promise to reject");
+  }
   const code = (err as NodeJS.ErrnoException).code;
   if (typeof expected === "string") {
     expect(code).toBe(expected);
@@ -180,6 +183,15 @@ describe("fs-safe", () => {
       await fs.writeFile(originalPath, "inside");
       await fs.writeFile(outsidePath, "outside");
 
+      const originalRealpath = fs.realpath.bind(fs);
+      const realpathSpy = vi.spyOn(fs, "realpath");
+      realpathSpy.mockImplementation(async (target) => {
+        if (typeof target === "string" && target.startsWith("/dev/fd/")) {
+          return movedPath;
+        }
+        return await originalRealpath(target);
+      });
+
       const handle = await fs.open(originalPath, "r");
       try {
         await fs.rename(originalPath, movedPath);
@@ -187,8 +199,35 @@ describe("fs-safe", () => {
 
         const resolved = await resolveOpenedFileRealPathForHandle(handle, originalPath);
 
-        await expect(fs.realpath(movedPath)).resolves.toBe(resolved);
+        expect(resolved).toBe(movedPath);
         await expect(handle.readFile({ encoding: "utf8" })).resolves.toBe("inside");
+      } finally {
+        await handle.close().catch(() => {});
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "falls back to the io path when /dev/fd realpath does not resolve to the opened file",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const filePath = path.join(root, "inside.txt");
+      await fs.writeFile(filePath, "inside");
+
+      const originalRealpath = fs.realpath.bind(fs);
+      const realpathSpy = vi.spyOn(fs, "realpath");
+      realpathSpy.mockImplementation(async (target) => {
+        if (typeof target === "string" && target.startsWith("/dev/fd/")) {
+          return "/dev/fd/inside.txt";
+        }
+        return await originalRealpath(target);
+      });
+
+      const handle = await fs.open(filePath, "r");
+      try {
+        await expect(resolveOpenedFileRealPathForHandle(handle, filePath)).resolves.toBe(
+          await originalRealpath(filePath),
+        );
       } finally {
         await handle.close().catch(() => {});
       }
@@ -201,9 +240,10 @@ describe("fs-safe", () => {
     const file = path.join(outside, "outside.txt");
     await fs.writeFile(file, "outside");
 
-    await expect(
+    await expectRejectCode(
       (await openRoot(root)).open(path.join("..", path.basename(outside), "outside.txt")),
-    ).rejects.toSatisfy((err: NodeJS.ErrnoException) => err.code === "outside-workspace");
+      "outside-workspace",
+    );
   });
 
   it("rejects directory path within root without leaking EISDIR (issue #31186)", async () => {
@@ -268,11 +308,12 @@ describe("fs-safe", () => {
         },
       });
 
-      await expect(
+      await expectRejectCode(
         (await openRoot(root)).read("link.txt", {
           symlinks: "follow-within-root",
         }),
-      ).rejects.toSatisfy((err: NodeJS.ErrnoException) => err.code === "path-mismatch");
+        "path-mismatch",
+      );
     },
   );
 
@@ -410,11 +451,12 @@ describe("fs-safe", () => {
     const sourcePath = path.join(sourceDir, "big.bin");
     await fs.writeFile(sourcePath, Buffer.alloc(8));
 
-    await expect(
+    await expectRejectCode(
       (await openRoot(root)).copyIn("nested/big.bin", sourcePath, {
         maxBytes: 4,
       }),
-    ).rejects.toSatisfy((err: NodeJS.ErrnoException) => err.code === "too-large");
+      "too-large",
+    );
     await expectRejectCode(fs.stat(path.join(root, "nested", "big.bin")), "ENOENT");
   });
 
@@ -451,11 +493,12 @@ describe("fs-safe", () => {
     await withOutsideHardlinkAlias({
       aliasPath: hardlinkPath,
       run: async (outsideFile) => {
-        await expect(
+        await expectRejectCode(
           (await openRoot(root)).append("alias.txt", "pwned", {
             prependNewlineIfNeeded: true,
           }),
-        ).rejects.toSatisfy((err: NodeJS.ErrnoException) => err.code === "path-alias");
+          "path-alias",
+        );
         await expect(fs.readFile(outsideFile, "utf8")).resolves.toBe("outside");
       },
     });

@@ -1,4 +1,4 @@
-import { ChannelType, Routes } from "discord-api-types/v10";
+import { ChannelType, MessageFlags, Routes } from "discord-api-types/v10";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "./internal/discord.js";
@@ -45,8 +45,9 @@ type MockCallSource = {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -65,8 +66,16 @@ function requestOptions(source: MockCallSource, callIndex = 0) {
   );
 }
 
+function requestPath(source: MockCallSource, callIndex = 0) {
+  return mockArg(source, callIndex, 0, `request path ${callIndex}`);
+}
+
 function requestBody(source: MockCallSource, callIndex = 0) {
   return requireRecord(requestOptions(source, callIndex).body, `request body ${callIndex}`);
+}
+
+function timerDelayAt(source: MockCallSource, callIndex = 0) {
+  return mockArg(source, callIndex, 1, `timer delay ${callIndex}`);
 }
 
 function createRateLimitError(
@@ -128,7 +137,7 @@ describe("sendMessageDiscord", () => {
       discordClientOpts(rest),
     );
     expect(getMock).not.toHaveBeenCalled();
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.threads("chan1", "m1"));
+    expect(requestPath(postMock as unknown as MockCallSource)).toBe(Routes.threads("chan1", "m1"));
     expect(requestBody(postMock as unknown as MockCallSource)).toEqual({ name: "thread" });
   });
 
@@ -138,7 +147,7 @@ describe("sendMessageDiscord", () => {
     postMock.mockResolvedValue({ id: "t1" });
     await createThreadDiscord("chan1", { name: "thread" }, discordClientOpts(rest));
     expect(getMock).toHaveBeenCalledWith(Routes.channel("chan1"));
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.threads("chan1"));
+    expect(requestPath(postMock as unknown as MockCallSource)).toBe(Routes.threads("chan1"));
     expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
       name: "thread",
       message: { content: "thread" },
@@ -154,7 +163,7 @@ describe("sendMessageDiscord", () => {
       { name: "thread", content: "initial forum post" },
       discordClientOpts(rest),
     );
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.threads("chan1"));
+    expect(requestPath(postMock as unknown as MockCallSource)).toBe(Routes.threads("chan1"));
     expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
       name: "thread",
       message: { content: "initial forum post" },
@@ -170,7 +179,7 @@ describe("sendMessageDiscord", () => {
       { name: "tagged post", appliedTags: ["tag1", "tag2"] },
       discordClientOpts(rest),
     );
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.threads("chan1"));
+    expect(requestPath(postMock as unknown as MockCallSource)).toBe(Routes.threads("chan1"));
     expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
       name: "tagged post",
       message: { content: "tagged post" },
@@ -187,7 +196,7 @@ describe("sendMessageDiscord", () => {
       { name: "thread", appliedTags: ["tag1"] },
       discordClientOpts(rest),
     );
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.threads("chan1"));
+    expect(requestPath(postMock as unknown as MockCallSource)).toBe(Routes.threads("chan1"));
     expect("applied_tags" in requestBody(postMock as unknown as MockCallSource)).toBe(false);
   });
 
@@ -196,7 +205,7 @@ describe("sendMessageDiscord", () => {
     getMock.mockRejectedValue(new Error("lookup failed"));
     postMock.mockResolvedValue({ id: "t1" });
     await createThreadDiscord("chan1", { name: "thread" }, discordClientOpts(rest));
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.threads("chan1"));
+    expect(requestPath(postMock as unknown as MockCallSource)).toBe(Routes.threads("chan1"));
     expect(requestBody(postMock as unknown as MockCallSource).name).toBe("thread");
     expect(requestBody(postMock as unknown as MockCallSource).type).toBe(ChannelType.PublicThread);
   });
@@ -211,7 +220,7 @@ describe("sendMessageDiscord", () => {
       discordClientOpts(rest),
     );
     expect(getMock).toHaveBeenCalledWith(Routes.channel("chan1"));
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.threads("chan1"));
+    expect(requestPath(postMock as unknown as MockCallSource)).toBe(Routes.threads("chan1"));
     expect(requestBody(postMock as unknown as MockCallSource).name).toBe("thread");
     expect(requestBody(postMock as unknown as MockCallSource).type).toBe(ChannelType.PrivateThread);
   });
@@ -227,13 +236,15 @@ describe("sendMessageDiscord", () => {
     );
     expect(postMock).toHaveBeenCalledTimes(2);
     // First call: create thread
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.threads("chan1"));
+    expect(requestPath(postMock as unknown as MockCallSource, 0)).toBe(Routes.threads("chan1"));
     expect(requestBody(postMock as unknown as MockCallSource, 0).name).toBe("thread");
     expect(requestBody(postMock as unknown as MockCallSource, 0).type).toBe(
       ChannelType.PublicThread,
     );
     // Second call: send message to thread
-    expect(postMock.mock.calls[1]?.[0]).toBe(Routes.channelMessages("t1"));
+    expect(requestPath(postMock as unknown as MockCallSource, 1)).toBe(
+      Routes.channelMessages("t1"),
+    );
     expect(requestBody(postMock as unknown as MockCallSource, 1)).toEqual({
       content: "Hello thread!",
     });
@@ -276,10 +287,14 @@ describe("sendMessageDiscord", () => {
     expect(getMock).not.toHaveBeenCalled();
     expect(postMock).toHaveBeenCalledTimes(2);
     // First call: create thread from message
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.threads("chan1", "m1"));
+    expect(requestPath(postMock as unknown as MockCallSource, 0)).toBe(
+      Routes.threads("chan1", "m1"),
+    );
     expect(requestBody(postMock as unknown as MockCallSource, 0)).toEqual({ name: "thread" });
     // Second call: send message to thread
-    expect(postMock.mock.calls[1]?.[0]).toBe(Routes.channelMessages("t1"));
+    expect(requestPath(postMock as unknown as MockCallSource, 1)).toBe(
+      Routes.channelMessages("t1"),
+    );
     expect(requestBody(postMock as unknown as MockCallSource, 1)).toEqual({
       content: "Discussion here",
     });
@@ -299,7 +314,9 @@ describe("sendMessageDiscord", () => {
       { guildId: "g1", userId: "u1", durationMinutes: 10 },
       discordClientOpts(rest),
     );
-    expect(patchMock.mock.calls[0]?.[0]).toBe(Routes.guildMember("g1", "u1"));
+    expect(requestPath(patchMock as unknown as MockCallSource)).toBe(
+      Routes.guildMember("g1", "u1"),
+    );
     expect(
       requestBody(patchMock as unknown as MockCallSource).communication_disabled_until,
     ).toBeTypeOf("string");
@@ -322,7 +339,7 @@ describe("sendMessageDiscord", () => {
       { guildId: "g1", userId: "u1", deleteMessageDays: 2 },
       discordClientOpts(rest),
     );
-    expect(putMock.mock.calls[0]?.[0]).toBe(Routes.guildBan("g1", "u1"));
+    expect(requestPath(putMock as unknown as MockCallSource)).toBe(Routes.guildBan("g1", "u1"));
     expect(requestBody(putMock as unknown as MockCallSource)).toEqual({ delete_message_days: 2 });
   });
 });
@@ -357,7 +374,7 @@ describe("uploadEmojiDiscord", () => {
       },
       discordClientOpts(rest),
     );
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.guildEmojis("g1"));
+    expect(requestPath(postMock as unknown as MockCallSource)).toBe(Routes.guildEmojis("g1"));
     expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
       name: "party_blob",
       image: "data:image/png;base64,aW1n",
@@ -385,7 +402,7 @@ describe("uploadStickerDiscord", () => {
       },
       discordClientOpts(rest),
     );
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.guildStickers("g1"));
+    expect(requestPath(postMock as unknown as MockCallSource)).toBe(Routes.guildStickers("g1"));
     const stickerBody = requestBody(postMock as unknown as MockCallSource);
     expect(stickerBody.name).toBe("openclaw_wave");
     expect(stickerBody.description).toBe("OpenClaw waving");
@@ -416,9 +433,27 @@ describe("sendStickerDiscord", () => {
     expect(res.channelId).toBe("789");
     expect(res.receipt.parts[0]?.platformMessageId).toBe("msg1");
     expect(res.receipt.parts[0]?.kind).toBe("card");
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.channelMessages("789"));
+    expect(requestPath(postMock as unknown as MockCallSource)).toBe(Routes.channelMessages("789"));
     expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
       content: "hiya",
+      flags: MessageFlags.SuppressEmbeds,
+      sticker_ids: ["123"],
+    });
+  });
+
+  it("allows sticker content link embeds when disabled", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+    await sendStickerDiscord("channel:789", ["123"], {
+      cfg: DISCORD_TEST_CFG,
+      rest,
+      token: "t",
+      content: "https://example.com",
+      suppressEmbeds: false,
+    });
+
+    expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
+      content: "https://example.com",
       sticker_ids: ["123"],
     });
   });
@@ -448,7 +483,10 @@ describe("sendPollDiscord", () => {
     expect(res.channelId).toBe("789");
     expect(res.receipt.parts[0]?.platformMessageId).toBe("msg1");
     expect(res.receipt.parts[0]?.kind).toBe("card");
-    expect(postMock.mock.calls[0]?.[0]).toBe(Routes.channelMessages("789"));
+    expect(requestPath(postMock as unknown as MockCallSource)).toBe(Routes.channelMessages("789"));
+    expect(requestBody(postMock as unknown as MockCallSource).flags).toBe(
+      MessageFlags.SuppressEmbeds,
+    );
     expect(requestBody(postMock as unknown as MockCallSource).poll).toEqual({
       question: { text: "Lunch?" },
       answers: [{ poll_media: { text: "Pizza" } }, { poll_media: { text: "Sushi" } }],
@@ -456,6 +494,29 @@ describe("sendPollDiscord", () => {
       allow_multiselect: false,
       layout_type: 1,
     });
+  });
+
+  it("combines silent and suppress-embeds flags for polls", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+    await sendPollDiscord(
+      "channel:789",
+      {
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        content: "https://example.com",
+        silent: true,
+      },
+    );
+
+    expect(requestBody(postMock as unknown as MockCallSource).flags).toBe(
+      MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications,
+    );
   });
 });
 
@@ -527,7 +588,7 @@ describe("retry rate limits", () => {
       expect(result.channelId).toBe("789");
       expect(result.receipt.primaryPlatformMessageId).toBe("msg1");
       expect(result.receipt.platformMessageIds).toEqual(["msg1"]);
-      expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(1);
+      expect(timerDelayAt(setTimeoutSpy as unknown as MockCallSource)).toBe(1);
     } finally {
       setTimeoutSpy.mockRestore();
     }

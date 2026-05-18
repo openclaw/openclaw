@@ -8,6 +8,8 @@ import {
   buildHistoryContext,
   buildHistoryContextFromEntries,
   buildHistoryContextFromMap,
+  buildInboundHistoryFromEntries,
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   HISTORY_CONTEXT_MARKER,
@@ -177,6 +179,58 @@ describe("history helpers", () => {
     expect(result).toContain("B: two");
     expect(result).toContain(CURRENT_MESSAGE_MARKER);
     expect(result).toContain("current");
+  });
+
+  it("builds structured inbound history with media metadata", () => {
+    const historyMap = new Map([
+      [
+        "group",
+        [
+          {
+            sender: "Older",
+            body: "zero",
+            timestamp: 0,
+          },
+          {
+            sender: "A",
+            body: "one",
+            timestamp: 1,
+            messageId: "m1",
+            media: [
+              {
+                path: "/tmp/image.png",
+                contentType: "image/png",
+                kind: "image" as const,
+              },
+            ],
+          },
+        ],
+      ],
+    ]);
+
+    expect(buildInboundHistoryFromMap({ historyMap, historyKey: "group", limit: 1 })).toEqual([
+      {
+        sender: "A",
+        body: "one",
+        timestamp: 1,
+        messageId: "m1",
+        media: [{ path: "/tmp/image.png", contentType: "image/png", kind: "image" }],
+      },
+    ]);
+    expect(
+      buildInboundHistoryFromMap({ historyMap, historyKey: "group", limit: 0 }),
+    ).toBeUndefined();
+    expect(
+      buildInboundHistoryFromEntries({ entries: historyMap.get("group") ?? [], limit: 1 }),
+    ).toEqual([
+      {
+        sender: "A",
+        body: "one",
+        timestamp: 1,
+        messageId: "m1",
+        media: [{ path: "/tmp/image.png", contentType: "image/png", kind: "image" }],
+      },
+    ]);
   });
 
   it("records pending entries only when enabled", () => {
@@ -552,7 +606,7 @@ describe("incrementCompactionCount", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].compactionCount).toBe(1);
     expect(stored[sessionKey].totalTokens).toBe(180_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
   });
 
   it("updates sessionId and sessionFile when compaction rotated transcripts", async () => {
@@ -678,12 +732,13 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].compactionCount).toBe(1);
   });
 
-  it("does not update totalTokens when tokensAfter is not provided", async () => {
+  it("marks totalTokens stale when tokensAfter is not provided", async () => {
     const entry = {
       sessionId: "s1",
       updatedAt: Date.now(),
       compactionCount: 0,
       totalTokens: 180_000,
+      totalTokensFresh: true,
     } as SessionEntry;
     const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
@@ -698,5 +753,6 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].compactionCount).toBe(1);
     // totalTokens unchanged
     expect(stored[sessionKey].totalTokens).toBe(180_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
   });
 });

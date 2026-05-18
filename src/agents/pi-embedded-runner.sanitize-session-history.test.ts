@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, UserMessage, Usage } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage, UserMessage, Usage } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
@@ -1215,6 +1215,47 @@ describe("sanitizeSessionHistory", () => {
       { type: "text", text: "visible answer" },
     ]);
   });
+
+  it.each([
+    ["Kimi K2.6", "custom-openai-proxy", "moonshotai/kimi-k2.6"],
+    ["MiMo V2.6 Pro", "custom-openai-proxy", "xiaomi/mimo-v2.6-pro"],
+  ])(
+    "preserves prior assistant reasoning for %s OpenAI-compatible replay",
+    async (_label, provider, modelId) => {
+      setNonGoogleModelApi();
+
+      const messages = castAgentMessages([
+        makeUserMessage("first"),
+        makeAssistantMessage([
+          {
+            type: "thinking",
+            thinking: "private reasoning",
+            thinkingSignature: "reasoning_content",
+          },
+          { type: "text", text: "visible answer" },
+        ]),
+        makeUserMessage("second"),
+      ]);
+
+      const result = await sanitizeSessionHistory({
+        messages,
+        modelApi: "openai-completions",
+        provider,
+        modelId,
+        sessionManager: makeMockSessionManager(),
+        sessionId: TEST_SESSION_ID,
+      });
+
+      expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+        {
+          type: "thinking",
+          thinking: "private reasoning",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "text", text: "visible answer" },
+      ]);
+    },
+  );
 
   it("preserves current OpenAI-compatible tool-call reasoning during tool continuation replay", async () => {
     setNonGoogleModelApi();

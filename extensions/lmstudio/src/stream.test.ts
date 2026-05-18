@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
 
@@ -83,7 +83,9 @@ function expectBaseStreamModelFields(baseStream: StreamFn, fields: Record<string
     "base stream",
   );
   expectRecordFields(requireRecord(call[0], "base stream model"), fields);
-  expect(call[1]).toBeDefined();
+  if (call[1] === undefined) {
+    throw new Error("Expected base stream context");
+  }
   expect(call[2]).toBeUndefined();
 }
 

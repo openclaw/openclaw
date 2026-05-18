@@ -1,8 +1,72 @@
 import { describe, expect, it } from "vitest";
-import { resolveClickClackAccount } from "./accounts.js";
+import {
+  listClickClackAccountIds,
+  resolveClickClackAccount,
+  resolveDefaultClickClackAccountId,
+} from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
 describe("ClickClack account resolution", () => {
+  it("preserves top-level default account when named accounts are configured", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          token: "ccb_default",
+          accounts: {
+            work: { enabled: false },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(listClickClackAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultClickClackAccountId(cfg)).toBe("default");
+    expect(resolveClickClackAccount({ cfg }).token).toBe("ccb_default");
+  });
+
+  it("does not synthesize a partial top-level default account from inherited credentials", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          token: "ccb_shared",
+          accounts: {
+            work: {
+              baseUrl: "https://app.clickclack.chat",
+              workspace: "wsp_1",
+            },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(listClickClackAccountIds(cfg)).toEqual(["work"]);
+    expect(resolveDefaultClickClackAccountId(cfg)).toBe("work");
+  });
+
+  it("does not synthesize a default account from blank top-level credentials", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_default",
+          token: "   ",
+          accounts: {
+            work: {
+              baseUrl: "https://app.clickclack.chat",
+              workspace: "wsp_1",
+              token: "ccb_work",
+            },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(listClickClackAccountIds(cfg)).toEqual(["work"]);
+    expect(resolveDefaultClickClackAccountId(cfg)).toBe("work");
+  });
+
   it("resolves env SecretRefs at runtime", () => {
     const cfg = {
       channels: {
@@ -25,10 +89,25 @@ describe("ClickClack account resolution", () => {
         accountId: "service",
         env: { CLICKCLACK_SERVICE_TOKEN: "  ccb_live  " },
       }),
-    ).toMatchObject({
+    ).toEqual({
+      allowFrom: ["*"],
       accountId: "service",
+      baseUrl: "https://app.clickclack.chat",
+      config: {
+        allowFrom: ["*"],
+        baseUrl: "https://app.clickclack.chat",
+        enabled: true,
+        token: { source: "env", provider: "default", id: "CLICKCLACK_SERVICE_TOKEN" },
+        workspace: "wsp_1",
+      },
       configured: true,
+      defaultTo: "channel:general",
+      enabled: true,
+      reconnectMs: 1_500,
+      replyMode: "agent",
+      senderIsOwner: false,
       token: "ccb_live",
+      workspace: "wsp_1",
     });
   });
 
@@ -53,13 +132,33 @@ describe("ClickClack account resolution", () => {
       },
     } satisfies CoreConfig;
 
-    expect(resolveClickClackAccount({ cfg, accountId: "peter" })).toMatchObject({
+    expect(resolveClickClackAccount({ cfg, accountId: "peter" })).toEqual({
+      allowFrom: ["*"],
       accountId: "peter",
       agentId: "peter-bot",
-      replyMode: "model",
+      baseUrl: "https://app.clickclack.chat",
+      config: {
+        agentId: "peter-bot",
+        allowFrom: ["*"],
+        baseUrl: "https://app.clickclack.chat",
+        enabled: true,
+        model: "openai/gpt-5.4-mini",
+        replyMode: "model",
+        senderIsOwner: true,
+        token: "ccb_peter",
+        toolsAllow: ["web_search"],
+        workspace: "wsp_1",
+      },
+      configured: true,
+      defaultTo: "channel:general",
+      enabled: true,
       model: "openai/gpt-5.4-mini",
+      reconnectMs: 1_500,
+      replyMode: "model",
       senderIsOwner: true,
+      token: "ccb_peter",
       toolsAllow: ["web_search"],
+      workspace: "wsp_1",
     });
   });
 });

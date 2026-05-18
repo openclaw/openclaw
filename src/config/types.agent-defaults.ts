@@ -1,7 +1,4 @@
-import type {
-  SilentReplyPolicyShape,
-  SilentReplyRewriteShape,
-} from "../shared/silent-reply-policy.js";
+import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type {
   AgentEmbeddedHarnessConfig,
   AgentModelConfig,
@@ -93,6 +90,17 @@ export type AgentContextLimitsConfig = {
   toolResultMaxChars?: number;
   /** Max chars retained from post-compaction AGENTS.md context injection (default: 1800). */
   postCompactionMaxChars?: number;
+};
+
+export type AgentRunRetriesConfig = {
+  /** Base number of run retry iterations (default: 24). */
+  base?: number;
+  /** Additional run retry iterations per fallback profile (default: 8). */
+  perProfile?: number;
+  /** Minimum limit for run retry iterations (default: 32). */
+  min?: number;
+  /** Maximum limit for run retry iterations (default: 160). */
+  max?: number;
 };
 
 export type CliBackendConfig = {
@@ -227,8 +235,6 @@ export type AgentDefaultsConfig = {
   skills?: string[];
   /** Silent-reply policy by conversation type. */
   silentReply?: SilentReplyPolicyShape;
-  /** Whether disallowed silent replies should be rewritten by conversation type. */
-  silentReplyRewrite?: SilentReplyRewriteShape;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
   /** Optional full system prompt replacement. Primarily for prompt debugging and controlled experiments. */
@@ -267,8 +273,8 @@ export type AgentDefaultsConfig = {
   /**
    * Agent-visible bootstrap truncation warning mode:
    * - off: do not inject warning text
-   * - once: inject once per unique truncation signature (default)
-   * - always: inject on every run with truncation
+   * - once: inject once per unique truncation signature
+   * - always: inject on every run with truncation (default)
    */
   bootstrapPromptTruncationWarning?: "off" | "once" | "always";
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
@@ -299,6 +305,8 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
+  /** Outer run loop retry iteration boundaries. */
+  runRetries?: AgentRunRetriesConfig;
   /** Embedded Pi runner hardening and compatibility controls. */
   embeddedPi?: {
     /**
@@ -407,7 +415,7 @@ export type AgentDefaultsConfig = {
      */
     isolatedSession?: boolean;
     /**
-     * If true, defer heartbeat runs while subagent or nested command lanes are busy.
+     * If true, defer heartbeat runs while this agent's session-keyed subagent or nested command lanes are busy.
      * Cron lanes are always treated as busy for heartbeat deferral.
      */
     skipWhenBusy?: boolean;
@@ -441,7 +449,7 @@ export type AgentDefaultsConfig = {
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
     runTimeoutSeconds?: number;
-    /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
+    /** Gateway timeout in ms for sub-agent announce delivery calls (default: 120000). */
     announceTimeoutMs?: number;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
     requireAgentId?: boolean;

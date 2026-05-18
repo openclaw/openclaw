@@ -93,8 +93,6 @@ async function readSessionFileJsonLines<T>(sessionFile: string): Promise<T[]> {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -107,18 +105,28 @@ function expectRecordFields(record: Record<string, unknown>, fields: Record<stri
   }
 }
 
-function requireMockArg(mock: typeof runCliAgentMock, callIndex: number, label: string) {
+function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex: number, label: string) {
   const arg = mock.mock.calls[callIndex]?.[0];
-  expect(arg).toBeDefined();
+  if (arg === undefined) {
+    throw new Error(`Expected mock argument for ${label}`);
+  }
   return requireRecord(arg, label);
 }
 
 function expectMockArgFields(
-  mock: typeof runCliAgentMock,
+  mock: ReturnType<typeof vi.fn>,
   fields: Record<string, unknown>,
   callIndex = 0,
 ) {
   expectRecordFields(requireMockArg(mock, callIndex, "mock call argument"), fields);
+}
+
+function firstRunCliAgentArg(callIndex = 0) {
+  return requireMockArg(runCliAgentMock, callIndex, "run CLI agent argument");
+}
+
+function firstEmbeddedPiAgentArg(callIndex = 0) {
+  return requireMockArg(runEmbeddedPiAgentMock, callIndex, "embedded PI agent argument");
 }
 
 describe("CLI attempt execution", () => {
@@ -177,6 +185,39 @@ describe("CLI attempt execution", () => {
       storePath,
       sessionHasHistory: false,
     });
+  }
+
+  async function writeClaudeCliAssistantTranscript(cliSessionId: string) {
+    const homeDir = path.join(tmpDir, `home-${cliSessionId}`);
+    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    process.env.HOME = homeDir;
+    await fs.mkdir(projectsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectsDir, `${cliSessionId}.jsonl`),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "old reply" }] },
+      })}\n`,
+      "utf-8",
+    );
+  }
+
+  function makeClaudeCliSessionEntry(
+    openclawSessionId: string,
+    cliSessionId: string,
+  ): SessionEntry {
+    return {
+      sessionId: openclawSessionId,
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: cliSessionId,
+          authProfileId: "anthropic:claude-cli",
+        },
+      },
+      cliSessionIds: { "claude-cli": cliSessionId },
+      claudeCliSessionId: cliSessionId,
+    };
   }
 
   it("clears stale Claude CLI session IDs before retrying after session expiration", async () => {
@@ -244,8 +285,8 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(2);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionId).toBe("stale-cli-session");
-    expect(runCliAgentMock.mock.calls[1]?.[0]?.cliSessionId).toBeUndefined();
+    expect(firstRunCliAgentArg().cliSessionId).toBe("stale-cli-session");
+    expect(firstRunCliAgentArg(1).cliSessionId).toBeUndefined();
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
@@ -255,6 +296,73 @@ describe("CLI attempt execution", () => {
     >;
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("clears reused Claude CLI session IDs after AbortError without retrying", async () => {
+    const sessionKey = "agent:main:direct:cli-abort";
+    const cliSessionId = "abort-poisoned-session";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry("session-cli-abort", cliSessionId);
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });
+    runCliAgentMock.mockRejectedValueOnce(abortError);
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "resume after abort",
+        runId: "run-cli-abort",
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("clears reused Claude CLI session IDs after non-expired failover without retrying", async () => {
+    const sessionKey = "agent:main:direct:cli-timeout";
+    const cliSessionId = "timeout-poisoned-session";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry("session-cli-timeout", cliSessionId);
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runCliAgentMock.mockRejectedValueOnce(
+      new FailoverError("CLI produced no output for 60s", {
+        reason: "timeout",
+        provider: "claude-cli",
+        model: "opus",
+      }),
+    );
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "resume after timeout",
+        runId: "run-cli-timeout",
+      }),
+    ).rejects.toMatchObject({ name: "FailoverError", reason: "timeout" });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
   it("does not pass --resume when the stored Claude CLI transcript is missing", async () => {
@@ -286,8 +394,8 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionId).toBeUndefined();
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionBinding).toBeUndefined();
+    expect(firstRunCliAgentArg().cliSessionId).toBeUndefined();
+    expect(firstRunCliAgentArg().cliSessionBinding).toBeUndefined();
     expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
@@ -344,8 +452,8 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionId).toBe(cliSessionId);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionBinding).toEqual({
+    expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+    expect(firstRunCliAgentArg().cliSessionBinding).toEqual({
       sessionId: cliSessionId,
       authProfileId: "anthropic:claude-cli",
     });
@@ -396,7 +504,7 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBe("openai-codex:work");
+    expect(firstRunCliAgentArg().authProfileId).toBe("openai-codex:work");
   });
 
   it("persists CLI replies into the session transcript", async () => {
@@ -511,6 +619,72 @@ describe("CLI attempt execution", () => {
     expect(messages).toHaveLength(1);
   });
 
+  it("embedded assistant gap-fill skips malformed transcript tail rows before deduping", async () => {
+    const sessionKey = "agent:main:subagent:embedded-gap-fill-malformed-tail";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-embedded-gap-fill-malformed-tail",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const result = makeCliResult("already mirrored");
+    result.meta.executionTrace = {
+      winnerProvider: "anthropic",
+      winnerModel: "claude-opus-4-6",
+      fallbackUsed: false,
+      runner: "embedded",
+    };
+
+    const updatedFirst = await persistCliTurnTranscript({
+      body: "ignored for gap fill",
+      result,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      embeddedAssistantGapFill: true,
+    });
+    const sessionFile = updatedFirst?.sessionFile;
+    if (typeof sessionFile !== "string") {
+      throw new Error("Expected CLI transcript session file.");
+    }
+
+    await fs.appendFile(sessionFile, "{truncated-json\n", "utf-8");
+
+    await persistCliTurnTranscript({
+      body: "still ignored",
+      result,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry: updatedFirst,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      embeddedAssistantGapFill: true,
+    });
+
+    const validEntries = (await fs.readFile(sessionFile, "utf-8"))
+      .split(/\r?\n/)
+      .flatMap((line) => {
+        if (!line) {
+          return [];
+        }
+        try {
+          return [JSON.parse(line) as { type?: string; message?: { role?: string } }];
+        } catch {
+          return [];
+        }
+      });
+    expect(validEntries.filter((entry) => entry.type === "message")).toHaveLength(1);
+  });
+
   it("embedded assistant gap-fill appends repeated replies after a user tail", async () => {
     const sessionKey = "agent:main:subagent:embedded-repeated-reply";
     const sessionEntry: SessionEntry = {
@@ -542,11 +716,15 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
     const sessionFile = updatedFirst?.sessionFile;
-    expect(typeof sessionFile).toBe("string");
-    expect(sessionFile?.length ?? 0).toBeGreaterThan(0);
-    if (typeof sessionFile !== "string" || sessionFile.length === 0) {
+    if (typeof sessionFile !== "string") {
       throw new Error("Expected CLI transcript session file.");
     }
+    expect(path.isAbsolute(sessionFile)).toBe(true);
+    expect(
+      sessionFile.endsWith(
+        path.join(".openclaw", "agents", "main", "sessions", `${sessionEntry.sessionId}.jsonl`),
+      ),
+    ).toBe(true);
 
     await appendSessionTranscriptMessage({
       transcriptPath: sessionFile,
@@ -773,7 +951,7 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it("routes canonical OpenAI models through the configured Codex CLI runtime", async () => {
+  it("routes canonical OpenAI models through the configured embedded Codex runtime", async () => {
     const sessionKey = "agent:main:direct:canonical-codex-cli";
     const sessionEntry: SessionEntry = {
       sessionId: "openclaw-session-canonical-codex-cli",
@@ -781,7 +959,14 @@ describe("CLI attempt execution", () => {
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("canonical codex cli"));
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "canonical codex embedded" }],
+      meta: {
+        durationMs: 5,
+        finalAssistantVisibleText: "canonical codex embedded",
+        executionTrace: { runner: "pi" },
+      },
+    });
 
     await runAgentAttempt({
       providerOverride: "openai",
@@ -821,10 +1006,92 @@ describe("CLI attempt execution", () => {
       sessionHasHistory: false,
     });
 
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    expectMockArgFields(runCliAgentMock, {
-      provider: "codex-cli",
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expectMockArgFields(runEmbeddedPiAgentMock, {
+      provider: "openai",
       model: "gpt-5.4",
+    });
+  });
+
+  it("forwards user-pinned OpenAI API-key backup profiles to Codex harness runs", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const sessionKey = "agent:main:direct:openai-codex-api-key";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-openai-codex-api-key",
+      updatedAt: Date.now(),
+      authProfileOverride: "openai:backup",
+      authProfileOverrideSource: "user",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await fs.writeFile(
+      path.join(tmpDir, "auth-profiles.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "openai:backup": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-test",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    try {
+      await runAgentAttempt({
+        providerOverride: "openai",
+        originalProvider: "openai",
+        modelOverride: "gpt-5.4",
+        cfg: {} as OpenClawConfig,
+        sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionAgentId: "main",
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        workspaceDir: tmpDir,
+        body: "use backup auth",
+        isFallbackRetry: false,
+        resolvedThinkLevel: "medium",
+        timeoutMs: 1_000,
+        runId: "run-openai-codex-api-key-backup",
+        opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+        runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+        spawnedBy: undefined,
+        messageChannel: undefined,
+        skillsSnapshot: undefined,
+        resolvedVerboseLevel: undefined,
+        agentDir: tmpDir,
+        onAgentEvent: vi.fn(),
+        authProfileProvider: "openai",
+        sessionStore,
+        storePath,
+        sessionHasHistory: false,
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expectMockArgFields(runEmbeddedPiAgentMock, {
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "openai:backup",
+      authProfileIdSource: "user",
     });
   });
 
@@ -898,9 +1165,7 @@ describe("CLI attempt execution", () => {
       promptMode: "none",
       disableTools: true,
     });
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt).not.toContain(
-      "[Inter-session message]",
-    );
+    expect(firstEmbeddedPiAgentArg().prompt).not.toContain("[Inter-session message]");
   });
 
   it("forwards trusted elevated defaults to embedded agent runs", async () => {
@@ -1200,6 +1465,7 @@ describe("embedded attempt harness pinning", () => {
   });
 
   it("auto-forwards OpenAI Codex auth profiles to default Codex harness runs", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const sessionEntry: SessionEntry = {
       sessionId: "codex-auth-session",
       updatedAt: Date.now(),
@@ -1222,34 +1488,45 @@ describe("embedded attempt harness pinning", () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
     } satisfies EmbeddedPiRunResult);
-
-    await runAgentAttempt({
-      providerOverride: "openai",
-      originalProvider: "openai",
-      modelOverride: "gpt-5.4",
-      cfg: {} as OpenClawConfig,
-      sessionEntry,
-      sessionId: sessionEntry.sessionId,
-      sessionKey: "agent:main:main",
-      sessionAgentId: "main",
-      sessionFile: path.join(tmpDir, "session.jsonl"),
-      workspaceDir: tmpDir,
-      body: "continue",
-      isFallbackRetry: false,
-      resolvedThinkLevel: "medium",
-      timeoutMs: 1_000,
-      runId: "run-codex-auto-auth-profile",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
-      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
-      spawnedBy: undefined,
-      messageChannel: undefined,
-      skillsSnapshot: undefined,
-      resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
-      onAgentEvent: vi.fn(),
-      authProfileProvider: "openai",
-      sessionHasHistory: true,
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
     });
+
+    try {
+      await runAgentAttempt({
+        providerOverride: "openai",
+        originalProvider: "openai",
+        modelOverride: "gpt-5.4",
+        cfg: {} as OpenClawConfig,
+        sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey: "agent:main:main",
+        sessionAgentId: "main",
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        workspaceDir: tmpDir,
+        body: "continue",
+        isFallbackRetry: false,
+        resolvedThinkLevel: "medium",
+        timeoutMs: 1_000,
+        runId: "run-codex-auto-auth-profile",
+        opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+        runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+        spawnedBy: undefined,
+        messageChannel: undefined,
+        skillsSnapshot: undefined,
+        resolvedVerboseLevel: undefined,
+        agentDir: tmpDir,
+        onAgentEvent: vi.fn(),
+        authProfileProvider: "openai",
+        sessionHasHistory: true,
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
 
     expectMockArgFields(runEmbeddedPiAgentMock, {
       agentHarnessId: undefined,
@@ -1342,7 +1619,7 @@ describe("embedded attempt harness pinning", () => {
     });
   });
 
-  it("routes explicit OpenAI PI runs with Codex OAuth through the legacy Codex auth transport", async () => {
+  it("routes explicit OpenAI PI runs with Codex OAuth through PI and the legacy Codex auth transport", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "explicit-pi-codex-oauth-session",
       updatedAt: Date.now(),
@@ -1394,7 +1671,8 @@ describe("embedded attempt harness pinning", () => {
     expectMockArgFields(runEmbeddedPiAgentMock, {
       provider: "openai-codex",
       model: "gpt-5.4",
-      agentHarnessId: undefined,
+      agentHarnessId: "pi",
+      agentHarnessRuntimeOverride: "pi",
       authProfileId: "openai-codex:work",
       authProfileIdSource: "user",
     });
@@ -1445,9 +1723,6 @@ describe("embedded attempt harness pinning", () => {
 
     expect(runCliAgentMock).not.toHaveBeenCalled();
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).not.toHaveProperty(
-      "agentHarnessId",
-      "claude-cli",
-    );
+    expect(firstEmbeddedPiAgentArg()).not.toHaveProperty("agentHarnessId", "claude-cli");
   });
 });

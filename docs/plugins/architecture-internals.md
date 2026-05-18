@@ -499,6 +499,30 @@ const video = await api.runtime.mediaUnderstanding.describeVideoFile({
   filePath: "/tmp/inbound-video.mp4",
   cfg: api.config,
 });
+
+const extraction = await api.runtime.mediaUnderstanding.extractStructuredWithModel({
+  provider: "codex",
+  model: "gpt-5.5",
+  input: [
+    {
+      type: "image",
+      buffer: receiptImageBuffer,
+      fileName: "receipt.png",
+      mime: "image/png",
+    },
+    { type: "text", text: "Use the printed fields as the source of truth." },
+  ],
+  instructions: "Return entities and searchable tags.",
+  schemaName: "example.evidence",
+  jsonSchema: {
+    type: "object",
+    properties: {
+      entities: { type: "array", items: { type: "string" } },
+      tags: { type: "array", items: { type: "string" } },
+    },
+  },
+  cfg: api.config,
+});
 ```
 
 For audio transcription, plugins can use either the media-understanding runtime
@@ -517,6 +541,11 @@ Notes:
 
 - `api.runtime.mediaUnderstanding.*` is the preferred shared surface for
   image/audio/video understanding.
+- `extractStructuredWithModel(...)` is the plugin-facing seam for bounded
+  provider-owned image-first extraction. Include at least one image input;
+  text inputs are supplemental context.
+  product plugins own their routes and schemas while OpenClaw owns the
+  provider/runtime boundary.
 - Uses core media-understanding audio configuration (`tools.media.audio`) and provider fallback order.
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
 - `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias.
@@ -1027,6 +1056,16 @@ export default function (api) {
 
 The factory `ctx` exposes optional `config`, `agentDir`, and `workspaceDir`
 values for construction-time initialization.
+
+`assemble()` may return `contextProjection` when the active harness has a
+persistent backend thread. Omit it for legacy per-turn projection. Return
+`{ mode: "thread_bootstrap", epoch }` when the assembled context should be
+injected once into a backend thread and reused until the epoch changes. Change
+the epoch after the engine's semantic context changes, such as after an
+engine-owned compaction pass. Hosts may preserve tool-call metadata, input
+shape, and redacted tool results in a thread-bootstrap projection so fresh
+backend threads retain tool continuity without copying raw secret-bearing
+payloads.
 
 If your engine does **not** own the compaction algorithm, keep `compact()`
 implemented and delegate it explicitly:

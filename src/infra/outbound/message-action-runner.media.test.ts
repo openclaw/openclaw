@@ -66,6 +66,18 @@ const workspaceConfig = {
   },
 } as OpenClawConfig;
 
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  return requireRecord(arg);
+}
+
 async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
   try {
@@ -87,6 +99,36 @@ const runDrySend = (params: {
     dryRun: true,
     sandboxRoot: params.sandboxRoot,
   });
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireActionPayload(
+  result: Awaited<ReturnType<typeof runMessageAction>>,
+): Record<string, unknown> {
+  expect(result.kind).toBe("action");
+  if (result.kind !== "action") {
+    throw new Error("expected action result");
+  }
+  return requireRecord(result.payload);
+}
+
+function requireLoadWebMediaOptions(): Record<string, unknown> {
+  const call = requireLoadWebMediaCall();
+  return requireRecord(call[1]);
+}
+
+function requireLoadWebMediaCall(): readonly unknown[] {
+  const call = vi.mocked(loadWebMedia).mock.calls[0];
+  if (!call) {
+    throw new Error("Expected loadWebMedia to be called");
+  }
+  return call;
+}
 
 async function expectSandboxMediaRewrite(params: {
   sandboxDir: string;
@@ -136,16 +178,12 @@ async function runAttachmentRemoteMediaAction(params: {
 }
 
 function expectAttachmentRemoteMediaPayload(result: Awaited<ReturnType<typeof runMessageAction>>) {
-  expect(result.kind).toBe("action");
-  expect(result.payload).toMatchObject({
-    ok: true,
-    filename: "pic.png",
-    caption: "caption",
-    contentType: "image/png",
-  });
-  expect((result.payload as { buffer?: string }).buffer).toBe(
-    Buffer.from("hello").toString("base64"),
-  );
+  const payload = requireActionPayload(result);
+  expect(payload.ok).toBe(true);
+  expect(payload.filename).toBe("pic.png");
+  expect(payload.caption).toBe("caption");
+  expect(payload.contentType).toBe("image/png");
+  expect(payload.buffer).toBe(Buffer.from("hello").toString("base64"));
 }
 
 let actualLoadWebMedia: typeof loadWebMedia;
@@ -256,11 +294,43 @@ describe("runMessageAction media behavior", () => {
     });
 
     expect(result.kind).toBe("send");
-    expect(channelResolutionMocks.executeSendAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        asVoice: true,
-      }),
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    expect(sendArgs.asVoice).toBe(true);
+  });
+
+  it("sends structured attachments as media urls", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
     );
+
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "12345678",
+          message: "track ready",
+          attachments: [{ path: "./song.mp3" }, { filePath: "/workspace/cover.png" }],
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "song.mp3"));
+      expect(result.sendResult?.mediaUrls).toEqual([
+        path.join(sandboxDir, "song.mp3"),
+        path.join(sandboxDir, "cover.png"),
+      ]);
+    });
   });
 
   describe("sendAttachment hydration", () => {
@@ -373,17 +443,11 @@ describe("runMessageAction media behavior", () => {
       const result = await runAttachmentRemoteMediaAction({ cfg, action: "sendAttachment" });
 
       expectAttachmentRemoteMediaPayload(result);
-      const call = vi.mocked(loadWebMedia).mock.calls[0];
-      expect(call?.[1]).toEqual(
-        expect.objectContaining({
-          localRoots: expect.any(Array),
-          readFile: expect.any(Function),
-          hostReadCapability: true,
-        }),
-      );
-      expect((call?.[1] as { sandboxValidated?: boolean } | undefined)?.sandboxValidated).not.toBe(
-        true,
-      );
+      const options = requireLoadWebMediaOptions();
+      expect(Array.isArray(options.localRoots)).toBe(true);
+      expect(typeof options.readFile).toBe("function");
+      expect(options.hostReadCapability).toBe(true);
+      expect(options.sandboxValidated).not.toBe(true);
     });
 
     it("allows host-local image attachment paths when fs root expansion is enabled", async () => {
@@ -408,12 +472,10 @@ describe("runMessageAction media behavior", () => {
           },
         });
 
-        expect(result.kind).toBe("action");
-        expect(result.payload).toMatchObject({
-          ok: true,
-          filename: "photo.png",
-          contentType: "image/png",
-        });
+        const payload = requireActionPayload(result);
+        expect(payload.ok).toBe(true);
+        expect(payload.filename).toBe("photo.png");
+        expect(payload.contentType).toBe("image/png");
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }
@@ -503,13 +565,9 @@ describe("runMessageAction media behavior", () => {
             sandboxRoot: sandboxDir,
           });
 
-          const call = vi.mocked(loadWebMedia).mock.calls[0];
-          expect(call?.[0], testCase.name).toBe(path.join(sandboxDir, testCase.expectedPath));
-          expect(call?.[1], testCase.name).toEqual(
-            expect.objectContaining({
-              sandboxValidated: true,
-            }),
-          );
+          const call = requireLoadWebMediaCall();
+          expect(call[0], testCase.name).toBe(path.join(sandboxDir, testCase.expectedPath));
+          expect(requireRecord(call[1]).sandboxValidated, testCase.name).toBe(true);
         });
       }
 
@@ -639,7 +697,7 @@ describe("runMessageAction media behavior", () => {
 
       expect(result.kind).toBe("action");
       expect(handleActionMock).toHaveBeenCalledTimes(1);
-      const handlerParams = handleActionMock.mock.calls[0]?.[0] as Record<string, unknown>;
+      const handlerParams = firstMockArg(handleActionMock, "handleAction");
       expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
       expect(handlerParams.filename).toBe("pic.png");
       expect(handlerParams.contentType).toBe("image/png");
@@ -696,7 +754,7 @@ describe("runMessageAction media behavior", () => {
       });
 
       expect(handleActionMock).toHaveBeenCalledTimes(1);
-      const handlerParams = handleActionMock.mock.calls[0]?.[0] as Record<string, unknown>;
+      const handlerParams = firstMockArg(handleActionMock, "handleAction");
       expect(handlerParams.caption).toBeUndefined();
       expect(handlerParams.message).toBe("look at this");
     });
@@ -773,12 +831,10 @@ describe("runMessageAction media behavior", () => {
           sandboxRoot: sandboxDir,
         });
 
-        expect(result.kind).toBe("action");
-        expect(result.payload).toMatchObject({
-          ok: true,
-          avatarPath: path.join(sandboxDir, "avatars", "profile.png"),
-          avatarUrl: "mxc://matrix.org/abc123def456",
-        });
+        const payload = requireActionPayload(result);
+        expect(payload.ok).toBe(true);
+        expect(payload.avatarPath).toBe(path.join(sandboxDir, "avatars", "profile.png"));
+        expect(payload.avatarUrl).toBe("mxc://matrix.org/abc123def456");
       });
     });
 
@@ -800,9 +856,9 @@ describe("runMessageAction media behavior", () => {
         });
 
         expect(result.kind).toBe("action");
-        expect((result.payload as { mediaLocalRoots?: string[] }).mediaLocalRoots).toEqual(
-          expect.arrayContaining([tempDir]),
-        );
+        const mediaLocalRoots = requireActionPayload(result).mediaLocalRoots;
+        expect(Array.isArray(mediaLocalRoots)).toBe(true);
+        expect(mediaLocalRoots).toContain(tempDir);
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
       }
@@ -828,9 +884,10 @@ describe("runMessageAction media behavior", () => {
         if (result.kind !== "send") {
           throw new Error("expected send result");
         }
-        expect(result.sendResult).toMatchObject({
-          channel: "profile-demo",
-        });
+        if (!result.sendResult) {
+          throw new Error("Expected send result payload");
+        }
+        expect(result.sendResult.channel).toBe("profile-demo");
       });
     });
   });

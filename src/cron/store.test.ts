@@ -66,7 +66,13 @@ async function captureRenameDestinations(action: () => Promise<void>): Promise<s
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.stat(targetPath);
+  } catch (err) {
+    expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected path to be missing: ${targetPath}`);
 }
 
 describe("resolveCronStorePath", () => {
@@ -123,10 +129,35 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    await expect(loadCronStore(store.storePath)).resolves.toMatchObject({
-      version: 1,
-      jobs: [{ id: "job-1", enabled: true }],
-    });
+    const loaded = await loadCronStore(store.storePath);
+    expect(loaded.version).toBe(1);
+    expect(loaded.jobs).toHaveLength(1);
+    expect(loaded.jobs[0]?.id).toBe("job-1");
+    expect(loaded.jobs[0]?.enabled).toBe(true);
+  });
+
+  it("skips non-object persisted jobs instead of hydrating scalar rows", async () => {
+    const store = await makeStorePath();
+    const valid = makeStore("job-valid", true).jobs[0];
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: ["bad-row", 7, null, false, valid],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const loaded = await loadCronStore(store.storePath);
+
+    expect(loaded.jobs).toHaveLength(1);
+    expect(loaded.jobs[0]?.id).toBe("job-valid");
+    expect(loaded.jobs[0]?.state).toStrictEqual({});
   });
 
   it("loads split cron state synchronously for task reconciliation", async () => {
@@ -135,11 +166,10 @@ describe("cron store", () => {
 
     const loaded = loadCronStoreSync(storePath);
 
-    expect(loaded.jobs[0]).toMatchObject({
-      id: "job-sync",
-      state: expect.any(Object),
-      updatedAtMs: expect.any(Number),
-    });
+    expect(loaded.jobs).toHaveLength(1);
+    expect(loaded.jobs[0]?.id).toBe("job-sync");
+    expect(loaded.jobs[0]?.state).toStrictEqual({});
+    expect(loaded.jobs[0]?.updatedAtMs).toBeTypeOf("number");
   });
 
   it("compares split state identity for flat legacy cron rows", async () => {
@@ -518,6 +548,48 @@ describe("cron store", () => {
 
     expect(loaded.jobs[0]?.updatedAtMs).toBe(job.createdAtMs);
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(job.createdAtMs + 60_000);
+  });
+
+  it("drops non-object runtime state from split cron sidecars", async () => {
+    const store = await makeStorePath();
+    const first = makeStore("job-array-state", true).jobs[0];
+    const second = makeStore("job-scalar-entry", true).jobs[0];
+    const config = {
+      version: 1,
+      jobs: [
+        { ...first, state: {}, updatedAtMs: undefined },
+        { ...second, state: {}, updatedAtMs: undefined },
+      ],
+    };
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify(config, null, 2), "utf-8");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: {
+            [first.id]: {
+              updatedAtMs: first.createdAtMs + 60_000,
+              state: ["not", "state"],
+            },
+            [second.id]: "not-an-entry",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const loaded = await loadCronStore(store.storePath);
+
+    expect(loaded.jobs[0]?.updatedAtMs).toBe(first.createdAtMs + 60_000);
+    expect(loaded.jobs[0]?.state).toStrictEqual({});
+    expect(loaded.jobs[1]?.updatedAtMs).toBe(second.createdAtMs);
+    expect(loaded.jobs[1]?.state).toStrictEqual({});
   });
 
   it.skipIf(process.platform === "win32")(

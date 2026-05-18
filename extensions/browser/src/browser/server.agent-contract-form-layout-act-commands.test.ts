@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { BROWSER_NAVIGATION_BLOCKED_MESSAGE } from "./errors.js";
 import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
   installAgentContractHooks,
@@ -436,9 +437,16 @@ describe("browser control server", () => {
 
     const dialog = await postJson(`${base}/hooks/dialog`, {
       accept: true,
+      dialogId: "d1",
       timeoutMs: 5678,
     });
     expectOkResult(dialog);
+    expectBrowserCallFields(pwMocks.armDialogViaPlaywright, {
+      targetId: "abcd1234",
+      accept: true,
+      dialogId: "d1",
+      timeoutMs: 5678,
+    });
 
     const waitDownload = await postJson(`${base}/wait/download`, {
       path: "report.pdf",
@@ -549,7 +557,7 @@ describe("browser control server", () => {
       });
       expect(res.status).toBe(400);
       const body = (await res.json()) as { error?: unknown };
-      expect(body.error).toEqual(expect.stringMatching(/(blocked|denied|not allowed|policy)/i));
+      expect(body.error).toBe(BROWSER_NAVIGATION_BLOCKED_MESSAGE);
       expect(pwMocks[routeCase.mockName]).not.toHaveBeenCalled();
     },
   );

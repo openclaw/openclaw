@@ -20,7 +20,8 @@ diagnostic surfaces around that boundary.
 OpenClaw still owns channel routing, session files, visible message delivery,
 OpenClaw dynamic tools, approvals, media delivery, and a transcript mirror.
 Codex owns the canonical native thread, native model loop, native tool
-continuation, and native compaction.
+continuation, and native compaction unless the active OpenClaw context engine
+declares that it owns compaction.
 
 ## Thread bindings and model changes
 
@@ -79,6 +80,11 @@ harness adapter. For Codex-native tools, Codex owns the canonical tool record.
 OpenClaw can mirror selected events, but it cannot rewrite the native Codex
 thread unless Codex exposes that operation through app-server or native hook
 callbacks.
+
+Codex app-server item notifications also provide async `after_tool_call`
+observations for native tool completions that are not already covered by the
+native `PostToolUse` relay. These observations are for telemetry and plugin
+compatibility only; they cannot block, delay, or mutate the native tool call.
 
 Compaction and LLM lifecycle projections come from Codex app-server
 notifications and OpenClaw adapter state, not native Codex hook commands.
@@ -145,13 +151,14 @@ requests fail closed.
 ## Queue steering
 
 Active-run queue steering maps onto Codex app-server `turn/steer`. With the
-default `messages.queue.mode: "steer"`, OpenClaw batches queued chat messages
-for the configured quiet window and sends them as one `turn/steer` request in
-arrival order. Legacy `queue` mode sends separate `turn/steer` requests.
+default `messages.queue.mode: "steer"`, OpenClaw batches steer-mode chat
+messages for the configured quiet window and sends them as one `turn/steer`
+request in arrival order.
 
 Codex review and manual compaction turns can reject same-turn steering. In that
-case, OpenClaw uses the follow-up queue when the selected mode allows fallback.
-See [Steering queue](/concepts/queue-steering).
+case, OpenClaw waits for the active run to finish before starting the prompt.
+Use `/queue followup` or `/queue collect` when messages should queue by default
+instead of steering. See [Steering queue](/concepts/queue-steering).
 
 ## Codex feedback upload
 
@@ -178,8 +185,17 @@ diagnostics bundle.
 ## Compaction and transcript mirror
 
 When the selected model uses the Codex harness, native thread compaction is
-delegated to Codex app-server. OpenClaw keeps a transcript mirror for channel
-history, search, `/new`, `/reset`, and future model or harness switching.
+delegated to Codex app-server unless an active context engine declares
+`ownsCompaction: true`. Owning context engines compact first and cause OpenClaw
+to abandon the old Codex backend thread so the next turn can rehydrate a fresh
+thread from engine-managed context. OpenClaw keeps a transcript mirror for
+channel history, search, `/new`, `/reset`, and future model or harness
+switching.
+
+When a context engine requests Codex thread-bootstrap projection, OpenClaw
+projects tool-call names and ids, input shapes, and redacted tool-result content
+into the fresh Codex thread. It does not copy raw tool-call argument values into
+that projection.
 
 The mirror includes the user prompt, final assistant text, and lightweight Codex
 reasoning or plan records when the app-server emits them. Today, OpenClaw only
