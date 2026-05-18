@@ -24,7 +24,7 @@ Options:
   --no-yolo                  Run nested Codex review with normal sandbox/approval prompts.
   --output FILE              Also save output to file.
   --parallel-tests CMD       Run review and test command concurrently.
-                              Default: pnpm --config.offline=true run check when available.
+                              Default: PNPM_CONFIG_OFFLINE=true pnpm run check when available.
   --dry-run                  Print selected commands, do not run.
   -h, --help                 Show help.
 
@@ -58,6 +58,7 @@ parallel_tests=
 parallel_tests_auto=false
 dry_run=false
 codex_review_prompt=
+codex_review_stdin_prompt=false
 openclaw_maintainer_validation=${AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION:-${OPENCLAW_TESTBOX:-0}}
 
 while [[ $# -gt 0 ]]; do
@@ -174,6 +175,13 @@ has_package_check_script() {
     >/dev/null 2>&1
 }
 
+auto_tests_disabled() {
+  case "${AUTOREVIEW_AUTO_TESTS:-${CODEX_REVIEW_AUTO_TESTS:-1}}" in
+    0|false|False|FALSE|no|No|NO|off|Off|OFF) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 current_branch=$(git branch --show-current 2>/dev/null || true)
 dirty=false
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -221,11 +229,11 @@ case "$openclaw_maintainer_validation" in
   *) openclaw_maintainer_validation=0 ;;
 esac
 if [[ -z "$parallel_tests" && "$openclaw_maintainer_validation" != 1 ]] &&
-  [[ "${AUTOREVIEW_AUTO_TESTS:-${CODEX_REVIEW_AUTO_TESTS:-1}}" != 0 ]]; then
+  ! auto_tests_disabled; then
   if [[ -f package.json && -f pnpm-lock.yaml && -d node_modules ]] &&
     command -v pnpm >/dev/null 2>&1 &&
     has_package_check_script; then
-    parallel_tests="pnpm --config.offline=true run check"
+    parallel_tests="PNPM_CONFIG_OFFLINE=true pnpm run check"
     parallel_tests_auto=true
   fi
 fi
@@ -238,7 +246,10 @@ OpenClaw maintainer autoreview validation policy:
 - If remote validation is not necessary for the finding, state the targeted proof that should be run instead of starting local tests.
 EOF
 )
-  review_cmd+=(-)
+  if [[ "$review_kind" == local ]]; then
+    review_cmd+=(-)
+    codex_review_stdin_prompt=true
+  fi
 fi
 
 printf 'autoreview target: %s\n' "$review_kind"
@@ -261,7 +272,7 @@ if [[ "$reviewer" == auto || "$reviewer" == codex ]]; then
   printf 'review:'
   printf ' %q' "${review_cmd[@]}"
   printf '\n'
-  if [[ -n "$codex_review_prompt" ]]; then
+  if [[ "$codex_review_stdin_prompt" == true ]]; then
     printf 'review policy: OpenClaw maintainer Crabbox/Testbox-aware validation prompt injected\n'
   fi
 else
@@ -312,7 +323,7 @@ trap cleanup EXIT
 
 run_review() {
   mkdir -p "$(dirname "$review_output")"
-  if [[ -n "$codex_review_prompt" ]]; then
+  if [[ "$codex_review_stdin_prompt" == true ]]; then
     printf '%s\n' "$codex_review_prompt" | "${review_cmd[@]}" 2>&1 | tee "$review_output"
   else
     "${review_cmd[@]}" 2>&1 | tee "$review_output"

@@ -112,7 +112,7 @@ The helper:
 - chooses dirty `--uncommitted` first
 - otherwise uses current PR base if `gh pr view` works
 - otherwise uses `origin/main` for non-main branches
-- auto-runs `pnpm --config.offline=true run check` in parallel when a repo has `package.json`, `pnpm-lock.yaml`, `node_modules`, and a `check` script; disable with `AUTOREVIEW_AUTO_TESTS=0`
+- auto-runs `PNPM_CONFIG_OFFLINE=true pnpm run check` in parallel when a repo has `package.json`, `pnpm-lock.yaml`, `node_modules`, and a `check` script; disable with `AUTOREVIEW_AUTO_TESTS=0`
 - use `--mode commit --commit <ref>` for already-committed work, especially clean `main` after landing
 - should be left in `--mode auto` or forced to `--mode branch` for PR/branch work; do not force `--mode local` after committing
 - supports `--reviewer codex|claude|pi|opencode|droid|copilot|auto`; `auto` means Codex first
