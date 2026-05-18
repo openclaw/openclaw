@@ -141,3 +141,34 @@ changelog/fragments/
 
 # Local scratch workspace
 .tmp/
+.cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.vmux*
+.artifacts/
+.openclaw-config-doc-cache/
+openclaw-path-alias-*/
+/.pi/
+/C:\\openclaw/
+*.log
+*.tmp
+*.heapsnapshot
+*.cpuprofile
+*.prof
+test/fixtures/openclaw-vitest-unit-report.json
+analysis/
+.artifacts/qa-e2e/
+/runs/
+/data/rtt.jsonl
+extensions/qa-lab/web/dist/
+
+# Generated bundled plugin runtime dependency manifests
+extensions/**/.openclaw-runtime-deps.json
+extensions/**/.openclaw-runtime-deps-stamp.json
+
+# Output dir for scripts/run-opengrep.sh (local opengrep scans)
+/.opengrep-out/
+/.crabbox-artifacts
+.comux*
+scripts/generated/
