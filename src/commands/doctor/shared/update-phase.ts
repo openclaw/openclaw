@@ -55,12 +55,15 @@ export function shouldDeferConfiguredPluginInstallRepair(env: NodeJS.ProcessEnv)
 /**
  * True iff a new doctor is running inside a shipped parent that can persist
  * doctor config repairs. Config writes must stay old-parent-readable because
- * that parent resumes after the candidate doctor exits.
+ * that parent resumes after the candidate doctor exits. Modern parents also
+ * set the explicit deferral marker, so they should keep current metadata
+ * writes while still deferring payload repair.
  */
 export function isLegacyParentWritableUpdateDoctorPass(env: NodeJS.ProcessEnv): boolean {
   return (
     isUpdatePackageSwapInProgress(env) &&
-    isTruthyEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])
+    isTruthyEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]) &&
+    !isTruthyEnvValue(env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV])
   );
 }
 
