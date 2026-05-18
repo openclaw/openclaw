@@ -4,8 +4,9 @@
 // header + the gemma workspace USER.md + MEMORY.md into a single .md file and
 // delivers it as a Telegram document (via the outbound mediaUrl path).
 //
-// Scope (P6-3a / stage A): NO compressed-context section — that arrives in
-// P6-3b. Keep this handler minimal and self-contained.
+// Scope (P6-3b / stage B): adds a 4th block — a recent-conversation
+// compression section generated via a Gemma4 self-call. On ANY failure the
+// 3-block CONTEXT.md still ships normally (the section is silently omitted).
 
 import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -18,6 +19,139 @@ import { resolvePreferredOpenClawTmpDir, type OpenClawPluginApi } from "openclaw
 function looksLikeGroupTarget(value: string | undefined): boolean {
   const v = (value ?? "").trim();
   return v.length > 0 && v.startsWith("-");
+}
+
+// P6-3b: exact system prompt mandated by the spec (do not paraphrase).
+const COMPRESS_SYSTEM_PROMPT =
+  "다음은 사용자와 AI 비서의 최근 대화 기록이다. 이 대화의 내용을 약 4000자 이내로 압축하라.\n" +
+  "\n" +
+  "중요 원칙:\n" +
+  '- 이것은 "요약"이 아니라 "압축"이다. 정보 보존이 매끄러운 문장보다 우선이다.\n' +
+  "- 구체적인 사실, 숫자, 이름, 시간, 결정사항, 진행 중인 일, 약속, 상태 변화는 모두 보존하라.\n" +
+  '- 인삿말이나 군더더기, 단순 확인 응답("응", "OK")만 제거하라.\n' +
+  "- 한국어로 작성하라.\n" +
+  "- 시간 순서를 유지하라.\n" +
+  "- 출력은 압축본 본문만. 헤더나 메타 설명 금지.";
+
+// Read the most recent conversation messages for this sender from gemma's
+// session jsonl (read-only). Accumulates from newest backwards up to a 50KB
+// raw byte cap, then returns chronological order. Any I/O or parse failure
+// degrades to [] (caller omits the compression section).
+async function readRecentMessages(
+  senderId: string,
+): Promise<Array<{ role: string; text: string }>> {
+  const sessionKey = `agent:gemma:telegram:direct:${senderId}`;
+  const sessionsPath = path.join(os.homedir(), ".openclaw/agents/gemma/sessions/sessions.json");
+  let sessions: Record<string, { sessionId?: string } | undefined>;
+  try {
+    sessions = JSON.parse(await readFile(sessionsPath, "utf-8")) as Record<
+      string,
+      { sessionId?: string } | undefined
+    >;
+  } catch {
+    return [];
+  }
+  const sessionId = sessions[sessionKey]?.sessionId;
+  if (!sessionId) return [];
+
+  const jsonlPath = path.join(os.homedir(), `.openclaw/agents/gemma/sessions/${sessionId}.jsonl`);
+  let jsonlRaw: string;
+  try {
+    jsonlRaw = await readFile(jsonlPath, "utf-8");
+  } catch {
+    return [];
+  }
+
+  const lines = jsonlRaw.split("\n");
+  const collected: Array<{ role: string; text: string }> = [];
+  let accumBytes = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim();
+    if (!line) continue;
+    let rec: {
+      type?: string;
+      message?: { role?: string; content?: unknown };
+    };
+    try {
+      rec = JSON.parse(line) as typeof rec;
+    } catch {
+      continue;
+    }
+    if (rec.type !== "message" || !rec.message) continue;
+    const role = (rec.message.role ?? "").trim();
+    if (!role) continue;
+
+    const rawContent = rec.message.content;
+    let text: string;
+    if (typeof rawContent === "string") {
+      text = rawContent;
+    } else if (Array.isArray(rawContent)) {
+      text = rawContent
+        .filter((p): p is { type?: string; text?: string } => !!p && typeof p === "object")
+        .filter((p) => p.type === "text" && typeof p.text === "string")
+        .map((p) => p.text as string)
+        .join("");
+    } else {
+      text = "";
+    }
+    if (!text) continue;
+
+    const byteLen = Buffer.byteLength(text, "utf8");
+    if (accumBytes + byteLen > 50000) break;
+    accumBytes += byteLen;
+    collected.push({ role, text });
+  }
+  collected.reverse();
+  return collected;
+}
+
+// Compress the given message sequence via the local Gemma4 vLLM endpoint.
+// Returns the compressed text (utf-8-safe trimmed to 4096 bytes) or null on
+// empty input / fetch error / timeout / empty response.
+async function compressRecentConversation(
+  messages: Array<{ role: string; text: string }>,
+): Promise<string | null> {
+  if (messages.length === 0) return null;
+  try {
+    const serialized = messages.map((m) => `[${m.role}] ${m.text}`).join("\n\n");
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
+    let data: { choices?: Array<{ message?: { content?: string } }> };
+    try {
+      const res = await fetch("http://localhost:8005/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "gemma4-26b-nvfp4",
+          messages: [
+            { role: "system", content: COMPRESS_SYSTEM_PROMPT },
+            { role: "user", content: serialized },
+          ],
+          max_tokens: 2048,
+          temperature: 0.3,
+        }),
+        signal: controller.signal,
+      });
+      data = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const out = data?.choices?.[0]?.message?.content;
+    if (!out || typeof out !== "string") return null;
+
+    const buf = Buffer.from(out, "utf8");
+    if (buf.length <= 4096) return out;
+    // Trim to 4096 bytes, dropping a trailing broken multibyte sequence.
+    let end = 4096;
+    while (end > 0 && (buf[end] & 0xc0) === 0x80) end--;
+    return buf.subarray(0, end).toString("utf8");
+  } catch {
+    return null;
+  }
 }
 
 export default function register(api: OpenClawPluginApi): void {
@@ -59,12 +193,31 @@ export default function register(api: OpenClawPluginApi): void {
         }
 
         // 4. Assemble: header + USER.md + MEMORY.md.
-        //    (Compressed-context section is intentionally omitted — P6-3b.)
         const header =
           "# CONTEXT.md - About This Person\n" +
           `- 이 파일을 업로드한 사람의 식별자: ${senderId}\n` +
           "- 아래 내용은 모두 이 사람에 대한 정보임.\n\n";
         const content = `${header}${userMd.trim()}\n\n${memoryMd.trim()}\n`;
+
+        // 4b. Append recent conversation compression (Gemma4 self-call).
+        //     On any failure (no messages / fetch error / timeout / empty),
+        //     silently omit the section. The 3-block CONTEXT.md still ships.
+        let finalContent = content;
+        try {
+          const messages = await readRecentMessages(senderId);
+          if (messages.length > 0) {
+            const compressed = await compressRecentConversation(messages);
+            if (compressed && compressed.trim()) {
+              finalContent =
+                content +
+                "\n# 최근 대화 압축본 (Gemma4 생성, 약 4KB)\n\n" +
+                compressed.trim() +
+                "\n";
+            }
+          }
+        } catch {
+          // silent fallback to 3-block content
+        }
 
         // 5. Write into OpenClaw's preferred tmp dir so the Telegram outbound
         //    pipeline's mediaLocalRoots allowlist accepts the file:// url.
@@ -74,7 +227,7 @@ export default function register(api: OpenClawPluginApi): void {
           resolvePreferredOpenClawTmpDir(),
           `CONTEXT-${safeId}-${Date.now()}.md`,
         );
-        await writeFile(tmpPath, content, "utf-8");
+        await writeFile(tmpPath, finalContent, "utf-8");
 
         // 6. Returning mediaUrl lets the outbound pipeline deliver it as a
         //    document (`.md` is not image/video/audio → api.sendDocument).
