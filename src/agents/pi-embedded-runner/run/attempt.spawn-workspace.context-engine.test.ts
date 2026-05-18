@@ -829,6 +829,43 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(contextCompiled?.data?.systemPrompt).toContain("internal heartbeat event");
   });
 
+  it("preserves channel inbound context (reply target) in runtime-only prompt submissions", async () => {
+    // Regression for #83767: when transcriptPrompt is empty (runtime-only path),
+    // currentInboundContext used to be dropped, hiding the Telegram/Discord reply
+    // target from the model. The fix passes inbound context through unconditionally
+    // while runtime-generated context still goes to the system prompt.
+    let seenPrompt: string | undefined;
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: "internal runtime event",
+        transcriptPrompt: "",
+        currentInboundContext: {
+          text: [
+            "Reply target of current user message (untrusted, for context):",
+            "```json",
+            '{"text":"earlier message body"}',
+            "```",
+          ].join("\n"),
+        },
+      },
+      sessionPrompt: async (session, prompt) => {
+        seenPrompt = prompt;
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seenPrompt).toContain("Reply target of current user message");
+    expect(seenPrompt).toContain("earlier message body");
+    expect(seenPrompt).toContain("Continue the OpenClaw runtime event.");
+  });
+
   it("submits suppressed room event context as the model prompt", async () => {
     let seenPrompt: string | undefined;
 

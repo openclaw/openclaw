@@ -3618,7 +3618,10 @@ export async function runEmbeddedAttempt(
               : "runtime-event",
           });
           const promptForModel = buildCurrentInboundPrompt({
-            context: promptSubmission.runtimeOnly ? undefined : params.currentInboundContext,
+            // Channel-level inbound context (reply target, mention metadata) must reach
+            // the model even on runtime-only turns. Only `runtimeContext` (plugin/hook
+            // derived) is relocated to the system prompt in the branch below — see #83767.
+            context: params.currentInboundContext,
             prompt: promptSubmission.prompt,
           });
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
