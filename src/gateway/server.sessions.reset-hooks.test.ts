@@ -525,6 +525,63 @@ test("sessions.reset drops cli session bindings so the next turn does not --resu
   expect(nextEntry?.cliSessionIds).toBeUndefined();
 });
 
+test("sessions.reset clears cli session bindings for parent-linked non-subagent sessions (e.g. dashboard children)", async () => {
+  const { dir } = await createSessionStoreDir();
+  const dashboardTranscript = path.join(dir, "sess-dashboard-child.jsonl");
+  await fs.writeFile(
+    dashboardTranscript,
+    `${JSON.stringify({
+      type: "message",
+      id: "m-dashboard",
+      message: { role: "user", content: "hello from dashboard child" },
+    })}\n`,
+    "utf-8",
+  );
+
+  await writeSessionStore({
+    entries: {
+      "dashboard:child:42": sessionStoreEntry("sess-dashboard-child", {
+        sessionFile: dashboardTranscript,
+        // parentSessionKey is set but the session key carries no `:subagent:`
+        // marker, so this is a user-facing parent-linked session, not a
+        // spawned subagent. The tighter predicate should still clear the
+        // CLI binding here so /reset matches user intuition.
+        parentSessionKey: "agent:main:main",
+        claudeCliSessionId: "claude-cli-dashboard-session",
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "claude-cli-dashboard-session" },
+        },
+        cliSessionIds: { "claude-cli": "claude-cli-dashboard-session" },
+      }),
+    },
+  });
+
+  const [{ getRuntimeConfig }, { resolveGatewaySessionStoreTarget }, { loadSessionStore }] =
+    await Promise.all([
+      import("../config/config.js"),
+      import("./session-utils.js"),
+      import("../config/sessions.js"),
+    ]);
+  const gatewayStorePath = resolveGatewaySessionStoreTarget({
+    cfg: getRuntimeConfig(),
+    key: "dashboard:child:42",
+  }).storePath;
+
+  const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
+    key: "dashboard:child:42",
+    reason: "new",
+  });
+  expect(reset.ok).toBe(true);
+
+  const store = loadSessionStore(gatewayStorePath, { skipCache: true });
+  const nextEntry = store["agent:main:dashboard:child:42"];
+  expect(nextEntry).toBeDefined();
+  expect(nextEntry?.sessionId).not.toBe("sess-dashboard-child");
+  expect(nextEntry?.claudeCliSessionId).toBeUndefined();
+  expect(nextEntry?.cliSessionBindings).toBeUndefined();
+  expect(nextEntry?.cliSessionIds).toBeUndefined();
+});
+
 test("sessions.reset preserves cli session bindings for spawned subagents (Tak Hoffman's fa56682b3ced contract)", async () => {
   const { dir } = await createSessionStoreDir();
   const childTranscript = path.join(dir, "sess-spawned-child.jsonl");
