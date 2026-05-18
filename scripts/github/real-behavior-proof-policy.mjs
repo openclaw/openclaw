@@ -108,9 +108,6 @@ export function isExternalPullRequest(pullRequest, labels) {
   if (privilegedAuthorAssociations.has(authorAssociation)) {
     return false;
   }
-  // Private org membership reports as CONTRIBUTOR in author_association. The
-  // labeler workflow applies "maintainer" via the team-membership API, which
-  // sees private members, so trust that label as an equivalent privileged signal.
   if (hasMaintainerAuthorLabel(labels ?? pullRequest.labels)) {
     return false;
   }

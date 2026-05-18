@@ -175,10 +175,6 @@ describe("real-behavior-proof-policy", () => {
   });
 
   it("skips private maintainers identified by the maintainer label", () => {
-    // Private org membership surfaces as author_association=CONTRIBUTOR even
-    // though the user holds maintainer permissions. The labeler workflow
-    // tags the PR with the "maintainer" label via the team-membership API,
-    // which the gate should trust as an equivalent privileged signal.
     const evaluation = evaluateRealBehaviorProof({
       pullRequest: externalPr("", { labels: [{ name: "maintainer" }] }),
     });
