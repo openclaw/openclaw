@@ -20,6 +20,7 @@ type RenderEnv = {
 type MarkdownToken = {
   type: string;
   content?: string;
+  info?: string;
   children?: MarkdownToken[];
   attrs?: [string, string][];
   attrGet?: (name: string) => string | null;
@@ -40,6 +41,7 @@ export type MarkdownStyleSpan = {
   start: number;
   end: number;
   style: MarkdownStyle;
+  language?: string;
 };
 
 export type MarkdownLinkSpan = {
@@ -53,6 +55,10 @@ export type MarkdownIR = {
   styles: MarkdownStyleSpan[];
   links: MarkdownLinkSpan[];
 };
+
+function copyStyleSpanMetadata(span: MarkdownStyleSpan): Pick<MarkdownStyleSpan, "language"> {
+  return span.language === undefined ? {} : { language: span.language };
+}
 
 export type MarkdownTableData = {
   headers: string[];
@@ -325,7 +331,12 @@ function renderInlineCode(state: RenderState, content: string) {
   target.styles.push({ start, end: start + content.length, style: "code" });
 }
 
-function renderCodeBlock(state: RenderState, content: string) {
+function normalizeCodeBlockLanguage(info: string | undefined): string | undefined {
+  const language = info?.trim().split(/\s+/, 1)[0]?.trim();
+  return language ? language : undefined;
+}
+
+function renderCodeBlock(state: RenderState, content: string, info?: string) {
   let code = content ?? "";
   if (!code.endsWith("\n")) {
     code = `${code}\n`;
@@ -333,7 +344,13 @@ function renderCodeBlock(state: RenderState, content: string) {
   const target = resolveRenderTarget(state);
   const start = target.text.length;
   target.text += code;
-  target.styles.push({ start, end: start + code.length, style: "code_block" });
+  const language = normalizeCodeBlockLanguage(info);
+  target.styles.push({
+    start,
+    end: start + code.length,
+    style: "code_block",
+    ...(language === undefined ? {} : { language }),
+  });
   if (state.env.listStack.length === 0) {
     target.text += "\n";
   }
@@ -397,7 +414,12 @@ function trimCell(cell: TableCell): TableCell {
     const sliceStart = Math.max(0, span.start - start);
     const sliceEnd = Math.min(trimmedLength, span.end - start);
     if (sliceEnd > sliceStart) {
-      trimmedStyles.push({ start: sliceStart, end: sliceEnd, style: span.style });
+      trimmedStyles.push({
+        start: sliceStart,
+        end: sliceEnd,
+        style: span.style,
+        ...copyStyleSpanMetadata(span),
+      });
     }
   }
   const trimmedLinks: MarkdownLinkSpan[] = [];
@@ -422,6 +444,7 @@ function appendCell(state: RenderState, cell: TableCell) {
       start: start + span.start,
       end: start + span.end,
       style: span.style,
+      ...copyStyleSpanMetadata(span),
     });
   }
   for (const link of cell.links) {
@@ -732,7 +755,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       case "code_block":
       case "fence":
-        renderCodeBlock(state, token.content ?? "");
+        renderCodeBlock(state, token.content ?? "", token.info);
         break;
       case "html_block":
       case "html_inline":
@@ -834,7 +857,7 @@ function clampStyleSpans(spans: MarkdownStyleSpan[], maxLength: number): Markdow
     const start = Math.max(0, Math.min(span.start, maxLength));
     const end = Math.max(start, Math.min(span.end, maxLength));
     if (end > start) {
-      clamped.push({ start, end, style: span.style });
+      clamped.push({ start, end, style: span.style, ...copyStyleSpanMetadata(span) });
     }
   }
   return clamped;
@@ -869,6 +892,7 @@ function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
     if (
       prev &&
       prev.style === span.style &&
+      prev.language === span.language &&
       // Blockquotes are container blocks. Adjacent blockquote spans should not merge or
       // consecutive blockquotes can "style bleed" across the paragraph boundary.
       (span.start < prev.end || (span.start === prev.end && span.style !== "blockquote"))
@@ -912,6 +936,7 @@ function sliceStyleSpans(
       start: bounds.start - start,
       end: bounds.end - start,
       style: span.style,
+      ...copyStyleSpanMetadata(span),
     });
   }
   return mergeStyleSpans(sliced);
