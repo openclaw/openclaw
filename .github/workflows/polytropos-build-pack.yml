@@ -25,7 +25,7 @@ env:
   OPENCLAW_TSDOWN_NODE_OPTIONS: "--max-old-space-size=6144"
   NODE_VERSION: "24.15.0"
   PNPM_VERSION: "11.0.8"
-  RELEASE_TAG: ${{ inputs.releaseTag || "" }}
+  RELEASE_TAG: ${{ inputs.releaseTag || '' }}
 
 jobs:
   build_pack:
