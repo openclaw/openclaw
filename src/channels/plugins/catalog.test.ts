@@ -1,11 +1,22 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getChannelPluginCatalogEntry } from "./catalog.js";
 
 describe("channel plugin catalog", () => {
   it("keeps third-party channel ids mapped with catalog install trust", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-catalog-state-"));
+    const workspaceDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-channel-catalog-workspace-"),
+    );
     const options = {
-      workspaceDir: "/tmp/openclaw-channel-catalog-empty-workspace",
-      env: {},
+      workspaceDir,
+      env: {
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
     };
 
     const wecom = getChannelPluginCatalogEntry("wecom", options);
