@@ -417,6 +417,15 @@ func chatPTYHandler(w http.ResponseWriter, r *http.Request) {
 		cwd = os.Getenv("HOME")
 	}
 
+	// Same login-flow gate as /chat: if a `claude setup-token` is
+	// in flight on this broker, refuse to spawn a competing persistent
+	// session that would race the OAuth state on disk. fleet-task #234.
+	if globalLoginState.active(binary) {
+		writeAuthInProgressFrame(w, binary)
+		log("chat-pty: refused spawn binary=%s reason=auth_in_progress", binary)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
 	defer cancel()
 

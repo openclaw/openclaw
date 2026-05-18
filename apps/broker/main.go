@@ -195,16 +195,32 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	// We deliberately log without secrets.
 	log("ws: started binary=%s cwd=%s pid=%d token=%s", binary, cwd, cmd.Process.Pid, redact(token))
 
-	bridgePTY(conn, ptmx, cmd)
+	// Track any binary that gets `/login`-ed inside this session so we
+	// can clear the global flag on WS close even if the user opens
+	// multiple OAuth dances in one shell.
+	markedDuringSession := map[string]struct{}{}
+	defer func() {
+		for b := range markedDuringSession {
+			globalLoginState.clear(b)
+			log("ws: cleared login-in-progress flag for binary=%s", b)
+		}
+	}()
+
+	bridgePTY(conn, ptmx, cmd, markedDuringSession)
 }
 
 // bridgePTY shovels frames between the WS client and the PTY until either
 // side closes or the child exits.
+//
+// markedDuringSession is the caller's record of which binaries this WS
+// has flagged as `logging_in`; bridgePTY appends to it as it sniffs
+// stdin frames. The caller is responsible for clearing those flags on
+// session end.
 func bridgePTY(conn *websocket.Conn, ptmx interface {
 	io.Reader
 	io.Writer
 	io.Closer
-}, cmd *exec.Cmd) {
+}, cmd *exec.Cmd, markedDuringSession map[string]struct{}) {
 	var wg sync.WaitGroup
 	done := make(chan struct{})
 	closeOnce := sync.Once{}
@@ -246,6 +262,18 @@ func bridgePTY(conn *websocket.Conn, ptmx interface {
 			}
 			switch data[0] {
 			case frameStdin:
+				// Sniff for `codex login` / `claude setup-token`
+				// trigger phrases — when one fires, mark the relevant
+				// binary as logging-in so /chat refuses to spawn
+				// competing processes that would race the OAuth flow
+				// (fleet-task #234).
+				if hit := sniffLoginTrigger(data[1:]); hit != "" {
+					if _, already := markedDuringSession[hit]; !already {
+						globalLoginState.mark(hit)
+						markedDuringSession[hit] = struct{}{}
+						log("ws: detected /login flow for binary=%s; blocking /chat spawns until WS close", hit)
+					}
+				}
 				if _, werr := ptmx.Write(data[1:]); werr != nil {
 					closeDone()
 					return
@@ -574,6 +602,18 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Cwd == "" {
 		req.Cwd = os.Getenv("HOME")
+	}
+
+	// Gate: if a /login flow is active for this binary, refuse to spawn
+	// a competing process. Returns a clean ndjson error frame instead
+	// of an HTTP 4xx so platform-context's /auth probe (the loudest
+	// caller) and the unified-agent router both interpret it as a
+	// well-formed "pending-auth" turn rather than a transport failure.
+	// fleet-task #234.
+	if globalLoginState.active(binary) {
+		writeAuthInProgressFrame(w, binary)
+		log("chat: refused spawn binary=%s reason=auth_in_progress", binary)
+		return
 	}
 
 	// When SessionID is set, claude resumes that session — flat-prompt
