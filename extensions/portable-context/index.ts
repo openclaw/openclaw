@@ -80,7 +80,7 @@ async function resolveContextPaths(
 
 // P6-3b: exact system prompt mandated by the spec (do not paraphrase).
 const COMPRESS_SYSTEM_PROMPT =
-  "다음은 사용자와 AI 비서의 최근 대화 기록이다. 이 대화의 내용을 약 4000자 이내로 압축하라.\n" +
+  "다음은 사용자와 AI 비서의 최근 대화 기록이다. 이 대화의 내용을 약 8000자 정도로 압축하라.\n" +
   "\n" +
   "중요 원칙:\n" +
   '- 이것은 "요약"이 아니라 "압축"이다. 정보 보존이 매끄러운 문장보다 우선이다.\n' +
@@ -170,7 +170,7 @@ async function readRecentMessages(
 }
 
 // Compress the given message sequence via the local Gemma4 vLLM endpoint.
-// Returns the compressed text (utf-8-safe trimmed to 4096 bytes) or null on
+// Returns the compressed text (utf-8-safe trimmed to 16384 bytes) or null on
 // empty input / fetch error / timeout / empty response.
 async function compressRecentConversation(
   messages: Array<{ role: string; text: string }>,
@@ -192,7 +192,7 @@ async function compressRecentConversation(
             { role: "system", content: COMPRESS_SYSTEM_PROMPT },
             { role: "user", content: serialized },
           ],
-          max_tokens: 2048,
+          max_tokens: 8192,
           temperature: 0.3,
         }),
         signal: controller.signal,
@@ -208,9 +208,9 @@ async function compressRecentConversation(
     if (!out || typeof out !== "string") return null;
 
     const buf = Buffer.from(out, "utf8");
-    if (buf.length <= 4096) return out;
-    // Trim to 4096 bytes, dropping a trailing broken multibyte sequence.
-    let end = 4096;
+    if (buf.length <= 16384) return out;
+    // Trim to 16384 bytes, dropping a trailing broken multibyte sequence.
+    let end = 16384;
     while (end > 0 && (buf[end] & 0xc0) === 0x80) end--;
     return buf.subarray(0, end).toString("utf8");
   } catch {
@@ -288,7 +288,7 @@ export default function register(api: OpenClawPluginApi): void {
             if (compressed && compressed.trim()) {
               finalContent =
                 content +
-                "\n# 최근 대화 압축본 (Gemma4 생성, 약 4KB)\n\n" +
+                "\n# 최근 대화 압축본 (Gemma4 생성, 최대 16KB)\n\n" +
                 compressed.trim() +
                 "\n";
             }
