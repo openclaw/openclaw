@@ -138,12 +138,15 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
 });
 
 const pathValidationMocks = vi.hoisted(() => ({
-  resolveExistingPathsWithinRoot: vi.fn(
-    async ({ requestedPaths }: { rootDir: string; requestedPaths: string[] }) => ({
-      ok: true as const,
-      paths: requestedPaths,
-    }),
-  ),
+  resolveExistingPathsWithinRoot: vi.fn<
+    (args: {
+      rootDir: string;
+      requestedPaths: string[];
+    }) => Promise<{ ok: true; paths: string[] } | { ok: false; error: string }>
+  >(async ({ requestedPaths }) => ({
+    ok: true as const,
+    paths: requestedPaths,
+  })),
 }));
 
 const sessionTabRegistryMocks = vi.hoisted(() => ({
