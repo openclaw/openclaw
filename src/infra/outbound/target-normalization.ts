@@ -57,6 +57,24 @@ export function normalizeTargetForProvider(provider: string, raw?: string): stri
     return undefined;
   }
   const providerId = normalizeOptionalLowercaseString(provider);
+  // Fast-path a few high-frequency normalizations to avoid triggering bundled
+  // channel plugin loading during lightweight call sites (for example unit-fast
+  // source-delivery suppression comparisons).
+  if (providerId === "telegram") {
+    const trimmed = fallback;
+    if (/^telegram:-?\d+:topic:\d+$/iu.test(trimmed)) {
+      return trimmed;
+    }
+    if (/^-?\d+:topic:\d+$/iu.test(trimmed)) {
+      return `telegram:${trimmed}`;
+    }
+    if (/^telegram:-?\d+$/iu.test(trimmed)) {
+      return trimmed;
+    }
+    if (/^-?\d+$/iu.test(trimmed)) {
+      return `telegram:${trimmed}`;
+    }
+  }
   const normalizer = providerId ? resolveTargetNormalizer(providerId) : undefined;
   return normalizeOptionalString(normalizer?.(raw) ?? fallback);
 }
