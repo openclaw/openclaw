@@ -95,6 +95,28 @@ describe("workspace reconcile package helpers", () => {
     });
   });
 
+  it("does not walk agent session transcripts even when they contain markdown files", async () => {
+    const tmpDir = getTmpDir();
+    fsSync.mkdirSync(path.join(tmpDir, "projects"), { recursive: true });
+    fsSync.mkdirSync(path.join(tmpDir, "agents", "main", "sessions"), { recursive: true });
+    fsSync.writeFileSync(
+      path.join(tmpDir, "projects", "included.md"),
+      "# Included\n\nProject note\n",
+      "utf8",
+    );
+    fsSync.writeFileSync(
+      path.join(tmpDir, "agents", "main", "sessions", "transcript.md"),
+      "# Session\n\nThis should stay out of the reconciler corpus.\n",
+      "utf8",
+    );
+
+    const { collectWorkspaceReconcileFiles } = await loadWorkspaceReconcileModule();
+    const files = await collectWorkspaceReconcileFiles(tmpDir);
+
+    expect(files.map((file) => file.path)).toEqual(["projects/included.md"]);
+    expect(files.some((file) => file.path.includes("agents/main/sessions"))).toBe(false);
+  });
+
   it("keeps unrelated heading chunks stable when one section changes", async () => {
     const tmpDir = getTmpDir();
     fsSync.mkdirSync(path.join(tmpDir, "projects"), { recursive: true });
