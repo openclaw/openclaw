@@ -57,6 +57,52 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     });
   });
 
+  it("skips skill root scans when the active agent has an explicit empty skill filter", () => {
+    const result = resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/tmp/workspace",
+      config: {
+        agents: {
+          defaults: {
+            skills: [],
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      shouldLoadSkillEntries: true,
+      skillEntries: [],
+    });
+    expect(loadWorkspaceSkillEntriesSpy).not.toHaveBeenCalled();
+  });
+
+  it("preserves snapshot prompts even when the active skill filter is empty", () => {
+    resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/tmp/workspace",
+      config: {
+        agents: {
+          defaults: {
+            skills: [],
+          },
+        },
+      },
+      skillsSnapshot: {
+        prompt: "skills prompt",
+        skills: [],
+      },
+    });
+
+    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", {
+      config: {
+        agents: {
+          defaults: {
+            skills: [],
+          },
+        },
+      },
+    });
+  });
+
   it("prefers the active runtime snapshot when caller config still contains SecretRefs", () => {
     const sourceConfig: OpenClawConfig = {
       skills: {
