@@ -75,6 +75,8 @@ import org.commonmark.node.SoftLineBreak
 import org.commonmark.node.StrongEmphasis
 import org.commonmark.node.ThematicBreak
 import org.commonmark.parser.Parser
+import java.net.URI
+import java.util.Locale
 import org.commonmark.node.Image as MarkdownImage
 import org.commonmark.node.Text as MarkdownTextNode
 
@@ -548,15 +550,13 @@ private fun AnnotatedString.Builder.appendLinkNode(
       color = linkColor,
       textDecoration = TextDecoration.Underline,
     )
-  if (destination.isEmpty()) {
-    withStyle(linkStyle) {
-      appendInlineNode(
-        link.firstChild,
-        inlineCodeBg = inlineCodeBg,
-        inlineCodeColor = inlineCodeColor,
-        linkColor = linkColor,
-      )
-    }
+  if (destination.isEmpty() || !isSafeMarkdownLinkDestination(destination)) {
+    appendInlineNode(
+      link.firstChild,
+      inlineCodeBg = inlineCodeBg,
+      inlineCodeColor = inlineCodeColor,
+      linkColor = linkColor,
+    )
     return
   }
 
@@ -568,6 +568,14 @@ private fun AnnotatedString.Builder.appendLinkNode(
       linkColor = linkColor,
     )
   }
+}
+
+private fun isSafeMarkdownLinkDestination(destination: String): Boolean {
+  val scheme =
+    runCatching { URI(destination).scheme?.lowercase(Locale.US) }
+      .getOrNull()
+      ?: return false
+  return scheme == "http" || scheme == "https"
 }
 
 internal fun buildChatInlineMarkdown(

@@ -34,6 +34,22 @@ class ChatMarkdownTest {
   }
 
   @Test
+  fun markdownLinksDropUnsafeDestinations() {
+    listOf(
+      "intent://example/#Intent;scheme=openclaw;end",
+      "file:///sdcard/Download/x",
+      "content://downloads/public_downloads/1",
+      "tel:+15551234567",
+      "javascript:alert(1)",
+    ).forEach { destination ->
+      val annotated = buildChatInlineMarkdown("Open [settings]($destination)")
+
+      assertEquals("Open settings", annotated.text)
+      assertTrue(annotated.getLinkAnnotations(0, annotated.length).isEmpty())
+    }
+  }
+
+  @Test
   fun plainTextDoesNotAddLinkAnnotations() {
     val annotated = buildChatInlineMarkdown("No link here")
 
