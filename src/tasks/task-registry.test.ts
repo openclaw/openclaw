@@ -1957,6 +1957,42 @@ describe("task-registry", () => {
     });
   });
 
+  it("does not mark unrelated childless subagent tasks lost", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+
+      const task = createTaskRecord({
+        runtime: "subagent",
+        taskKind: "codex-native",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        sourceId: "other-runtime:child-thread",
+        runId: "other-runtime:child-thread",
+        task: "Non-Codex childless row",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+        lastEventAt: now - 31 * 60_000,
+      });
+
+      expect(await runTaskRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        recovered: 0,
+        cleanupStamped: 0,
+        pruned: 0,
+      });
+      expectRecordFields(requireTaskById(task.taskId), {
+        status: "running",
+        lastEventAt: now - 31 * 60_000,
+      });
+    });
+  });
+
   it("closes terminal parent-owned one-shot ACP sessions during maintenance", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -3236,6 +3272,38 @@ describe("task-registry", () => {
         lastEventAt: expect.any(Number),
         cleanupAfter: expect.any(Number),
         error: "Cancelled by operator.",
+      });
+      expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not cancel unrelated childless subagent tasks", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const task = createTaskRecord({
+        runtime: "subagent",
+        taskKind: "codex-native",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        sourceId: "other-runtime:child-thread",
+        runId: "other-runtime:child-thread",
+        task: "Non-Codex childless row",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(result).toEqual({
+        found: true,
+        cancelled: false,
+        reason: "Task has no cancellable child session.",
+        task,
       });
       expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
     });
