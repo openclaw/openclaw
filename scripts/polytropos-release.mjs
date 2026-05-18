@@ -45,7 +45,6 @@ function defaultLogPath() {
 function parseArgs(argv) {
   // Supported:
   //   node scripts/polytropos-release.mjs release [--log <path>]
-  node scripts/polytropos-release.mjs promote --tgz <path> [--log <path>]
   //   node scripts/polytropos-release.mjs promote --tgz <path> [--log <path>]
   const args = argv.slice(2);
   const cmd = args[0] || "";
