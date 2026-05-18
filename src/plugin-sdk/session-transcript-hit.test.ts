@@ -71,7 +71,7 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     const identity = extractTranscriptIdentityFromSessionsMemoryHit(
       "qmd/sessions-main/normal-session.md",
     );
-    expect(identity).toEqual({ stem: "normal-session", archived: false });
+    expect(identity).toEqual({ stem: "normal-session", ownerAgentId: "main", archived: false });
   });
 
   it("returns archived identity for QMD-normalized reset .md stems", () => {
@@ -80,6 +80,7 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     );
     expect(identity).toEqual({
       stem: "abc-uuid",
+      ownerAgentId: "main",
       archived: true,
     });
   });
@@ -106,6 +107,7 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     );
     expect(identity).toEqual({
       stem: "abc-uuid",
+      ownerAgentId: "main",
       archived: true,
     });
   });
@@ -116,6 +118,7 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     );
     expect(identity).toEqual({
       stem: "abc.jsonl.reset.not-a-timestamp",
+      ownerAgentId: "main",
       archived: false,
     });
   });
@@ -133,6 +136,18 @@ describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
     expect(
       extractTranscriptIdentityFromSessionsMemoryHit(
         "sessions/main/deleted-uuid.jsonl.deleted.2026-02-16T22-27-33.000Z",
+      ),
+    ).toEqual({
+      stem: "deleted-uuid",
+      ownerAgentId: "main",
+      archived: true,
+    });
+  });
+
+  it("extracts owner metadata from QMD session collection archive paths", () => {
+    expect(
+      extractTranscriptIdentityFromSessionsMemoryHit(
+        "qmd/sessions-main/deleted-uuid-jsonl-deleted-2026-02-16t22-27-33-000z.md",
       ),
     ).toEqual({
       stem: "deleted-uuid",
@@ -177,5 +192,26 @@ describe("resolveTranscriptStemToSessionKeys", () => {
     });
 
     expect(keys).toEqual(["agent:main:deleted-stem"]);
+  });
+
+  it("matches QMD-slugified stems to unique session ids with safe punctuation", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:s1": baseEntry({ sessionId: "foo_bar.v1" }),
+    };
+
+    expect(resolveTranscriptStemToSessionKeys({ store, stem: "foo-bar-v1" })).toEqual([
+      "agent:main:s1",
+    ]);
+  });
+
+  it("prefers exact stem matches before QMD-slugified fallback matches", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:exact": baseEntry({ sessionId: "foo-bar" }),
+      "agent:main:slug": baseEntry({ sessionId: "foo_bar" }),
+    };
+
+    expect(resolveTranscriptStemToSessionKeys({ store, stem: "foo-bar" })).toEqual([
+      "agent:main:exact",
+    ]);
   });
 });

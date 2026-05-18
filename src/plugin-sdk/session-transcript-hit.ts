@@ -29,6 +29,15 @@ function restoreQmdNormalizedArchiveName(mdStem: string): string | null {
   return restoredTimestamp ? `${sessionId}.jsonl.${reason}.${restoredTimestamp}` : null;
 }
 
+function normalizeQmdSessionStem(stem: string): string {
+  return stem
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^\p{Letter}\p{Number}]+/gu, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 export type SessionTranscriptHitIdentity = {
   stem: string;
   ownerAgentId?: string;
@@ -42,10 +51,14 @@ function parseSessionsPath(hitPath: string): { base: string; ownerAgentId?: stri
     : normalized;
   const parts = fromSessionsRoot.split("/").filter(Boolean);
   const base = path.posix.basename(fromSessionsRoot);
+  const qmdCollection = normalized.startsWith("qmd/") ? parts[1] : undefined;
+  const qmdOwnerAgentId = qmdCollection?.startsWith("sessions-")
+    ? normalizeAgentId(qmdCollection.slice("sessions-".length))
+    : undefined;
   const ownerAgentId =
     normalized.startsWith("sessions/") && parts.length === 2
       ? normalizeAgentId(parts[0])
-      : undefined;
+      : qmdOwnerAgentId;
   return { base, ownerAgentId };
 }
 
@@ -124,6 +137,27 @@ export function resolveTranscriptStemToSessionKeys(params: {
   const deduped = [...new Set(matches)];
   if (deduped.length > 0) {
     return deduped;
+  }
+  const normalizedStem = normalizeQmdSessionStem(params.stem);
+  if (normalizedStem) {
+    for (const [sessionKey, entry] of Object.entries(store)) {
+      const sessionFile = normalizeOptionalString(entry.sessionFile);
+      if (sessionFile) {
+        const base = path.basename(sessionFile);
+        const fileStem = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
+        if (normalizeQmdSessionStem(fileStem) === normalizedStem) {
+          matches.push(sessionKey);
+          continue;
+        }
+      }
+      if (normalizeQmdSessionStem(entry.sessionId) === normalizedStem) {
+        matches.push(sessionKey);
+      }
+    }
+  }
+  const normalizedDeduped = [...new Set(matches)];
+  if (normalizedDeduped.length > 0) {
+    return normalizedDeduped;
   }
   const archivedOwnerAgentId = normalizeOptionalString(params.archivedOwnerAgentId);
   return archivedOwnerAgentId
