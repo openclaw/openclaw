@@ -32,6 +32,10 @@ function reasoningEffortMap(model: unknown): Record<string, string> | undefined 
   return readCompat<{ reasoningEffortMap?: Record<string, string> }>(model)?.reasoningEffortMap;
 }
 
+function supportsPromptCacheKey(model: unknown): boolean | undefined {
+  return readCompat<{ supportsPromptCacheKey?: boolean }>(model)?.supportsPromptCacheKey;
+}
+
 const MISTRAL_REASONING_EFFORT_MAP = {
   off: "none",
   minimal: "none",
@@ -49,6 +53,7 @@ describe("resolveMistralCompatPatch", () => {
       supportsStore: false,
       supportsReasoningEffort: true,
       maxTokensField: "max_tokens",
+      supportsPromptCacheKey: true,
       reasoningEffortMap: MISTRAL_REASONING_EFFORT_MAP,
     });
   });
@@ -58,6 +63,7 @@ describe("resolveMistralCompatPatch", () => {
       supportsStore: false,
       supportsReasoningEffort: true,
       maxTokensField: "max_tokens",
+      supportsPromptCacheKey: true,
       reasoningEffortMap: MISTRAL_REASONING_EFFORT_MAP,
     });
   });
@@ -77,6 +83,8 @@ describe("applyMistralModelCompat", () => {
     expect(supportsReasoningEffort(normalized)).toBe(false);
     expect(maxTokensField(normalized)).toBe("max_tokens");
     expect(reasoningEffortMap(normalized)).toBeUndefined();
+    // Regression for #83709: Mistral compat patch must opt the transport gate in.
+    expect(supportsPromptCacheKey(normalized)).toBe(true);
   });
 
   it("applies reasoning compat for mistral-small-latest", () => {
@@ -126,6 +134,7 @@ describe("applyMistralModelCompat", () => {
         supportsStore: false,
         supportsReasoningEffort: false,
         maxTokensField: "max_tokens" as const,
+        supportsPromptCacheKey: true,
       },
     };
     expect(applyMistralModelCompat(model)).toBe(model);

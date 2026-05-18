@@ -15,9 +15,15 @@ const MISTRAL_MAX_TOKENS_FIELD = "max_tokens";
 export const MISTRAL_MODEL_TRANSPORT_PATCH = {
   supportsStore: false,
   maxTokensField: MISTRAL_MAX_TOKENS_FIELD,
+  // Mistral's chat completion API accepts `prompt_cache_key`; cached prefix tokens
+  // are billed at 10% of the standard input price. Without this flag the transport
+  // gate in openai-transport-stream (compat.supportsPromptCacheKey === true) never
+  // fires for Mistral, so usage.cached_tokens stays at 0. See #83709.
+  supportsPromptCacheKey: true,
 } as const satisfies {
   supportsStore: boolean;
   maxTokensField: "max_tokens";
+  supportsPromptCacheKey: boolean;
 };
 
 const MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP: Record<string, string> = {
@@ -38,6 +44,7 @@ export function resolveMistralCompatPatch(model: { id?: string }): {
   supportsStore: boolean;
   supportsReasoningEffort: boolean;
   maxTokensField: "max_tokens";
+  supportsPromptCacheKey: boolean;
   reasoningEffortMap?: Record<string, string>;
 } {
   const reasoningEnabled =
@@ -58,6 +65,7 @@ function compatMatchesResolved(
     compat?.supportsStore === expected.supportsStore &&
     compat?.supportsReasoningEffort === expected.supportsReasoningEffort &&
     compat?.maxTokensField === expected.maxTokensField &&
+    compat?.supportsPromptCacheKey === expected.supportsPromptCacheKey &&
     compat?.reasoningEffortMap === expected.reasoningEffortMap
   );
 }
