@@ -195,6 +195,25 @@ describe("WhatsApp QA live runtime", () => {
     });
   });
 
+  it("detects complete heap snapshot files before copying", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-heap-test-"));
+    try {
+      const completePath = path.join(tempRoot, "complete.heapsnapshot");
+      const partialPath = path.join(tempRoot, "partial.heapsnapshot");
+      await fs.writeFile(completePath, '{"snapshot":{},"nodes":[],"edges":[],"strings":[]}', "utf8");
+      await fs.writeFile(partialPath, '{"snapshot":{},"nodes":[],"edges":[],"strings":[', "utf8");
+
+      await expect(
+        __testing.heapSnapshotLooksComplete(completePath, (await fs.stat(completePath)).size),
+      ).resolves.toBe(true);
+      await expect(
+        __testing.heapSnapshotLooksComplete(partialPath, (await fs.stat(partialPath)).size),
+      ).resolves.toBe(false);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("fails explicitly requested group scenarios when group credentials are missing", () => {
     const [scenario] = testing.findScenarios(["whatsapp-mention-gating"]);
 

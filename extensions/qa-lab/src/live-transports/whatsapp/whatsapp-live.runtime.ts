@@ -575,9 +575,20 @@ async function listWhatsAppGatewayHeapSnapshotFiles(tempRoot: string) {
 
 async function waitForStableFileSize(pathName: string) {
   let lastSize = -1;
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  let stableObservations = 0;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     const stats = await fs.stat(pathName).catch(() => null);
     if (stats && stats.size > 0 && stats.size === lastSize) {
+      stableObservations += 1;
+    } else {
+      stableObservations = 0;
+    }
+    if (
+      stats &&
+      stats.size > 0 &&
+      stableObservations >= 3 &&
+      (await heapSnapshotLooksComplete(pathName, stats.size))
+    ) {
       return stats.size;
     }
     lastSize = stats?.size ?? -1;
@@ -585,6 +596,21 @@ async function waitForStableFileSize(pathName: string) {
   }
   const stats = await fs.stat(pathName);
   return stats.size;
+}
+
+async function heapSnapshotLooksComplete(pathName: string, size: number) {
+  if (size <= 0) {
+    return false;
+  }
+  const handle = await fs.open(pathName, "r");
+  try {
+    const length = Math.min(2048, size);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, size - length);
+    return buffer.toString("utf8").trimEnd().endsWith("]}");
+  } finally {
+    await handle.close();
+  }
 }
 
 async function captureWhatsAppGatewayHeapSnapshotCheckpoint(params: {
@@ -1278,6 +1304,7 @@ export const testing = {
   createMissingGroupJidScenarioResult,
   findScenarios,
   formatWhatsAppScenarioTimings,
+  heapSnapshotLooksComplete,
   isTransientWhatsAppQaDriverError,
   parseWhatsAppQaCredentialPayload,
   renderWhatsAppQaMarkdown,
