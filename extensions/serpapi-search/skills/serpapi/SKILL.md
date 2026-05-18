@@ -1,6 +1,6 @@
 ---
 name: serpapi
-description: SerpApi search tools covering web, news, flights, hotels, maps, shopping, YouTube, scholar, finance, events, and trends.
+description: SerpApi search tools covering web, news, flights, hotels, maps, shopping, YouTube, scholar, finance, events, trends, weather, e-commerce, and more.
 metadata:
   { "openclaw": { "emoji": "🔎", "requires": { "config": ["plugins.entries.serpapi-search.enabled"] } } }
 ---
@@ -9,21 +9,39 @@ metadata:
 
 ## When to use which tool
 
-| Need                        | Tool                |
-| --------------------------- | ------------------- |
-| Web search                  | `web_search`        |
-| Recent news articles        | `serpapi_news`      |
-| Academic papers / citations | `serpapi_scholar`   |
-| Local businesses / places   | `serpapi_maps`      |
-| Product prices / shopping   | `serpapi_shopping`  |
-| Amazon product search       | `serpapi_amazon`    |
-| Job listings                | `serpapi_jobs`      |
-| YouTube videos / channels   | `serpapi_youtube`   |
-| Search trend data           | `serpapi_trends`    |
-| Flight search               | `serpapi_flights`   |
-| Hotel search                | `serpapi_hotels`    |
-| Local events / concerts     | `serpapi_events`    |
-| Stock / crypto / FX         | `serpapi_finance`   |
+| Need                              | Tool                         |
+| --------------------------------- | ---------------------------- |
+| Web search                        | `web_search`                 |
+| Recent news articles              | `serpapi_news`               |
+| Academic papers / citations       | `serpapi_scholar`            |
+| Local businesses / places         | `serpapi_maps`               |
+| Reviews for a place               | `serpapi_maps_reviews`       |
+| Product prices / shopping         | `serpapi_shopping`           |
+| Google AI Overview (AI answer)    | `serpapi_ai_overview`        |
+| Amazon product search             | `serpapi_amazon`             |
+| Amazon product details by ASIN    | `serpapi_amazon_product`     |
+| eBay product search               | `serpapi_ebay`               |
+| eBay product details by ID        | `serpapi_ebay_product`       |
+| Walmart product search            | `serpapi_walmart`            |
+| Walmart product details by ID     | `serpapi_walmart_product`    |
+| Google Shopping product detail    | `serpapi_immersive_product`  |
+| Job listings                      | `serpapi_jobs`               |
+| YouTube videos / channels         | `serpapi_youtube`            |
+| YouTube video metadata            | `serpapi_youtube_video`      |
+| YouTube video transcript          | `serpapi_youtube_transcript` |
+| Search trend data                 | `serpapi_trends`             |
+| Flight search                     | `serpapi_flights`            |
+| Hotel search                      | `serpapi_hotels`             |
+| Local events / concerts           | `serpapi_events`             |
+| Stock / crypto / FX               | `serpapi_finance`            |
+| Bing web search                   | `serpapi_bing`               |
+| DuckDuckGo web search             | `serpapi_duckduckgo`         |
+| Yahoo! web search                 | `serpapi_yahoo`              |
+| Query autocomplete suggestions    | `serpapi_autocomplete`       |
+| Reverse image search              | `serpapi_lens`               |
+| Tripadvisor places / restaurants  | `serpapi_tripadvisor`        |
+| Facebook public profile           | `serpapi_facebook_profile`   |
+| Weather forecast                  | `serpapi_weather`            |
 
 ## web_search
 
@@ -240,3 +258,280 @@ Look up stock prices, cryptocurrency, FX rates, and market data via Google Finan
 | `window`  | Time window: `1D` (default), `5D`, `1M`, `6M`, `YTD`, `1Y`, `5Y`, `MAX`   |
 
 Response includes `summary` (price, movement, exchange), `markets` (US/Europe/Asia indices, currencies, crypto), `graph` (price history points), `knowledge_graph` (key stats), `financials` (income statement), `news_results`, and `discover_more`.
+
+## serpapi_maps_reviews
+
+Fetch reviews for a place on Google Maps.
+
+| Parameter          | Description                                                                              |
+| ------------------ | ---------------------------------------------------------------------------------------- |
+| `data_id`          | Google Maps data ID from `serpapi_maps` results. Either `data_id` or `place_id` required. |
+| `place_id`         | Google Maps place ID. Either `place_id` or `data_id` required.                           |
+| `hl`               | Language code (e.g. `en`, `uk`)                                                          |
+| `sort_by`          | `qualityScore` (default), `newestFirst`, `ratingHigh`, `ratingLow`                      |
+| `topic_id`         | Filter by topic ID from `topics[]` in the response. Cannot be used with `query`.         |
+| `query`            | Text filter for reviews. Cannot be used with `topic_id`.                                 |
+| `num`              | Number of reviews to return (1–20, default: 10)                                          |
+| `next_page_token`  | Pagination token from `serpapi_pagination.next_page_token`                               |
+
+Response includes `place_info`, `topics`, `reviews` (rating, snippet, user, date), and `serpapi_pagination`.
+
+### Tips
+- Obtain `data_id` from `serpapi_maps` results.
+- Use `topics[]` from the first response to pass `topic_id` for filtered follow-up calls.
+
+## serpapi_ai_overview
+
+Fetch a Google AI Overview (AI-generated answer) for a query.
+
+| Parameter    | Description                                                          |
+| ------------ | -------------------------------------------------------------------- |
+| `page_token` | Token from `ai_overview.page_token` in a `web_search` result. Required. |
+
+Response includes `ai_overview` with `text_blocks`, `references`, and related content.
+
+### Tips
+- First run a `web_search` and check for `ai_overview.page_token` in the response.
+- Tokens expire ~1 minute after the original Google search.
+
+## serpapi_immersive_product
+
+Fetch detailed Google Shopping product info including all seller prices.
+
+| Parameter           | Description                                                            |
+| ------------------- | ---------------------------------------------------------------------- |
+| `page_token`        | Token from `serpapi_link` in a `serpapi_shopping` result. Required.   |
+| `next_page_token`   | Token for next page of stores (from `stores_next_page_token`)          |
+| `more_stores`       | `true` to expand additional stores                                     |
+
+Response includes `product_results` with title, brand, rating, price range, all store listings, thumbnails, reviews, and more.
+
+## serpapi_bing
+
+Search the web using Bing.
+
+| Parameter    | Description                                                                      |
+| ------------ | -------------------------------------------------------------------------------- |
+| `query`      | Search query. Supports Bing operators: NOT, OR, site:, filetype:, near:.         |
+| `mkt`        | Market locale (e.g. `en-US`, `de-DE`). Takes precedence over `cc`.              |
+| `cc`         | 2-letter country code (e.g. `us`, `de`). Cannot be used with `mkt`.             |
+| `location`   | Location string (e.g. `"Seattle, Washington"`)                                   |
+| `safeSearch` | `Off`, `Moderate` (default), or `Strict` (case-sensitive)                        |
+| `first`      | Result offset: `1` (default), `11` page 2, `21` page 3, ...                     |
+
+## serpapi_duckduckgo
+
+Search the web using DuckDuckGo.
+
+| Parameter       | Description                                                                     |
+| --------------- | ------------------------------------------------------------------------------- |
+| `query`         | Search query                                                                    |
+| `kl`            | Region code (e.g. `us-en`, `de-de`, `ua-uk`)                                   |
+| `safe`          | SafeSearch: `1`=Strict, `-1`=Moderate, `-2`=Off                                 |
+| `df`            | Date filter: `d`=day, `w`=week, `m`=month, `y`=year, or `YYYY-MM-DD..YYYY-MM-DD` |
+| `m`             | Max results (1–50)                                                              |
+| `start`         | Pagination offset                                                               |
+| `search_assist` | `true` to enable search assist suggestions                                      |
+
+Response includes `results`, `knowledge_graph`, `news_results`, `related_searches`, `search_assist`.
+
+## serpapi_yahoo
+
+Search the web using Yahoo!.
+
+| Parameter       | Description                                                            |
+| --------------- | ---------------------------------------------------------------------- |
+| `query`         | Search query                                                           |
+| `yahoo_domain`  | Domain prefix (e.g. `fr` for fr.search.yahoo.com)                     |
+| `vc`            | 2-letter country code (e.g. `us`, `gb`, `fr`)                         |
+| `vl`            | Language filter (e.g. `lang_fr` to search French only)                 |
+| `vm`            | Adult filter: `r`=Strict, `i`=Moderate, `p`=Off                        |
+| `vs`            | TLD filter, comma-separated (e.g. `.com,.org`)                         |
+| `vf`            | File format (e.g. `pdf`, `txt`)                                        |
+| `b`             | Pagination offset (default: 1, page 2: 11, page 3: 21, ...)           |
+
+## serpapi_autocomplete
+
+Get Google search query completions.
+
+| Parameter | Description                                                        |
+| --------- | ------------------------------------------------------------------ |
+| `query`   | Partial search query to get completions for                        |
+| `gl`      | Country code (e.g. `us`, `ua`)                                     |
+| `hl`      | Language code (e.g. `en`, `uk`)                                    |
+| `cp`      | Cursor position (0-based, defaults to end of query)                |
+| `client`  | Autocomplete client: `chrome`, `safari`, `firefox-b-d`, `youtube` |
+
+Response includes `suggestions[]` with `value`, `relevance`, and `type`, plus `verbatim_relevance`.
+
+## serpapi_lens
+
+Perform a Google Lens reverse image search.
+
+| Parameter   | Description                                                                   |
+| ----------- | ----------------------------------------------------------------------------- |
+| `url`       | Public URL of the image to search. Required.                                  |
+| `type`      | `all` (default), `about_this_image`, `products`, `exact_matches`, `visual_matches` |
+| `q`         | Optional query to refine results (applies to `all`, `visual_matches`, `products`) |
+| `hl`        | Language code                                                                 |
+| `country`   | 2-letter country code                                                         |
+| `safe`      | `active` or `off`                                                             |
+| `auto_crop` | `true` to auto-crop to detected area of interest                              |
+
+Response includes `visual_matches`, `exact_matches`, `related_content`, `knowledge_graph`, `text_results`, `ai_overview`.
+
+## serpapi_youtube_video
+
+Fetch metadata for a YouTube video.
+
+| Parameter          | Description                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------- |
+| `v`                | YouTube video ID (e.g. `dQw4w9WgXcQ`). Required.                                     |
+| `hl`               | Language code                                                                         |
+| `gl`               | Country code                                                                          |
+| `next_page_token`  | Paginate related videos or comments using tokens from a previous response             |
+
+Response includes `title`, `channel`, `views`, `likes`, `description`, `chapters`, `related_videos`, pagination tokens (`related_videos_next_page_token`, `comments_next_page_token`, `comments_sorting_token`), and a `transcript` link.
+
+### Tips
+- Use `related_videos_next_page_token` to page through related videos.
+- Use `comments_next_page_token` or `comments_sorting_token[].token` to fetch comments.
+- Use `serpapi_youtube_transcript` to get the full text transcript.
+
+## serpapi_youtube_transcript
+
+Fetch the transcript of a YouTube video.
+
+| Parameter       | Description                                                                               |
+| --------------- | ----------------------------------------------------------------------------------------- |
+| `v`             | YouTube video ID. Required.                                                               |
+| `language_code` | Language code (e.g. `en`, `es-ES`, `zh-Hans`). Defaults to `en`. Falls back to first available. |
+| `title`         | Select a specific transcript by title (e.g. `"Twitch Chat - Simple"`)                   |
+| `type`          | Transcript type: `asr` for auto-generated                                                 |
+
+Response includes `transcript[]` (timestamped segments), `video_id`, `title`, `language_code`.
+
+## serpapi_amazon_product
+
+Fetch detailed Amazon product info by ASIN.
+
+| Parameter          | Description                                                         |
+| ------------------ | ------------------------------------------------------------------- |
+| `asin`             | Amazon ASIN (e.g. `B072MQ5BRX` from amazon.com/dp/B072MQ5BRX). Required. |
+| `amazon_domain`    | Marketplace (e.g. `amazon.co.uk`, `amazon.de`). Defaults to `amazon.com`. |
+| `language`         | Locale (e.g. `en_US`, `es_US`, `ja_JP`)                            |
+| `delivery_zip`     | ZIP/postal code for shipping availability                           |
+| `shipping_location`| Country for shipping filtering                                      |
+
+Response includes `product` (title, price, rating, specs, variants, images), `purchase_options`, `related_products`, `bought_together`, `reviews_information`.
+
+### Tips
+- Get `asin` values from `serpapi_amazon` results.
+
+## serpapi_ebay
+
+Search eBay listings.
+
+| Parameter         | Description                                                                         |
+| ----------------- | ----------------------------------------------------------------------------------- |
+| `query`           | Search query. Optional when `category_id` is set.                                  |
+| `ebay_domain`     | eBay domain (e.g. `ebay.co.uk`, `ebay.de`). Defaults to `ebay.com`.               |
+| `buying_format`   | `Auction`, `BIN` (Buy It Now), or `BO` (Accepts Offers)                            |
+| `show_only`       | Comma-separated flags: `Sold`, `FS` (Free shipping), `FR` (Free returns), `LPickup`, etc. |
+| `min_price`       | Minimum price                                                                       |
+| `max_price`       | Maximum price                                                                       |
+| `sort`            | Sort numeric code (see serpapi.com/ebay-sort-options)                              |
+| `category_id`     | Category ID from `categories[]` in a previous result                               |
+| `condition`       | Condition ID(s): `1000`=New, `3000`=Used. Combine with `\|` (e.g. `1000\|3000`)   |
+| `zip`             | ZIP/postal code for local shipping                                                  |
+| `page`            | Page number (default: 1)                                                            |
+| `per_page`        | Results per page: `25`, `50` (default), `100`, `200`                               |
+
+Response includes `organic_results`, `filters`, `categories`, `serpapi_pagination`.
+
+### Tips
+- Use `organic_results[].product_id` with `serpapi_ebay_product` for full listing details.
+
+## serpapi_ebay_product
+
+Fetch detailed eBay listing info by product ID.
+
+| Parameter          | Description                                                              |
+| ------------------ | ------------------------------------------------------------------------ |
+| `product_id`       | eBay item ID from the URL (e.g. `30557685` from ebay.com/itm/30557685). Required. |
+| `ebay_domain`      | eBay domain (e.g. `ebay.co.uk`). Defaults to `ebay.com`.               |
+| `locale`           | Locale for search origin                                                 |
+| `lang`             | Language override (US domain + locale only)                             |
+| `shipping_country` | Country code for shipping cost calculation                              |
+
+Response includes `product_results` (title, price, condition, specs, shipping, returns, media), `seller_results`, `related_products`.
+
+## serpapi_tripadvisor
+
+Search Tripadvisor for destinations, hotels, restaurants, and attractions.
+
+| Parameter            | Description                                                                 |
+| -------------------- | --------------------------------------------------------------------------- |
+| `query`              | Search query (e.g. `"Rome"`, `"best restaurants in Paris"`)                 |
+| `ssrc`               | Filter: `a`=All (default), `r`=Restaurants, `A`=Things to Do, `h`=Hotels, `g`=Destinations, `f`=Forums |
+| `tripadvisor_domain` | Domain (e.g. `www.tripadvisor.co.uk`). Defaults to `tripadvisor.com`.     |
+| `lat` / `lon`        | GPS coordinates for location-based search                                  |
+| `limit`              | Max results (1–100, default: 30)                                            |
+| `offset`             | Pagination offset (0, 30, 60, ...)                                          |
+
+Response includes `places`, `restaurants`, `hotels`, `attractions`, `serpapi_pagination`.
+
+## serpapi_facebook_profile
+
+Fetch a public Facebook profile.
+
+| Parameter    | Description                                                                       |
+| ------------ | --------------------------------------------------------------------------------- |
+| `profile_id` | Profile slug or numeric ID (e.g. `Meta` or `100080376596424`). Required.         |
+
+Response includes `profile`, `posts`, `photos`, `videos`, `about`.
+
+## serpapi_weather
+
+Get weather for a location via Google.
+
+| Parameter | Description                                                                    |
+| --------- | ------------------------------------------------------------------------------ |
+| `query`   | Natural language query (e.g. `"weather in Kyiv"`, `"forecast Paris tomorrow"`). Required. |
+| `gl`      | Country code (e.g. `us`, `ua`)                                                 |
+| `hl`      | Language code (e.g. `en`, `uk`)                                                |
+
+Response includes `answer_box` with `high`, `low`, `weather` (conditions), `date`, `location`, and `icon`.
+
+## serpapi_walmart
+
+Search Walmart product listings.
+
+| Parameter        | Description                                                             |
+| ---------------- | ----------------------------------------------------------------------- |
+| `query`          | Search query. Optional when `cat_id` is set.                           |
+| `walmart_domain` | Domain (e.g. `walmart.ca`, `walmart.com.mx`). Defaults to `walmart.com`. |
+| `sort`           | `price_low`, `price_high`, `best_seller`, `best_match`, `rating_high`, `new` |
+| `cat_id`         | Category ID (e.g. `0` for all). Either `query` or `cat_id` required.  |
+| `facet`          | Attribute filter: `key:value` pairs separated by `\|\|`               |
+| `store_id`       | Filter by specific Walmart store                                        |
+| `min_price`      | Minimum price                                                           |
+| `max_price`      | Maximum price                                                           |
+| `page`           | Page number (default: 1, max: 100)                                      |
+
+Response includes `search_information`, `organic_results` (with `us_item_id`, `product_id`, price, rating), `serpapi_pagination`.
+
+### Tips
+- Use `organic_results[].product_id` with `serpapi_walmart_product` for full product details.
+
+## serpapi_walmart_product
+
+Fetch detailed Walmart product info by product ID.
+
+| Parameter    | Description                                                              |
+| ------------ | ------------------------------------------------------------------------ |
+| `product_id` | Walmart product ID or `us_item_id` from URL (e.g. `138762768`). Required. |
+| `store_id`   | Store ID for store-specific pricing                                      |
+
+Response includes `product_result` (title, price, specs, stock, shipping/pickup/delivery options) and `reviews_results`.
+
