@@ -299,6 +299,7 @@ describe("chrome MCP page parsing", () => {
       "Chrome",
       "Profile 1",
     );
+    const attachFailureDetail = `attach failed for ${userDataDir}`;
     const fakeMcpCommand = path.join(tempDir, "fake-mcp.mjs");
     await fs.writeFile(
       fakeMcpCommand,
@@ -311,7 +312,7 @@ describe("chrome MCP page parsing", () => {
         const body = JSON.stringify({
           jsonrpc: "2.0",
           id: Number(match[1]),
-          error: { code: -32000, message: "attach failed" },
+          error: { code: -32000, message: ${JSON.stringify(attachFailureDetail)} },
         });
         process.stdout.write(body + "\\n");
       });
@@ -337,6 +338,7 @@ describe("chrome MCP page parsing", () => {
 
     expect(message).toContain("Chrome MCP existing-session attach failed");
     expect(message).toContain("~/Library/Application Support/Google/Chrome/Profile 1");
+    expect(message).toContain("attach failed for ~/Library/Application Support/Google/Chrome/Profile 1");
     expect(message).not.toContain(homeDir);
     expect(message).not.toContain(userDataDir);
   });

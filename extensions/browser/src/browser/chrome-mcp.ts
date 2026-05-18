@@ -389,6 +389,13 @@ function redactChromeMcpDiagnosticText(text: string): string {
   );
 }
 
+function redactChromeMcpDiagnosticTextWithLocalPaths(text: string): string {
+  const homeDir = normalizeOptionalString(os.homedir());
+  const homePath = homeDir ? path.resolve(homeDir) : undefined;
+  const withHomeRedacted = homePath ? text.split(homePath).join("~") : text;
+  return redactChromeMcpDiagnosticText(withHomeRedacted);
+}
+
 function redactChromeMcpLocalPathForDiagnostic(filePath: string): string {
   const homeDir = normalizeOptionalString(os.homedir());
   if (!homeDir || !path.isAbsolute(filePath)) {
@@ -466,7 +473,7 @@ async function createRealSession(
       const stderr = getStderr();
       if (stderr) {
         log.warn(
-          `Chrome MCP attach failed for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}". Subprocess stderr:\n${redactChromeMcpDiagnosticText(stderr)}`,
+          `Chrome MCP attach failed for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}". Subprocess stderr:\n${redactChromeMcpDiagnosticTextWithLocalPaths(stderr)}`,
         );
       }
       const targetLabel = options.browserUrl
@@ -474,7 +481,7 @@ async function createRealSession(
         : options.userDataDir
           ? `the configured Chromium user data dir (${redactChromeMcpLocalPathForDiagnostic(options.userDataDir)})`
           : "Google Chrome's default profile";
-      const detail = redactChromeMcpDiagnosticText(
+      const detail = redactChromeMcpDiagnosticTextWithLocalPaths(
         err instanceof Error ? err.message : String(err),
       );
       throw new BrowserProfileUnavailableError(
