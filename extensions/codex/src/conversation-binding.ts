@@ -1,4 +1,5 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { formatErrorMessage, type AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   PluginConversationBindingResolvedEvent,
   PluginHookInboundClaimContext,
@@ -9,11 +10,22 @@ import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-br
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
   codexSandboxPolicyForTurn,
+  readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   type CodexAppServerApprovalPolicy,
   type CodexAppServerSandboxMode,
 } from "./app-server/config.js";
 import {
+  filterCodexDynamicTools,
+  resolveCodexDynamicToolsLoading,
+} from "./app-server/dynamic-tool-profile.js";
+import {
+  createCodexDynamicToolBridge,
+  type CodexDynamicToolBridge,
+} from "./app-server/dynamic-tools.js";
+import { readCodexDynamicToolCallParams } from "./app-server/protocol-validators.js";
+import {
+  type CodexDynamicToolSpec,
   type CodexServiceTier,
   type CodexThreadResumeResponse,
   type CodexThreadStartResponse,
@@ -29,6 +41,10 @@ import {
   type CodexAppServerAuthProfileLookup,
 } from "./app-server/session-binding.js";
 import { getSharedCodexAppServerClient } from "./app-server/shared-client.js";
+import {
+  areCodexDynamicToolFingerprintsCompatible,
+  codexDynamicToolsFingerprint,
+} from "./app-server/thread-lifecycle.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   createCodexConversationBindingData,
@@ -52,6 +68,7 @@ export {
 
 type CodexConversationRunOptions = {
   pluginConfig?: unknown;
+  config?: OpenClawConfig;
   timeoutMs?: number;
   resumeCodexCliSessionOnNode?: ResumeCodexCliSessionOnNodeFn;
 };
@@ -62,7 +79,7 @@ type ResumeCodexCliSessionOnNodeFn = (
 
 type CodexConversationStartParams = {
   pluginConfig?: unknown;
-  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  config?: OpenClawConfig;
   sessionFile: string;
   workspaceDir?: string;
   agentDir?: string;
@@ -123,6 +140,12 @@ export async function startCodexConversationThread(
       config: params.config,
     });
   } else {
+    const dynamicToolBridge = await buildConversationDynamicToolBridge({
+      pluginConfig: params.pluginConfig,
+      config: params.config,
+      workspaceDir,
+      ...(agentDir ? { agentDir } : {}),
+    });
     await createThread({
       pluginConfig: params.pluginConfig,
       sessionFile: params.sessionFile,
@@ -135,6 +158,8 @@ export async function startCodexConversationThread(
       sandbox: params.sandbox,
       serviceTier: params.serviceTier,
       config: params.config,
+      dynamicTools: dynamicToolBridge.specs,
+      dynamicToolsFingerprint: codexDynamicToolsFingerprint(dynamicToolBridge.specs),
     });
   }
   return createCodexConversationBindingData({
@@ -197,7 +222,9 @@ export async function handleCodexConversationInboundClaim(
         data,
         prompt,
         event,
+        ctx,
         pluginConfig: options.pluginConfig,
+        config: options.config,
         timeoutMs: options.timeoutMs,
       }),
     );
@@ -238,6 +265,8 @@ async function attachExistingThread(params: {
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
   config?: CodexAppServerAuthProfileLookup["config"];
+  dynamicTools?: CodexDynamicToolSpec[];
+  dynamicToolsFingerprint?: string;
 }): Promise<void> {
   const runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.pluginConfig,
@@ -307,6 +336,8 @@ async function createThread(params: {
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
   config?: CodexAppServerAuthProfileLookup["config"];
+  dynamicTools?: CodexDynamicToolSpec[];
+  dynamicToolsFingerprint?: string;
 }): Promise<void> {
   const runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.pluginConfig,
@@ -337,6 +368,7 @@ async function createThread(params: {
         : {}),
       developerInstructions:
         "This Codex thread is bound to an OpenClaw conversation. Answer normally; OpenClaw will deliver your final response back to the conversation.",
+      dynamicTools: params.dynamicTools ?? [],
       experimentalRawEvents: true,
       persistExtendedHistory: true,
     },
@@ -359,6 +391,7 @@ async function createThread(params: {
       approvalPolicy: params.approvalPolicy ?? runtimeApprovalPolicy,
       sandbox: params.sandbox ?? runtime.sandbox,
       serviceTier: params.serviceTier ?? runtime.serviceTier,
+      dynamicToolsFingerprint: params.dynamicToolsFingerprint ?? codexDynamicToolsFingerprint([]),
     },
     {
       ...agentLookup,
@@ -370,23 +403,71 @@ async function runBoundTurn(params: {
   data: CodexAppServerConversationBindingData;
   prompt: string;
   event: PluginHookInboundClaimEvent;
+  ctx: PluginHookInboundClaimContext;
   pluginConfig?: unknown;
+  config?: OpenClawConfig;
   timeoutMs?: number;
 }): Promise<BoundTurnResult> {
   const runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.pluginConfig,
   });
   const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir });
-  const binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
-  const threadId = binding?.threadId;
+  let binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
+  let threadId = binding?.threadId;
   if (!threadId) {
     throw new Error("bound Codex conversation has no thread binding");
+  }
+  if (!binding) {
+    throw new Error("bound Codex conversation has no sidecar binding");
+  }
+  const turnAbortController = new AbortController();
+  const toolBridge = await buildConversationDynamicToolBridge({
+    pluginConfig: params.pluginConfig,
+    config: params.config,
+    workspaceDir: binding?.cwd || params.data.workspaceDir,
+    ...(params.data.agentDir ? { agentDir: params.data.agentDir } : {}),
+    event: params.event,
+    ctx: params.ctx,
+    signal: turnAbortController.signal,
+  });
+  const dynamicToolsFingerprint = codexDynamicToolsFingerprint(toolBridge.specs);
+  const shouldRefreshDynamicTools = binding.dynamicToolsFingerprint
+    ? !areCodexDynamicToolFingerprintsCompatible({
+        previous: binding.dynamicToolsFingerprint,
+        next: dynamicToolsFingerprint,
+      })
+    : toolBridge.specs.length > 0;
+  if (shouldRefreshDynamicTools) {
+    await createThread({
+      pluginConfig: params.pluginConfig,
+      sessionFile: params.data.sessionFile,
+      workspaceDir: binding.cwd || params.data.workspaceDir,
+      ...(params.data.agentDir ? { agentDir: params.data.agentDir } : {}),
+      model: binding.model,
+      modelProvider: binding.modelProvider,
+      authProfileId: binding.authProfileId,
+      approvalPolicy: binding.approvalPolicy,
+      sandbox: binding.sandbox,
+      serviceTier: binding.serviceTier,
+      config: params.config,
+      dynamicTools: toolBridge.specs,
+      dynamicToolsFingerprint,
+    });
+    binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
+    threadId = binding?.threadId;
+    if (!threadId) {
+      throw new Error("bound Codex conversation has no thread binding after dynamic tool refresh");
+    }
+  }
+  const activeBinding = binding;
+  if (!activeBinding) {
+    throw new Error("bound Codex conversation has no sidecar binding after dynamic tool refresh");
   }
 
   const client = await getSharedCodexAppServerClient({
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,
-    authProfileId: binding.authProfileId,
+    authProfileId: activeBinding.authProfileId,
     ...agentLookup,
   });
   const collector = createCodexConversationTurnCollector(threadId);
@@ -396,15 +477,14 @@ async function runBoundTurn(params: {
   const requestCleanup = client.addRequestHandler(
     async (request): Promise<JsonValue | undefined> => {
       if (request.method === "item/tool/call") {
-        return {
-          contentItems: [
-            {
-              type: "inputText",
-              text: "OpenClaw native Codex conversation binding does not expose dynamic OpenClaw tools yet.",
-            },
-          ],
-          success: false,
-        };
+        const call = readCodexDynamicToolCallParams(request.params);
+        if (!call) {
+          return {
+            contentItems: [{ type: "inputText", text: "Invalid OpenClaw dynamic tool call." }],
+            success: false,
+          };
+        }
+        return toolBridge.handleToolCall(call, { signal: turnAbortController.signal });
       }
       if (
         request.method === "item/commandExecution/requestApproval" ||
@@ -438,16 +518,16 @@ async function runBoundTurn(params: {
           prompt: params.prompt,
           event: params.event,
         }),
-        cwd: binding.cwd || params.data.workspaceDir,
-        approvalPolicy: binding.approvalPolicy ?? runtime.approvalPolicy,
+        cwd: activeBinding.cwd || params.data.workspaceDir,
+        approvalPolicy: activeBinding.approvalPolicy ?? runtime.approvalPolicy,
         approvalsReviewer: runtime.approvalsReviewer,
         sandboxPolicy: codexSandboxPolicyForTurn(
-          binding.sandbox ?? runtime.sandbox,
-          binding.cwd || params.data.workspaceDir,
+          activeBinding.sandbox ?? runtime.sandbox,
+          activeBinding.cwd || params.data.workspaceDir,
         ),
-        ...(binding.model ? { model: binding.model } : {}),
-        ...((binding.serviceTier ?? runtime.serviceTier)
-          ? { serviceTier: binding.serviceTier ?? runtime.serviceTier }
+        ...(activeBinding.model ? { model: activeBinding.model } : {}),
+        ...((activeBinding.serviceTier ?? runtime.serviceTier)
+          ? { serviceTier: activeBinding.serviceTier ?? runtime.serviceTier }
           : {}),
       },
       { timeoutMs: runtime.requestTimeoutMs },
@@ -471,6 +551,7 @@ async function runBoundTurn(params: {
       },
     };
   } finally {
+    turnAbortController.abort("codex conversation turn finished");
     notificationCleanup();
     requestCleanup();
   }
@@ -480,7 +561,9 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
   data: CodexAppServerConversationBindingData;
   prompt: string;
   event: PluginHookInboundClaimEvent;
+  ctx: PluginHookInboundClaimContext;
   pluginConfig?: unknown;
+  config?: OpenClawConfig;
   timeoutMs?: number;
 }): Promise<BoundTurnResult> {
   try {
@@ -502,9 +585,58 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
       approvalPolicy: binding?.approvalPolicy,
       sandbox: binding?.sandbox,
       serviceTier: binding?.serviceTier,
+      config: params.config,
     });
     return await runBoundTurn(params);
   }
+}
+
+async function buildConversationDynamicToolBridge(params: {
+  pluginConfig?: unknown;
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  agentDir?: string;
+  event?: PluginHookInboundClaimEvent;
+  ctx?: PluginHookInboundClaimContext;
+  signal?: AbortSignal;
+}): Promise<CodexDynamicToolBridge> {
+  const signal = params.signal ?? new AbortController().signal;
+  const codexConfig = readCodexPluginConfig(params.pluginConfig);
+  const { createOpenClawCodingTools } = await import("openclaw/plugin-sdk/agent-harness");
+  const allTools = createOpenClawCodingTools({
+    includeCoreTools: false,
+    config: params.config,
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    workspaceDir: params.workspaceDir,
+    spawnWorkspaceDir: params.workspaceDir,
+    sessionId: params.ctx?.conversationId ?? params.event?.conversationId,
+    sessionKey: params.ctx?.sessionKey,
+    runId: params.ctx?.runId,
+    messageProvider: params.event?.channel,
+    agentAccountId: params.event?.accountId,
+    messageTo: params.event?.conversationId,
+    messageThreadId: params.event?.threadId,
+    currentChannelId: params.ctx?.channelId ?? params.event?.conversationId,
+    currentMessageId: params.event?.messageId,
+    senderId: params.event?.senderId,
+    senderName: params.event?.senderName,
+    senderUsername: params.event?.senderUsername,
+    allowGatewaySubagentBinding: true,
+    abortSignal: signal,
+  });
+  const tools = filterCodexDynamicTools(allTools as AnyAgentTool[], codexConfig);
+  return createCodexDynamicToolBridge({
+    tools,
+    signal,
+    hookContext: {
+      config: params.config,
+      sessionId: params.ctx?.conversationId ?? params.event?.conversationId,
+      sessionKey: params.ctx?.sessionKey,
+      runId: params.ctx?.runId,
+      channelId: params.ctx?.channelId ?? params.event?.conversationId,
+    },
+    loading: resolveCodexDynamicToolsLoading(codexConfig),
+  });
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
