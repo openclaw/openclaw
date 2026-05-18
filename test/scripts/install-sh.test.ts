@@ -116,6 +116,18 @@ describe("install.sh", () => {
     expect(output).toContain("version=v22.22.1");
   });
 
+  it("only invokes install_homebrew when Node.js needs to be installed", () => {
+    // Regression for #83232: non-admin macOS accounts with adequate Node already
+    // on PATH were blocked by an unconditional Homebrew bootstrap. Homebrew is
+    // only required to `brew install node@...`, so it must be gated by check_node.
+    expect(script).toMatch(
+      /if ! check_node; then\s+#\s*Step 1: Homebrew[^\n]*\s+install_homebrew\s+install_node\s+fi/,
+    );
+    expect(script).not.toMatch(
+      /ui_stage "Preparing environment"\s+#\s*Step 1: Homebrew[^\n]*\s+install_homebrew\s+#\s*Step 2: Node/,
+    );
+  });
+
   it("promotes a supported Linux Node binary over stale PATH entries", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-node-promote-"));
     const staleBin = join(tmp, "usr-local-bin");

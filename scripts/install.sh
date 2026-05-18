@@ -2818,12 +2818,11 @@ main() {
 
     ui_stage "Preparing environment"
 
-    # Step 1: Homebrew (macOS only)
-    install_homebrew
-
     # Step 2: Node.js
     load_nvm_for_node_detection
     if ! check_node; then
+        # Step 1: Homebrew (macOS only) — only needed to bootstrap node@${NODE_DEFAULT_MAJOR}
+        install_homebrew
         install_node
     fi
     activate_supported_node_on_path || true
