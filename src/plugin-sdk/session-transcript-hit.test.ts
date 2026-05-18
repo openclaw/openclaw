@@ -218,8 +218,27 @@ describe("resolveTranscriptStemToSessionKeys", () => {
       "agent:main:slug": baseEntry({ sessionId: "foo_bar" }),
     };
 
-    expect(resolveTranscriptStemToSessionKeys({ store, stem: "foo-bar" })).toEqual([
-      "agent:main:exact",
-    ]);
+    expect(
+      resolveTranscriptStemToSessionKeys({
+        store,
+        stem: "foo-bar",
+        allowQmdSlugFallback: true,
+      }),
+    ).toEqual(["agent:main:exact"]);
+  });
+
+  it("does not guess when QMD-slugified fallback matches multiple sessions", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:dot": baseEntry({ sessionId: "foo.bar" }),
+      "agent:main:underscore": baseEntry({ sessionId: "foo_bar" }),
+    };
+
+    expect(
+      resolveTranscriptStemToSessionKeys({
+        store,
+        stem: "foo-bar",
+        allowQmdSlugFallback: true,
+      }),
+    ).toEqual([]);
   });
 });

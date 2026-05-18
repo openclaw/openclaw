@@ -154,7 +154,7 @@ export function resolveTranscriptStemToSessionKeys(params: {
   }
   const normalizedDeduped = [...new Set(matches)];
   if (normalizedDeduped.length > 0) {
-    return normalizedDeduped;
+    return normalizedDeduped.length === 1 ? normalizedDeduped : [];
   }
   const archivedOwnerAgentId = normalizeOptionalString(params.archivedOwnerAgentId);
   return archivedOwnerAgentId
