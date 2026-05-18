@@ -24,8 +24,20 @@ describe("gateway restart trace handoff", () => {
     const metrics = Object.fromEntries(collectGatewayProcessMemoryUsageMb());
 
     expect(metrics.rssMb).toEqual(expect.any(Number));
+    expect(metrics.activeTimersCount).toEqual(expect.any(Number));
     expect(metrics.processSigusr1ListenersCount).toEqual(expect.any(Number));
     expect(metrics.processSigtermListenersCount).toEqual(expect.any(Number));
     expect(metrics.processSigintListenersCount).toEqual(expect.any(Number));
+  });
+
+  it("counts active timer resources", () => {
+    const timer = setTimeout(() => {}, 10_000);
+    try {
+      const metrics = Object.fromEntries(collectGatewayProcessMemoryUsageMb());
+
+      expect(metrics.activeTimersCount).toBeGreaterThanOrEqual(1);
+    } finally {
+      clearTimeout(timer);
+    }
   });
 });

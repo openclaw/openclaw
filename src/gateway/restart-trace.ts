@@ -203,9 +203,11 @@ function collectGatewayProcessResourceCounts(): ReadonlyArray<readonly [string, 
   const processWithResourceAccess = process as NodeJS.Process & {
     _getActiveHandles?: () => unknown[];
     _getActiveRequests?: () => unknown[];
+    getActiveResourcesInfo?: () => string[];
   };
   const activeHandles = processWithResourceAccess._getActiveHandles?.();
   const activeRequests = processWithResourceAccess._getActiveRequests?.();
+  const activeResources = processWithResourceAccess.getActiveResourcesInfo?.();
   const metrics: Array<readonly [string, number]> = [
     ["processSigintListenersCount", process.listenerCount("SIGINT")],
     ["processSigtermListenersCount", process.listenerCount("SIGTERM")],
@@ -213,15 +215,27 @@ function collectGatewayProcessResourceCounts(): ReadonlyArray<readonly [string, 
   ];
   if (activeHandles) {
     metrics.push(["activeHandlesCount", activeHandles.length]);
-    metrics.push(["activeTimersCount", countActiveTimers(activeHandles)]);
   }
   if (activeRequests) {
     metrics.push(["activeRequestsCount", activeRequests.length]);
   }
+  const activeTimersCount = activeResources
+    ? countActiveTimersFromResourceInfo(activeResources)
+    : activeHandles
+      ? countActiveTimersFromHandles(activeHandles)
+      : undefined;
+  if (activeTimersCount !== undefined) {
+    metrics.push(["activeTimersCount", activeTimersCount]);
+  }
   return metrics.length > 0 ? metrics : null;
 }
 
-function countActiveTimers(activeHandles: readonly unknown[]): number {
+function countActiveTimersFromResourceInfo(activeResources: readonly string[]): number {
+  return activeResources.filter((resource) => resource === "Timeout" || resource === "Timer")
+    .length;
+}
+
+function countActiveTimersFromHandles(activeHandles: readonly unknown[]): number {
   let count = 0;
   for (const handle of activeHandles) {
     if (typeof handle !== "object" || handle === null) {
