@@ -82,7 +82,7 @@ export function createGatewayPluginRequestHandler(params: {
   const { log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
     const registry = resolveActivePluginHttpRouteRegistry(params.registry);
-    const registryGatewayContext = getPluginRegistryGatewayContext(registry);
+    const registryGatewayContext = getPluginRegistryGatewayContext(params.registry);
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {
       return false;
@@ -182,7 +182,7 @@ export function createGatewayPluginUpgradeHandler(params: {
   const { log } = params;
   return async (req, socket, head, providedPathContext, dispatchContext) => {
     const registry = resolveActivePluginHttpRouteRegistry(params.registry);
-    const registryGatewayContext = getPluginRegistryGatewayContext(registry);
+    const registryGatewayContext = getPluginRegistryGatewayContext(params.registry);
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {
       return false;

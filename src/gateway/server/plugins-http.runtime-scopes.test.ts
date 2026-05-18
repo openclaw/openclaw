@@ -192,10 +192,10 @@ describe("plugin HTTP route runtime scopes", () => {
     });
   });
 
-  it("uses the active registry gateway context for plugin runtime scope", async () => {
-    const staleRegistry = createTestRegistry();
+  it("uses the server-local gateway context when routes resolve from the active registry", async () => {
+    const serverRegistry = createTestRegistry();
+    const serverContext = { label: "server-gateway" } as unknown as GatewayRequestContext;
     const activeContext = { label: "active-gateway" } as unknown as GatewayRequestContext;
-    const staleContext = { label: "stale-gateway" } as unknown as GatewayRequestContext;
     let observedContext: GatewayRequestContext | undefined;
     const activeRegistry = createTestRegistry({
       httpRoutes: [
@@ -210,13 +210,13 @@ describe("plugin HTTP route runtime scopes", () => {
       ],
     });
 
-    setPluginRegistryGatewayContext(staleRegistry, staleContext);
+    setPluginRegistryGatewayContext(serverRegistry, serverContext);
     setPluginRegistryGatewayContext(activeRegistry, activeContext);
     setActivePluginRegistry(activeRegistry);
     pinActivePluginHttpRouteRegistry(activeRegistry);
 
     const handler = createGatewayPluginRequestHandler({
-      registry: staleRegistry,
+      registry: serverRegistry,
       log: createMockLogger(),
     });
 
@@ -228,8 +228,8 @@ describe("plugin HTTP route runtime scopes", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(observedContext).toBe(activeContext);
-    expect(observedContext).not.toBe(staleContext);
+    expect(observedContext).toBe(serverContext);
+    expect(observedContext).not.toBe(activeContext);
   });
 
   it("does not give approval-scoped gateway-auth routes global approval visibility", async () => {
