@@ -381,13 +381,9 @@ function hasImageInput(input: unknown): boolean {
 }
 
 function supportsAnthropicImageInput(modelId: string, modelName?: string): boolean {
-  const candidates = [modelId, modelName]
+  return [modelId, modelName]
     .filter((value): value is string => typeof value === "string")
-    .map((value) => normalizeLowercaseStringOrEmpty(value))
-    .filter(Boolean);
-  return candidates.some((candidate) =>
-    ANTHROPIC_MODERN_MODEL_PREFIXES.some((prefix) => candidate.startsWith(prefix)),
-  );
+    .some((candidate) => matchesAnthropicModernModel(candidate));
 }
 
 function applyAnthropicImageInputCapability(params: {
