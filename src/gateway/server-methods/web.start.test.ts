@@ -23,6 +23,7 @@ function createOptions(
     isWebchatConnect: () => false,
     respond: vi.fn(),
     context: {
+      getRuntimeConfig: vi.fn().mockReturnValue({}),
       stopChannel: vi.fn(),
       startChannel: vi.fn(),
       getRuntimeSnapshot: vi.fn(
@@ -55,6 +56,7 @@ function createRunningWhatsappContext() {
     startChannel,
     stopChannel,
     context: {
+      getRuntimeConfig: vi.fn().mockReturnValue({}),
       stopChannel,
       startChannel,
       getRuntimeSnapshot: vi.fn(
@@ -147,6 +149,42 @@ describe("webHandlers web.login.start", () => {
     expect(stopChannel).toHaveBeenCalledWith("whatsapp", "default");
     expect(startChannel).not.toHaveBeenCalled();
   });
+
+  it("explains how to repair a configured missing external WhatsApp plugin", async () => {
+    mocks.listChannelPlugins.mockReturnValue([]);
+    const respond = vi.fn();
+
+    await webHandlers["web.login.start"](
+      createOptions(
+        { accountId: "default" },
+        {
+          respond,
+          context: {
+            getRuntimeConfig: vi.fn().mockReturnValue({
+              channels: { whatsapp: { enabled: true } },
+            }),
+            stopChannel: vi.fn(),
+            startChannel: vi.fn(),
+            getRuntimeSnapshot: vi.fn(
+              (): ChannelRuntimeSnapshot => ({
+                channels: {},
+                channelAccounts: {},
+              }),
+            ),
+          } as unknown as GatewayRequestHandlerOptions["context"],
+        },
+      ),
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("openclaw plugins install clawhub:@openclaw/whatsapp"),
+      }),
+    );
+  });
 });
 
 describe("webHandlers web.login.wait", () => {
@@ -205,6 +243,48 @@ describe("webHandlers web.login.wait", () => {
         qrDataUrl: "data:image/png;base64,next-qr",
       },
       undefined,
+    );
+  });
+
+  it("uses the same missing external plugin repair hint while waiting", async () => {
+    mocks.listChannelPlugins.mockReturnValue([]);
+    const respond = vi.fn();
+
+    await webHandlers["web.login.wait"](
+      createOptions(
+        { accountId: "default" },
+        {
+          req: {
+            type: "req",
+            id: "req-2",
+            method: "web.login.wait",
+            params: { accountId: "default" },
+          } as GatewayRequestHandlerOptions["req"],
+          respond,
+          context: {
+            getRuntimeConfig: vi.fn().mockReturnValue({
+              channels: { whatsapp: { enabled: true } },
+            }),
+            stopChannel: vi.fn(),
+            startChannel: vi.fn(),
+            getRuntimeSnapshot: vi.fn(
+              (): ChannelRuntimeSnapshot => ({
+                channels: {},
+                channelAccounts: {},
+              }),
+            ),
+          } as unknown as GatewayRequestHandlerOptions["context"],
+        },
+      ),
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("openclaw doctor --fix"),
+      }),
     );
   });
 });

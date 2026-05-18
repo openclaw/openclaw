@@ -1,5 +1,10 @@
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
+import { hasExplicitChannelConfig } from "../../plugins/channel-plugin-ids.js";
+import {
+  resolveMissingOfficialExternalChannelPluginRepairHint,
+  resolveOfficialExternalPluginRepairHint,
+} from "../../plugins/official-external-plugin-repair-hints.js";
 import {
   ErrorCodes,
   errorShape,
@@ -8,7 +13,7 @@ import {
   validateWebLoginWaitParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
@@ -26,11 +31,44 @@ function resolveAccountId(params: unknown): string | undefined {
     : undefined;
 }
 
-function respondProviderUnavailable(respond: RespondFn) {
+function resolveMissingWebLoginProviderRepairHint(
+  context: Pick<GatewayRequestContext, "getRuntimeConfig">,
+): string | undefined {
+  try {
+    const config = context.getRuntimeConfig();
+    const channels = config.channels;
+    if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+      return undefined;
+    }
+    for (const channelId of Object.keys(channels)) {
+      if (!hasExplicitChannelConfig({ config, channelId })) {
+        continue;
+      }
+      const hint =
+        resolveMissingOfficialExternalChannelPluginRepairHint({
+          config,
+          channelId,
+        }) ?? resolveOfficialExternalPluginRepairHint(channelId);
+      if (hint) {
+        return `Configured official external channel ${hint.label} is missing its plugin. ${hint.repairHint}`;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function respondProviderUnavailable(respond: RespondFn, repairHint?: string) {
   respond(
     false,
     undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "web login provider is not available"),
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      repairHint
+        ? `web login provider is not available. ${repairHint}`
+        : "web login provider is not available",
+    ),
   );
 }
 
@@ -78,7 +116,7 @@ export const webHandlers: GatewayRequestHandlers = {
       const accountId = resolveAccountId(params);
       const provider = resolveWebLoginProvider();
       if (!provider) {
-        respondProviderUnavailable(respond);
+        respondProviderUnavailable(respond, resolveMissingWebLoginProviderRepairHint(context));
         return;
       }
       if (!provider.gateway?.loginWithQrStart) {
@@ -126,7 +164,7 @@ export const webHandlers: GatewayRequestHandlers = {
       const accountId = resolveAccountId(params);
       const provider = resolveWebLoginProvider();
       if (!provider) {
-        respondProviderUnavailable(respond);
+        respondProviderUnavailable(respond, resolveMissingWebLoginProviderRepairHint(context));
         return;
       }
       if (!provider.gateway?.loginWithQrWait) {
