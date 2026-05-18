@@ -24,6 +24,7 @@ Options:
   --no-yolo                  Run nested Codex review with normal sandbox/approval prompts.
   --output FILE              Also save output to file.
   --parallel-tests CMD       Run review and test command concurrently.
+                              Default: pnpm --config.offline=true run check when available.
   --dry-run                  Print selected commands, do not run.
   -h, --help                 Show help.
 
@@ -54,6 +55,7 @@ codex_args=()
 yolo=${AUTOREVIEW_YOLO:-${CODEX_REVIEW_YOLO:-1}}
 output=${AUTOREVIEW_OUTPUT:-${CODEX_REVIEW_OUTPUT:-}}
 parallel_tests=
+parallel_tests_auto=false
 dry_run=false
 codex_review_prompt=
 openclaw_maintainer_validation=${AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION:-${OPENCLAW_TESTBOX:-0}}
@@ -166,6 +168,12 @@ esac
 
 repo_root=$(git rev-parse --show-toplevel)
 
+has_package_check_script() {
+  command -v node >/dev/null 2>&1 || return 1
+  node -e 'const p = require("./package.json"); process.exit(p.scripts?.check ? 0 : 1)' \
+    >/dev/null 2>&1
+}
+
 current_branch=$(git branch --show-current 2>/dev/null || true)
 dirty=false
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -212,6 +220,15 @@ case "$openclaw_maintainer_validation" in
   1|true|True|TRUE|yes|Yes|YES|on|On|ON) openclaw_maintainer_validation=1 ;;
   *) openclaw_maintainer_validation=0 ;;
 esac
+if [[ -z "$parallel_tests" && "$openclaw_maintainer_validation" != 1 ]] &&
+  [[ "${AUTOREVIEW_AUTO_TESTS:-${CODEX_REVIEW_AUTO_TESTS:-1}}" != 0 ]]; then
+  if [[ -f package.json && -f pnpm-lock.yaml && -d node_modules ]] &&
+    command -v pnpm >/dev/null 2>&1 &&
+    has_package_check_script; then
+    parallel_tests="pnpm --config.offline=true run check"
+    parallel_tests_auto=true
+  fi
+fi
 if [[ "$repo_url" == *"openclaw/openclaw"* && "$openclaw_maintainer_validation" == 1 ]]; then
   codex_review_prompt=$(cat <<'EOF'
 OpenClaw maintainer autoreview validation policy:
@@ -251,7 +268,11 @@ else
   printf 'review: %s prompt review\n' "$reviewer"
 fi
 if [[ -n "$parallel_tests" ]]; then
-  printf 'tests: %s\n' "$parallel_tests"
+  printf 'tests: %s' "$parallel_tests"
+  if [[ "$parallel_tests_auto" == true ]]; then
+    printf ' (auto)'
+  fi
+  printf '\n'
 fi
 if [[ "$review_kind" == branch ]]; then
   printf 'fetch: git fetch origin --quiet\n'
