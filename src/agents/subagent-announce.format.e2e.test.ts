@@ -69,6 +69,8 @@ function visibleAgentResponse(runId = "run-main") {
     status: "ok",
     result: {
       payloads: [{ text: "announced" }],
+      didSendViaMessagingTool: true,
+      messagingToolSentTexts: ["announced"],
     },
   };
 }
@@ -511,8 +513,13 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("</prompt-data>");
     expect(msg).toContain("raw subagent reply");
     expect(msg).toContain("Stats:");
-    expect(msg).toContain("A completed subagent task is ready for user delivery.");
-    expect(msg).toContain("Convert the result above into your normal assistant voice");
+    expect(msg).toContain("A completed subagent task is ready for parent review.");
+    expect(msg).toContain(
+      "Review/verify the result above before deciding whether the original task is done.",
+    );
+    expect(msg).toContain(
+      "If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update.",
+    );
     expect(msg).toContain("Keep this internal context private");
     expect(call?.params?.internalEvents?.[0]?.type).toBe("task_completion");
     expect(call?.params?.internalEvents?.[0]?.taskLabel).toBe("do thing");
@@ -530,7 +537,7 @@ describe("subagent announce formatting", () => {
 
     const call = getAgentCall() as { params?: { message?: string } };
     const msg = call?.params?.message as string;
-    expect(msg).toContain("completed successfully");
+    expect(msg).toContain("completed; ready for parent review");
   });
 
   it("rechecks timed-out waits before announcing timeout when the run finishes immediately after", async () => {
@@ -586,7 +593,9 @@ describe("subagent announce formatting", () => {
       };
     };
     expect(call?.params?.internalEvents?.[0]?.status).toBe("ok");
-    expect(call?.params?.internalEvents?.[0]?.statusLabel).toBe("completed successfully");
+    expect(call?.params?.internalEvents?.[0]?.statusLabel).toBe(
+      "completed; ready for parent review",
+    );
     expect(call?.params?.internalEvents?.[0]?.result).toContain("Worker executed successfully");
   });
 
@@ -697,7 +706,10 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("tokens 1.0k (in 12 / out 1.0k)");
     expect(msg).toContain("prompt/cache 197.0k");
     expect(msg).toContain("session_id: child-session-usage");
-    expect(msg).toContain("A completed subagent task is ready for user delivery.");
+    expect(msg).toContain("A completed subagent task is ready for parent review.");
+    expect(msg).toContain(
+      "If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update.",
+    );
     expect(msg).toContain(
       `Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`,
     );
@@ -801,9 +813,10 @@ describe("subagent announce formatting", () => {
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall() as { params?: Record<string, unknown> };
-    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.deliver).toBe(false);
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
+    expect(call?.params?.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
   it("suppresses completion delivery when subagent reply is ANNOUNCE_SKIP", async () => {
@@ -995,9 +1008,10 @@ describe("subagent announce formatting", () => {
     const call = getAgentCall() as { params?: Record<string, unknown> };
     const rawMessage = call?.params?.message;
     const msg = typeof rawMessage === "string" ? rawMessage : "";
-    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.deliver).toBe(false);
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
+    expect(call?.params?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(msg).not.toContain("There are still");
     expect(msg).not.toContain("wait for the remaining results");
   });
@@ -1363,7 +1377,7 @@ describe("subagent announce formatting", () => {
           threadId: 99,
         },
         requesterSessionMeta: {},
-        expectedThreadId: "99",
+        expectedThreadId: 99,
       },
     ] as const;
 
@@ -1735,7 +1749,7 @@ describe("subagent announce formatting", () => {
     const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
     const delivery = await runSubagentAnnounceDispatch({
       expectsCompletionMessage: false,
-      steer: async () => "steered",
+      steer: async () => ({ status: "steered" }),
       direct,
     });
 
@@ -1747,7 +1761,7 @@ describe("subagent announce formatting", () => {
   it("reports cron announce as delivered when it successfully steers into an active requester run", async () => {
     const delivery = await runSubagentAnnounceDispatch({
       expectsCompletionMessage: false,
-      steer: async () => "steered",
+      steer: async () => ({ status: "steered" }),
       direct: async () => ({ delivered: false, path: "direct" as const }),
     });
 
@@ -1759,7 +1773,7 @@ describe("subagent announce formatting", () => {
     const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
     const delivery = await runSubagentAnnounceDispatch({
       expectsCompletionMessage: false,
-      steer: async () => "dropped",
+      steer: async () => ({ status: "dropped" }),
       direct,
     });
 
@@ -1771,10 +1785,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("keeps direct announce idempotency unique for same-ms distinct child runs", async () => {
-    const activeResponses = [true, false, true, false];
-    embeddedRunMock.isEmbeddedPiRunActive.mockImplementation(
-      () => activeResponses.shift() ?? false,
-    );
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:main": {
@@ -1850,7 +1861,7 @@ describe("subagent announce formatting", () => {
     const delivery = await runSubagentAnnounceDispatch({
       expectsCompletionMessage: true,
       direct,
-      steer: async () => "steered",
+      steer: async () => ({ status: "steered" }),
     });
 
     expect(delivery.delivered).toBe(true);
@@ -1917,8 +1928,9 @@ describe("subagent announce formatting", () => {
       sessionKey: "agent:main:main",
       channel: "discord",
       to: "channel:12345",
-      deliver: true,
+      deliver: false,
     });
+    expect(getAgentCall().params?.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
   it("returns failure for completion-mode when direct delivery fails and steering fallback is unavailable", async () => {
@@ -2102,10 +2114,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("preserves account routing for separate collect-mode announcements", async () => {
-    const activeResponses = [true, false, true, false];
-    embeddedRunMock.isEmbeddedPiRunActive.mockImplementation(
-      () => activeResponses.shift() ?? false,
-    );
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
     sessionStore = {
       "agent:main:main": {

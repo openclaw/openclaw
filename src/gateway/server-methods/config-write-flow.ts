@@ -12,7 +12,7 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
-import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
+import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime-state.js";
 import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
 import { buildGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
@@ -212,16 +212,17 @@ export async function commitGatewayConfigWrite(params: {
   nextConfig: OpenClawConfig;
   context?: GatewayRequestContext;
   disconnectSharedAuthClients?: boolean;
-}): Promise<{ path: string; queueFollowUp: () => void }> {
-  await replaceConfigFile({
+}): Promise<{ path: string; config: OpenClawConfig; queueFollowUp: () => void }> {
+  const result = await replaceConfigFile({
     nextConfig: params.nextConfig,
     writeOptions: params.writeOptions,
     afterWrite: { mode: "auto" },
   });
   return {
     path: resolveGatewayConfigPath(params.snapshot),
+    config: result.nextConfig,
     queueFollowUp: () => {
-      queueSharedGatewayAuthGenerationRefresh(true, params.nextConfig, params.context);
+      queueSharedGatewayAuthGenerationRefresh(true, result.nextConfig, params.context);
       queueSharedGatewayAuthDisconnect(Boolean(params.disconnectSharedAuthClients), params.context);
     },
   };

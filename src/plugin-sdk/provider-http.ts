@@ -4,11 +4,16 @@
 export {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
+  assertProviderBinaryResponseContent,
   createProviderHttpError,
   extractProviderErrorDetail,
   extractProviderRequestId,
   formatProviderErrorPayload,
   formatProviderHttpErrorMessage,
+  readProviderBinaryResponse,
+  readProviderJsonArrayFieldResponse,
+  readProviderJsonObjectResponse,
+  readProviderJsonResponse,
   readResponseTextLimited,
   truncateErrorDetail,
 } from "../agents/provider-http-errors.js";

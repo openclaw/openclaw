@@ -141,8 +141,16 @@ describe("agent event handler", () => {
     return broadcast.mock.calls.filter(([event]) => event === "chat");
   }
 
+  function agentBroadcastCalls(broadcast: ReturnType<typeof vi.fn>) {
+    return broadcast.mock.calls.filter(([event]) => event === "agent");
+  }
+
   function sessionChatCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
     return nodeSendToSession.mock.calls.filter(([, event]) => event === "chat");
+  }
+
+  function sessionAgentCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
+    return nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
   }
 
   function requireCall<T>(call: T | undefined, label: string): T {
@@ -391,6 +399,300 @@ describe("agent event handler", () => {
     expect(payload.message?.content?.[0]?.text).toBe("Hello world");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     nowSpy?.mockRestore();
+  });
+
+  it("coalesces assistant agent events under the chat delta throttle", () => {
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-agent-throttle", {
+      sessionKey: "session-agent-throttle",
+      clientRunId: "client-agent-throttle",
+    });
+
+    for (let i = 0; i < 5; i += 1) {
+      now = 10_000 + i * 20;
+      handler({
+        runId: "run-agent-throttle",
+        seq: i + 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "x".repeat(i + 1), delta: "x" },
+      });
+    }
+
+    const agentCalls = agentBroadcastCalls(broadcast);
+    expect(agentCalls).toHaveLength(1);
+    expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(1);
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(1);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect((agentCalls[0]?.[1] as { data?: { text?: string } }).data?.text).toBe("x");
+    nowSpy.mockRestore();
+  });
+
+  it("flushes coalesced assistant agent text before lifecycle end", () => {
+    let now = 20_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-agent-flush", {
+      sessionKey: "session-agent-flush",
+      clientRunId: "client-agent-flush",
+    });
+
+    handler({
+      runId: "run-agent-flush",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello", delta: "Hello" },
+    });
+    now = 20_050;
+    handler({
+      runId: "run-agent-flush",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world", delta: " world" },
+    });
+    now = 20_090;
+    handler({
+      runId: "run-agent-flush",
+      seq: 3,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world!", delta: "!" },
+    });
+    handler({
+      runId: "run-agent-flush",
+      seq: 4,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    const agentCalls = agentBroadcastCalls(broadcast);
+    expect(agentCalls).toHaveLength(3);
+    expect((agentCalls[0]?.[1] as { data?: { text?: string } }).data?.text).toBe("Hello");
+    expect((agentCalls[1]?.[1] as { data?: { delta?: string } }).data?.delta).toBe(" world!");
+    expect((agentCalls[1]?.[1] as { data?: { text?: string } }).data?.text).toBe("Hello world!");
+    expect((agentCalls[1]?.[1] as { seq?: number }).seq).toBe(3);
+    expect((agentCalls[2]?.[1] as { stream?: string; data?: { phase?: string } }).stream).toBe(
+      "lifecycle",
+    );
+    expect((agentCalls[2]?.[1] as { data?: { phase?: string } }).data?.phase).toBe("end");
+    expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(3);
+    nowSpy.mockRestore();
+  });
+
+  it("flushes pending assistant agent deltas before post-window text", () => {
+    let now = 22_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-agent-window", {
+      sessionKey: "session-agent-window",
+      clientRunId: "client-agent-window",
+    });
+
+    handler({
+      runId: "run-agent-window",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hel", delta: "Hel" },
+    });
+    now = 22_050;
+    handler({
+      runId: "run-agent-window",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello", delta: "lo" },
+    });
+    now = 22_200;
+    handler({
+      runId: "run-agent-window",
+      seq: 3,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello!", delta: "!" },
+    });
+
+    const agentCalls = agentBroadcastCalls(broadcast);
+    expect(agentCalls).toHaveLength(3);
+    expect((agentCalls[0]?.[1] as { data?: { delta?: string } }).data?.delta).toBe("Hel");
+    expect((agentCalls[1]?.[1] as { data?: { delta?: string } }).data?.delta).toBe("lo");
+    expect((agentCalls[1]?.[1] as { seq?: number }).seq).toBe(2);
+    expect((agentCalls[2]?.[1] as { data?: { delta?: string } }).data?.delta).toBe("!");
+    expect((agentCalls[2]?.[1] as { seq?: number }).seq).toBe(3);
+    expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(3);
+    nowSpy.mockRestore();
+  });
+
+  it("flushes older cross-stream agent deltas before immediate text", () => {
+    let now = 23_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-agent-cross-stream", {
+      sessionKey: "session-agent-cross-stream",
+      clientRunId: "client-agent-cross-stream",
+    });
+
+    handler({
+      runId: "run-agent-cross-stream",
+      seq: 1,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "Think", delta: "Think" },
+    });
+    now = 23_050;
+    handler({
+      runId: "run-agent-cross-stream",
+      seq: 2,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "Thinking", delta: "ing" },
+    });
+    now = 23_080;
+    handler({
+      runId: "run-agent-cross-stream",
+      seq: 3,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Answer", delta: "Answer" },
+    });
+
+    const agentCalls = agentBroadcastCalls(broadcast);
+    expect(agentCalls.map(([, payload]) => (payload as { seq?: number }).seq)).toEqual([1, 2, 3]);
+    expect(agentCalls.map(([, payload]) => (payload as { stream?: string }).stream)).toEqual([
+      "thinking",
+      "thinking",
+      "assistant",
+    ]);
+    expect((agentCalls[1]?.[1] as { data?: { delta?: string } }).data?.delta).toBe("ing");
+    expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(3);
+    nowSpy.mockRestore();
+  });
+
+  it("does not let lifecycle start throttle the first assistant agent event", () => {
+    let now = 25_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-agent-start", {
+      sessionKey: "session-agent-start",
+      clientRunId: "client-agent-start",
+    });
+
+    handler({
+      runId: "run-agent-start",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "start" },
+    });
+    now = 25_050;
+    handler({
+      runId: "run-agent-start",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello", delta: "Hello" },
+    });
+
+    const agentCalls = agentBroadcastCalls(broadcast);
+    expect(agentCalls).toHaveLength(2);
+    expect((agentCalls[0]?.[1] as { stream?: string }).stream).toBe("lifecycle");
+    expect((agentCalls[1]?.[1] as { data?: { text?: string } }).data?.text).toBe("Hello");
+    expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(2);
+    nowSpy.mockRestore();
+  });
+
+  it("coalesces thinking agent events under the chat delta throttle", () => {
+    let now = 27_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-agent-thinking", {
+      sessionKey: "session-agent-thinking",
+      clientRunId: "client-agent-thinking",
+    });
+
+    for (let i = 0; i < 5; i += 1) {
+      now = 27_000 + i * 20;
+      handler({
+        runId: "run-agent-thinking",
+        seq: i + 1,
+        stream: "thinking",
+        ts: Date.now(),
+        data: { text: "t".repeat(i + 1), delta: "t" },
+      });
+    }
+
+    const agentCalls = agentBroadcastCalls(broadcast);
+    expect(agentCalls).toHaveLength(1);
+    expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(1);
+    expect((agentCalls[0]?.[1] as { stream?: string }).stream).toBe("thinking");
+    expect((agentCalls[0]?.[1] as { data?: { text?: string } }).data?.text).toBe("t");
+    nowSpy.mockRestore();
+  });
+
+  it("does not drop non-cumulative assistant agent events while coalescing text", () => {
+    let now = 30_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-agent-media", {
+      sessionKey: "session-agent-media",
+      clientRunId: "client-agent-media",
+    });
+
+    handler({
+      runId: "run-agent-media",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Look", delta: "Look" },
+    });
+    now = 30_050;
+    handler({
+      runId: "run-agent-media",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Look", delta: "", mediaUrls: ["https://example.test/image.png"] },
+    });
+    now = 30_070;
+    handler({
+      runId: "run-agent-media",
+      seq: 3,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Look elsewhere", delta: "", replace: true },
+    });
+    now = 30_090;
+    handler({
+      runId: "run-agent-media",
+      seq: 4,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Look elsewhere now", delta: " now" },
+    });
+    handler({
+      runId: "run-agent-media",
+      seq: 5,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    const agentCalls = agentBroadcastCalls(broadcast);
+    expect(agentCalls).toHaveLength(5);
+    expect((agentCalls[1]?.[1] as { data?: { mediaUrls?: string[] } }).data?.mediaUrls).toEqual([
+      "https://example.test/image.png",
+    ]);
+    expect((agentCalls[2]?.[1] as { data?: { replace?: boolean } }).data?.replace).toBe(true);
+    expect((agentCalls[3]?.[1] as { data?: { text?: string } }).data?.text).toBe(
+      "Look elsewhere now",
+    );
+    expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(5);
+    nowSpy.mockRestore();
   });
 
   it("strips inline directives from assistant chat events", () => {

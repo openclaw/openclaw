@@ -9,13 +9,17 @@ type RepoLabel = {
 };
 
 const COLOR_BY_PREFIX = new Map<string, string>([
-  ["channel", "1d76db"],
-  ["app", "6f42c1"],
-  ["extensions", "0e8a16"],
-  ["docs", "0075ca"],
-  ["cli", "f9d0c4"],
-  ["gateway", "d4c5f9"],
-  ["size", "fbca04"],
+  ["channel", "DDEBFA"],
+  ["app", "EADFF8"],
+  ["extensions", "EDEDED"],
+  ["plugin", "EDEDED"],
+  ["docs", "CFE3F8"],
+  ["cli", "CFE3F8"],
+  ["gateway", "D9CCF5"],
+  ["commands", "CFE3F8"],
+  ["scripts", "D9CCF5"],
+  ["docker", "DDF4E4"],
+  ["size", "E8C4CB"],
 ]);
 
 const EXTRA_LABEL_METADATA = new Map<

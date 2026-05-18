@@ -1278,8 +1278,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("warns when falling back due to model_not_found", async () => {
-    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnLogs = createWarnLogCapture("openclaw-model-fallback-test");
     try {
       const cfg = makeCfg();
       const run = vi
@@ -1295,13 +1294,13 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("ok");
-      expect(warnSpy).toHaveBeenCalledWith(
-        '[model-fallback] Model "openai/gpt-6" not found. Fell back to "anthropic/claude-haiku-3-5".',
-      );
+      expect(
+        await warnLogs.findText(
+          'Model "openai/gpt-6" not found. Fell back to "anthropic/claude-haiku-3-5".',
+        ),
+      ).toBeDefined();
     } finally {
-      warnSpy.mockRestore();
-      setLoggerOverride(null);
-      resetLogger();
+      warnLogs.cleanup();
     }
   });
 

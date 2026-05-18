@@ -18,8 +18,15 @@ import {
   setLastActiveSessionKey,
   syncUrlWithSessionKey,
 } from "./app-settings.ts";
-import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
+import {
+  handleAgentEvent,
+  handleSessionOperationEvent,
+  resetToolStream,
+  type AgentEventPayload,
+  type SessionOperationEventPayload,
+} from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
+import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { recordControlUiRpcTiming } from "./control-ui-performance.ts";
@@ -106,6 +113,7 @@ type GatewayHost = {
   chatRunId: string | null;
   pendingAbort?: { runId?: string | null; sessionKey: string } | null;
   refreshSessionsAfterChat: Set<string>;
+  sessionsLoading?: boolean;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
@@ -135,6 +143,8 @@ type GatewayHostWithSideResults = GatewayHost & {
 };
 
 const SESSIONS_CHANGED_RELOAD_DEBOUNCE_MS = 5_000;
+const DEFERRED_SESSION_MESSAGE_REPLAY_POLL_MS = 250;
+const DEFERRED_SESSION_MESSAGE_REPLAY_TIMEOUT_MS = 10_000;
 
 function enqueueApprovalRequest(host: GatewayHost, entry: ExecApprovalRequest | null) {
   if (!entry) {
@@ -551,11 +561,24 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       }
       // Reset orphaned chat run state from before disconnect.
       // Any in-flight run's final event was lost during the disconnect window.
-      host.chatRunId = null;
-      (host as unknown as { chatStream: string | null }).chatStream = null;
-      (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
-      (host as GatewayHostWithSideResults).chatSideResultTerminalRuns?.clear();
-      resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+      const orphanedRunId = host.chatRunId;
+      const hadOrphanedRun =
+        Boolean(orphanedRunId) ||
+        (host as unknown as { chatStream?: string | null }).chatStream != null;
+      reconcileChatRunLifecycle(
+        host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+        {
+          outcome: hadOrphanedRun ? "interrupted" : undefined,
+          sessionStatus: "killed",
+          runId: orphanedRunId,
+          sessionKey: host.sessionKey,
+          clearLocalRun: true,
+          clearChatStream: true,
+          clearToolStream: true,
+          clearSideResultTerminalRuns: true,
+          clearRunStatus: !hadOrphanedRun,
+        },
+      );
       if (shutdownHost.resumeChatQueueAfterReconnect) {
         // The interrupted run will never emit its terminal event now that the
         // old client is gone, so resume any deferred commands after hello.
@@ -701,7 +724,13 @@ function resolveChatEventSessionListAgentId(
   host: GatewayHost,
   payload: ChatEventPayload | undefined,
 ): string {
-  const sessionKey = payload?.sessionKey?.trim() || host.sessionKey;
+  return resolveSessionListAgentIdForSessionKey(
+    host,
+    payload?.sessionKey?.trim() || host.sessionKey,
+  );
+}
+
+function resolveSessionListAgentIdForSessionKey(host: GatewayHost, sessionKey: string): string {
   const parsed = parseAgentSessionKey(sessionKey);
   if (parsed?.agentId) {
     return parsed.agentId;
@@ -781,6 +810,41 @@ function handleSessionMessageGatewayEvent(
   // first LLM delta arrives.
   if (host.chatRunId) {
     deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
+    void loadSessions(host as unknown as SessionsState, {
+      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+      agentId: resolveSessionListAgentIdForSessionKey(host, sessionKey),
+      limit: CHAT_SESSIONS_REFRESH_LIMIT,
+    }).finally(() =>
+      replayDeferredSessionMessageReloadAfterSessionsRefresh(host, sessionKey, Date.now()),
+    );
+    return;
+  }
+  deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
+  void loadChatHistory(host as unknown as ChatState);
+}
+
+function replayDeferredSessionMessageReloadAfterSessionsRefresh(
+  host: GatewayHost,
+  sessionKey: string,
+  startedAt: number,
+) {
+  const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
+  if (
+    deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim() !== sessionKey ||
+    host.sessionKey !== sessionKey
+  ) {
+    return;
+  }
+  if (host.chatRunId) {
+    if (
+      host.sessionsLoading === true &&
+      Date.now() - startedAt < DEFERRED_SESSION_MESSAGE_REPLAY_TIMEOUT_MS
+    ) {
+      globalThis.setTimeout(
+        () => replayDeferredSessionMessageReloadAfterSessionsRefresh(host, sessionKey, startedAt),
+        DEFERRED_SESSION_MESSAGE_REPLAY_POLL_MS,
+      );
+    }
     return;
   }
   deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
@@ -825,6 +889,14 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "session.message") {
     handleSessionMessageGatewayEvent(host, evt.payload as { sessionKey?: string } | undefined);
+    return;
+  }
+
+  if (evt.event === "session.operation") {
+    handleSessionOperationEvent(
+      host as unknown as Parameters<typeof handleSessionOperationEvent>[0],
+      evt.payload as SessionOperationEventPayload | undefined,
+    );
     return;
   }
 

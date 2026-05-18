@@ -47,7 +47,7 @@ function shouldRegisterGatewayRunOnly(name: string, argv: string[]): boolean {
 }
 
 async function registerGatewayRunOnly(program: Command): Promise<void> {
-  const { addGatewayRunCommand } = await import("../gateway-cli/run.js");
+  const { addGatewayRunCommand } = await import("../gateway-cli/run-command.js");
   removeCommandByName(program, "gateway");
   const gateway = addGatewayRunCommand(
     program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
@@ -65,14 +65,14 @@ async function registerSubCliWithPluginCommands(
   const invocation = resolveCliArgvInvocation(process.argv);
   const shouldRegisterPluginCommands =
     !invocation.hasHelpOrVersion &&
-    (invocation.commandPath.length <= 1 ||
-      resolveCliCommandPathPolicy(invocation.commandPath).loadPlugins !== "never");
-  const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
+    resolveCliCommandPathPolicy(invocation.commandPath).loadPlugins !== "never";
   if (pluginCliPosition === "before" && shouldRegisterPluginCommands) {
+    const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
   await registerSubCli();
   if (pluginCliPosition === "after" && shouldRegisterPluginCommands) {
+    const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
 }

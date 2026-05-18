@@ -44,6 +44,15 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.scenarioIds).toEqual(scenarioIds);
   });
 
+  it("records the runtime pair when the suite runs the runtime axis", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      runtimePair: ["pi", "codex"],
+    });
+
+    expect(json.run.runtimePair).toEqual(["pi", "codex"]);
+  });
+
   it("treats an empty scenarioIds array as unspecified (no filter)", () => {
     // A CLI path that omits --scenario passes an empty array to runQaSuite.
     // The summary must encode that as null so downstream parity/report
@@ -58,12 +67,12 @@ describe("buildQaSuiteSummaryJson", () => {
   it("records an Anthropic baseline lane cleanly for parity runs", () => {
     const json = buildQaSuiteSummaryJson({
       ...baseParams,
-      primaryModel: "anthropic/claude-opus-4-6",
+      primaryModel: "anthropic/claude-opus-4-7",
       alternateModel: "anthropic/claude-sonnet-4-6",
     });
-    expect(json.run.primaryModel).toBe("anthropic/claude-opus-4-6");
+    expect(json.run.primaryModel).toBe("anthropic/claude-opus-4-7");
     expect(json.run.primaryProvider).toBe("anthropic");
-    expect(json.run.primaryModelName).toBe("claude-opus-4-6");
+    expect(json.run.primaryModelName).toBe("claude-opus-4-7");
     expect(json.run.alternateModel).toBe("anthropic/claude-sonnet-4-6");
     expect(json.run.alternateProvider).toBe("anthropic");
     expect(json.run.alternateModelName).toBe("claude-sonnet-4-6");
@@ -90,6 +99,50 @@ describe("buildQaSuiteSummaryJson", () => {
       total: 2,
       passed: 1,
       failed: 1,
+    });
+  });
+
+  it("preserves scenario-level runtime parity payloads", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      scenarios: [
+        {
+          name: "Scenario A",
+          status: "pass" as const,
+          steps: [],
+          runtimeParity: {
+            scenarioId: "scenario-a",
+            drift: "none" as const,
+            cells: {
+              pi: {
+                runtime: "pi" as const,
+                transcriptBytes: "",
+                toolCalls: [],
+                finalText: "done",
+                usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                wallClockMs: 10,
+                bootStateLines: [],
+              },
+              codex: {
+                runtime: "codex" as const,
+                transcriptBytes: "",
+                toolCalls: [],
+                finalText: "done",
+                usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                wallClockMs: 10,
+                bootStateLines: [],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(json.scenarios[0]).toMatchObject({
+      runtimeParity: {
+        scenarioId: "scenario-a",
+        drift: "none",
+      },
     });
   });
 

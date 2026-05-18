@@ -5,6 +5,7 @@ import path from "node:path";
 import JSON5 from "json5";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
+import { isVerbose } from "../global-state.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -181,6 +182,7 @@ type ConfigHealthState = {
 };
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
+export type ConfigWriteResult = { persistedHash: string; persistedConfig: OpenClawConfig };
 export type ConfigWriteOptions = {
   /**
    * Read-time env snapshot used to validate `${VAR}` restoration decisions.
@@ -237,6 +239,12 @@ export type ConfigWriteOptions = {
    * Omitted means the observer should use its normal reload plan.
    */
   afterWrite?: ConfigWriteAfterWrite;
+  /**
+   * Legacy root keys to preserve on disk while excluding them from write validation.
+   * This is for doctor repair of historical config metadata that should not become
+   * part of the public schema contract again.
+   */
+  preservedLegacyRootKeys?: readonly string[];
   /**
    * Skip plugin-aware validation before writing. Use only for safe partial
    * migrations (e.g. legacy key removal) where the base schema is valid but
@@ -879,6 +887,14 @@ export type ConfigIoDeps = {
   logger?: Pick<typeof console, "error" | "warn">;
   measure?: ConfigSnapshotReadMeasure;
   suppressFutureVersionWarning?: boolean;
+  observe?: boolean;
+};
+
+export type ConfigSnapshotReadOptions = {
+  measure?: ConfigSnapshotReadMeasure;
+  observe?: boolean;
+  skipPluginValidation?: boolean;
+  preservedLegacyRootKeys?: readonly string[];
 };
 
 function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">): void {
@@ -938,6 +954,7 @@ function normalizeDeps(overrides: ConfigIoDeps = {}): Required<ConfigIoDeps> {
     logger: overrides.logger ?? console,
     measure: overrides.measure ?? (async (_name, run) => await run()),
     suppressFutureVersionWarning: overrides.suppressFutureVersionWarning ?? false,
+    observe: overrides.observe ?? true,
   };
 }
 
@@ -1210,7 +1227,9 @@ async function finalizeReadConfigSnapshotInternalResult(
   deps: Required<ConfigIoDeps>,
   result: ReadConfigFileSnapshotInternalResult,
 ): Promise<ReadConfigFileSnapshotInternalResult> {
-  await observeConfigSnapshot(deps, result.snapshot);
+  if (deps.observe) {
+    await observeConfigSnapshot(deps, result.snapshot);
+  }
   return result;
 }
 
@@ -1227,7 +1246,10 @@ async function collectInvalidConfigLegacyIssues(
 }
 
 export function createConfigIO(
-  overrides: ConfigIoDeps & { pluginValidation?: "full" | "skip" } = {},
+  overrides: ConfigIoDeps & {
+    pluginValidation?: "full" | "skip";
+    preservedLegacyRootKeys?: readonly string[];
+  } = {},
 ) {
   const deps = normalizeDeps(overrides);
   const configPath = resolveConfigPathForDeps(deps);
@@ -1578,6 +1600,7 @@ export function createConfigIO(
         pluginValidation: overrides.pluginValidation,
         loadPluginMetadataSnapshot: loadValidationPluginMetadataSnapshot,
         sourceRaw: snapshotParsed,
+        preservedLegacyRootKeys: overrides.preservedLegacyRootKeys,
       });
       if (!validated.ok) {
         observeLoadConfigSnapshot({
@@ -1797,6 +1820,7 @@ export function createConfigIO(
           pluginValidation: overrides.pluginValidation,
           loadPluginMetadataSnapshot: loadValidationPluginMetadataSnapshot,
           sourceRaw: effectiveParsed,
+          preservedLegacyRootKeys: overrides.preservedLegacyRootKeys,
         }),
       );
       if (!validated.ok) {
@@ -2041,6 +2065,7 @@ export function createConfigIO(
     const validated = validateConfigObjectRawWithPlugins(persistCandidate, {
       env: deps.env,
       pluginValidation: options.skipPluginValidation ? "skip" : "full",
+      preservedLegacyRootKeys: options.preservedLegacyRootKeys,
     });
     if (!validated.ok) {
       const issue = validated.issues[0];
@@ -2143,6 +2168,9 @@ export function createConfigIO(
       const isVitest = deps.env.VITEST === "true";
       const shouldLogInVitest = deps.env.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG === "1";
       if (isVitest && !shouldLogInVitest) {
+        return;
+      }
+      if (!isVerbose() && deps.env.OPENCLAW_CONFIG_OVERWRITE_LOG !== "1" && !shouldLogInVitest) {
         return;
       }
       deps.logger.warn(
@@ -2365,12 +2393,17 @@ export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
   return await createConfigIO().readSourceConfigBestEffort();
 }
 
-export async function readConfigFileSnapshot(options?: {
-  measure?: ConfigSnapshotReadMeasure;
-}): Promise<ConfigFileSnapshot> {
-  return await createConfigIO(
-    options?.measure ? { measure: options.measure } : {},
-  ).readConfigFileSnapshot();
+export async function readConfigFileSnapshot(
+  options: ConfigSnapshotReadOptions = {},
+): Promise<ConfigFileSnapshot> {
+  return await createConfigIO({
+    ...(options.measure ? { measure: options.measure } : {}),
+    ...(options.observe === false ? { observe: false } : {}),
+    ...(options.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+    ...(options.preservedLegacyRootKeys
+      ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }
+      : {}),
+  }).readConfigFileSnapshot();
 }
 
 export async function readConfigFileSnapshotWithPluginMetadata(options?: {
@@ -2404,8 +2437,12 @@ export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {
   return await readConfigFileSnapshot();
 }
 
-export async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
-  return await createConfigIO().readConfigFileSnapshotForWrite();
+export async function readConfigFileSnapshotForWrite(options?: {
+  skipPluginValidation?: boolean;
+}): Promise<ReadConfigFileSnapshotForWriteResult> {
+  return await createConfigIO(
+    options?.skipPluginValidation ? { pluginValidation: "skip" } : {},
+  ).readConfigFileSnapshotForWrite();
 }
 
 export async function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
@@ -2415,8 +2452,13 @@ export async function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFile
 export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
-): Promise<void> {
-  const io = createConfigIO(options.skipPluginValidation ? { pluginValidation: "skip" } : {});
+): Promise<ConfigWriteResult> {
+  const io = createConfigIO({
+    ...(options.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+    ...(options.preservedLegacyRootKeys
+      ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }
+      : {}),
+  });
   assertConfigWriteAllowedInCurrentMode({ configPath: io.configPath });
   let nextCfg = cfg;
   const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
@@ -2445,13 +2487,14 @@ export async function writeConfigFile(
     skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
     skipOutputLogs: options.skipOutputLogs,
     skipPluginValidation: options.skipPluginValidation,
+    preservedLegacyRootKeys: options.preservedLegacyRootKeys,
   });
   if (
     options.skipRuntimeSnapshotRefresh &&
     !hadRuntimeSnapshot &&
     !getRuntimeConfigSnapshotRefreshHandlerState()
   ) {
-    return;
+    return writeResult;
   }
   // Re-read the freshly persisted file so the sourceConfig we publish matches
   // exactly what readConfigFileSnapshot() will produce when the file-watcher
@@ -2505,4 +2548,5 @@ export async function writeConfigFile(
         { cause },
       ),
   });
+  return { ...writeResult, persistedConfig: canonicalSourceConfig };
 }

@@ -670,6 +670,21 @@ describe("media store", () => {
       expectedContentType: "application/octet-stream",
       expectedExtension: ".custom",
     },
+    {
+      name: "does not preserve image header extensions for generic container buffers",
+      bufferFactory: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return await zip.generateAsync({ type: "nodebuffer" });
+      },
+      contentType: "image/png",
+      originalFilename: "fake.png",
+      expectedContentType: "application/zip",
+      expectedExtension: ".zip",
+      assertSaved: async (saved: Awaited<ReturnType<typeof store.saveMediaBuffer>>) => {
+        expect(path.basename(saved.path)).toMatch(/^fake---[a-f0-9-]{36}\.zip$/);
+      },
+    },
   ] as const)("$name", async (testCase) => {
     const buffer =
       "bufferFactory" in testCase && testCase.bufferFactory
@@ -941,6 +956,18 @@ describe("media store", () => {
         filename: "报告_2024---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
         expected: "报告_2024.pdf",
         basePath: "/media",
+      },
+      {
+        name: "extracts from Windows paths on non-Windows hosts",
+        filename: "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
+        expected: "report.pdf",
+        basePath: String.raw`C:\media\inbound`,
+      },
+      {
+        name: "extracts from mixed-separator paths",
+        filename: "photo---a1b2c3d4-e5f6-7890-abcd-ef1234567890.png",
+        expected: "photo.png",
+        basePath: String.raw`C:\media/inbound`,
       },
     ] as const)("$name", async ({ filename, expected, basePath }) => {
       await expectOriginalFilenameCase({ filename, expected, basePath });

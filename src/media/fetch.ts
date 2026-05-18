@@ -1,4 +1,3 @@
-import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   fetchWithSsrFGuard,
@@ -10,6 +9,7 @@ import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isAbortError, isTransientNetworkError } from "../infra/unhandled-rejections.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { MAX_DOCUMENT_BYTES } from "./constants.js";
+import { basenameFromAnyPath, extnameFromAnyPath } from "./file-name.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./read-response-with-limit.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
@@ -60,6 +60,8 @@ type FetchMediaOptions = {
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
+  /** Abort the guarded fetch request if it has not completed by this deadline (ms). */
+  timeoutMs?: number;
   /** Abort if the response body stops yielding data for this long (ms). */
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
@@ -115,14 +117,14 @@ function parseContentDispositionFileName(header?: string | null): string | undef
     const cleaned = stripQuotes(starMatch[1].trim());
     const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
     try {
-      return path.basename(decodeURIComponent(encoded));
+      return basenameFromAnyPath(decodeURIComponent(encoded));
     } catch {
-      return path.basename(encoded);
+      return basenameFromAnyPath(encoded);
     }
   }
   const match = /filename\s*=\s*([^;]+)/i.exec(header);
   if (match?.[1]) {
-    return path.basename(stripQuotes(match[1].trim()));
+    return basenameFromAnyPath(stripQuotes(match[1].trim()));
   }
   return undefined;
 }
@@ -157,6 +159,7 @@ async function fetchGuardedMediaResponse(
     fetchImpl,
     requestInit,
     maxRedirects,
+    timeoutMs,
     ssrfPolicy,
     lookupFn,
     dispatcherPolicy,
@@ -179,6 +182,7 @@ async function fetchGuardedMediaResponse(
         fetchImpl,
         init: requestInit,
         maxRedirects,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         policy: ssrfPolicy,
         lookupFn: attempt.lookupFn ?? lookupFn,
         dispatcherPolicy: attempt.dispatcherPolicy,
@@ -291,7 +295,7 @@ function resolveRemoteFileName(params: {
   let fileNameFromUrl: string | undefined;
   try {
     const parsed = new URL(params.finalUrl);
-    const base = path.basename(parsed.pathname);
+    const base = basenameFromAnyPath(parsed.pathname);
     fileNameFromUrl = base || undefined;
   } catch {
     // ignore parse errors; leave undefined
@@ -301,7 +305,7 @@ function resolveRemoteFileName(params: {
   );
   return (
     headerFileName ||
-    (params.filePathHint ? path.basename(params.filePathHint) : undefined) ||
+    (params.filePathHint ? basenameFromAnyPath(params.filePathHint) : undefined) ||
     fileNameFromUrl
   );
 }
@@ -615,13 +619,13 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
     });
 
     const filePathForMime =
-      fileName && path.extname(fileName) ? fileName : (options.filePathHint ?? finalUrl);
+      fileName && extnameFromAnyPath(fileName) ? fileName : (options.filePathHint ?? finalUrl);
     const contentType = await detectMime({
       buffer,
       headerMime: res.headers.get("content-type"),
       filePath: filePathForMime,
     });
-    if (fileName && !path.extname(fileName) && contentType) {
+    if (fileName && !extnameFromAnyPath(fileName) && contentType) {
       const ext = extensionForMime(contentType);
       if (ext) {
         fileName = `${fileName}${ext}`;

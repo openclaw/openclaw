@@ -99,6 +99,7 @@ async function emitTranscriptUpdateAndCollectEvents(params: {
   sessionFile: string;
   message: Record<string, unknown>;
   messageId: string;
+  messageSeq?: number;
 }) {
   const messageEventPromise = waitForSessionMessageEvent(params.ws, params.sessionKey);
   const changedEventPromise = waitForSessionsChangedMessagePhase(params.ws, params.sessionKey);
@@ -108,6 +109,7 @@ async function emitTranscriptUpdateAndCollectEvents(params: {
     sessionKey: params.sessionKey,
     message: params.message,
     messageId: params.messageId,
+    ...(typeof params.messageSeq === "number" ? { messageSeq: params.messageSeq } : {}),
   });
 
   const [messageEvent, changedEvent] = await Promise.all([
@@ -387,6 +389,58 @@ describe("session.message websocket events", () => {
     });
   });
 
+  test("does not broadcast hidden runtime-context custom messages as live chat messages", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        "hidden-runtime": {
+          sessionId: "sess-hidden-runtime",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const changedEventPromise = waitForSessionsChangedMessagePhase(
+        ws,
+        "agent:main:hidden-runtime",
+      );
+      await expectNoMessageWithin({
+        watch: (timeoutMs) =>
+          onceMessage(
+            ws,
+            (message) =>
+              message.type === "event" &&
+              message.event === "session.message" &&
+              (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+                "agent:main:hidden-runtime",
+            timeoutMs,
+          ),
+        action: () => {
+          emitSessionTranscriptUpdate({
+            sessionFile: path.join(path.dirname(storePath), "sess-hidden-runtime.jsonl"),
+            sessionKey: "agent:main:hidden-runtime",
+            messageId: "runtime-context-1",
+            messageSeq: 1,
+            message: {
+              role: "custom",
+              customType: "openclaw.runtime-context",
+              content: "secret runtime context",
+              display: false,
+            },
+          });
+        },
+      });
+
+      const changedEvent = await changedEventPromise;
+      expectRecordFields(changedEvent.payload, {
+        sessionKey: "agent:main:hidden-runtime",
+        phase: "message",
+      });
+    });
+  });
+
   test("includes live usage metadata on session.message and sessions.changed transcript events", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({
@@ -458,6 +512,49 @@ describe("session.message websocket events", () => {
         modelProvider: "openai",
         model: "gpt-5.4",
       });
+    });
+  });
+
+  test("prefers carried transcript sequence for live session events", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const { messageEvent, changedEvent } = await emitTranscriptUpdateAndCollectEvents({
+        ws,
+        sessionKey: "agent:main:main",
+        sessionFile: path.join(path.dirname(storePath), "missing-transcript.jsonl"),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "carried sequence" }],
+          timestamp: Date.now(),
+        },
+        messageId: "msg-carried-seq",
+        messageSeq: 7,
+      });
+
+      expectRecordFields(messageEvent.payload, {
+        sessionKey: "agent:main:main",
+        messageId: "msg-carried-seq",
+        messageSeq: 7,
+      });
+      expectRecordFields(changedEvent.payload, {
+        sessionKey: "agent:main:main",
+        phase: "message",
+        messageId: "msg-carried-seq",
+        messageSeq: 7,
+      });
+      const payload = requireRecord(messageEvent.payload, "session.message payload");
+      const message = requireRecord(payload.message, "session.message payload message");
+      expect((message.__openclaw as { seq?: unknown } | undefined)?.seq).toBe(7);
     });
   });
 

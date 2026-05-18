@@ -1,6 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -38,51 +37,18 @@ async function addCompileCacheProbe(fixtureRoot: string): Promise<void> {
   );
 }
 
-async function waitForFile(filePath: string, timeoutMs: number): Promise<string> {
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch {
-    // Wait below.
+async function waitForJsonFile<T>(filePath: string, timeoutMs: number): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() <= deadline) {
+    try {
+      return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
   }
-
-  const signal = AbortSignal.timeout(timeoutMs);
-  return await new Promise<string>((resolve, reject) => {
-    let settled = false;
-    let watcher: ReturnType<typeof watch> | undefined;
-    const fileName = path.basename(filePath);
-
-    const cleanup = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      watcher?.close();
-    };
-    const tryRead = async () => {
-      try {
-        const content = await fs.readFile(filePath, "utf8");
-        cleanup();
-        resolve(content);
-      } catch {
-        // Keep watching until the deadline aborts.
-      }
-    };
-
-    signal.addEventListener(
-      "abort",
-      () => {
-        cleanup();
-        reject(new Error(`timed out waiting for ${filePath}`));
-      },
-      { once: true },
-    );
-    watcher = watch(path.dirname(filePath), { signal }, (_event, changedFileName) => {
-      if (!changedFileName || changedFileName.toString() === fileName) {
-        void tryRead();
-      }
-    });
-    void tryRead();
-  });
+  throw new Error(`timed out waiting for parseable JSON in ${filePath}`, { cause: lastError });
 }
 
 async function waitForProcessExit(
@@ -137,6 +103,30 @@ describe("openclaw launcher", () => {
 
   afterEach(async () => {
     cleanupTempDirs(fixtureRoots);
+  });
+
+  it("keeps the bootstrap Node floor aligned with package and runtime guards", async () => {
+    const [launcher, runtimeGuard, packageJsonRaw] = await Promise.all([
+      fs.readFile(path.resolve(process.cwd(), "openclaw.mjs"), "utf8"),
+      fs.readFile(path.resolve(process.cwd(), "src/infra/runtime-guard.ts"), "utf8"),
+      fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"),
+    ]);
+    const packageJson = JSON.parse(packageJsonRaw) as { engines?: { node?: string } };
+    const launcherMatch = launcher.match(
+      /const MIN_NODE_MAJOR = (\d+);\s+const MIN_NODE_MINOR = (\d+);/u,
+    );
+    const runtimeMatch = runtimeGuard.match(
+      /const MIN_NODE: Semver = \{ major: (\d+), minor: (\d+), patch: (\d+) \};/u,
+    );
+    const engineMatch = packageJson.engines?.node?.match(/^>=(\d+)\.(\d+)\.(\d+)$/u);
+
+    expect(launcherMatch).not.toBeNull();
+    expect(runtimeMatch).not.toBeNull();
+    expect(engineMatch).not.toBeNull();
+    expect(`${launcherMatch?.[1]}.${launcherMatch?.[2]}.0`).toBe(
+      `${engineMatch?.[1]}.${engineMatch?.[2]}.${engineMatch?.[3]}`,
+    );
+    expect(runtimeMatch?.slice(1, 4)).toEqual(engineMatch?.slice(1, 4));
   });
 
   it("surfaces transitive entry import failures instead of masking them as missing dist", async () => {
@@ -250,7 +240,7 @@ describe("openclaw launcher", () => {
       let respawnChildPid: number | undefined;
 
       try {
-        const childInfo = JSON.parse(await waitForFile(childInfoPath, 5000)) as { pid: number };
+        const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
         respawnChildPid = childInfo.pid;
 
         launcher.kill("SIGTERM");
@@ -301,7 +291,7 @@ describe("openclaw launcher", () => {
       let respawnChildPid: number | undefined;
 
       try {
-        const childInfo = JSON.parse(await waitForFile(childInfoPath, 5000)) as { pid: number };
+        const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
         respawnChildPid = childInfo.pid;
 
         launcher.kill("SIGTERM");

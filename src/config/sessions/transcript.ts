@@ -14,7 +14,7 @@ import {
   resolveSessionTranscriptPath,
 } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
+import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
@@ -75,13 +75,24 @@ type AssistantTranscriptText = {
 export type LatestAssistantTranscriptText = AssistantTranscriptText;
 export type TailAssistantTranscriptText = AssistantTranscriptText;
 
-function parseAssistantTranscriptText(line: string): AssistantTranscriptText | undefined {
+function parseAssistantTranscriptText(
+  line: string,
+  options?: { excludeTranscriptOnlyOpenClawAssistant?: boolean },
+): AssistantTranscriptText | undefined {
   const parsed = JSON.parse(line) as {
     id?: unknown;
     message?: unknown;
   };
-  const message = parsed.message as { role?: unknown; timestamp?: unknown } | undefined;
+  const message = parsed.message as
+    | { role?: unknown; timestamp?: unknown; provider?: unknown; model?: unknown }
+    | undefined;
   if (!message || message.role !== "assistant") {
+    return undefined;
+  }
+  if (
+    options?.excludeTranscriptOnlyOpenClawAssistant &&
+    isTranscriptOnlyOpenClawAssistantMessage(message)
+  ) {
     return undefined;
   }
   const text = extractAssistantVisibleText(message)?.trim();
@@ -95,6 +106,16 @@ function parseAssistantTranscriptText(line: string): AssistantTranscriptText | u
       ? { timestamp: message.timestamp }
       : {}),
   };
+}
+
+function isTranscriptOnlyOpenClawAssistantMessage(message: {
+  provider?: unknown;
+  model?: unknown;
+}): boolean {
+  return (
+    message.provider === "openclaw" &&
+    (message.model === "delivery-mirror" || message.model === "gateway-injected")
+  );
 }
 
 export async function resolveSessionTranscriptFile(params: {
@@ -151,7 +172,9 @@ export async function readLatestAssistantTextFromSessionTranscript(
 
   for await (const line of streamSessionTranscriptLinesReverse(sessionFile)) {
     try {
-      const assistantText = parseAssistantTranscriptText(line);
+      const assistantText = parseAssistantTranscriptText(line, {
+        excludeTranscriptOnlyOpenClawAssistant: true,
+      });
       if (assistantText) {
         return assistantText;
       }
@@ -173,7 +196,7 @@ export async function readTailAssistantTextFromSessionTranscript(
     try {
       return parseAssistantTranscriptText(line);
     } catch {
-      return undefined;
+      continue;
     }
   }
   return undefined;
@@ -255,8 +278,8 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
 
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
   const store = loadSessionStore(storePath, { skipCache: true });
-  const normalizedKey = normalizeStoreSessionKey(sessionKey);
-  const entry = (store[normalizedKey] ?? store[sessionKey]) as SessionEntry | undefined;
+  const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  const entry = resolved.existing;
   if (!entry?.sessionId) {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
   }
@@ -265,7 +288,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   try {
     const resolvedSessionFile = await resolveAndPersistSessionFile({
       sessionId: entry.sessionId,
-      sessionKey,
+      sessionKey: resolved.normalizedKey,
       sessionStore: store,
       storePath,
       sessionEntry: entry,
@@ -302,7 +325,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   if (latestEquivalentAssistantId) {
     return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
   }
-
   const message = {
     ...params.message,
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),

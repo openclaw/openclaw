@@ -41,7 +41,12 @@ function createMaintenanceTimerDeps() {
     logHealth: { error: () => {} },
     dedupe: new Map(),
     chatAbortControllers: new Map(),
-    chatRunState: { abortedRuns: new Map(), deltaLastBroadcastText: new Map() },
+    chatRunState: {
+      abortedRuns: new Map(),
+      deltaLastBroadcastText: new Map(),
+      agentDeltaSentAt: new Map(),
+      bufferedAgentEvents: new Map(),
+    },
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),
@@ -209,6 +214,33 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
+  it("sweeps orphaned stale agent throttle state once the abort controller is gone", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-agent-orphaned";
+    deps.chatRunState.agentDeltaSentAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
+    deps.chatRunState.bufferedAgentEvents.set(runId, {
+      payload: {
+        runId,
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "buffer", delta: "buffer" },
+      },
+    });
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.chatRunState.agentDeltaSentAt.has(runId)).toBe(false);
+    expect(deps.chatRunState.bufferedAgentEvents.has(runId)).toBe(false);
+
+    stopMaintenanceTimers(timers);
+  });
+
   it("clears deltaLastBroadcastLen when aborted runs age out", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
@@ -220,6 +252,16 @@ describe("startGatewayMaintenanceTimers", () => {
     deps.chatDeltaSentAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
     deps.chatDeltaLastBroadcastLen.set(runId, 6);
     deps.chatRunState.deltaLastBroadcastText.set(runId, "buffer");
+    deps.chatRunState.agentDeltaSentAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
+    deps.chatRunState.bufferedAgentEvents.set(runId, {
+      payload: {
+        runId,
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "buffer", delta: "buffer" },
+      },
+    });
 
     const timers = startGatewayMaintenanceTimers(deps);
 
@@ -230,6 +272,8 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(deps.chatDeltaSentAt.has(runId)).toBe(false);
     expect(deps.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
     expect(deps.chatRunState.deltaLastBroadcastText.has(runId)).toBe(false);
+    expect(deps.chatRunState.agentDeltaSentAt.has(runId)).toBe(false);
+    expect(deps.chatRunState.bufferedAgentEvents.has(runId)).toBe(false);
 
     stopMaintenanceTimers(timers);
   });
@@ -258,6 +302,35 @@ describe("startGatewayMaintenanceTimers", () => {
 
     expect(deps.dedupe.has("agent:active-agent")).toBe(true);
     expect(deps.dedupe.has("agent:stale-agent")).toBe(false);
+
+    stopMaintenanceTimers(timers);
+  });
+
+  it("keeps active exec approval dedupe aliases past the normal ttl", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const now = Date.now();
+    const runId = "exec-approval-followup:req-active:nonce:retry-1";
+    deps.chatAbortControllers.set(runId, createActiveRun("agent:main:main", "agent"));
+    deps.dedupe.set("agent:exec-approval-followup:req-active", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: { runId, status: "accepted" },
+    });
+    deps.dedupe.set("agent:exec-approval-followup:req-stale", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: { runId: "exec-approval-followup:req-stale:nonce:retry-1", status: "accepted" },
+    });
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.dedupe.has("agent:exec-approval-followup:req-active")).toBe(true);
+    expect(deps.dedupe.has("agent:exec-approval-followup:req-stale")).toBe(false);
 
     stopMaintenanceTimers(timers);
   });

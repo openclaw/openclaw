@@ -34,6 +34,8 @@ import {
 
 export {
   getActiveEmbeddedRunCount,
+  listActiveEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys,
   type ActiveEmbeddedRunSnapshot,
   type EmbeddedPiQueueHandle,
   type EmbeddedPiQueueMessageOptions,
@@ -44,6 +46,8 @@ export type EmbeddedPiQueueFailureReason =
   | "no_active_run"
   | "not_streaming"
   | "compacting"
+  | "source_reply_delivery_mode_mismatch"
+  | "transcript_commit_wait_unsupported"
   | "runtime_rejected";
 
 export type EmbeddedPiQueueMessageOutcome =
@@ -52,6 +56,8 @@ export type EmbeddedPiQueueMessageOutcome =
       sessionId: string;
       target: "embedded_run" | "reply_run";
       gatewayHealth: "live";
+      deliveredAtMs?: number;
+      enqueuedAtMs?: number;
     }
   | {
       queued: false;
@@ -140,7 +146,7 @@ export function queueEmbeddedPiMessageWithOutcome(
   text: string,
   options?: EmbeddedPiQueueMessageOptions,
 ): EmbeddedPiQueueMessageOutcome {
-  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text);
+  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text, options);
   if (prepared.kind === "complete") {
     return prepared.outcome;
   }
@@ -157,6 +163,7 @@ export function queueEmbeddedPiMessageWithOutcome(
     sessionId,
     target: "embedded_run",
     gatewayHealth: "live",
+    enqueuedAtMs: Date.now(),
   };
 }
 
@@ -169,29 +176,34 @@ export async function queueEmbeddedPiMessageWithOutcomeAsync(
   text: string,
   options?: EmbeddedPiQueueMessageOptions,
 ): Promise<EmbeddedPiQueueMessageOutcome> {
-  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text);
+  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text, options);
   if (prepared.kind === "complete") {
     return prepared.outcome;
   }
   try {
+    const enqueuedAtMs = Date.now();
     await prepared.handle.queueMessage(text, options ?? { steeringMode: "all" });
+    const deliveredAtMs = options?.waitForTranscriptCommit ? Date.now() : undefined;
+    logMessageQueued({ sessionId, source: "pi-embedded-runner" });
+    return {
+      queued: true,
+      sessionId,
+      target: "embedded_run",
+      gatewayHealth: "live",
+      ...(deliveredAtMs !== undefined ? { deliveredAtMs } : {}),
+      enqueuedAtMs,
+    };
   } catch (err) {
     const errorMessage = formatQueueError(err);
     diag.debug(`queue message rejected: sessionId=${sessionId} err=${errorMessage}`);
     return createQueueFailureOutcome(sessionId, "runtime_rejected", errorMessage);
   }
-  logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-  return {
-    queued: true,
-    sessionId,
-    target: "embedded_run",
-    gatewayHealth: "live",
-  };
 }
 
 function prepareEmbeddedPiQueueMessage(
   sessionId: string,
   text: string,
+  options?: EmbeddedPiQueueMessageOptions,
 ): PreparedEmbeddedPiQueueMessage {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
@@ -205,7 +217,17 @@ function prepareEmbeddedPiQueueMessage(
           sessionId,
           target: "reply_run",
           gatewayHealth: "live",
+          enqueuedAtMs: Date.now(),
         },
+      };
+    }
+    if (options?.waitForTranscriptCommit === true) {
+      diag.debug(
+        `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
+      );
+      return {
+        kind: "complete",
+        outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
       };
     }
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
@@ -218,6 +240,27 @@ function prepareEmbeddedPiQueueMessage(
   if (handle.isCompacting()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "compacting") };
+  }
+  if (options?.waitForTranscriptCommit === true && handle.supportsTranscriptCommitWait !== true) {
+    diag.debug(
+      `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
+    );
+    return {
+      kind: "complete",
+      outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
+    };
+  }
+  if (
+    options?.sourceReplyDeliveryMode === "message_tool_only" &&
+    handle.sourceReplyDeliveryMode !== "message_tool_only"
+  ) {
+    diag.debug(
+      `queue message failed: sessionId=${sessionId} reason=source_reply_delivery_mode_mismatch`,
+    );
+    return {
+      kind: "complete",
+      outcome: createQueueFailureOutcome(sessionId, "source_reply_delivery_mode_mismatch"),
+    };
   }
   return { kind: "embedded_run", handle };
 }

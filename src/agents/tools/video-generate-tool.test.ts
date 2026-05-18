@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { MAX_VIDEO_BYTES } from "../../media/constants.js";
 import * as mediaStore from "../../media/store.js";
@@ -186,6 +186,15 @@ function resetVideoGenerateMocks() {
 }
 
 describe("createVideoGenerateTool", () => {
+  let emptyConfigTool: ReturnType<typeof createVideoGenerateTool>;
+
+  beforeAll(() => {
+    resetVideoGenerateMocks();
+    emptyConfigTool = createVideoGenerateTool({ config: asConfig({}) });
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     resetVideoGenerateMocks();
     for (const envVar of GENERATION_PROVIDER_ENV_VARS) {
@@ -200,7 +209,7 @@ describe("createVideoGenerateTool", () => {
   it("returns null when no video-generation config or auth-backed provider is available", () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
 
-    expect(createVideoGenerateTool({ config: asConfig({}) })).toBeNull();
+    expect(emptyConfigTool).toBeNull();
   });
 
   it("registers when video-generation config is present", () => {
@@ -359,13 +368,22 @@ describe("createVideoGenerateTool", () => {
       "lobster.mp4",
     );
     expect(text).toContain("Generated 1 video with qwen/wan2.6-t2v.");
-    expect(text).toContain("MEDIA:/tmp/generated-lobster.mp4");
+    expect(text).toContain('path="/tmp/generated-lobster.mp4"');
+    expect(text).not.toContain("MEDIA:");
     const details = resultDetails(result);
     expect(details.provider).toBe("qwen");
     expect(details.model).toBe("wan2.6-t2v");
     expect(details.count).toBe(1);
     expect((details.media as { mediaUrls?: string[] }).mediaUrls).toEqual([
       "/tmp/generated-lobster.mp4",
+    ]);
+    expect((details.media as { attachments?: unknown }).attachments).toEqual([
+      {
+        type: "video",
+        path: "/tmp/generated-lobster.mp4",
+        mimeType: "video/mp4",
+        name: "generated-lobster.mp4",
+      },
     ]);
     expect(details.paths).toEqual(["/tmp/generated-lobster.mp4"]);
     expect(details.metadata).toEqual({ taskId: "task-1" });
@@ -492,7 +510,8 @@ describe("createVideoGenerateTool", () => {
 
     expect(saveSpy).not.toHaveBeenCalled();
     expect(text).toContain("Generated 1 video with vydra/veo3.");
-    expect(text).toContain("MEDIA:https://example.com/generated-lobster.mp4");
+    expect(text).toContain('mediaUrl="https://example.com/generated-lobster.mp4"');
+    expect(text).not.toContain("MEDIA:");
     const details = resultDetails(result);
     expect(details.provider).toBe("vydra");
     expect(details.model).toBe("veo3");
@@ -542,7 +561,8 @@ describe("createVideoGenerateTool", () => {
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
     expect(text).toContain("Generated 1 video with fal/fal-ai/minimax/video-01-live.");
-    expect(text).toContain("MEDIA:https://fal.run/files/generated-lobster.mp4");
+    expect(text).toContain('mediaUrl="https://fal.run/files/generated-lobster.mp4"');
+    expect(text).not.toContain("MEDIA:");
     const details = resultDetails(result);
     expect(details.provider).toBe("fal");
     expect(details.model).toBe("fal-ai/minimax/video-01-live");
@@ -567,7 +587,7 @@ describe("createVideoGenerateTool", () => {
       createdAt: Date.now(),
     });
     const wakeSpy = vi
-      .spyOn(videoGenerateBackground, "wakeVideoGenerationTaskCompletion")
+      .spyOn(videoGenerateBackground.videoGenerationTaskLifecycle, "wakeTaskCompletion")
       .mockResolvedValue(undefined);
     const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer");
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
@@ -634,13 +654,21 @@ describe("createVideoGenerateTool", () => {
     const wake = firstMockCallArg(wakeSpy) as {
       handle: { taskId?: string };
       status: string;
-      mediaUrls: string[];
+      attachments: unknown[];
       result: string;
     };
     expect(wake.handle.taskId).toBe("task-123");
     expect(wake.status).toBe("ok");
-    expect(wake.mediaUrls).toEqual(["https://example.com/generated-lobster.mp4"]);
-    expect(wake.result).toContain("MEDIA:https://example.com/generated-lobster.mp4");
+    expect(wake.attachments).toEqual([
+      {
+        type: "video",
+        url: "https://example.com/generated-lobster.mp4",
+        mimeType: "video/mp4",
+        name: "lobster.mp4",
+      },
+    ]);
+    expect(wake.result).toContain('mediaUrl="https://example.com/generated-lobster.mp4"');
+    expect(wake.result).not.toContain("MEDIA:");
   });
 
   it("surfaces provider generation failures inline when there is no detached session", async () => {

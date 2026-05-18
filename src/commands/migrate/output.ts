@@ -90,7 +90,7 @@ function formatPlanWarnings(plan: MigrationPlan): string[] {
   }
   const lines = ["", theme.warn("Warnings:")];
   for (const warning of plan.warnings) {
-    lines.push(`• ${warning}`);
+    lines.push(`⚠️  ${warning}`);
   }
   return lines;
 }
@@ -109,7 +109,8 @@ export function formatMigrationResult(plan: MigrationPlan): string[] {
     lines.push("");
     lines.push(theme.heading("Next:"));
     for (const step of plan.nextSteps) {
-      lines.push(`• ${step}`);
+      const prefix = plan.warnings?.includes(step) ? "⚠️ " : "•";
+      lines.push(`${prefix} ${step}`);
     }
   }
   return lines;
@@ -120,27 +121,51 @@ function formatItemDisplayName(item: MigrationItem): string {
 }
 
 const REASON_CODE_MESSAGES: Record<string, string> = {
-  plugin_missing: "Plugin not found in the Codex marketplace.",
-  marketplace_missing: "Codex marketplace is unavailable.",
-  disabled: "Plugin is disabled in Codex.",
-  refresh_failed: "Failed to refresh the Codex plugin marketplace.",
-  auth_required: "Plugin requires additional authentication.",
-  already_active: "Plugin is already active in OpenClaw.",
-  installed: "Plugin is already installed in OpenClaw.",
-  plugin_install_failed: "Plugin installation failed.",
-  codex_subscription_required: "Plugin requires an active Codex subscription.",
-  "not selected for migration": "Skipped because it was not selected for migration.",
+  plugin_missing: "Plugin not found in the Codex marketplace",
+  marketplace_missing: "Codex marketplace is unavailable",
+  disabled: "Plugin is disabled in Codex",
+  refresh_failed: "Failed to refresh the Codex plugin marketplace",
+  auth_required: "Plugin requires additional authentication",
+  already_active: "Plugin is already active in OpenClaw",
+  installed: "Plugin is already installed in OpenClaw",
+  plugin_install_failed: "Plugin installation failed",
+  codex_subscription_required: "Plugin requires an active Codex subscription",
+  "not selected for migration": "Skipped because it was not selected for migration",
 };
+
+// Phrase-form conflict reasons, used as-is in selection-prompt hints
+// (`<source label> <phrase>`) and wrapped into sentence form for preview
+// /result rows. Keep one map so the two surfaces never drift.
+export const MIGRATION_CONFLICT_REASON_PHRASES: Record<string, string> = {
+  "target exists": "already installed in workspace",
+  "plugin exists": "already installed in workspace",
+};
+
+function conflictReasonSentence(reason: string): string | undefined {
+  const phrase = MIGRATION_CONFLICT_REASON_PHRASES[reason];
+  if (!phrase) {
+    return undefined;
+  }
+  return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}`;
+}
 
 function humanizeReason(reason: string | undefined): string | undefined {
   if (!reason) {
     return undefined;
   }
-  return REASON_CODE_MESSAGES[reason] ?? reason;
+  return REASON_CODE_MESSAGES[reason] ?? conflictReasonSentence(reason) ?? reason;
 }
 
 function formatItemMessage(item: MigrationItem, mode: FormatMode): string | undefined {
   if (mode === "preview") {
+    if (
+      item.status === "conflict" ||
+      item.status === "skipped" ||
+      item.status === "warning" ||
+      item.status === "error"
+    ) {
+      return humanizeReason(item.reason) ?? item.message;
+    }
     if (item.kind === "skill" && item.action === "copy") {
       return "Copy Codex skill into OpenClaw";
     }
@@ -159,12 +184,15 @@ function formatItemMessage(item: MigrationItem, mode: FormatMode): string | unde
     if (item.status === "skipped") {
       return "Skipped";
     }
+    if (item.status === "warning") {
+      return item.message ?? humanizeReason(item.reason);
+    }
     if (item.status === "error" || item.status === "conflict") {
       return humanizeReason(item.reason) ?? item.message;
     }
     return undefined;
   }
-  if (item.status === "error" || item.status === "conflict") {
+  if (item.status === "warning" || item.status === "error" || item.status === "conflict") {
     return humanizeReason(item.reason) ?? item.message;
   }
   return item.message ?? humanizeReason(item.reason);
@@ -172,20 +200,24 @@ function formatItemMessage(item: MigrationItem, mode: FormatMode): string | unde
 
 const RESULT_STATUS_GLYPHS: Record<string, string> = {
   migrated: "✅",
+  warning: "⚠️ ",
   error: "❌",
   skipped: "⏭️ ",
   conflict: "⚠️ ",
 };
 
-function formatItemPrefix(item: MigrationItem, mode: FormatMode): string {
-  if (mode === "result") {
-    const glyph = RESULT_STATUS_GLYPHS[item.status];
-    if (glyph) {
-      return `${glyph} `;
-    }
-    return "• ";
+function formatItemPrefix(item: MigrationItem): string {
+  if (item.kind === "manual") {
+    return "🔍 ";
   }
-  return item.status === "planned" ? "• " : `• ${item.status}: `;
+  if (item.kind === "archive") {
+    return "📖 ";
+  }
+  const glyph = RESULT_STATUS_GLYPHS[item.status];
+  if (glyph) {
+    return `${glyph} `;
+  }
+  return "• ";
 }
 
 function formatMigrationItem(item: MigrationItem, mode: FormatMode): string {
@@ -193,7 +225,7 @@ function formatMigrationItem(item: MigrationItem, mode: FormatMode): string {
   const message = formatItemMessage(item, mode);
   const messageSuffix = message ? ` ${theme.muted(`(${message})`)}` : "";
   const sensitive = item.sensitive ? " [sensitive]" : "";
-  const prefix = formatItemPrefix(item, mode);
+  const prefix = formatItemPrefix(item);
   return `${prefix}${name}${sensitive}${messageSuffix}`;
 }
 

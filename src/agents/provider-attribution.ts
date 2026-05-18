@@ -54,6 +54,7 @@ export type ProviderEndpointClass =
   | "azure-openai"
   | "openrouter"
   | "xai-native"
+  | "xiaomi-native"
   | "zai-native"
   | "google-generative-ai"
   | "google-vertex"
@@ -149,6 +150,7 @@ const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
   "azure-openai",
   "openrouter",
   "xai-native",
+  "xiaomi-native",
   "zai-native",
   "google-generative-ai",
   "google-vertex",
@@ -520,6 +522,26 @@ function buildOpenAICodexAttributionPolicy(
   };
 }
 
+function buildXaiAttributionPolicy(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy {
+  const identity = resolveProviderAttributionIdentity(env);
+  return {
+    provider: "xai",
+    enabledByDefault: true,
+    verification: "vendor-hidden-api-spec",
+    hook: "request-headers",
+    reviewNote:
+      "xAI api.x.ai accepts a standard openclaw User-Agent. Companion originator/version headers mirror the OpenAI attribution shape for consistency; they are not validated against an xAI-specific spec and are expected to be ignored by xAI's OpenAI-compatible surface.",
+    ...identity,
+    headers: {
+      originator: OPENCLAW_ATTRIBUTION_ORIGINATOR,
+      version: identity.version,
+      "User-Agent": formatOpenClawUserAgent(identity.version),
+    },
+  };
+}
+
 function buildSdkHookOnlyPolicy(
   provider: string,
   hook: ProviderAttributionHook,
@@ -543,6 +565,7 @@ export function listProviderAttributionPolicies(
     buildOpenRouterAttributionPolicy(env),
     buildOpenAIAttributionPolicy(env),
     buildOpenAICodexAttributionPolicy(env),
+    buildXaiAttributionPolicy(env),
     buildSdkHookOnlyPolicy(
       "anthropic",
       "default-headers",
@@ -612,6 +635,7 @@ export function resolveProviderRequestPolicy(
   const usesOpenAICodexAttributionHost = endpointClass === "openai-codex";
   const usesVerifiedOpenAIAttributionHost =
     usesOpenAIPublicAttributionHost || usesOpenAICodexAttributionHost;
+  const usesXaiNativeAttributionHost = endpointClass === "xai-native";
   const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
 
   let attributionProvider: string | undefined;
@@ -624,6 +648,11 @@ export function resolveProviderRequestPolicy(
     // OpenRouter endpoints or the default (unset) baseUrl path.
     if (endpointClass === "openrouter" || endpointClass === "default") {
       attributionProvider = "openrouter";
+    }
+  } else if (provider === "xai" && policy?.enabledByDefault) {
+    // Default (unset baseUrl) maps to api.x.ai; custom baseUrls are treated as proxies and withheld.
+    if (usesXaiNativeAttributionHost || endpointClass === "default") {
+      attributionProvider = "xai";
     }
   }
 
@@ -680,6 +709,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "azure-openai" ||
     endpointClass === "openrouter" ||
     endpointClass === "xai-native" ||
+    endpointClass === "xiaomi-native" ||
     endpointClass === "zai-native" ||
     endpointClass === "google-generative-ai" ||
     endpointClass === "google-vertex";

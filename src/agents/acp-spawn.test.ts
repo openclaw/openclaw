@@ -786,6 +786,20 @@ describe("spawnAcpDirect", () => {
       targetKind: "session",
       placement: "child",
     });
+    const patchCallIndex = hoisted.callGatewayMock.mock.calls.findIndex(
+      (call: unknown[]) => (call[0] as { method?: string }).method === "sessions.patch",
+    );
+    const agentCallIndex = hoisted.callGatewayMock.mock.calls.findIndex(
+      (call: unknown[]) => (call[0] as { method?: string }).method === "agent",
+    );
+    const patchCallOrder = hoisted.callGatewayMock.mock.invocationCallOrder[patchCallIndex];
+    const initializeCallOrder = hoisted.initializeSessionMock.mock.invocationCallOrder[0];
+    const agentCallOrder = hoisted.callGatewayMock.mock.invocationCallOrder[agentCallIndex];
+    expect(typeof patchCallOrder).toBe("number");
+    expect(typeof initializeCallOrder).toBe("number");
+    expect(typeof agentCallOrder).toBe("number");
+    expect(patchCallOrder < initializeCallOrder).toBe(true);
+    expect(initializeCallOrder < agentCallOrder).toBe(true);
     expectResolvedIntroTextInBindMetadata();
 
     const agentCall = gatewayRequest("agent");
@@ -2721,6 +2735,15 @@ describe("spawnAcpDirect", () => {
     expect(expectFailedSpawn(result, "error").error).toContain("agent dispatch failed");
     expect(relayHandle.dispose).toHaveBeenCalledTimes(1);
     expect(relayHandle.notifyStarted).not.toHaveBeenCalled();
+    expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeCloseHandle: expect.objectContaining({
+          handle: expect.objectContaining({
+            backend: "acpx",
+          }),
+        }),
+      }),
+    );
   });
 
   it('rejects streamTo="parent" without requester session context', async () => {
