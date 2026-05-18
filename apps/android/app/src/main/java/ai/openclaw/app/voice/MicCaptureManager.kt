@@ -759,10 +759,10 @@ class MicCaptureManager(
     var outputIndex = 0
     while (inputIndex + 1 < pcm16.size) {
       val sample =
-        ((pcm16[inputIndex].toInt() and 0xff) or
-          (pcm16[inputIndex + 1].toInt() shl 8))
-          .toShort()
-          .toInt()
+        (
+          (pcm16[inputIndex].toInt() and 0xff) or
+            (pcm16[inputIndex + 1].toInt() shl 8)
+        ).toShort().toInt()
       output[outputIndex] = linear16ToPcmu(sample)
       inputIndex += 2
       outputIndex += 1

@@ -169,11 +169,15 @@ class TalkModeManager internal constructor(
   private val realtimePlaybackLock = Any()
   private var realtimeAudioTrack: AudioTrack? = null
   private var realtimePlaybackIdleJob: Job? = null
-  @Volatile private var realtimePlaybackEndsAtMs = 0L
 
-  @Volatile private var realtimeOutputSuppressed = false
+  @Volatile
+  private var realtimePlaybackEndsAtMs = 0L
 
-  @Volatile private var playbackEnabled = true
+  @Volatile
+  private var realtimeOutputSuppressed = false
+
+  @Volatile
+  private var playbackEnabled = true
   private val playbackGeneration = AtomicLong(0L)
 
   private var ttsJob: Job? = null
@@ -755,11 +759,9 @@ class TalkModeManager internal constructor(
       }
   }
 
-  private fun shouldAppendRealtimeCapturedFrame(length: Int): Boolean =
-    !isRealtimePlaybackActive() && length > 0
+  private fun shouldAppendRealtimeCapturedFrame(length: Int): Boolean = !isRealtimePlaybackActive() && length > 0
 
-  private fun isRealtimePlaybackActive(): Boolean =
-    _isSpeaking.value || SystemClock.elapsedRealtime() < realtimePlaybackEndsAtMs
+  private fun isRealtimePlaybackActive(): Boolean = _isSpeaking.value || SystemClock.elapsedRealtime() < realtimePlaybackEndsAtMs
 
   private fun handleRealtimeTalkEvent(payloadJson: String?) {
     if (payloadJson.isNullOrBlank()) return
