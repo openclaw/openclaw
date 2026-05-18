@@ -690,7 +690,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payload?.data?.summary).toEqual(expect.any(String));
     expect(payload?.data?.title).not.toContain(rawSecret);
     expect(payload?.data?.summary).not.toContain(rawSecret);
-    expect(String(payload?.data?.title).length).toBeLessThanOrEqual(80);
+    expect(String(payload?.data?.title).length).toBeLessThanOrEqual(120);
   });
 
   it.each([

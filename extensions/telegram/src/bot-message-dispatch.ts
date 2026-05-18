@@ -680,6 +680,9 @@ export const dispatchTelegramMessage = async ({
     if (streamMode !== "progress" && !streamToolProgressEnabled) {
       return false;
     }
+    if (streamToolProgressEnabled && !normalized) {
+      return false;
+    }
     const shouldUpdateProgressLines =
       streamToolProgressEnabled && !streamToolProgressSuppressed && Boolean(normalized);
     if (!shouldUpdateProgressLines && streamMode !== "progress") {

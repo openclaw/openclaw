@@ -1,8 +1,8 @@
 import { redactToolDetail } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 
-const SUBAGENT_PROGRESS_LABEL_MAX_CHARS = 80;
-const SUBAGENT_PROGRESS_STATUS_MAX_CHARS = 140;
+const SUBAGENT_PROGRESS_LABEL_MAX_CHARS = 120;
+const SUBAGENT_PROGRESS_STATUS_MAX_CHARS = 220;
 
 function sanitizeSubagentProgressText(
   value: string | undefined,

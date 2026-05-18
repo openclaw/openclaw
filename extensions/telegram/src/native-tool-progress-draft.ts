@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 
 const TELEGRAM_NATIVE_DRAFT_MAX_CHARS = 4096;
+const TELEGRAM_NATIVE_DRAFT_MIN_UPDATE_INTERVAL_MS = 750;
 const TELEGRAM_DRAFT_ID_STATE_KEY = Symbol.for("openclaw.telegramNativeDraftIdState");
 
 type TelegramSendMessageDraft = (
@@ -14,6 +15,7 @@ type TelegramSendMessageDraft = (
     parse_mode?: "HTML";
     entities?: unknown[];
   },
+  signal?: AbortSignal,
 ) => Promise<unknown>;
 
 export type NativeTelegramToolProgressDraft = {
@@ -52,6 +54,7 @@ export function createNativeTelegramToolProgressDraft(params: {
   chatId: Parameters<Bot["api"]["sendMessage"]>[0];
   thread?: TelegramThreadSpec | null;
   log?: (message: string) => void;
+  minUpdateIntervalMs?: number;
 }): NativeTelegramToolProgressDraft | undefined {
   const sendMessageDraft = resolveSendMessageDraftApi(params.api);
   if (!sendMessageDraft) {
@@ -60,8 +63,97 @@ export function createNativeTelegramToolProgressDraft(params: {
 
   const draftId = allocateTelegramDraftId();
   const threadParams = buildTelegramThreadParams(params.thread) ?? {};
+  const rawMinUpdateIntervalMs =
+    params.minUpdateIntervalMs ?? TELEGRAM_NATIVE_DRAFT_MIN_UPDATE_INTERVAL_MS;
+  const minUpdateIntervalMs = Math.max(
+    0,
+    Math.trunc(
+      Number.isFinite(rawMinUpdateIntervalMs)
+        ? rawMinUpdateIntervalMs
+        : TELEGRAM_NATIVE_DRAFT_MIN_UPDATE_INTERVAL_MS,
+    ),
+  );
   let stopped = false;
   let lastSentText: string | undefined;
+  let lastSendStartedAt = 0;
+  let inFlight: Promise<boolean> | undefined;
+  let inFlightText: string | undefined;
+  let inFlightAbortController: AbortController | undefined;
+  let queuedText: string | undefined;
+  let queuedTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearQueuedTimer = () => {
+    if (queuedTimer !== undefined) {
+      clearTimeout(queuedTimer);
+      queuedTimer = undefined;
+    }
+  };
+
+  const sendNow = async (text: string): Promise<boolean> => {
+    const abortController = new AbortController();
+    try {
+      if (stopped) {
+        return false;
+      }
+      inFlightText = text;
+      inFlightAbortController = abortController;
+      lastSendStartedAt = Date.now();
+      inFlight = sendMessageDraft(
+        params.chatId,
+        draftId,
+        text,
+        Object.keys(threadParams).length > 0 ? threadParams : undefined,
+        abortController.signal,
+      ).then(() => true);
+      const sent = await inFlight;
+      if (stopped) {
+        return false;
+      }
+      lastSentText = text;
+      return sent;
+    } catch (err) {
+      if (stopped && abortController.signal.aborted) {
+        return false;
+      }
+      stopped = true;
+      queuedText = undefined;
+      clearQueuedTimer();
+      params.log?.(`telegram native tool-progress draft disabled: ${formatErrorMessage(err)}`);
+      return false;
+    } finally {
+      if (inFlightAbortController === abortController) {
+        inFlightAbortController = undefined;
+      }
+      inFlight = undefined;
+      inFlightText = undefined;
+      scheduleQueuedSend();
+    }
+  };
+
+  const flushQueuedSend = async (): Promise<boolean> => {
+    clearQueuedTimer();
+    if (stopped || inFlight || !queuedText) {
+      return false;
+    }
+    const nextText = queuedText;
+    queuedText = undefined;
+    if (nextText === lastSentText) {
+      return true;
+    }
+    return await sendNow(nextText);
+  };
+
+  function scheduleQueuedSend() {
+    if (stopped || inFlight || queuedTimer !== undefined || !queuedText) {
+      return;
+    }
+    const elapsedMs = lastSendStartedAt > 0 ? Date.now() - lastSendStartedAt : minUpdateIntervalMs;
+    const delayMs = Math.max(0, minUpdateIntervalMs - elapsedMs);
+    queuedTimer = setTimeout(() => {
+      queuedTimer = undefined;
+      void flushQueuedSend();
+    }, delayMs);
+  }
 
   return {
     update: async (text: string): Promise<boolean> => {
@@ -75,23 +167,22 @@ export function createNativeTelegramToolProgressDraft(params: {
       if (normalizedText === lastSentText) {
         return true;
       }
-      try {
-        await sendMessageDraft(
-          params.chatId,
-          draftId,
-          normalizedText,
-          Object.keys(threadParams).length > 0 ? threadParams : undefined,
-        );
-        lastSentText = normalizedText;
+      if (normalizedText === inFlightText || normalizedText === queuedText) {
         return true;
-      } catch (err) {
-        stopped = true;
-        params.log?.(`telegram native tool-progress draft disabled: ${formatErrorMessage(err)}`);
-        return false;
       }
+      if (!lastSentText && !inFlight) {
+        return await sendNow(normalizedText);
+      }
+      queuedText = normalizedText;
+      scheduleQueuedSend();
+      return true;
     },
     stop: () => {
       stopped = true;
+      queuedText = undefined;
+      clearQueuedTimer();
+      inFlightAbortController?.abort();
+      inFlightAbortController = undefined;
     },
   };
 }

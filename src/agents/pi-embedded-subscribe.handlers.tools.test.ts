@@ -367,7 +367,7 @@ describe("handleToolExecutionEnd sessions_spawn progress", () => {
     const meta = requireString(event.data?.meta, "subagent meta");
     expect(title).not.toContain(rawSecret);
     expect(meta).not.toContain(rawSecret);
-    expect(title.length).toBeLessThanOrEqual(80);
+    expect(title.length).toBeLessThanOrEqual(120);
   });
 });
 

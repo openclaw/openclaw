@@ -1605,6 +1605,60 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it("uses native tool-progress drafts in progress mode without answer-draft duplication", async () => {
+    const nativeDraft = createNativeToolProgressDraft();
+    createNativeTelegramToolProgressDraft.mockReturnValue(nativeDraft);
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          preview: { nativeToolProgress: true, nativeToolProgressAllowFrom: ["123"] },
+          progress: { label: "Working" },
+        },
+      },
+    });
+
+    expect(createNativeTelegramToolProgressDraft).toHaveBeenCalled();
+    expect(nativeDraft.update).toHaveBeenCalledWith("Working\n🛠️ Exec");
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith("Working\n`🛠️ Exec`");
+    expectDeliveredReply(0, { text: "Done." });
+  });
+
+  it("does not start progress drafts from empty item updates", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onItemEvent?.({ kind: "analysis", title: "Reasoning" });
+        await replyOptions?.onItemEvent?.({ kind: "analysis", title: "Reasoning" });
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Working" } } },
+    });
+
+    expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Working\n`🛠️ Exec`");
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith("Working");
+    expectDeliveredReply(0, { text: "Done." });
+  });
+
   it("does not restart progress drafts after final answer delivery", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
