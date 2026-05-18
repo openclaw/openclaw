@@ -3,6 +3,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -44,6 +45,7 @@ import {
 import { resolveOpenAIRuntimeProvider } from "../../agents/openai-codex-routing.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
+  resolveAgentIdFromSessionKey,
   resolveGroupSessionKey,
   type SessionEntry,
   updateSessionStore,
@@ -1525,8 +1527,14 @@ export async function runAgentTurnWithFallback(params: {
     params.opts?.onAgentRunStart?.(runId);
   };
   const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
+  const activeAgentId =
+    resolveAgentIdFromSessionKey(params.sessionKey) ?? params.followupRun.run.agentId ?? undefined;
   const shouldNotifyUserAboutCompaction =
-    runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
+    (
+      (activeAgentId
+        ? resolveAgentConfig(runtimeConfig ?? {}, activeAgentId)?.compaction
+        : undefined) ?? runtimeConfig?.agents?.defaults?.compaction
+    )?.notifyUser === true;
   const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
     if (!params.opts?.onBlockReply) {
       return;

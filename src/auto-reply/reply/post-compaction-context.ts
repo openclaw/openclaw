@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
@@ -94,21 +95,31 @@ export async function readPostCompactionContext(
       }
     })();
 
-    const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
-    if (!Array.isArray(configuredSections) || configuredSections.length === 0) {
+    // Extract configured sections from AGENTS.md (default: Session Startup + Red Lines).
+    // An explicit empty array disables post-compaction context injection entirely.
+    const configuredSections =
+      (cfg && agentId
+        ? resolveAgentConfig(cfg, agentId)?.compaction?.postCompactionSections
+        : undefined) ?? cfg?.agents?.defaults?.compaction?.postCompactionSections;
+    const sectionNames = Array.isArray(configuredSections)
+      ? configuredSections
+      : DEFAULT_POST_COMPACTION_SECTIONS;
+
+    if (sectionNames.length === 0) {
       return null;
     }
-    const sectionNames = configuredSections;
 
     const foundSectionNames: string[] = [];
     let sections = extractSections(content, sectionNames, foundSectionNames);
 
-    // Legacy "Every Session" / "Safety" fallback is preserved only for users
-    // who explicitly opt in to the documented default section pair.
-    const isDefaultSections = matchesSectionSet(
-      configuredSections,
-      DEFAULT_POST_COMPACTION_SECTIONS,
-    );
+    // Fall back to legacy section names ("Every Session" / "Safety") when using
+    // defaults and the current headings aren't found — preserves compatibility
+    // with older AGENTS.md templates. The fallback also applies when the user
+    // explicitly configures the default pair, so that pinning the documented
+    // defaults never silently changes behavior vs. leaving the field unset.
+    const isDefaultSections =
+      !Array.isArray(configuredSections) ||
+      matchesSectionSet(configuredSections, DEFAULT_POST_COMPACTION_SECTIONS);
     if (sections.length === 0 && isDefaultSections) {
       sections = extractSections(content, LEGACY_POST_COMPACTION_SECTIONS, foundSectionNames);
     }
