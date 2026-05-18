@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  getQQBotDataPath,
   getQQBotMediaPath,
   getHomeDir,
   resolveQQBotLocalMediaPath,
@@ -59,6 +60,29 @@ describe("qqbot local media path remapping", () => {
 
     expect(getQQBotMediaPath("image.png")).toBe(mediaFile);
     expect(resolveQQBotPayloadLocalFilePath(mediaFile)).toBe(fs.realpathSync(mediaFile));
+  });
+
+  it("keeps QQ Bot persisted data on the legacy home-derived root when OPENCLAW_HOME is configured", () => {
+    const hostHome = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-platform-home-"));
+    const openclawHome = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-platform-openclaw-home-"));
+    createdPaths.push(hostHome, openclawHome);
+    vi.stubEnv("HOME", hostHome);
+    vi.stubEnv("OPENCLAW_HOME", openclawHome);
+
+    expect(getQQBotDataPath("sessions", "main.json")).toBe(
+      path.join(getHomeDir(), ".openclaw", "qqbot", "sessions", "main.json"),
+    );
+  });
+
+  it("expands QQ Bot OPENCLAW_HOME media roots through HOME for tilde paths", () => {
+    const hostHome = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-platform-home-"));
+    createdPaths.push(hostHome);
+    vi.stubEnv("HOME", hostHome);
+    vi.stubEnv("OPENCLAW_HOME", "~/svc");
+
+    expect(getQQBotMediaPath("image.png")).toBe(
+      path.join(hostHome, "svc", ".openclaw", "media", "qqbot", "image.png"),
+    );
   });
 
   it("remaps missing workspace media paths to the real media directory", () => {

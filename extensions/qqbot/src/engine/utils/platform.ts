@@ -13,6 +13,14 @@ import { getPlatformAdapter } from "../adapter/index.js";
 import { formatErrorMessage } from "./format.js";
 import { debugLog, debugWarn } from "./log.js";
 
+function normalizeEnvPath(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === "undefined" || trimmed === "null") {
+    return undefined;
+  }
+  return trimmed;
+}
+
 /**
  * Resolve the current user's home directory safely across platforms.
  *
@@ -39,23 +47,25 @@ export function getHomeDir(): string {
   return getPlatformAdapter().getTempDir();
 }
 
-function resolveOpenClawHomeDir(): string {
-  const explicitHome = process.env.OPENCLAW_HOME?.trim();
+function resolveOpenClawMediaHomeDir(): string {
+  const explicitHome = normalizeEnvPath(process.env.OPENCLAW_HOME);
   if (!explicitHome) {
     return getHomeDir();
   }
-  if (explicitHome === "~") {
-    return getHomeDir();
-  }
   if (explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
-    return path.join(getHomeDir(), explicitHome.slice(2));
+    const envHome = normalizeEnvPath(process.env.HOME) ?? normalizeEnvPath(process.env.USERPROFILE);
+    return envHome ? path.resolve(explicitHome.replace(/^~(?=$|[\\/])/, envHome)) : getHomeDir();
+  }
+  if (explicitHome === "~") {
+    const envHome = normalizeEnvPath(process.env.HOME) ?? normalizeEnvPath(process.env.USERPROFILE);
+    return envHome ? path.resolve(envHome) : getHomeDir();
   }
   return path.resolve(explicitHome);
 }
 
 /** Return a path under `~/.openclaw/qqbot` without creating it. */
 export function getQQBotDataPath(...subPaths: string[]): string {
-  return path.join(resolveOpenClawHomeDir(), ".openclaw", "qqbot", ...subPaths);
+  return path.join(getHomeDir(), ".openclaw", "qqbot", ...subPaths);
 }
 
 /** Return a path under `~/.openclaw/qqbot`, creating it on demand. */
@@ -74,7 +84,7 @@ export function getQQBotDataDir(...subPaths: string[]): string {
  * downloaded images and audio can be accessed by framework media tooling.
  */
 export function getQQBotMediaPath(...subPaths: string[]): string {
-  return path.join(resolveOpenClawHomeDir(), ".openclaw", "media", "qqbot", ...subPaths);
+  return path.join(resolveOpenClawMediaHomeDir(), ".openclaw", "media", "qqbot", ...subPaths);
 }
 
 /** Return a path under `~/.openclaw/media/qqbot`, creating it on demand. */
@@ -97,7 +107,7 @@ export function getQQBotMediaDir(...subPaths: string[]): string {
  * the check anchored to a single, well-known directory.
  */
 function getOpenClawMediaDir(): string {
-  return path.join(resolveOpenClawHomeDir(), ".openclaw", "media");
+  return path.join(resolveOpenClawMediaHomeDir(), ".openclaw", "media");
 }
 
 // ---- Basic platform information ----
