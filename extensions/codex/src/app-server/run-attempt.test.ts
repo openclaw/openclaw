@@ -942,12 +942,12 @@ describe("runCodexAppServerAttempt", () => {
     params.toolAuthProfileStore = toolAuthProfileStore;
     params.runtimePlan = createCodexRuntimePlanFixture();
     const factoryOptions: unknown[] = [];
-    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
       factoryOptions.push(options);
       return [];
     });
 
-    await __testing.buildDynamicTools({
+    await testing.buildDynamicTools({
       params,
       resolvedWorkspace: workspaceDir,
       effectiveWorkspace: workspaceDir,
