@@ -6,8 +6,8 @@ import type {
 } from "../config/types.provider-request.js";
 import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
-import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../plugin-sdk/provider-auth.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
 import type {
   ProviderRequestCapabilities,
   ProviderRequestCapability,
