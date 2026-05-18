@@ -65,8 +65,8 @@ proof_cmd="${OPENCLAW_TELEGRAM_USER_PROOF_CMD:-openclaw-telegram-user-crabbox-pr
 
 This uses Telegram Desktop directly with `tg://privatepost`, not `xdg-open`.
 It also resizes Telegram to `650x1000` at the tested desktop position so
-Telegram switches to single-chat mode with no left chat list or right info
-pane. Do not press Escape after this; Escape can close the selected chat.
+the crop can isolate the chat pane even if Telegram keeps a split/sidebar
+layout. Do not press Escape after this; Escape can close the selected chat.
 
 Bottom behavior matters:
 
@@ -74,8 +74,8 @@ Bottom behavior matters:
   later messages appear live in the recording
 - deep-linking to an older message does not auto-scroll to new arrivals; link
   again to the newest/final marker instead of clicking the down-arrow
-- `650px` is the largest tested clean width; `660px` switches Telegram back to
-  split/sidebar layout
+- the cropped GIF intentionally uses the chat pane, not the whole desktop or
+  whole Telegram window
 
 Send as the real Telegram user:
 

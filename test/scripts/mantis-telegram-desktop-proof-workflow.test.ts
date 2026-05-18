@@ -334,6 +334,20 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
   });
 
+  it("crops the Telegram Desktop chat pane for PR proof GIFs", () => {
+    const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
+    const skill = readFileSync(TELEGRAM_PROOF_SKILL, "utf8");
+
+    expect(proofScript).toContain("const TELEGRAM_PROOF_WINDOW =");
+    expect(proofScript).toContain("const TELEGRAM_PROOF_CROP =");
+    expect(proofScript).toContain("x: TELEGRAM_PROOF_WINDOW.x + 220");
+    expect(proofScript).toContain("width: 430");
+    expect(proofScript).toContain("geometry: TELEGRAM_PROOF_WINDOW");
+    expect(proofScript).toContain("crop: TELEGRAM_PROOF_CROP");
+    expect(skill).toContain("crop can isolate the chat pane");
+    expect(skill).not.toContain("650px` is the largest tested clean width");
+  });
+
   it("does not pass the full workflow environment into the local Telegram SUT", () => {
     const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
     expect(proofScript).toContain("function childProcessBaseEnv()");
