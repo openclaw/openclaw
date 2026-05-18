@@ -46,6 +46,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/subagents: keep collect-mode announce queues batching unresolved-origin items with compatible same-route messages and resume collection after a true cross-channel drain when a later compatible batch remains. Fixes #83577.
 - Browser: enforce current-tab URL allowlist checks for `/act` evaluate/batch actions and `/highlight` routes while leaving tab-management actions unblocked. (#78523)
 - CI: require real-behavior-proof verdict markers to come from the ClawSweeper GitHub App before accepting exact-head proof. (#83692)
 - Browser: keep a profile `cdpPort` when its `cdpUrl` omits a port, while still letting explicitly written URL ports win. (#82166) Thanks @Marvae.
