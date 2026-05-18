@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - CLI/help: keep `gateway`, `doctor`, `status`, and `health` help registration out of action/runtime imports so subcommand `--help` stays lightweight in constrained terminals. Fixes #83228. Thanks @dfguerrerom.
 - Cron/Discord: keep explicit announce runs in message-tool-only source-reply mode so scheduled agent turns post once instead of also echoing through automatic visible replies. Fixes #83261. Thanks @Theralley.
 - Telegram: preserve forum-topic origin targets in inbound, audio-preflight, and skipped-message hook contexts so follow-up delivery stays bound to the originating topic. Fixes #83302. Thanks @M00zyx.
+- Telegram: fail topic sends closed when Telegram reports `message thread not found` instead of retrying without `message_thread_id` into the base chat. Refs #83302.
 - Mac app: align the Sessions settings pane with the standard Settings page gutter and row spacing.
 - OpenAI/Codex: stop rejecting available `openai-codex` GPT-5.1, GPT-5.2, and GPT-5.3 model refs during config validation, while keeping removed Spark aliases suppressed. Fixes #83303.
 - Plugins/xAI: complete OAuth-backed xAI login and sidecar auth fixes, including guarded loopback callback CORS handling, video generation polling/defaults, and native-host User-Agent attribution. (#83322) Thanks @Jaaneek.
