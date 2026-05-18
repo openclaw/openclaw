@@ -118,7 +118,8 @@ describe("createModelSelectionState catalog loading", () => {
       models: {
         providers: {
           custom: {
-            models: [{ id: "tiny", name: "Tiny" }],
+            baseUrl: "https://example.invalid/v1",
+            models: [makeConfiguredModel({ id: "tiny", name: "Tiny" })],
           },
         },
       },
