@@ -28,7 +28,7 @@ type TelegramSequentialKeyContext = {
   };
 };
 
-function resolveStatusCommandControlLane(params: {
+export function isTelegramReadOnlyControlLaneText(params: {
   rawText?: string;
   botUsername?: string;
 }): boolean {
@@ -82,7 +82,7 @@ export function isTelegramControlLaneText(params: {
   if (isTelegramTargetedStopCommand(params.rawText, params.botUsername)) {
     return true;
   }
-  return resolveStatusCommandControlLane(params);
+  return isTelegramReadOnlyControlLaneText(params);
 }
 
 export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
