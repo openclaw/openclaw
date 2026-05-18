@@ -227,11 +227,14 @@ dynamic tools that duplicate Codex-native workspace operations:
 - `process`
 - `update_plan`
 
-Remaining OpenClaw integration tools, such as messaging, sessions, media, cron,
+Most remaining OpenClaw integration tools, such as messaging, media, cron,
 browser, nodes, gateway, `heartbeat_respond`, and `web_search`, are available
 through Codex tool search under the `openclaw` namespace. This keeps the initial
 model context smaller. `sessions_yield` and message-tool-only source replies
-stay direct because those are turn-control contracts.
+stay direct because those are turn-control contracts. `sessions_spawn` stays
+searchable so Codex's native `spawn_agent` remains the primary Codex subagent
+surface, while explicit OpenClaw or ACP delegation is still available through
+the `openclaw` dynamic tool namespace.
 
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom Codex
 app-server that cannot search deferred dynamic tools or when debugging the full
