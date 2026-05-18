@@ -126,6 +126,25 @@ describe("ensureSkillsWatcher", () => {
     ]);
   });
 
+  it("bumps the snapshot version once when watch targets change (#83782)", () => {
+    const seen: SkillsChangeEvent[] = [];
+    refreshModule.registerSkillsChangeListener((change) => {
+      seen.push(change);
+    });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace",
+      config: { skills: { load: { extraDirs: [] } } },
+    });
+    seen.length = 0; // ignore any churn from the initial mount
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace",
+      config: { skills: { load: { extraDirs: ["/tmp/extra/skills"] } } },
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.reason).toBe("watch-targets");
+    expect(seen[0]?.workspaceDir).toBe("/tmp/workspace");
+  });
+
   it.each(["add", "change", "unlink", "unlinkDir"] as const)(
     "refreshes skills snapshots on %s",
     async (event) => {

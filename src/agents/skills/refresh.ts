@@ -127,6 +127,12 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   if (existing && existing.pathsKey === pathsKey && existing.debounceMs === debounceMs) {
     return;
   }
+  // The set of watch roots itself changed (e.g. skills.load.extraDirs was edited
+  // or a plugin contributed a new skill dir). Existing per-session snapshots cache
+  // the previous root set, so without a snapshot bump they keep mounting the stale
+  // list — file-change events from the new watcher bump the snapshot, but a pure
+  // root-set change emits no chokidar event. See #83782.
+  const watchTargetsChanged = Boolean(existing) && existing.pathsKey !== pathsKey;
   if (existing) {
     watchers.delete(workspaceDir);
     if (existing.timer) {
@@ -174,6 +180,13 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   });
 
   watchers.set(workspaceDir, state);
+  if (watchTargetsChanged) {
+    bumpSkillsSnapshotVersion({
+      workspaceDir,
+      reason: "watch-targets",
+      changedPath: pathsKey,
+    });
+  }
 }
 
 export async function resetSkillsRefreshForTest(): Promise<void> {
