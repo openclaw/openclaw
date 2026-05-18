@@ -56,15 +56,15 @@ jobs:
         id: pack
         run: |
           set -euo pipefail
-          # npm pack writes filename to stdout
           pkg=$(node -p "require('./package.json').name")
           ver=$(node -p "require('./package.json').version")
-          tgz=$(npm pack --silent)
+          # Build the tarball; do NOT trust stdout formatting
+          npm pack --silent > /tmp/npm-pack.out
+          tgz=$(ls -1 *.tgz | tail -n 1)
           echo "package=$pkg" >> "$GITHUB_OUTPUT"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
           ls -la "$tgz"
-
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
