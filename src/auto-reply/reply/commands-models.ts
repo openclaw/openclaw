@@ -388,14 +388,21 @@ function parseModelsArgs(raw: string): ParsedModelsCommand {
 function resolveProviderLabel(params: {
   provider: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
 }): string {
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    config: params.cfg,
+    provider: params.provider,
+    agentId: params.agentId,
+  });
   const authLabel = resolveModelAuthLabel({
     provider: params.provider,
     acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
       provider: params.provider,
+      harnessRuntime: harnessPolicy.runtime,
       config: params.cfg,
     }),
     cfg: params.cfg,
@@ -413,6 +420,7 @@ export function formatModelsAvailableHeader(params: {
   provider: string;
   total: number;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
@@ -420,6 +428,7 @@ export function formatModelsAvailableHeader(params: {
   const providerLabel = resolveProviderLabel({
     provider: params.provider,
     cfg: params.cfg,
+    agentId: params.agentId,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     sessionEntry: params.sessionEntry,
@@ -544,6 +553,7 @@ export async function resolveModelsCommandReply(params: {
     const emptyProviderLabel = resolveProviderLabel({
       provider,
       cfg: params.cfg,
+      agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       sessionEntry: params.sessionEntry,
@@ -576,6 +586,7 @@ export async function resolveModelsCommandReply(params: {
         provider,
         total,
         cfg: params.cfg,
+        agentId: params.agentId,
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         sessionEntry: params.sessionEntry,
@@ -605,6 +616,7 @@ export async function resolveModelsCommandReply(params: {
   const providerLabel = resolveProviderLabel({
     provider,
     cfg: params.cfg,
+    agentId: params.agentId,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     sessionEntry: params.sessionEntry,

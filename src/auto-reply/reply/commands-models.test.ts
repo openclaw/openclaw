@@ -682,7 +682,25 @@ describe("handleModelsCommand", () => {
     const [[authLabelParams]] = modelAuthLabelMocks.resolveModelAuthLabel.mock
       .calls as unknown as Array<[{ provider?: string; acceptedProviderIds?: string[] }]>;
     expect(authLabelParams.provider).toBe("openai");
-    expect(authLabelParams.acceptedProviderIds).toEqual(["openai-codex", "openai"]);
+    expect(authLabelParams.acceptedProviderIds).toEqual(["openai-codex"]);
+  });
+
+  it("labels OpenAI model lists through the dispatch harness auth providers", async () => {
+    modelAuthLabelMocks.resolveModelAuthLabel.mockImplementation((params: unknown) => {
+      const acceptedProviderIds = (params as { acceptedProviderIds?: string[] })
+        .acceptedProviderIds;
+      return acceptedProviderIds?.length === 1 && acceptedProviderIds[0] === "openai-codex"
+        ? "oauth (codex-runtime)"
+        : "api-key (env: OPENAI_API_KEY)";
+    });
+
+    const result = await handleModelsCommand(buildParams("/models openai"), true);
+
+    expect(result?.reply?.text).toContain("Models (openai · 🔑 oauth (codex-runtime))");
+    const [[authLabelParams]] = modelAuthLabelMocks.resolveModelAuthLabel.mock
+      .calls as unknown as Array<[{ provider?: string; acceptedProviderIds?: string[] }]>;
+    expect(authLabelParams.provider).toBe("openai");
+    expect(authLabelParams.acceptedProviderIds).toEqual(["openai-codex"]);
   });
 
   it("uses spawned workspace for direct /models provider visibility", async () => {
