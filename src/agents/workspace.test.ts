@@ -141,7 +141,8 @@ describe("ensureAgentWorkspace", () => {
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
-    await expect(fs.access(path.join(tempDir, DEFAULT_IDENTITY_FILENAME))).resolves.toBeUndefined();
+    // Optional files are not seeded into existing (non-brand-new) workspaces (#83593).
+    await expectPathMissing(path.join(tempDir, DEFAULT_IDENTITY_FILENAME));
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
     const state = await readWorkspaceState(tempDir);
     expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
@@ -156,7 +157,34 @@ describe("ensureAgentWorkspace", () => {
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
-    await expectCompletedWithoutBootstrap(tempDir);
+    // Optional files are not seeded into existing (non-brand-new) workspaces (#83593).
+    await expectPathMissing(path.join(tempDir, DEFAULT_IDENTITY_FILENAME));
+    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+    const state = await readWorkspaceState(tempDir);
+    expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("does not recreate optional bootstrap files removed from an initialized workspace (#83593)", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    // Simulate the reporter's setup: workspace root has AGENTS.md + .git but
+    // optional files were intentionally moved to a subdirectory.
+    await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, ".git", "HEAD"), "ref: refs/heads/main\n");
+    await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "# AGENTS\n");
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    for (const fileName of [
+      DEFAULT_SOUL_FILENAME,
+      DEFAULT_IDENTITY_FILENAME,
+      DEFAULT_USER_FILENAME,
+      DEFAULT_HEARTBEAT_FILENAME,
+    ]) {
+      await expectPathMissing(path.join(tempDir, fileName));
+    }
+    // Required files are still ensured.
+    await expect(fs.access(path.join(tempDir, DEFAULT_AGENTS_FILENAME))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(tempDir, DEFAULT_TOOLS_FILENAME))).resolves.toBeUndefined();
   });
 
   it("skips configured optional bootstrap files without skipping required files", async () => {

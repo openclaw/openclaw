@@ -526,8 +526,14 @@ export async function ensureAgentWorkspace(params?: {
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
   const skipOptionalBootstrapFiles = new Set(params?.skipOptionalBootstrapFiles ?? []);
-  const shouldWriteBootstrapFile = (fileName: string): boolean =>
-    !OPTIONAL_BOOTSTRAP_FILENAMES.has(fileName) || !skipOptionalBootstrapFiles.has(fileName);
+  // Optional files (SOUL, USER, HEARTBEAT, IDENTITY) are only seeded into brand-new workspaces.
+  // In existing workspaces they may have been intentionally removed or relocated; recreating them
+  // from templates on every subagent spawn is the bug reported in #83593.
+  const shouldWriteBootstrapFile = (fileName: string): boolean => {
+    if (!OPTIONAL_BOOTSTRAP_FILENAMES.has(fileName)) return true;
+    if (!isBrandNewWorkspace) return false;
+    return !skipOptionalBootstrapFiles.has(fileName);
+  };
 
   await writeFileIfMissing(agentsPath, agentsTemplate);
   if (shouldWriteBootstrapFile(DEFAULT_SOUL_FILENAME)) {
