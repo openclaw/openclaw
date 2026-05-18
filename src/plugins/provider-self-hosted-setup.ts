@@ -54,10 +54,11 @@ export async function discoverOpenAICompatibleLocalModels(params: {
     return [];
   }
 
-  // Skip discovery if no valid API key is available (including local-only markers
-  // like "custom-local" that don't represent real credentials).
+  // Skip true non-secret markers ("custom-local", etc.) but preserve
+  // undefined/no-key paths — some local servers (Ollama, etc.) serve models
+  // without authentication.
   const actualKey = normalizeOptionalString(params.apiKey);
-  if (!actualKey || isNonSecretApiKeyMarker(actualKey)) {
+  if (actualKey && isNonSecretApiKeyMarker(actualKey, { includeEnvVarName: false })) {
     return [];
   }
 
@@ -274,10 +275,10 @@ export async function discoverOpenAICompatibleSelfHostedProvider<
     return null;
   }
   const { apiKey, discoveryApiKey } = params.ctx.resolveProviderApiKey(params.providerId);
-  // Non-secret auth markers ("custom-local", etc.) are placeholders for
-  // local providers that don't need authentication. Do not attempt catalog
-  // discovery with these — toDiscoveryApiKey already filters them to undefined.
-  if (!apiKey || isNonSecretApiKeyMarker(apiKey)) {
+  // Only block true non-secret markers ("custom-local", "ollama-local", etc.).
+  // Env-var names ("LITELLM_API_KEY", "VLLM_API_KEY") are valid apiKey values
+  // with the actual secret riding in discoveryApiKey — preserve those.
+  if (!apiKey || isNonSecretApiKeyMarker(apiKey, { includeEnvVarName: false })) {
     return null;
   }
   return {
