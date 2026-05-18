@@ -2,6 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createSerpApiWebSearchProvider } from "./src/serpapi-search-provider.js";
 import { createSerpApiAmazonTool } from "./src/tools/amazon.js";
 import { createSerpApiEventsTool } from "./src/tools/events.js";
+import { createSerpApiImmersiveProductTool } from "./src/tools/immersive-product.js";
 import { createSerpApiFinanceTool } from "./src/tools/finance.js";
 import { createSerpApiFlightsTool } from "./src/tools/flights.js";
 import { createSerpApiHotelsTool } from "./src/tools/hotels.js";
@@ -25,6 +26,7 @@ export default definePluginEntry({
     api.registerTool((ctx) => createSerpApiMapsTool(api, ctx), { name: "serpapi_maps" });
     api.registerTool((ctx) => createSerpApiShoppingTool(api, ctx), { name: "serpapi_shopping" });
     api.registerTool((ctx) => createSerpApiAmazonTool(api, ctx), { name: "serpapi_amazon" });
+    api.registerTool((ctx) => createSerpApiImmersiveProductTool(api, ctx), { name: "serpapi_immersive_product" });
     api.registerTool((ctx) => createSerpApiJobsTool(api, ctx), { name: "serpapi_jobs" });
     api.registerTool((ctx) => createSerpApiYouTubeTool(api, ctx), { name: "serpapi_youtube" });
     api.registerTool((ctx) => createSerpApiTrendsTool(api, ctx), { name: "serpapi_trends" });
