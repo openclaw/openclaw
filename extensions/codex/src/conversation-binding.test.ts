@@ -515,15 +515,31 @@ describe("codex conversation binding", () => {
     });
   });
 
-  it("preserves older native bound Codex threads without dynamic tool fingerprints", async () => {
+  it("upgrades older native bound Codex threads without dynamic tool fingerprints", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     agentHarnessMocks.createOpenClawCodingTools.mockReturnValue([createEchoTool()] as never);
+    agentRuntimeMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        work: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+        },
+      },
+    });
     await fs.writeFile(
       sessionFile + ".codex-app-server.json",
       JSON.stringify({
         schemaVersion: 1,
         threadId: "thread-old",
         cwd: tempDir,
+        authProfileId: "work",
+        model: "gpt-5.4-mini",
+        modelProvider: "openai",
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        serviceTier: "fast",
       }),
     );
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -531,16 +547,22 @@ describe("codex conversation binding", () => {
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
         requests.push({ method, params: requestParams });
+        if (method === "thread/start") {
+          return {
+            thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
+            model: "gpt-5.4-mini",
+          };
+        }
         if (method === "turn/start") {
           setImmediate(() => {
             notificationHandler?.({
               method: "turn/completed",
               params: {
-                threadId: "thread-old",
+                threadId: "thread-new",
                 turn: {
                   id: "turn-1",
                   status: "completed",
-                  items: [{ type: "agentMessage", id: "item-1", text: "still here" }],
+                  items: [{ type: "agentMessage", id: "item-1", text: "upgraded" }],
                 },
               },
             });
@@ -588,14 +610,27 @@ describe("codex conversation binding", () => {
       { timeoutMs: 500 },
     );
 
-    expect(result).toEqual({ handled: true, reply: { text: "still here" } });
-    expect(requests.map((request) => request.method)).toEqual(["turn/start"]);
-    expect(requests[0]?.params.threadId).toBe("thread-old");
+    expect(result).toEqual({ handled: true, reply: { text: "upgraded" } });
+    expect(requests.map((request) => request.method)).toEqual(["thread/start", "turn/start"]);
+    expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
+    expect(requests[0]?.params.approvalPolicy).toBe("on-request");
+    expect(requests[0]?.params.sandbox).toBe("workspace-write");
+    expect(requests[0]?.params.serviceTier).toBe("priority");
+    expect(requests[0]?.params).not.toHaveProperty("modelProvider");
+    expect(requests[0]?.params.dynamicTools).toEqual([
+      expect.objectContaining({ name: "test_plugin_echo" }),
+    ]);
+    expect(requests[1]?.params.threadId).toBe("thread-new");
     const savedBinding = JSON.parse(
       await fs.readFile(sessionFile + ".codex-app-server.json", "utf8"),
     );
-    expect(savedBinding.threadId).toBe("thread-old");
-    expect(savedBinding).not.toHaveProperty("dynamicToolsFingerprint");
+    expect(savedBinding.threadId).toBe("thread-new");
+    expect(savedBinding.authProfileId).toBe("work");
+    expect(savedBinding.model).toBe("gpt-5.4-mini");
+    expect(savedBinding.approvalPolicy).toBe("on-request");
+    expect(savedBinding.sandbox).toBe("workspace-write");
+    expect(savedBinding.serviceTier).toBe("priority");
+    expect(savedBinding.dynamicToolsFingerprint).toContain("test_plugin_echo");
   });
 
   it("recreates a missing bound thread and preserves auth plus turn overrides", async () => {
@@ -622,6 +657,7 @@ describe("codex conversation binding", () => {
         approvalPolicy: "on-request",
         sandbox: "workspace-write",
         serviceTier: "fast",
+        dynamicToolsFingerprint: "[]",
       }),
     );
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -739,6 +775,7 @@ describe("codex conversation binding", () => {
         threadId: "thread-1",
         cwd: tempDir,
         authProfileId: "openai-codex:work",
+        dynamicToolsFingerprint: "[]",
       }),
     );
     const unhandledRejections: unknown[] = [];
@@ -816,6 +853,7 @@ describe("codex conversation binding", () => {
         schemaVersion: 1,
         threadId: "thread-1",
         cwd: tempDir,
+        dynamicToolsFingerprint: "[]",
       }),
     );
     let notificationHandler: ((notification: unknown) => void) | undefined;

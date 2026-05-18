@@ -431,10 +431,11 @@ async function runBoundTurn(params: {
     signal: turnAbortController.signal,
   });
   const dynamicToolsFingerprint = codexDynamicToolsFingerprint(toolBridge.specs);
-  // Older bound sidecars predate dynamic-tool fingerprints. Preserve their
-  // existing thread context instead of rotating them as soon as plugins appear.
+  // Older bound sidecars predate dynamic-tool fingerprints and were started
+  // without a dynamic tool catalog, so refresh them once onto a tool-aware
+  // thread before preserving future compatible fingerprints.
   const shouldRefreshDynamicTools =
-    binding.dynamicToolsFingerprint !== undefined &&
+    binding.dynamicToolsFingerprint === undefined ||
     !areCodexDynamicToolFingerprintsCompatible({
       previous: binding.dynamicToolsFingerprint,
       next: dynamicToolsFingerprint,
