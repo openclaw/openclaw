@@ -178,7 +178,7 @@ export function createCronPromptExecutor(params: {
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
         registerAgentRunContext(params.cronSession.sessionEntry.sessionId, {
-          sessionKey: params.runSessionKey,
+          sessionKey: params.agentSessionKey,
           verboseLevel: params.resolvedVerboseLevel,
           isControlUiVisible: false,
         });
