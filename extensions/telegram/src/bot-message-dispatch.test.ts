@@ -585,6 +585,39 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
   });
 
+  it("mirrors deduped preview finals before returning", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Final answer" });
+        await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+      content: "Final answer",
+      messageId: 2001,
+    });
+    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
+      transcriptPath: "/tmp/session.jsonl",
+    });
+    expectRecordFields(transcriptCall.message, {
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: "Final answer" }],
+    });
+  });
+
   it("does not dedup a final when the preview has no Telegram message id yet", async () => {
     // setupDraftStreams without answerMessageId leaves stream.messageId()
     // returning undefined, simulating a preview that never landed. The final

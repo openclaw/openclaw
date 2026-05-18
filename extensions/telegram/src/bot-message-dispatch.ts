@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelMessageReplyPipeline,
+  createPreviewMessageReceipt,
   deriveDurableFinalDeliveryRequirements,
 } from "openclaw/plugin-sdk/channel-message";
 import {
@@ -1372,6 +1373,14 @@ export const dispatchTelegramMessage = async ({
                         if (isPreviewStreamedText(effectivePayload.text, previewDedupeText)) {
                           answerLane.finalized = true;
                           deliveryState.markDelivered();
+                          emitPreviewFinalizedHook({
+                            kind: "preview-finalized",
+                            delivery: {
+                              content: effectivePayload.text ?? "",
+                              messageId: previewMessageId,
+                              receipt: createPreviewMessageReceipt({ id: previewMessageId }),
+                            },
+                          });
                           return;
                         }
                       }
