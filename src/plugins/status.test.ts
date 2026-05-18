@@ -586,6 +586,7 @@ describe("plugin status reports", () => {
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
+      allowAcpSpawn: undefined,
     });
     expectPluginLoaderCall({ loadModules: true });
   });
@@ -697,6 +698,9 @@ describe("plugin status reports", () => {
               allowModelOverride: true,
               allowedModels: ["openai/gpt-5.5"],
             },
+            acp: {
+              allowSpawn: true,
+            },
           },
         },
       },
@@ -737,6 +741,7 @@ describe("plugin status reports", () => {
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
+      allowAcpSpawn: true,
     });
     expect(inspect.diagnostics).toEqual([
       { level: "warn", pluginId: "google", message: "watch this surface" },

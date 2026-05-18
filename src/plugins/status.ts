@@ -107,6 +107,7 @@ export type PluginInspectReport = {
     allowModelOverride?: boolean;
     allowedModels: string[];
     hasAllowedModelsConfig: boolean;
+    allowAcpSpawn?: boolean;
   };
   usesLegacyBeforeAgentStart: boolean;
   compatibility: PluginCompatibilityNotice[];
@@ -526,6 +527,7 @@ export function buildPluginInspectReport(params: {
       allowModelOverride: policyEntry?.subagent?.allowModelOverride,
       allowedModels: [...(policyEntry?.subagent?.allowedModels ?? [])],
       hasAllowedModelsConfig: policyEntry?.subagent?.hasAllowedModelsConfig === true,
+      allowAcpSpawn: policyEntry?.acp?.allowSpawn,
     },
     usesLegacyBeforeAgentStart,
     compatibility,

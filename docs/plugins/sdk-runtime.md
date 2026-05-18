@@ -3,7 +3,7 @@ summary: "api.runtime -- the injected runtime helpers available to plugins"
 title: "Plugin runtime helpers"
 sidebarTitle: "Runtime helpers"
 read_when:
-  - You need to call core helpers from a plugin (TTS, STT, image gen, web search, subagent, nodes)
+  - You need to call core helpers from a plugin (TTS, STT, ACP, image gen, web search, subagent, nodes)
   - You want to understand what api.runtime exposes
   - You are accessing config, agent, or media helpers from plugin code
 ---
@@ -233,6 +233,41 @@ two-party event loops that do not go through the shared channel-turn kernel.
     </Warning>
 
     `deleteSession(...)` can delete sessions created by the same plugin through `api.runtime.subagent.run(...)`. Deleting arbitrary user or operator sessions still requires an admin-scoped Gateway request.
+
+  </Accordion>
+  <Accordion title="api.runtime.acp">
+    Dispatch ACP-backed agent sessions from trusted plugins, including follow-up turns that can deliver back into a channel thread.
+
+    ```typescript
+    const spawned = await api.runtime.acp.spawn(
+      {
+        task: "Review the latest PR and report findings.",
+        agentId: "opencode",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:discord:thread:123",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentThreadId: "123",
+      },
+    );
+
+    const { runId } = await api.runtime.acp.prompt({
+      sessionKey: spawned.childSessionKey,
+      text: "Continue with the implementation.",
+      channel: "discord",
+      accountId: "default",
+      threadId: "123",
+    });
+    ```
+
+    <Warning>
+    ACP dispatch can start host-side coding harnesses and deliver into operator channels. It is disabled unless the operator explicitly trusts the calling plugin with `plugins.entries.<id>.acp.allowSpawn: true` in config. Do not enable this for untrusted third-party plugins.
+    </Warning>
+
+    `prompt(...)` uses the Gateway agent delivery path and marks the request as an explicit ACP turn, so a trusted plugin can continue an existing ACP session without being blocked by automatic-dispatch policy.
 
   </Accordion>
   <Accordion title="api.runtime.nodes">

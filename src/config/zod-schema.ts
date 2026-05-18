@@ -259,6 +259,12 @@ const PluginEntrySchema = z
       })
       .strict()
       .optional(),
+    acp: z
+      .object({
+        allowSpawn: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     config: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();

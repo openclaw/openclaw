@@ -1018,6 +1018,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.llm.allowModelOverride": "Allow Plugin LLM Model Override",
   "plugins.entries.*.llm.allowedModels": "Plugin LLM Allowed Models",
   "plugins.entries.*.llm.allowAgentIdOverride": "Allow Plugin LLM Agent Override",
+  "plugins.entries.*.acp": "Plugin ACP Policy",
+  "plugins.entries.*.acp.allowSpawn": "Allow Plugin ACP Spawn",
   "plugins.entries.*.apiKey": "Plugin API Key", // pragma: allowlist secret
   "plugins.entries.*.env": "Plugin Environment Variables",
   "plugins.entries.*.config": "Plugin Config",

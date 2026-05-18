@@ -1,3 +1,8 @@
+import type {
+  SpawnAcpContext,
+  SpawnAcpParams,
+  SpawnAcpResult,
+} from "../../agents/acp-spawn-contract.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
@@ -311,6 +316,19 @@ export type PluginRuntimeCore = {
   };
   /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
   taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
+  acp: {
+    spawn: (params: SpawnAcpParams, ctx: SpawnAcpContext) => Promise<SpawnAcpResult>;
+    prompt: (params: {
+      sessionKey: string;
+      text: string;
+      channel?: string;
+      accountId?: string;
+      /** Alias for channels where the threaded destination is also the conversation id. */
+      threadId?: string;
+      conversationId?: string;
+      parentConversationId?: string;
+    }) => Promise<{ runId: string }>;
+  };
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
   };

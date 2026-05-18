@@ -35,6 +35,10 @@ export type PluginEntryConfig = {
     /** Explicitly allow this plugin to run completions against a non-default agent id. */
     allowAgentIdOverride?: boolean;
   };
+  acp?: {
+    /** Explicitly allow this plugin to call api.runtime.acp.spawn() and api.runtime.acp.prompt(). */
+    allowSpawn?: boolean;
+  };
   config?: Record<string, unknown>;
 };
 
