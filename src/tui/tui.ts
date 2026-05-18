@@ -346,6 +346,7 @@ type DrainableTui = {
 const TUI_SHUTDOWN_DRAIN_MAX_MS = 500;
 const TUI_SHUTDOWN_DRAIN_IDLE_MS = 100;
 const TUI_SHUTDOWN_HARD_EXIT_MS = 2000;
+const TUI_PROCESS_EXIT_AFTER_RETURN_MS = 2000;
 
 export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
   if (typeof tui.terminal?.drainInput === "function") {
@@ -356,6 +357,34 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
     }
   }
   stopTuiSafely(() => tui.stop());
+}
+
+export function scheduleProcessExitAfterTuiReturn(
+  params: {
+    delayMs?: number;
+    setTimeoutFn?: typeof setTimeout;
+    exit?: (code?: number) => never | void;
+    writeStderr?: (text: string) => void;
+  } = {},
+): ReturnType<typeof setTimeout> {
+  const delayMs = Math.max(0, Math.floor(params.delayMs ?? TUI_PROCESS_EXIT_AFTER_RETURN_MS));
+  const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
+  const exit = params.exit ?? ((code?: number) => process.exit(code));
+  const writeStderr =
+    params.writeStderr ??
+    ((text: string) => {
+      process.stderr.write(text);
+    });
+  const timer = setTimeoutFn(() => {
+    try {
+      writeStderr("openclaw tui forcing process exit after return\n");
+    } catch {
+      // Best effort only; forced exit must not depend on stderr.
+    }
+    exit(0);
+  }, delayMs);
+  timer.unref?.();
+  return timer;
 }
 
 type CtrlCAction = "clear" | "warn" | "exit";
@@ -1380,5 +1409,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     process.once("exit", finish);
     deferredFinish.setFinish(finish);
   });
+  if (opts.forceProcessExitOnReturn === true) {
+    scheduleProcessExitAfterTuiReturn();
+  }
   return exitResult;
 }
