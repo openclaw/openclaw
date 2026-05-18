@@ -102,7 +102,7 @@ describe("update-phase env helpers", () => {
         [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
         [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isLegacyParentWritableUpdateDoctorPass({
         [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
