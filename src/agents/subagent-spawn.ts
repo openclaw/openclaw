@@ -1023,7 +1023,9 @@ export async function spawnSubagentDirect(
       config: cfg,
       sandboxed: childRuntime.sandboxed,
     }),
-    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+      surface: "subagent",
+    }),
     childDepth,
     maxSpawnDepth,
   });

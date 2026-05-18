@@ -16,6 +16,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -599,6 +600,7 @@ describe("runCodexAppServerAttempt", () => {
     __testing.resetOpenClawCodingToolsFactoryForTests();
     resetCodexRateLimitCacheForTests();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    clearPluginCommands();
     resetAgentEventsForTest();
     resetGlobalHookRunner();
     defaultCodexAppInventoryCache.clear();
@@ -991,6 +993,46 @@ describe("runCodexAppServerAttempt", () => {
 
     params.sourceReplyDeliveryMode = "automatic";
     expect(__testing.shouldForceMessageTool(params)).toBe(false);
+  });
+
+  it("scopes Codex developer reply instructions to message-tool-only delivery", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.sourceReplyDeliveryMode = "message_tool_only";
+
+    expect(__testing.buildDeveloperInstructions(params)).toContain(
+      "Visible channel replies: use `message`",
+    );
+
+    params.sourceReplyDeliveryMode = "automatic";
+    const automaticInstructions = __testing.buildDeveloperInstructions(params);
+    expect(automaticInstructions).toContain("active Codex delivery path");
+    expect(automaticInstructions).not.toContain("Visible channel replies: use `message`");
+  });
+
+  it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
+    registerPluginCommand("demo-plugin", {
+      name: "codex_demo",
+      description: "Codex demo command",
+      agentPromptGuidance: [
+        {
+          text: "Codex app-server command guidance.",
+          surfaces: ["codex_app_server"],
+        },
+        {
+          text: "PI main command guidance.",
+          surfaces: ["pi_main"],
+        },
+      ],
+      handler: async () => ({ text: "ok" }),
+    });
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+
+    const instructions = __testing.buildDeveloperInstructions(params);
+
+    expect(instructions).toContain("Codex app-server command guidance.");
+    expect(instructions).not.toContain("PI main command guidance.");
   });
 
   it("keeps forced message dynamic tool when toolsAllow omits it", async () => {
@@ -3775,7 +3817,7 @@ describe("runCodexAppServerAttempt", () => {
       developerInstructions?: string;
       config?: Record<string, unknown>;
     };
-    expect(threadStartParams.config?.project_doc_max_bytes).toBe(0);
+    expect(threadStartParams.config).not.toHaveProperty("project_doc_max_bytes");
     expect(threadStartParams.developerInstructions).not.toContain("Soul voice goes here.");
     expect(threadStartParams.developerInstructions).not.toContain("Follow AGENTS guidance.");
 
@@ -3834,7 +3876,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(llmInputPayload.prompt).toBe("hello");
     expect(llmInputPayload.imagesCount).toBe(0);
     expect(llmInputPayload.historyMessages?.[0]?.role).toBe("assistant");
-    expect(llmInputPayload.systemPrompt).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(llmInputPayload.systemPrompt).toContain("Running inside OpenClaw");
+    expect(llmInputPayload.systemPrompt).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     expect(llmInputContext.runId).toBe("run-1");
     expect(llmInputContext.sessionId).toBe("session-1");
     expect(llmInputContext.sessionKey).toBe("agent:main:session-1");
@@ -4960,7 +5003,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadStartParams?.approvalPolicy).toBe("never");
     expect(threadStartParams?.sandbox).toBe("danger-full-access");
     expect(threadStartParams?.approvalsReviewer).toBe("user");
-    expect(threadStartParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(threadStartParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const steer = requests.find((entry) => entry.method === "turn/steer");
     expect(steer?.params).toEqual({
       threadId: "thread-1",
@@ -6342,7 +6385,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
-    expect(resumeRequestParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
   });
 
   it("starts a fresh Codex thread before resume when the native rollout is over budget", async () => {
@@ -8058,7 +8101,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeConfig?.["features.hooks"]).toBe(true);
     expect(resumeConfig?.["features.code_mode"]).toBe(true);
     expect(resumeConfig?.["features.code_mode_only"]).toBe(true);
-    expect(resumeRequestParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnRequest = requests.find((request) => request.method === "turn/start");
     const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
     expect(turnRequestParams?.approvalPolicy).toBe("on-request");
@@ -8253,7 +8296,7 @@ describe("runCodexAppServerAttempt", () => {
       developerInstructions: resumeParams.developerInstructions,
       persistExtendedHistory: true,
     });
-    expect(resumeParams.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnParams = buildTurnStartParams(params, {
       threadId: "thread-1",
       cwd: "/tmp/workspace",

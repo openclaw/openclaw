@@ -4283,6 +4283,7 @@ export const __testing = {
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   createCodexSteeringQueue,
   buildCodexNativeHookRelayId,
+  buildDeveloperInstructions,
   filterCodexDynamicTools,
   buildDynamicTools,
   filterCodexDynamicToolsForAllowlist,

@@ -23,6 +23,16 @@ Codex owns the canonical native thread, native model loop, native tool
 continuation, and native compaction unless the active OpenClaw context engine
 declares that it owns compaction.
 
+Prompt routing follows the selected runtime, not just the provider string. A
+native Codex turn receives Codex app-server developer instructions, while an
+explicit PI compatibility route keeps the normal OpenClaw/PI system prompt even
+when it uses Codex-flavored OpenAI auth or transport.
+
+Native Codex keeps Codex-owned base/model/personality instructions and native
+project-doc loading. OpenClaw developer instructions are limited to OpenClaw
+runtime concerns such as source-channel delivery, OpenClaw dynamic tools, ACP
+delegation, and adapter context.
+
 ## Thread bindings and model changes
 
 When an OpenClaw session is attached to an existing Codex thread, the next turn
@@ -105,7 +115,7 @@ Supported in Codex runtime v1:
 | OpenAI model loop through Codex               | Supported                                                                        | Codex app-server owns the OpenAI turn, native thread resume, and native tool continuation.                                                                                                                 |
 | OpenClaw channel routing and delivery         | Supported                                                                        | Telegram, Discord, Slack, WhatsApp, iMessage, and other channels stay outside the model runtime.                                                                                                           |
 | OpenClaw dynamic tools                        | Supported                                                                        | Codex asks OpenClaw to execute these tools, so OpenClaw stays in the execution path.                                                                                                                       |
-| Prompt and context plugins                    | Supported                                                                        | OpenClaw builds prompt overlays and projects context into the Codex turn before starting or resuming the thread.                                                                                           |
+| Prompt and context plugins                    | Supported                                                                        | OpenClaw projects OpenClaw-specific prompt/context into the Codex turn while leaving Codex-owned base, model, personality, and project-doc prompts in the native Codex lane.                               |
 | Context engine lifecycle                      | Supported                                                                        | Assemble, ingest, after-turn maintenance, and context-engine compaction coordination run for Codex turns.                                                                                                  |
 | Dynamic tool hooks                            | Supported                                                                        | `before_tool_call`, `after_tool_call`, and tool-result middleware run around OpenClaw-owned dynamic tools.                                                                                                 |
 | Lifecycle hooks                               | Supported as adapter observations                                                | `llm_input`, `llm_output`, `agent_end`, `before_compaction`, and `after_compaction` fire with honest Codex-mode payloads.                                                                                  |
