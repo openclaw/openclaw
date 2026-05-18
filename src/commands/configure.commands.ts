@@ -21,16 +21,16 @@ export async function configureCommandFromSectionsArg(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   const { sections, invalid } = parseConfigureWizardSections(rawSections);
-  if (sections.length === 0) {
-    await configureCommand(runtime);
-    return;
-  }
-
   if (invalid.length > 0) {
     runtime.error(
       `Invalid --section: ${invalid.join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}. Run ${formatCliCommand("openclaw configure")} without --section to use the full wizard.`,
     );
     runtime.exit(1);
+    return;
+  }
+
+  if (sections.length === 0) {
+    await configureCommand(runtime);
     return;
   }
 

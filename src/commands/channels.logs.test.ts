@@ -87,6 +87,54 @@ describe("channelsLogsCommand", () => {
     expect(payload.lines.map((line) => line.message)).toEqual(["external sent"]);
   });
 
+  it("rejects unknown channel filters instead of falling back to all logs", async () => {
+    await fs.writeFile(
+      logPath,
+      [
+        logLine({ module: "gateway/channels/external-chat/send", message: "external sent" }),
+        logLine({ module: "gateway/channels/slack/send", message: "slack sent" }),
+      ].join("\n"),
+    );
+
+    await channelsLogsCommand({ channel: "typo", json: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      'Unknown channel "typo" for logs. Run `openclaw channels list --all` to see configured and installable channels.',
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid line limits instead of silently using the default", async () => {
+    await fs.writeFile(
+      logPath,
+      logLine({ module: "gateway/channels/slack/send", message: "slack sent" }),
+    );
+
+    await channelsLogsCommand({ channel: "slack", lines: "wat", json: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Invalid --lines. Use a positive integer, for example --lines 200.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("rejects fractional line limits instead of truncating", async () => {
+    await fs.writeFile(
+      logPath,
+      logLine({ module: "gateway/channels/slack/send", message: "slack sent" }),
+    );
+
+    await channelsLogsCommand({ channel: "slack", lines: "2.5", json: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Invalid --lines. Use a positive integer, for example --lines 200.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
   it("falls back to the latest rolling log when the configured rolling file is missing", async () => {
     const configuredFile = path.join(tempDir, "openclaw-2026-04-26.log");
     const fallbackFile = path.join(tempDir, "openclaw-2026-04-25.log");

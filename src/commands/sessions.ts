@@ -134,6 +134,18 @@ function parseSessionsLimit(value: string | number | undefined): number | undefi
   return Number.isInteger(value) && value > 0 ? value : null;
 }
 
+function parseActiveMinutes(value: string | undefined): number | null {
+  if (value === undefined) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return parsed > 0 ? parsed : null;
+}
+
 const colorByPct = (label: string, pct: number | null, rich: boolean) => {
   if (!rich || pct === null) {
     return label;
@@ -254,8 +266,8 @@ export async function sessionsCommand(
 
   let activeMinutes: number | undefined;
   if (opts.active !== undefined) {
-    const parsed = Number.parseInt(opts.active, 10);
-    if (Number.isNaN(parsed) || parsed <= 0) {
+    const parsed = parseActiveMinutes(opts.active);
+    if (parsed === null) {
       runtime.error("--active must be a positive number of minutes, for example --active 30.");
       runtime.exit(1);
       return;

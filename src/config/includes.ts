@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
@@ -319,7 +320,9 @@ class IncludeProcessor {
       return this.resolver.parseJson(raw);
     } catch (err) {
       throw new ConfigIncludeError(
-        `Failed to parse include file: ${includePath} (resolved: ${resolvedPath})`,
+        `Failed to parse include file: ${includePath} (resolved: ${resolvedPath}): ${formatErrorMessage(
+          err,
+        )}`,
         includePath,
         err instanceof Error ? err : undefined,
       );

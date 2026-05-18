@@ -31,7 +31,7 @@ export class MissingEnvVarError extends Error {
     public readonly varName: string,
     public readonly configPath: string,
   ) {
-    super(`Missing env var "${varName}" referenced at config path: ${configPath}`);
+    super(`Missing env var "${varName}" referenced at config path: ${configPath || "<root>"}`);
     this.name = "MissingEnvVarError";
   }
 }

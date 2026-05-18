@@ -153,6 +153,21 @@ function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
   }
 }
 
+function parsePositiveIntegerOption(
+  raw: string | undefined,
+  fallback: number | undefined,
+): number | undefined {
+  if (raw === undefined) {
+    return fallback;
+  }
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const value = Number(trimmed);
+  return Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
 export async function modelsScanCommand(
   opts: {
     minParams?: string;
@@ -178,17 +193,17 @@ export async function modelsScanCommand(
   if (maxAgeDays !== undefined && (!Number.isFinite(maxAgeDays) || maxAgeDays < 0)) {
     throw new Error("--max-age-days must be >= 0");
   }
-  const maxCandidates = opts.maxCandidates ? Number(opts.maxCandidates) : 6;
-  if (!Number.isFinite(maxCandidates) || maxCandidates <= 0) {
-    throw new Error("--max-candidates must be > 0");
+  const maxCandidates = parsePositiveIntegerOption(opts.maxCandidates, 6);
+  if (maxCandidates === undefined) {
+    throw new Error("--max-candidates must be a positive integer");
   }
   const timeout = opts.timeout ? Number(opts.timeout) : undefined;
   if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
     throw new Error("--timeout must be > 0");
   }
-  const concurrency = opts.concurrency ? Number(opts.concurrency) : undefined;
-  if (concurrency !== undefined && (!Number.isFinite(concurrency) || concurrency <= 0)) {
-    throw new Error("--concurrency must be > 0");
+  const concurrency = parsePositiveIntegerOption(opts.concurrency, undefined);
+  if (opts.concurrency !== undefined && concurrency === undefined) {
+    throw new Error("--concurrency must be a positive integer");
   }
 
   const requestedProbe = opts.probe ?? true;

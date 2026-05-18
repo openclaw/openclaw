@@ -117,6 +117,13 @@ describe("resolveConfigEnvVars", () => {
     it("throws MissingEnvVarError with var name and config path details", () => {
       const scenarios: MissingEnvScenario[] = [
         {
+          name: "missing root string var",
+          config: "${MISSING_ROOT}",
+          env: {},
+          varName: "MISSING_ROOT",
+          configPath: "",
+        },
+        {
           name: "missing top-level var",
           config: { key: "${MISSING}" },
           env: {},
@@ -147,6 +154,12 @@ describe("resolveConfigEnvVars", () => {
       ];
 
       expectMissingScenarios(scenarios);
+    });
+
+    it("labels root-level missing env var errors instead of printing a blank path", () => {
+      expect(() => resolveConfigEnvVars("${MISSING_ROOT}", {})).toThrow(
+        'Missing env var "MISSING_ROOT" referenced at config path: <root>',
+      );
     });
   });
 

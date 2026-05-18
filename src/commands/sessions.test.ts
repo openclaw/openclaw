@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../terminal/ansi.js";
 import {
   makeRuntime,
   mockSessionsConfig,
@@ -48,7 +49,7 @@ describe("sessionsCommand", () => {
     expect(logs.join("\n")).toContain("Tokens (ctx %");
 
     const row = logs.find((line) => line.includes("+15555550123")) ?? "";
-    expect(row).toBe(
+    expect(stripAnsi(row)).toBe(
       "direct      +15555550123               45m ago   pi:opus        OpenAI Codex       2.0k/32k (6%)        id:abc123",
     );
   });
@@ -85,7 +86,7 @@ describe("sessionsCommand", () => {
     expect(logs.join("\n")).toContain("Runtime");
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
-    expect(row).toBe(
+    expect(stripAnsi(row)).toBe(
       "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
     );
   });
@@ -120,7 +121,7 @@ describe("sessionsCommand", () => {
     fs.rmSync(store);
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
-    expect(row).toBe(
+    expect(stripAnsi(row)).toBe(
       "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
     );
   });
@@ -140,7 +141,7 @@ describe("sessionsCommand", () => {
     fs.rmSync(store);
 
     const row = logs.find((line) => line.includes("quietchat:group:demo")) ?? "";
-    expect(row).toBe(
+    expect(stripAnsi(row)).toBe(
       "group       quietchat:group:demo       5m ago    pi:opus        OpenAI Codex       unknown/32k (?%)     think:high id:xyz",
     );
   });
@@ -318,6 +319,26 @@ describe("sessionsCommand", () => {
     const { runtime, errors } = makeRuntime();
 
     await expect(sessionsCommand({ store, active: "0" }, runtime)).rejects.toThrow("exit 1");
+    expect(errors).toStrictEqual([
+      "--active must be a positive number of minutes, for example --active 30.",
+    ]);
+
+    fs.rmSync(store);
+  });
+
+  it("rejects --active values with junk suffixes", async () => {
+    const store = writeStore(
+      {
+        demo: {
+          sessionId: "demo",
+          updatedAt: Date.now() - 5 * 60_000,
+        },
+      },
+      "sessions-active-junk",
+    );
+    const { runtime, errors } = makeRuntime();
+
+    await expect(sessionsCommand({ store, active: "10wat" }, runtime)).rejects.toThrow("exit 1");
     expect(errors).toStrictEqual([
       "--active must be a positive number of minutes, for example --active 30.",
     ]);

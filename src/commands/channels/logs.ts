@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { normalizeChannelId as normalizeBundledChannelId } from "../../channels/registry.js";
+import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { resolveLogFile } from "../../logging/log-tail.js";
 import { parseLogLine } from "../../logging/parse-log-line.js";
@@ -37,7 +38,19 @@ function parseChannelFilter(raw?: string) {
   if (bundled) {
     return bundled;
   }
-  return listManifestChannelIds().has(trimmed) ? trimmed : "all";
+  return listManifestChannelIds().has(trimmed) ? trimmed : null;
+}
+
+function parseLineLimit(raw: string | number | undefined): number | null {
+  if (raw === undefined) {
+    return DEFAULT_LIMIT;
+  }
+  const value = typeof raw === "string" ? raw.trim() : String(raw);
+  if (!/^\d+$/.test(value)) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function matchesChannel(line: NonNullable<LogLine>, channel: string) {
@@ -91,11 +104,22 @@ export async function channelsLogsCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const channel = parseChannelFilter(opts.channel);
-  const limitRaw = typeof opts.lines === "string" ? Number(opts.lines) : opts.lines;
-  const limit =
-    typeof limitRaw === "number" && Number.isFinite(limitRaw) && limitRaw > 0
-      ? Math.floor(limitRaw)
-      : DEFAULT_LIMIT;
+  if (!channel) {
+    runtime.error(
+      formatUnknownChannelMessage({
+        channel: opts.channel ?? "",
+        purpose: "logs",
+      }),
+    );
+    runtime.exit(1);
+    return;
+  }
+  const limit = parseLineLimit(opts.lines);
+  if (limit === null) {
+    runtime.error("Invalid --lines. Use a positive integer, for example --lines 200.");
+    runtime.exit(1);
+    return;
+  }
 
   const file = await resolveLogFile(getResolvedLoggerSettings().file);
   const rawLines = await readTailLines(file, limit * 4);

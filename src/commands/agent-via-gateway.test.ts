@@ -171,6 +171,45 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("rejects timeout values with junk suffixes", async () => {
+    await withTempStore(async () => {
+      await expect(
+        agentCliCommand({ message: "hi", to: "+1555", timeout: "10wat" }, runtime),
+      ).rejects.toThrow(
+        "Invalid --timeout. Use seconds as a non-negative integer, for example --timeout 600. Use --timeout 0 to disable the timeout.",
+      );
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects fractional timeout values", async () => {
+    await withTempStore(async () => {
+      await expect(
+        agentCliCommand({ message: "hi", to: "+1555", timeout: "1.5" }, runtime),
+      ).rejects.toThrow(
+        "Invalid --timeout. Use seconds as a non-negative integer, for example --timeout 600. Use --timeout 0 to disable the timeout.",
+      );
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects blank timeout values instead of disabling the timeout", async () => {
+    await withTempStore(async () => {
+      await expect(
+        agentCliCommand({ message: "hi", to: "+1555", timeout: " " }, runtime),
+      ).rejects.toThrow(
+        "Invalid --timeout. Use seconds as a non-negative integer, for example --timeout 600. Use --timeout 0 to disable the timeout.",
+      );
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
   it("uses gateway by default", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();

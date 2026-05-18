@@ -189,6 +189,19 @@ describe("resolveConfigIncludes", () => {
     expectResolveIncludeError(run, pattern);
   });
 
+  it("includes the JSON parser detail when an included file cannot be parsed", () => {
+    const error = expectResolveIncludeError(() =>
+      resolveConfigIncludes({ $include: "./bad.json" }, DEFAULT_BASE_PATH, {
+        readFile: () => "{ invalid json }",
+        parseJson: JSON.parse,
+      }),
+    );
+
+    expect(error.message).toContain("Failed to parse include file: ./bad.json");
+    expect(error.message).toContain("JSON");
+    expect(error.message).toContain("line 1 column 3");
+  });
+
   it("throws CircularIncludeError for circular includes", () => {
     const aPath = configPath("a.json");
     const bPath = configPath("b.json");

@@ -1,5 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { replaceConfigFile } from "../config/config.js";
+import { formatConfigIssueSummary } from "../config/issue-format.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -99,8 +100,15 @@ export async function runNonInteractiveSetup(
 ) {
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
+    const issueSummary = formatConfigIssueSummary(snapshot.issues ?? []);
     runtime.error(
-      `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
+      [
+        "Config invalid.",
+        issueSummary ? `Issues: ${issueSummary}` : null,
+        `Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n"),
     );
     runtime.exit(1);
     return;
