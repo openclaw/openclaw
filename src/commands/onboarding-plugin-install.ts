@@ -65,7 +65,8 @@ export type OnboardingPluginInstallResult = {
 function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boolean {
   return (
     result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND ||
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_DOWNLOAD_UNAVAILABLE
   );
 }
 

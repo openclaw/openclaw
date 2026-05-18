@@ -5,6 +5,7 @@ import {
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
   UPDATE_POST_CORE_CONVERGENCE_ENV,
   isLegacyPackageUpdateDoctorPass,
+  isLegacyParentWritableUpdateDoctorPass,
   isPostCoreConvergencePass,
   isUpdatePackageSwapInProgress,
   shouldDeferConfiguredPluginInstallRepair,
@@ -52,7 +53,7 @@ describe("update-phase env helpers", () => {
         [UPDATE_IN_PROGRESS_ENV]: "1",
         [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldDeferConfiguredPluginInstallRepair({
         [UPDATE_IN_PROGRESS_ENV]: "1",
@@ -79,11 +80,33 @@ describe("update-phase env helpers", () => {
         [UPDATE_IN_PROGRESS_ENV]: "1",
         [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isLegacyPackageUpdateDoctorPass({
         [UPDATE_IN_PROGRESS_ENV]: "1",
         [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
+      }),
+    ).toBe(false);
+  });
+
+  it("identifies writable legacy parents that need old-readable config writes", () => {
+    expect(
+      isLegacyParentWritableUpdateDoctorPass({
+        [UPDATE_IN_PROGRESS_ENV]: "1",
+        [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+      }),
+    ).toBe(true);
+    expect(
+      isLegacyParentWritableUpdateDoctorPass({
+        [UPDATE_IN_PROGRESS_ENV]: "1",
+        [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
+        [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+      }),
+    ).toBe(false);
+    expect(
+      isLegacyParentWritableUpdateDoctorPass({
+        [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
+        [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
       }),
     ).toBe(false);
   });

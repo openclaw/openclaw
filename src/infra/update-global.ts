@@ -34,6 +34,7 @@ type ResolvedGlobalInstallCommand = {
 export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
   globalRoot: string | null;
   packageRoot: string | null;
+  directNodeModulesRoot?: boolean;
 };
 
 const PRIMARY_PACKAGE_NAME = "openclaw";
@@ -419,6 +420,7 @@ function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
 
 export function resolveNpmGlobalPrefixLayoutFromGlobalRoot(
   globalRoot?: string | null,
+  options: { allowDirectNodeModulesRoot?: boolean } = {},
 ): NpmGlobalPrefixLayout | null {
   const trimmed = globalRoot?.trim();
   if (!trimmed) {
@@ -442,6 +444,13 @@ export function resolveNpmGlobalPrefixLayoutFromGlobalRoot(
       prefix: parentDir,
       globalRoot: normalized,
       binDir: parentDir,
+    };
+  }
+  if (options.allowDirectNodeModulesRoot) {
+    return {
+      prefix: parentDir,
+      globalRoot: normalized,
+      binDir: path.join(normalized, ".bin"),
     };
   }
   return null;
@@ -481,6 +490,16 @@ function inferGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null 
   const normalized = path.resolve(trimmed);
   const globalRoot = path.dirname(normalized);
   return path.basename(globalRoot) === "node_modules" ? globalRoot : null;
+}
+
+function isDirectNpmNodeModulesRoot(globalRoot: string | null): boolean {
+  return (
+    globalRoot !== null &&
+    resolveNpmGlobalPrefixLayoutFromGlobalRoot(globalRoot) === null &&
+    resolveNpmGlobalPrefixLayoutFromGlobalRoot(globalRoot, {
+      allowDirectNodeModulesRoot: true,
+    }) !== null
+  );
 }
 
 function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
@@ -602,6 +621,7 @@ export async function resolveGlobalInstallTarget(params: {
   runCommand: CommandRunner;
   timeoutMs: number;
   pkgRoot?: string | null;
+  honorPackageRoot?: boolean;
 }): Promise<ResolvedGlobalInstallTarget> {
   const command = normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
   const globalRoot = await resolveGlobalRoot(
@@ -614,11 +634,20 @@ export async function resolveGlobalInstallTarget(params: {
     command.manager === "pnpm" && (await isPnpmGlobalPackageRoot(params.pkgRoot))
       ? inferPnpmGlobalRootFromPackageRoot(params.pkgRoot)
       : null;
-  const targetGlobalRoot = pkgRootGlobalRoot ?? globalRoot;
+  const honoredPackageRootGlobalRoot =
+    params.honorPackageRoot && command.manager === "npm"
+      ? inferGlobalRootFromPackageRoot(params.pkgRoot)
+      : null;
+  const targetGlobalRoot = pkgRootGlobalRoot ?? honoredPackageRootGlobalRoot ?? globalRoot;
   return {
     ...command,
     globalRoot: targetGlobalRoot,
     packageRoot: targetGlobalRoot ? path.join(targetGlobalRoot, PRIMARY_PACKAGE_NAME) : null,
+    ...(honoredPackageRootGlobalRoot &&
+    targetGlobalRoot === honoredPackageRootGlobalRoot &&
+    isDirectNpmNodeModulesRoot(honoredPackageRootGlobalRoot)
+      ? { directNodeModulesRoot: true }
+      : {}),
   };
 }
 
