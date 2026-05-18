@@ -128,6 +128,45 @@ describe("Code Mode", () => {
     expect(limitedSearch.maxSearchLimit).toBe(3);
   });
 
+  it("resolves active-agent code mode over the runtime default", () => {
+    const config = {
+      tools: {
+        codeMode: {
+          enabled: false,
+          timeoutMs: 1234,
+          searchDefaultLimit: 6,
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "ops",
+            tools: {
+              codeMode: {
+                enabled: true,
+                searchDefaultLimit: 4,
+              },
+            },
+          },
+          {
+            id: "chat",
+            tools: {
+              codeMode: false,
+            },
+          },
+        ],
+      },
+    } as never;
+
+    const ops = resolveCodeModeConfig(config, "ops");
+    expect(ops.enabled).toBe(true);
+    expect(ops.timeoutMs).toBe(1234);
+    expect(ops.searchDefaultLimit).toBe(4);
+
+    expect(resolveCodeModeConfig(config, "chat").enabled).toBe(false);
+    expect(resolveCodeModeConfig(config, "missing").enabled).toBe(false);
+  });
+
   it("resolves the packaged worker URL from stable and hashed dist modules", () => {
     expect(
       __testing.resolveCodeModeWorkerUrl("file:///repo/dist/agents/code-mode.js").pathname,
@@ -156,6 +195,39 @@ describe("Code Mode", () => {
       CODE_MODE_WAIT_TOOL_NAME,
     ]);
     expect(compacted.catalogToolCount).toBe(2);
+  });
+
+  it("hides normal tools when only the active agent enables code mode", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      agents: {
+        list: [{ id: "ops", tools: { codeMode: true } }],
+      },
+    } as never;
+    const codeModeTools = createCodeModeTools({
+      config,
+      runtimeConfig: config,
+      agentId: "ops",
+      sessionId: "session-code-mode",
+      sessionKey: "agent:ops:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_create_ticket", "Create a fake ticket")],
+      config,
+      agentId: "ops",
+      sessionId: "session-code-mode",
+      sessionKey: "agent:ops:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(compacted.compacted).toBe(true);
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      CODE_MODE_EXEC_TOOL_NAME,
+      CODE_MODE_WAIT_TOOL_NAME,
+    ]);
   });
 
   it("uses a flat enum for the exec language schema", () => {

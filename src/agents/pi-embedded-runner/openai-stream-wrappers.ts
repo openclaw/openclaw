@@ -549,11 +549,14 @@ export function createOpenAITextVerbosityWrapper(
 /** @deprecated OpenAI Codex provider-owned stream helper; do not use from third-party plugins. */
 export function createCodexNativeWebSearchWrapper(
   baseStreamFn: StreamFn | undefined,
-  params: { config?: OpenClawConfig; agentDir?: string },
+  params: { config?: OpenClawConfig; agentDir?: string; codeModeToolSurfaceEnabled?: boolean },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (isCodeModeEnabled(params.config) && hasCodeModeVisibleTools(context)) {
+    if (
+      (params.codeModeToolSurfaceEnabled === true || isCodeModeEnabled(params.config)) &&
+      hasCodeModeVisibleTools(context)
+    ) {
       emitModelTransportDebug(
         log,
         `skipping Codex native web search because code mode owns the model tool surface for ${
