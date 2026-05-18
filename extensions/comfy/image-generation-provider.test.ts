@@ -454,4 +454,221 @@ describe("comfy image-generation provider", () => {
     const extraData = requestBody.extra_data as { api_key_comfy_org?: unknown } | undefined;
     expect(extraData?.api_key_comfy_org).toBe("profile-key");
   });
+
+  function mockLocalWorkflowResponses(promptId: string) {
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ prompt_id: promptId }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            [promptId]: {
+              outputs: {
+                "9": {
+                  images: [{ filename: "out.png", subfolder: "", type: "output" }],
+                },
+              },
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("png-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+  }
+
+  it("injects explicit size into configured dimension nodes", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockLocalWorkflowResponses("dim-size-1");
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "a red square",
+      size: "512x768",
+      cfg: buildComfyConfig({
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "10": { inputs: { width: 1024, height: 1024, batch_size: 1 } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+        dimensions: { widthNodeId: "10", heightNodeId: "10" },
+      }),
+    });
+
+    expect(parseJsonBody(1)).toEqual({
+      prompt: {
+        "6": { inputs: { text: "a red square" } },
+        "10": { inputs: { width: 512, height: 768, batch_size: 1 } },
+        "9": { inputs: {} },
+      },
+    });
+  });
+
+  it("injects calculated dimensions from aspectRatio into configured dimension nodes", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockLocalWorkflowResponses("dim-ar-1");
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "a wide scene",
+      aspectRatio: "16:9",
+      cfg: buildComfyConfig({
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "10": { inputs: { width: 1024, height: 1024 } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+        dimensions: { widthNodeId: "10", heightNodeId: "10" },
+      }),
+    });
+
+    // 16:9 at base 1024: width=1024, height=round(1024*9/16/64)*64=576
+    const body = parseJsonBody(1);
+    const node10 = (body.prompt as Record<string, unknown>)["10"] as {
+      inputs: { width: number; height: number };
+    };
+    expect(node10.inputs.width).toBe(1024);
+    expect(node10.inputs.height).toBe(576);
+  });
+
+  it("size takes precedence over aspectRatio when both are provided", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockLocalWorkflowResponses("dim-precedence-1");
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "test",
+      size: "640x480",
+      aspectRatio: "16:9",
+      cfg: buildComfyConfig({
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "10": { inputs: { width: 1024, height: 1024 } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+        dimensions: { widthNodeId: "10", heightNodeId: "10" },
+      }),
+    });
+
+    const body = parseJsonBody(1);
+    const node10 = (body.prompt as Record<string, unknown>)["10"] as {
+      inputs: { width: number; height: number };
+    };
+    expect(node10.inputs.width).toBe(640);
+    expect(node10.inputs.height).toBe(480);
+  });
+
+  it("does not inject dimensions when no dimensions config is present", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockLocalWorkflowResponses("dim-fallback-1");
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "test",
+      size: "512x512",
+      cfg: buildComfyConfig({
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "10": { inputs: { width: 1024, height: 1024 } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+        // no dimensions config
+      }),
+    });
+
+    // Workflow node "10" should be unchanged
+    const body = parseJsonBody(1);
+    const node10 = (body.prompt as Record<string, unknown>)["10"] as {
+      inputs: { width: number; height: number };
+    };
+    expect(node10.inputs.width).toBe(1024);
+    expect(node10.inputs.height).toBe(1024);
+  });
+
+  it("does not inject dimensions for an invalid aspectRatio", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockLocalWorkflowResponses("dim-invalid-ar-1");
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "test",
+      aspectRatio: "not-a-ratio",
+      cfg: buildComfyConfig({
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "10": { inputs: { width: 1024, height: 1024 } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+        dimensions: { widthNodeId: "10", heightNodeId: "10" },
+      }),
+    });
+
+    const body = parseJsonBody(1);
+    const node10 = (body.prompt as Record<string, unknown>)["10"] as {
+      inputs: { width: number; height: number };
+    };
+    expect(node10.inputs.width).toBe(1024);
+    expect(node10.inputs.height).toBe(1024);
+  });
+
+  it("respects custom baseSize for aspectRatio calculation", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockLocalWorkflowResponses("dim-basesize-1");
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "test",
+      aspectRatio: "1:1",
+      cfg: buildComfyConfig({
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "10": { inputs: { width: 1024, height: 1024 } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+        dimensions: { widthNodeId: "10", heightNodeId: "10", baseSize: 512 },
+      }),
+    });
+
+    const body = parseJsonBody(1);
+    const node10 = (body.prompt as Record<string, unknown>)["10"] as {
+      inputs: { width: number; height: number };
+    };
+    expect(node10.inputs.width).toBe(512);
+    expect(node10.inputs.height).toBe(512);
+  });
 });

@@ -308,6 +308,7 @@ function setWorkflowDimensionInput(
 function calculateDimensions(params: {
   aspectRatio?: string;
   size?: string | undefined;
+  baseConfig?: ComfyDimensionConfig;
 }): { width: number; height: number } | null {
   const { aspectRatio, size } = params;
 

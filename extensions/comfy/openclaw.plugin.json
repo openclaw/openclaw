@@ -235,6 +235,8 @@
           "timeoutMs": { "type": "integer", "minimum": 1000 },
           "dimensions": {
             "type": "object",
+            "additionalProperties": false,
+            "required": ["widthNodeId", "heightNodeId"],
             "properties": {
               "widthNodeId": { "type": "string" },
               "widthInputName": { "type": "string" },
