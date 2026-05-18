@@ -25,5 +25,22 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-members: read
+      - uses: actions/create-github-app-token@v3
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        continue-on-error: true
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-members: read
       - name: Check real behavior proof
+        env:
+          GH_APP_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
         run: node scripts/github/real-behavior-proof-check.mjs

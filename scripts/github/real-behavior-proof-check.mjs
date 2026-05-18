@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { evaluateRealBehaviorProof } from "./real-behavior-proof-policy.mjs";
+import {
+  evaluateRealBehaviorProof,
+  isMaintainerTeamMember,
+} from "./real-behavior-proof-policy.mjs";
 
 function escapeCommandValue(value) {
   return String(value)
@@ -21,6 +24,24 @@ const pullRequest = event.pull_request;
 if (!pullRequest) {
   console.log("No pull_request payload found; skipping real behavior proof gate.");
   process.exit(0);
+}
+
+const token = process.env.GH_APP_TOKEN;
+const org = event.repository?.owner?.login;
+const authorLogin = pullRequest.user?.login;
+if (token && org && authorLogin) {
+  try {
+    if (await isMaintainerTeamMember({ token, org, login: authorLogin })) {
+      console.log(
+        `PR author @${authorLogin} is an active member of the ${org}/maintainer team; skipping real behavior proof gate.`,
+      );
+      process.exit(0);
+    }
+  } catch (error) {
+    console.warn(
+      `::warning title=Maintainer membership check failed::${escapeCommandValue(error?.message ?? String(error))}`,
+    );
+  }
 }
 
 const evaluation = evaluateRealBehaviorProof({ pullRequest });

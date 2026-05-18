@@ -3,6 +3,7 @@ export const PROOF_SUPPLIED_LABEL = "proof: supplied";
 export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";
 export const NEEDS_REAL_BEHAVIOR_PROOF_LABEL = "triage: needs-real-behavior-proof";
 export const MOCK_ONLY_PROOF_LABEL = "triage: mock-only-proof";
+export const MAINTAINER_TEAM_SLUG = "maintainer";
 
 const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
@@ -109,6 +110,34 @@ export function isExternalPullRequest(pullRequest) {
 
 export function hasProofOverride(labels) {
   return labelNames(labels).has(PROOF_OVERRIDE_LABEL);
+}
+
+export async function isMaintainerTeamMember({
+  token,
+  org,
+  login,
+  teamSlug = MAINTAINER_TEAM_SLUG,
+  fetch = globalThis.fetch,
+} = {}) {
+  if (!token || !org || !login) {
+    return false;
+  }
+  const url = `https://api.github.com/orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(teamSlug)}/memberships/${encodeURIComponent(login)}`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (response.status === 404) {
+    return false;
+  }
+  if (!response.ok) {
+    throw new Error(`Team membership lookup failed: ${response.status}`);
+  }
+  const body = await response.json();
+  return body?.state === "active";
 }
 
 export function extractRealBehaviorProofSection(body = "") {
