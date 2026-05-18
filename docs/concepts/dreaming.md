@@ -119,6 +119,14 @@ stays separate from `MEMORY.md` and that the agent does not claim the candidate
 was promoted. It does not add production shadow-trial behavior or change the
 deep-phase promotion engine.
 
+The `memory-core` shadow-trial runner keeps that same report-only contract for
+code paths that need a stable artifact. It accepts the candidate, trial prompt,
+baseline outcome, candidate outcome, verdict, reason, risk flags, and evidence
+references, then writes a report with `promotion action: report-only`. Helpful
+verdicts map to a `promote` recommendation, neutral verdicts map to `defer`, and
+harmful verdicts map to `reject`; none of those recommendations writes to
+`MEMORY.md` or applies deep-phase promotion.
+
 ## Scheduling
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep. Each sweep runs phases in order: light → REM → deep.
