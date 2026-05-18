@@ -575,15 +575,6 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
     return;
   }
   const bindExplicitRaw = bindExplicitRawStr as GatewayBindMode | undefined;
-  if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
-    const { cleanStaleGatewayProcessesSync } = await import("../../infra/restart-stale-pids.js");
-    const stale = cleanStaleGatewayProcessesSync(port);
-    if (stale.length > 0) {
-      gatewayLog.info(
-        `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,
-      );
-    }
-  }
   if (opts.force) {
     try {
       const { forceFreePortAndWait, waitForPortBindable } = await import("../ports.js");
@@ -662,6 +653,25 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
     | "auto"
     | "custom"
     | "tailnet";
+  const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
+  const { detectRespawnSupervisor } = await import("../../infra/supervisor-markers.js");
+  const supervisor = detectRespawnSupervisor(process.env);
+  if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
+    if (await probeGatewayHealthz({ host: healthHost, port })) {
+      gatewayLog.info(
+        `service-mode: existing healthy gateway is already listening on port ${port}; leaving it in control`,
+      );
+      defaultRuntime.exit(supervisor === "systemd" ? EXIT_CONFIG_ERROR : 0);
+      return;
+    }
+    const { cleanStaleGatewayProcessesSync } = await import("../../infra/restart-stale-pids.js");
+    const stale = cleanStaleGatewayProcessesSync(port);
+    if (stale.length > 0) {
+      gatewayLog.info(
+        `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,
+      );
+    }
+  }
 
   let passwordRaw: string | undefined;
   try {
@@ -817,8 +827,6 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
       },
     });
 
-  const { detectRespawnSupervisor } = await import("../../infra/supervisor-markers.js");
-  const supervisor = detectRespawnSupervisor(process.env);
   try {
     await runGatewayLoopWithSupervisedLockRecovery({
       startLoop,

@@ -1,3 +1,4 @@
+import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,11 +19,13 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
   escalatedToSigkill: false,
 }));
 const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
+const cleanStaleGatewayProcessesSync = vi.fn((_port?: number) => [] as number[]);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
 const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
   await start();
 });
+const httpRequest = vi.hoisted(() => vi.fn());
 const gatewayLogMessages = vi.hoisted(() => [] as string[]);
 const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
@@ -59,6 +62,10 @@ vi.mock("../../config/config.js", () => ({
   readBestEffortConfig: () => readBestEffortConfig(),
   readConfigFileSnapshot: async () => configState.snapshot,
   readConfigFileSnapshotWithPluginMetadata: () => readConfigFileSnapshotWithPluginMetadata(),
+}));
+
+vi.mock("node:http", () => ({
+  request: (...args: unknown[]) => httpRequest(...args),
 }));
 
 vi.mock("../../config/paths.js", () => ({
@@ -147,6 +154,10 @@ vi.mock("../../infra/ports.js", () => ({
   inspectPortUsage: async () => ({ status: "free" }),
 }));
 
+vi.mock("../../infra/restart-stale-pids.js", () => ({
+  cleanStaleGatewayProcessesSync: (port?: number) => cleanStaleGatewayProcessesSync(port),
+}));
+
 vi.mock("../../infra/supervisor-markers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/supervisor-markers.js")>();
   return {
@@ -227,8 +238,31 @@ describe("gateway run option collisions", () => {
     setConsoleSubsystemFilter.mockClear();
     forceFreePortAndWait.mockClear();
     waitForPortBindable.mockClear();
+    cleanStaleGatewayProcessesSync.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
+    httpRequest.mockImplementation(
+      (
+        _opts: unknown,
+        _callback: (res: Pick<IncomingMessage, "statusCode" | "resume">) => void,
+      ) => {
+        const handlers = new Map<string, (...args: unknown[]) => void>();
+        return {
+          once(event: string, handler: (...args: unknown[]) => void) {
+            handlers.set(event, handler);
+            return this;
+          },
+          removeAllListeners() {
+            handlers.clear();
+            return this;
+          },
+          destroy() {},
+          end() {
+            handlers.get("error")?.(new Error("connection refused"));
+          },
+        };
+      },
+    );
   });
 
   async function runGatewayCli(argv: string[]) {
@@ -319,6 +353,47 @@ describe("gateway run option collisions", () => {
     expect(forceFreePortAndWait).not.toHaveBeenCalled();
     expect(startGatewayServer).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("Refusing to start the gateway service");
+  });
+
+  it("leaves an existing healthy service-mode gateway in control before stale cleanup", async () => {
+    httpRequest.mockImplementationOnce(
+      (_opts: unknown, callback: (res: Pick<IncomingMessage, "statusCode" | "resume">) => void) => {
+        return {
+          once() {
+            return this;
+          },
+          removeAllListeners() {
+            return this;
+          },
+          destroy() {},
+          end() {
+            callback({
+              statusCode: 200,
+              resume() {},
+            });
+          },
+        };
+      },
+    );
+    const previousMarker = process.env.OPENCLAW_SERVICE_MARKER;
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    try {
+      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+        "__exit__:0",
+      );
+    } finally {
+      if (previousMarker === undefined) {
+        delete process.env.OPENCLAW_SERVICE_MARKER;
+      } else {
+        process.env.OPENCLAW_SERVICE_MARKER = previousMarker;
+      }
+    }
+
+    expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(gatewayLogMessages).toContain(
+      "service-mode: existing healthy gateway is already listening on port 18789; leaving it in control",
+    );
   });
 
   it.each([
