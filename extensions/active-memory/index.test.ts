@@ -2278,7 +2278,7 @@ describe("active-memory plugin", () => {
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 25,
       maxSummaryChars: 40,
       persistTranscripts: true,
       logging: true,
@@ -2858,7 +2858,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
     runEmbeddedPiAgent.mockImplementationOnce(async (params: { timeoutMs?: number }) => {
-      await new Promise((resolve) => setTimeout(resolve, (params.timeoutMs ?? 0) + 25));
+      await new Promise((resolve) => setTimeout(resolve, (params.timeoutMs ?? 0) + 5));
       return {
         payloads: [{ text: "late timeout payload that should never become memory context" }],
         meta: { aborted: true },
@@ -2890,8 +2890,8 @@ describe("active-memory plugin", () => {
   });
 
   it("does not spend the model timeout budget on active-memory subagent setup", async () => {
-    const CONFIGURED_TIMEOUT_MS = 50;
-    const SETUP_GRACE_TIMEOUT_MS = 500;
+    const CONFIGURED_TIMEOUT_MS = 25;
+    const SETUP_GRACE_TIMEOUT_MS = 50;
     testing.setMinimumTimeoutMsForTests(1);
     api.pluginConfig = {
       agents: ["main"],
@@ -2901,7 +2901,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
     runEmbeddedPiAgent.mockImplementationOnce(async () => {
-      await new Promise((resolve) => setTimeout(resolve, CONFIGURED_TIMEOUT_MS + 30));
+      await new Promise((resolve) => setTimeout(resolve, CONFIGURED_TIMEOUT_MS + 5));
       return { payloads: [{ text: "remember the ramen place" }] };
     });
 
@@ -2924,8 +2924,8 @@ describe("active-memory plugin", () => {
   });
 
   it("returns timeout within a hard deadline even when the subagent never checks the abort signal", async () => {
-    const CONFIGURED_TIMEOUT_MS = 200;
-    const HARD_DEADLINE_MARGIN_MS = 4_800;
+    const CONFIGURED_TIMEOUT_MS = 25;
+    const HARD_DEADLINE_MARGIN_MS = 500;
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
@@ -2960,7 +2960,7 @@ describe("active-memory plugin", () => {
   });
 
   it("does not fast-fail terminal zero-hit memory_search results as empty", async () => {
-    const CONFIGURED_TIMEOUT_MS = 1_000;
+    const CONFIGURED_TIMEOUT_MS = 50;
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
@@ -3008,7 +3008,7 @@ describe("active-memory plugin", () => {
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 500,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -3030,7 +3030,7 @@ describe("active-memory plugin", () => {
           },
         },
       ]);
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 35));
       return { payloads: [{ text: "User usually orders ramen." }] };
     });
 
@@ -3103,7 +3103,7 @@ describe("active-memory plugin", () => {
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 500,
+      timeoutMs: 100,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
     runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
@@ -3116,7 +3116,7 @@ describe("active-memory plugin", () => {
           },
         },
       ]);
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 35));
       return { payloads: [{ text: "User usually orders ramen after late flights." }] };
     });
 

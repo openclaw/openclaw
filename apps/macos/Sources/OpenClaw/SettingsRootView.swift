@@ -84,7 +84,7 @@ struct SettingsRootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
-        .padding(.vertical, 18)
+        .padding(.vertical, SettingsLayout.detailVerticalPadding)
     }
 
     private var cachedDetailTabs: [SettingsTab] {
