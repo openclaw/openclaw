@@ -7,18 +7,9 @@ const ALLOWED_PARAMS = ["q", "gl", "hl", "currency", "zero_trace"] as const;
 
 function extract(raw: Record<string, unknown>, maxCount: number): Record<string, unknown> {
   const results = Array.isArray(raw.shopping_results)
-    ? (raw.shopping_results as Record<string, unknown>[])
+    ? (raw.shopping_results as unknown[]).slice(0, maxCount)
     : [];
-  return {
-    engine: "google_shopping",
-    results: results.slice(0, maxCount).map((r) => ({
-      title: r.title,
-      price: r.price ?? null,
-      source: r.source ?? null,
-      rating: r.rating ?? null,
-      link: r.link ?? (r.product_link as string | undefined) ?? null,
-    })),
-  };
+  return { engine: "google_shopping", results };
 }
 
 export function createSerpApiShoppingTool(api: OpenClawPluginApi, ctx?: SerpApiToolCtx) {

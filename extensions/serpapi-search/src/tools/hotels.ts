@@ -15,19 +15,9 @@ function isoDateOffset(days: number): string {
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
   const properties = Array.isArray(raw.properties)
-    ? (raw.properties as Record<string, unknown>[])
+    ? (raw.properties as unknown[])
     : [];
-  return {
-    engine: "google_hotels",
-    properties: properties.map((h) => ({
-      name: h.name,
-      rate_per_night:
-        (h.rate_per_night as Record<string, unknown> | undefined)?.extracted_lowest ?? null,
-      overall_rating: h.overall_rating ?? null,
-      hotel_class: h.hotel_class ?? null,
-      link: h.link ?? null,
-    })),
-  };
+  return { engine: "google_hotels", properties };
 }
 
 export function createSerpApiHotelsTool(api: OpenClawPluginApi, ctx?: SerpApiToolCtx) {

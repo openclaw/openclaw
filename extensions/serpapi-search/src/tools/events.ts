@@ -7,24 +7,9 @@ const ALLOWED_PARAMS = ["q", "gl", "hl", "location", "htichips", "zero_trace"] a
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
   const events = Array.isArray(raw.events_results)
-    ? (raw.events_results as Record<string, unknown>[])
+    ? (raw.events_results as unknown[])
     : [];
-  return {
-    engine: "google_events",
-    events: events.map((r) => ({
-      title: r.title,
-      when: (r.date as Record<string, unknown> | undefined)?.when ?? null,
-      address: Array.isArray(r.address)
-        ? (r.address as string[]).join(", ")
-        : (r.address ?? null),
-      ticket_link:
-        (
-          Array.isArray(r.ticket_info)
-            ? (r.ticket_info as Record<string, unknown>[])[0]
-            : undefined
-        )?.link ?? r.link ?? null,
-    })),
-  };
+  return { engine: "google_events", events };
 }
 
 export function createSerpApiEventsTool(api: OpenClawPluginApi, ctx?: SerpApiToolCtx) {

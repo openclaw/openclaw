@@ -10,6 +10,7 @@ function extract(raw: Record<string, unknown>): Record<string, unknown> {
     engine: "google_trends",
     interest_over_time: raw.interest_over_time ?? null,
     interest_by_region: raw.interest_by_region ?? null,
+    related_topics: raw.related_topics ?? null,
     related_queries: raw.related_queries ?? null,
   };
 }
@@ -19,8 +20,8 @@ export function createSerpApiTrendsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
     name: "serpapi_trends",
     label: "SerpApi Google Trends",
     description:
-      "Get Google Trends data: interest over time, by region, or related queries. " +
-      "data_type: TIMESERIES (default), GEO_MAP, RELATED_QUERIES.",
+      "Get Google Trends data: interest over time, by region, related topics, or related queries. " +
+      "data_type: TIMESERIES (default), GEO_MAP, GEO_MAP_0, RELATED_TOPICS, RELATED_QUERIES.",
     parameters: {
       type: "object",
       properties: {
@@ -33,7 +34,7 @@ export function createSerpApiTrendsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
         },
         data_type: {
           type: "string",
-          enum: ["TIMESERIES", "GEO_MAP", "RELATED_QUERIES"],
+          enum: ["TIMESERIES", "GEO_MAP", "GEO_MAP_0", "RELATED_TOPICS", "RELATED_QUERIES"],
           description: 'Trend data type (default: "TIMESERIES").',
         },
       },

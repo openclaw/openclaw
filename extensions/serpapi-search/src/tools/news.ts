@@ -7,21 +7,9 @@ const ALLOWED_PARAMS = ["q", "gl", "hl", "tbs", "zero_trace"] as const;
 
 function extract(raw: Record<string, unknown>, maxCount: number): Record<string, unknown> {
   const results = Array.isArray(raw.news_results)
-    ? (raw.news_results as Record<string, unknown>[])
+    ? (raw.news_results as unknown[]).slice(0, maxCount)
     : [];
-  return {
-    engine: "google_news",
-    results: results.slice(0, maxCount).map((r) => ({
-      title: r.title,
-      source:
-        typeof r.source === "string"
-          ? r.source
-          : (r.source as Record<string, unknown> | undefined)?.name ?? null,
-      date: r.date ?? null,
-      url: r.link ?? null,
-      snippet: r.snippet ?? null,
-    })),
-  };
+  return { engine: "google_news", results };
 }
 
 export function createSerpApiNewsTool(api: OpenClawPluginApi, ctx?: SerpApiToolCtx) {

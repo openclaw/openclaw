@@ -1,24 +1,17 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import { readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../tool-utils.js";
 
 const ALLOWED_PARAMS = ["search_query", "hl", "sp", "zero_trace"] as const;
 
-function extract(raw: Record<string, unknown>, maxCount: number): Record<string, unknown> {
+function extract(raw: Record<string, unknown>): Record<string, unknown> {
   const videos = Array.isArray(raw.video_results)
     ? (raw.video_results as Record<string, unknown>[])
     : [];
   return {
     engine: "youtube",
-    videos: videos.slice(0, maxCount).map((r) => ({
-      title: r.title,
-      url: r.link,
-      channel: (r.channel as Record<string, unknown> | undefined)?.name ?? null,
-      views: r.views ?? null,
-      duration: r.length ?? null,
-      published_date: r.published_date ?? null,
-    })),
+    videos,
   };
 }
 
@@ -32,7 +25,6 @@ export function createSerpApiYouTubeTool(api: OpenClawPluginApi, ctx?: SerpApiTo
       type: "object",
       properties: {
         query: { type: "string", description: "YouTube search query." },
-        count: { type: "number", description: "Number of results (1-20).", minimum: 1, maximum: 20 },
         sp: {
           type: "string",
           description: 'YouTube search filters (e.g. "EgQIBBAB" for this week). Advanced use only.',
@@ -43,7 +35,6 @@ export function createSerpApiYouTubeTool(api: OpenClawPluginApi, ctx?: SerpApiTo
     },
     execute: async (_toolCallId: string, args: Record<string, unknown>) => {
       const cfg = resolveToolConfig(api, ctx);
-      const count = readNumberParam(args, "count", { integer: true }) ?? 5;
       const raw = await callSerpApi({
         cfg,
         engine: "youtube",
@@ -53,7 +44,7 @@ export function createSerpApiYouTubeTool(api: OpenClawPluginApi, ctx?: SerpApiTo
           sp: readStringParam(args, "sp") ?? undefined,
         },
       });
-      return extract(raw, count);
+      return extract(raw);
     },
   };
 }

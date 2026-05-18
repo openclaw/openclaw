@@ -7,18 +7,9 @@ const ALLOWED_PARAMS = ["q", "gl", "hl", "location", "chips", "zero_trace"] as c
 
 function extract(raw: Record<string, unknown>, maxCount: number): Record<string, unknown> {
   const results = Array.isArray(raw.jobs_results)
-    ? (raw.jobs_results as Record<string, unknown>[])
+    ? (raw.jobs_results as unknown[]).slice(0, maxCount)
     : [];
-  return {
-    engine: "google_jobs",
-    results: results.slice(0, maxCount).map((r) => ({
-      title: r.title,
-      company: r.company_name ?? null,
-      location: r.location ?? null,
-      via: r.via ?? null,
-      description: r.description ?? null,
-    })),
-  };
+  return { engine: "google_jobs", results };
 }
 
 export function createSerpApiJobsTool(api: OpenClawPluginApi, ctx?: SerpApiToolCtx) {

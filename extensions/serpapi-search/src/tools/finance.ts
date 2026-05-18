@@ -6,33 +6,10 @@ import { type SerpApiToolCtx, resolveToolConfig } from "../tool-utils.js";
 const ALLOWED_PARAMS = ["q", "hl", "window", "zero_trace"] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
-  const summary = raw.summary as Record<string, unknown> | undefined;
-  const mv = summary?.price_movement as Record<string, unknown> | undefined;
-  const newsGroups = Array.isArray(raw.news_results)
-    ? (raw.news_results as Record<string, unknown>[])
-    : [];
-  const newsItems: Record<string, unknown>[] = [];
-  for (const entry of newsGroups) {
-    if (Array.isArray(entry.items)) newsItems.push(...(entry.items as Record<string, unknown>[]));
-    else if (entry.title) newsItems.push(entry);
-  }
   return {
     engine: "google_finance",
-    ticker: summary?.stock ?? null,
-    exchange: summary?.exchange ?? null,
-    title: summary?.title ?? null,
-    price: summary?.price ?? null,
-    currency: summary?.currency ?? null,
-    change: mv ? { direction: mv.movement, value: mv.value, percentage: mv.percentage } : null,
-    news: newsItems.slice(0, 3).map((n) => ({
-      title: n.title,
-      source:
-        typeof n.source === "string"
-          ? n.source
-          : (n.source as Record<string, unknown> | undefined)?.name ?? null,
-      date: n.date ?? null,
-      link: n.link ?? null,
-    })),
+    summary: raw.summary ?? null,
+    news_results: raw.news_results ?? null,
   };
 }
 

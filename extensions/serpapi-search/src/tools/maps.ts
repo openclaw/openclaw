@@ -7,21 +7,9 @@ const ALLOWED_PARAMS = ["q", "gl", "hl", "ll", "location", "type", "zero_trace"]
 
 function extract(raw: Record<string, unknown>, maxCount: number): Record<string, unknown> {
   const results = Array.isArray(raw.local_results)
-    ? (raw.local_results as Record<string, unknown>[])
+    ? (raw.local_results as unknown[]).slice(0, maxCount)
     : [];
-  return {
-    engine: "google_maps",
-    results: results.slice(0, maxCount).map((r) => ({
-      name: r.title,
-      rating: r.rating ?? null,
-      reviews: r.reviews ?? null,
-      address: r.address ?? null,
-      type: r.type ?? null,
-      open_state: r.open_state ?? null,
-      phone: r.phone ?? null,
-      website: r.website ?? null,
-    })),
-  };
+  return { engine: "google_maps", results };
 }
 
 export function createSerpApiMapsTool(api: OpenClawPluginApi, ctx?: SerpApiToolCtx) {

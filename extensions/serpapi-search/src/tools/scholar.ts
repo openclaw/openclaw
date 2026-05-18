@@ -7,24 +7,9 @@ const ALLOWED_PARAMS = ["q", "gl", "hl", "as_ylo", "as_yhi", "scisbd", "zero_tra
 
 function extract(raw: Record<string, unknown>, maxCount: number): Record<string, unknown> {
   const results = Array.isArray(raw.organic_results)
-    ? (raw.organic_results as Record<string, unknown>[])
+    ? (raw.organic_results as unknown[]).slice(0, maxCount)
     : [];
-  return {
-    engine: "google_scholar",
-    results: results.slice(0, maxCount).map((r) => ({
-      title: r.title,
-      url: r.link ?? null,
-      publication:
-        (r.publication_info as Record<string, unknown> | undefined)?.summary ?? null,
-      cited_by:
-        (
-          (r.inline_links as Record<string, unknown> | undefined)?.cited_by as
-            | Record<string, unknown>
-            | undefined
-        )?.total ?? null,
-      snippet: r.snippet ?? null,
-    })),
-  };
+  return { engine: "google_scholar", results };
 }
 
 export function createSerpApiScholarTool(api: OpenClawPluginApi, ctx?: SerpApiToolCtx) {

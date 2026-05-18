@@ -9,27 +9,11 @@ const ALLOWED_PARAMS = [
 ] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
-  const best = Array.isArray(raw.best_flights)
-    ? (raw.best_flights as Record<string, unknown>[])
-    : [];
-  const other = Array.isArray(raw.other_flights)
-    ? (raw.other_flights as Record<string, unknown>[])
-    : [];
   return {
     engine: "google_flights",
-    flights: [...best, ...other].map((f) => ({
-      price: f.price ?? null,
-      total_duration_min: f.total_duration ?? null,
-      legs: (Array.isArray(f.flights) ? (f.flights as Record<string, unknown>[]) : []).map(
-        (leg) => ({
-          from: (leg.departure_airport as Record<string, unknown> | undefined)?.id ?? null,
-          to: (leg.arrival_airport as Record<string, unknown> | undefined)?.id ?? null,
-          departs: (leg.departure_airport as Record<string, unknown> | undefined)?.time ?? null,
-          duration_min: leg.duration ?? null,
-          airline: leg.airline ?? null,
-        }),
-      ),
-    })),
+    best_flights: raw.best_flights ?? [],
+    other_flights: raw.other_flights ?? [],
+    price_insights: raw.price_insights ?? null,
   };
 }
 
