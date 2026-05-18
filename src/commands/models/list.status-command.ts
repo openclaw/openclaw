@@ -402,18 +402,17 @@ export async function modelsStatusCommand(
     const syntheticProvidersToProbe = new Set(
       providers.map((provider) => normalizeProviderId(provider)),
     );
-    const codexRuntimeAuthProviders = new Set<string>();
-    for (const usage of providerUses) {
-      if (
+    const codexProvider = normalizeProviderId(OPENAI_CODEX_PROVIDER_ID);
+    const codexProviderAlias = aliasMap[codexProvider] ?? codexProvider;
+    const codexRuntimeAuthUsages = providerUses.filter(
+      (usage) =>
         usage.allowCodexRuntimeFallback &&
-        openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg })
-      ) {
-        const codexProvider = normalizeProviderId(OPENAI_CODEX_PROVIDER_ID);
-        codexRuntimeAuthProviders.add(codexProvider);
-        syntheticProvidersToProbe.add(codexProvider);
-        syntheticProvidersToProbe.add(aliasMap[codexProvider] ?? codexProvider);
-        syntheticProvidersToProbe.add("codex");
-      }
+        openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg }),
+    );
+    if (codexRuntimeAuthUsages.length > 0) {
+      syntheticProvidersToProbe.add(codexProvider);
+      syntheticProvidersToProbe.add(codexProviderAlias);
+      syntheticProvidersToProbe.add("codex");
     }
     for (const provider of syntheticProvidersToProbe) {
       const normalized = normalizeProviderId(provider);
@@ -440,8 +439,7 @@ export async function modelsStatusCommand(
         expiresAt: resolved.expiresAt,
       };
       syntheticAuthByProvider.set(normalized, syntheticAuth);
-      const codexProvider = normalizeProviderId(OPENAI_CODEX_PROVIDER_ID);
-      if (normalized === "codex" || (aliasMap[codexProvider] ?? codexProvider) === normalized) {
+      if (normalized === "codex" || normalized === codexProviderAlias) {
         syntheticAuthByProvider.set(codexProvider, syntheticAuth);
       }
     }
@@ -455,14 +453,14 @@ export async function modelsStatusCommand(
     const shellFallbackEnabled =
       shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
 
-    const providerAuthProviders = new Set(providers);
-    for (const provider of codexRuntimeAuthProviders) {
-      if (syntheticAuthByProvider.has(provider)) {
-        providerAuthProviders.add(provider);
-      }
-    }
-
-    const providerAuth = Array.from(providerAuthProviders)
+    const providerAuth = Array.from(
+      new Set([
+        ...providers,
+        ...(codexRuntimeAuthUsages.length > 0 && syntheticAuthByProvider.has(codexProvider)
+          ? [codexProvider]
+          : []),
+      ]),
+    )
       .toSorted((a, b) => a.localeCompare(b))
       .map((provider) =>
         resolveProviderAuthOverview({
@@ -535,29 +533,22 @@ export async function modelsStatusCommand(
     };
     const runtimeAuthRoutes = Array.from(
       new Map(
-        providerUses
-          .filter(
-            (usage) =>
-              usage.allowCodexRuntimeFallback &&
-              openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg }),
-          )
-          .map((usage) => {
-            const authProvider = normalizeProviderId(OPENAI_CODEX_PROVIDER_ID);
-            const effective = providerAuthMap.get(authProvider)?.effective ?? {
-              kind: "missing" as const,
-              detail: "missing",
-            };
-            return [
-              `${usage.provider}:codex:${authProvider}`,
-              {
-                provider: usage.provider,
-                runtime: "codex",
-                authProvider,
-                status: hasUsableProviderAuth(authProvider) ? "usable" : "missing",
-                effective,
-              },
-            ] as const;
-          }),
+        codexRuntimeAuthUsages.map((usage) => {
+          const effective = providerAuthMap.get(codexProvider)?.effective ?? {
+            kind: "missing" as const,
+            detail: "missing",
+          };
+          return [
+            `${usage.provider}:codex:${codexProvider}`,
+            {
+              provider: usage.provider,
+              runtime: "codex",
+              authProvider: codexProvider,
+              status: hasUsableProviderAuth(codexProvider) ? "usable" : "missing",
+              effective,
+            },
+          ] as const;
+        }),
       ).values(),
     ).toSorted((a, b) => a.provider.localeCompare(b.provider));
     const missingProvidersInUse = Array.from(
