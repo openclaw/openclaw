@@ -2912,6 +2912,7 @@ describe("TelegramPollingSession", () => {
 
     expect(setStatus).toHaveBeenCalledWith({
       mode: "polling",
+      connected: false,
       lastConnectedAt: null,
       lastEventAt: null,
       lastTransportActivityAt: null,
@@ -3016,7 +3017,7 @@ describe("TelegramPollingSession", () => {
     await runPromise;
   });
 
-  it("keeps polling marked connected across recoverable restart cycles", async () => {
+  it("does not clear polling connected status during recoverable restart cycles", async () => {
     const abort = new AbortController();
     const recoverableError = new Error("recoverable polling error");
     const setStatus = vi.fn();
@@ -3077,20 +3078,25 @@ describe("TelegramPollingSession", () => {
     const disconnectedPatches = statusPatches(setStatus).filter(
       (patch) => patch.connected === false,
     );
-    // Only notePollingStop now writes connected:false; notePollingStart no longer
-    // stomps the flag (see polling-status.ts for why).
-    expect(disconnectedPatches).toHaveLength(1);
+    expect(disconnectedPatches).toHaveLength(2);
     expect(disconnectedPatches[0]).toEqual({
+      mode: "polling",
+      connected: false,
+      lastConnectedAt: null,
+      lastEventAt: null,
+      lastTransportActivityAt: null,
+    });
+    expect(disconnectedPatches[1]).toEqual({
       mode: "polling",
       connected: false,
     });
     const cycleStartPatches = setStatus.mock.calls.filter(
       ([patch]) =>
         (patch as Record<string, unknown>).mode === "polling" &&
-        !("connected" in (patch as Record<string, unknown>)) &&
+        (patch as Record<string, unknown>).connected === false &&
         (patch as Record<string, unknown>).lastEventAt === null,
     );
-    expect(cycleStartPatches.length).toBeGreaterThanOrEqual(1);
+    expect(cycleStartPatches).toHaveLength(1);
     expect(cycleStartPatches[0]?.[0]).toMatchObject({
       mode: "polling",
       lastConnectedAt: null,

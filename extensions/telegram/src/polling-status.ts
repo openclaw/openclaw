@@ -9,16 +9,11 @@ type TelegramPollingStatusSink = (patch: Omit<ChannelAccountSnapshot, "accountId
 export function createTelegramPollingStatusPublisher(setStatus?: TelegramPollingStatusSink) {
   return {
     notePollingStart() {
-      // Intentionally do NOT set connected:false here. A new polling cycle has not yet
-      // proven the channel is disconnected; writing false makes channel-health-policy
-      // fire "disconnected" after the channel connect-grace window on busy bots whose
-      // startup handshake (deleteWebhook + confirmPersistedOffset + first long-poll)
-      // races past the grace. Leave connected untouched; notePollingStop is the only
-      // place that should mark the channel disconnected. A startup that never reaches
-      // its first getUpdates is caught instead by the post-grace null-transport branch
-      // in evaluateChannelHealth.
+      // Runtime snapshots are patch-merged, so a fresh polling lifecycle must
+      // explicitly clear a previous connected:true until getUpdates succeeds.
       setStatus?.({
         mode: "polling",
+        connected: false,
         lastConnectedAt: null,
         lastEventAt: null,
         lastTransportActivityAt: null,

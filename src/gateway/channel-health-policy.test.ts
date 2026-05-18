@@ -223,14 +223,11 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 
-  it("flags polling startups that hang before first transport activity", () => {
+  it("flags polling startups that explicitly remain disconnected after grace", () => {
     const evaluation = evaluateChannelHealth(
       {
         running: true,
-        // Patch-merged from previous lifecycle: a polling restart cleared the
-        // transport timestamps but `notePollingStart` deliberately omits
-        // `connected`, so the prior `connected:true` is inherited.
-        connected: true,
+        connected: false,
         enabled: true,
         configured: true,
         mode: "polling",
@@ -246,14 +243,14 @@ describe("evaluateChannelHealth", () => {
         staleEventThresholdMs: 30_000,
       },
     );
-    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+    expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
   });
 
-  it("keeps polling channels healthy during the connect grace even with null transport", () => {
+  it("keeps polling channels healthy during the connect grace before getUpdates succeeds", () => {
     const evaluation = evaluateChannelHealth(
       {
         running: true,
-        connected: true,
+        connected: false,
         enabled: true,
         configured: true,
         mode: "polling",

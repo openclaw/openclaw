@@ -127,24 +127,6 @@ export function evaluateChannelHealth(
       return { healthy: false, reason: "stale-socket" };
     }
   }
-  // Runtime status is patch-merged in server-channels, so a fresh polling start
-  // that clears transport timestamps but omits `connected` inherits the previous
-  // `connected:true`. Without this branch a polling restart that hangs before
-  // its first transport event (e.g. a Telegram long-poll handshake that never
-  // reaches getUpdates) sits past the grace window looking healthy: the stale-
-  // socket check above requires a non-null `lastTransportActivityAt`, and
-  // `connected===false` is masked by the inherited true. Scoped to polling mode
-  // so webhook channels (which never publish continuous transport activity) and
-  // channels without transport tracking are not falsely flagged.
-  if (
-    snapshot.mode === "polling" &&
-    snapshot.connected === true &&
-    lastTransportActivityAt == null &&
-    snapshot.lastConnectedAt == null &&
-    lastStartAt != null
-  ) {
-    return { healthy: false, reason: "stale-socket" };
-  }
   return { healthy: true, reason: "healthy" };
 }
 
