@@ -3817,7 +3817,7 @@ describe("runCodexAppServerAttempt", () => {
       developerInstructions?: string;
       config?: Record<string, unknown>;
     };
-    expect(threadStartParams.config).not.toHaveProperty("project_doc_max_bytes");
+    expect(threadStartParams.config?.project_doc_max_bytes).toBe(0);
     expect(threadStartParams.developerInstructions).not.toContain("Soul voice goes here.");
     expect(threadStartParams.developerInstructions).not.toContain("Follow AGENTS guidance.");
 
