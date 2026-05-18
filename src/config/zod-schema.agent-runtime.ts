@@ -359,7 +359,7 @@ const ToolsWebSearchSchema = z
       .strict()
       .optional(),
   })
-  .strict()
+  .catchall(z.unknown())
   .optional();
 
 const ToolsWebFetchSchema = z

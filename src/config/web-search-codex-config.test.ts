@@ -31,6 +31,29 @@ describe("web search Codex native config validation", () => {
     expect(result.success).toBe(true);
   });
 
+  it("preserves extension-owned tools.web.search entries", () => {
+    const result = validateConfigObjectRaw({
+      tools: {
+        web: {
+          search: {
+            customSearch: {
+              endpoint: "https://search.example.test",
+              mode: "strict",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.tools?.web?.search?.customSearch).toEqual({
+        endpoint: "https://search.example.test",
+        mode: "strict",
+      });
+    }
+  });
+
   it("rejects invalid openaiCodex.mode", () => {
     const result = validateConfigObjectRaw({
       tools: {
