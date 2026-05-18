@@ -9,7 +9,9 @@ const mocks = vi.hoisted(() => ({
   isEmbeddedPiRunActive: vi.fn(),
   isEmbeddedPiRunHandleActive: vi.fn(),
   getCommandLaneSnapshot: vi.fn(),
+  enqueueCommandInLane: vi.fn(async (_lane: string, task: () => Promise<unknown>) => task()),
   resetCommandLane: vi.fn(),
+  callGateway: vi.fn(),
   resolveActiveEmbeddedRunSessionId: vi.fn(),
   resolveActiveEmbeddedRunHandleSessionId: vi.fn(),
   resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
@@ -52,8 +54,13 @@ vi.mock("../agents/pi-embedded-runner/lanes.js", () => ({
 }));
 
 vi.mock("../process/command-queue.js", () => ({
+  enqueueCommandInLane: mocks.enqueueCommandInLane,
   getCommandLaneSnapshot: mocks.getCommandLaneSnapshot,
   resetCommandLane: mocks.resetCommandLane,
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
 }));
 
 vi.mock("./diagnostic-runtime.js", () => ({
@@ -72,6 +79,12 @@ function resetMocks() {
   mocks.isEmbeddedPiRunActive.mockReset();
   mocks.isEmbeddedPiRunHandleActive.mockReset();
   mocks.getCommandLaneSnapshot.mockReset();
+  mocks.enqueueCommandInLane.mockReset();
+  mocks.enqueueCommandInLane.mockImplementation(
+    async (_lane: string, task: () => Promise<unknown>) => task(),
+  );
+  mocks.callGateway.mockReset();
+  mocks.callGateway.mockResolvedValue({ ok: true });
   mocks.getCommandLaneSnapshot.mockReturnValue({
     lane: "session:agent:main:main",
     queuedCount: 1,
@@ -383,6 +396,75 @@ describe("stuck session recovery", () => {
       "stuck session recovery: sessionId=stale-session sessionKey=agent:main:main age=180s action=release_lane aborted=false drained=true released=0",
       "stuck session recovery outcome: status=released action=release_lane sessionId=stale-session sessionKey=agent:main:main lane=session:agent:main:main released=0",
     ]);
+  });
+
+  it("closes a stale unfinished topic turn even when task runs are empty", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-stale-reply-turn-"));
+    const sessionKey = "agent:openclaw:telegram:group:-100:topic:2";
+    try {
+      process.env.OPENCLAW_STATE_DIR = tempDir;
+      const { resolveStateDir } = await import("../config/paths.js");
+      const stateDir = resolveStateDir();
+      const storeDir = path.join(tempDir, "agents", "openclaw", "sessions");
+      const resolvedStoreDir = path.join(stateDir, "agents", "openclaw", "sessions");
+      fs.mkdirSync(storeDir, { recursive: true });
+      fs.mkdirSync(resolvedStoreDir, { recursive: true });
+      const storeJson = JSON.stringify({
+        [sessionKey]: {
+          sessionId: "session-1",
+          replyTurnState: "running",
+          replyTurnStartedAt: Date.now() - 180_000,
+          replyTurnUpdatedAt: Date.now() - 180_000,
+          deliveryContext: {
+            channel: "telegram",
+            to: "-100",
+            threadId: "2",
+          },
+        },
+      });
+      fs.writeFileSync(path.join(storeDir, "sessions.json"), storeJson);
+      fs.writeFileSync(path.join(resolvedStoreDir, "sessions.json"), storeJson);
+      mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+      mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+      mocks.isEmbeddedPiRunActive.mockReturnValue(false);
+      mocks.resetCommandLane.mockReturnValue(0);
+
+      const outcome = await recoverStuckDiagnosticSession({
+        sessionId: "session-1",
+        sessionKey,
+        ageMs: 180_000,
+      });
+
+      expect(outcome.status).toBe("released");
+      expect("reason" in outcome ? outcome.reason : undefined).toBe("stale_reply_turn_closed");
+      expect(mocks.enqueueCommandInLane).toHaveBeenCalledWith("message", expect.any(Function));
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "message.action",
+          params: expect.objectContaining({
+            action: "send",
+            channel: "telegram",
+            idempotencyKey: `stale-reply-turn-recovery:${sessionKey}`,
+            params: expect.objectContaining({
+              to: "-100",
+              threadId: "2",
+              message: expect.stringContaining("interrupted"),
+            }),
+          }),
+        }),
+      );
+      const store = JSON.parse(fs.readFileSync(path.join(storeDir, "sessions.json"), "utf8"));
+      expect(store[sessionKey].replyTurnState).toBe("failed");
+      expect(store[sessionKey].replyTurnLastError).toBe("recovered_after_restart");
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("releases a stale session-id lane when no session key is available", async () => {

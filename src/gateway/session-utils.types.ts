@@ -23,7 +23,14 @@ type GatewayThinkingLevelOption = {
   label: string;
 };
 
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+export type SessionRunStatus =
+  | "running"
+  | "done"
+  | "failed"
+  | "killed"
+  | "timeout"
+  | "lost"
+  | "aborted";
 
 type SubagentRunState = "active" | "interrupted" | "historical";
 
@@ -72,6 +79,7 @@ export type GatewaySessionRow = {
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
   hasActiveRun?: boolean;
+  stalePersistedRunning?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
   startedAt?: number;
