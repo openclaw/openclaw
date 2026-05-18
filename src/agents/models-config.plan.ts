@@ -111,20 +111,37 @@ type ExistingAuthSurfaces = {
   sensitiveHeaders: Map<string, string>;
 };
 
+const SENSITIVE_PROVIDER_HEADER_NAMES = new Set([
+  "authorization",
+  "proxy-authorization",
+  "x-api-key",
+  "api-key",
+  "apikey",
+  "x-auth-token",
+  "auth-token",
+  "x-access-token",
+  "access-token",
+  "x-secret-key",
+  "secret-key",
+]);
+const SENSITIVE_PROVIDER_HEADER_NAME_FRAGMENTS = [
+  "api-key",
+  "apikey",
+  "token",
+  "secret",
+  "password",
+  "credential",
+];
+
 function shouldPersistProviderApiKey(value: unknown): value is string {
   return typeof value === "string" && isNonSecretApiKeyMarker(value);
 }
 
 function isSensitiveProviderHeaderName(headerName: string): boolean {
   const normalized = headerName.trim().toLowerCase();
-  return (
-    normalized === "authorization" ||
-    normalized === "proxy-authorization" ||
-    normalized === "api-key" ||
-    normalized === "x-api-key" ||
-    normalized === "x-goog-api-key" ||
-    normalized === "anthropic-api-key" ||
-    normalized.endsWith("-api-key")
+  return normalized !== "" && (
+    SENSITIVE_PROVIDER_HEADER_NAMES.has(normalized) ||
+    SENSITIVE_PROVIDER_HEADER_NAME_FRAGMENTS.some((fragment) => normalized.includes(fragment))
   );
 }
 

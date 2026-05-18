@@ -260,6 +260,8 @@ describe("models-config", () => {
                 headers: {
                   Authorization: "Bearer sk-config-header", // pragma: allowlist secret
                   "X-Api-Key": "sk-config-header-key", // pragma: allowlist secret
+                  "X-Auth-Token": "sk-config-auth-token", // pragma: allowlist secret
+                  "X-Secret-Key": "sk-config-secret-key", // pragma: allowlist secret
                   "X-Tenant": "tenant-a",
                 },
                 models: [
@@ -297,6 +299,7 @@ describe("models-config", () => {
               apiKey: "sk-existing-plaintext", // pragma: allowlist secret
               headers: {
                 Authorization: "Bearer sk-existing-header", // pragma: allowlist secret
+                "X-Secret-Key": "sk-existing-secret-header", // pragma: allowlist secret
               },
               models: [],
             },
@@ -322,9 +325,10 @@ describe("models-config", () => {
       "secretref-env:OPENAI_PROXY_TOKEN",
     );
     expect(parsed.providers?.legacy?.apiKey).toBe("sk-existing-plaintext"); // pragma: allowlist secret
-    expect(parsed.providers?.legacy?.headers?.Authorization).toBe(
-      "Bearer sk-existing-header",
-    ); // pragma: allowlist secret
+    expect(parsed.providers?.legacy?.headers).toEqual({
+      Authorization: "Bearer sk-existing-header", // pragma: allowlist secret
+      "X-Secret-Key": "sk-existing-secret-header", // pragma: allowlist secret
+    });
   });
 
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
