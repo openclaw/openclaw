@@ -243,11 +243,10 @@ function extractMarkerField(marker, name) {
 }
 
 function isTrustedClawSweeperComment(comment) {
-  const user = comment?.user ?? comment?.author ?? {};
-  const login = String(user?.login ?? "").toLowerCase();
-  const type = String(user?.type ?? "").toLowerCase();
-  const appSlug = String(comment?.performed_via_github_app?.slug ?? "").toLowerCase();
-  return appSlug === "clawsweeper" || (login === "clawsweeper[bot]" && type === "bot");
+  const appSlug = String(
+    comment?.performed_via_github_app?.slug ?? comment?.performedViaGithubApp?.slug ?? "",
+  ).toLowerCase();
+  return appSlug === "clawsweeper";
 }
 
 export function hasClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}) {

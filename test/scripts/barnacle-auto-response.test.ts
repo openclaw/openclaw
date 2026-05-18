@@ -135,7 +135,11 @@ function barnacleGithub(
     maintainerLogins?: string[];
     removeLabelNotFound?: string[];
     repositoryRoles?: Record<string, string>;
-    comments?: Array<{ body: string; user?: { login: string; type: string } }>;
+    comments?: Array<{
+      body: string;
+      performed_via_github_app?: { slug: string };
+      user?: { login: string; type: string };
+    }>;
   } = {},
 ) {
   const maintainerLogins = new Set(
@@ -796,6 +800,9 @@ describe("barnacle-auto-response", () => {
           user: {
             login: "clawsweeper[bot]",
             type: "Bot",
+          },
+          performed_via_github_app: {
+            slug: "clawsweeper",
           },
           body: `<!-- clawsweeper-verdict:pass item=123 sha=${headSha} confidence=high -->`,
         },
