@@ -9,7 +9,7 @@ import { listChannelPluginCatalogEntries } from "../../../channels/plugins/catal
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
-import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
+import { isOpenClawOrgNpmSpec, parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
 import {
   normalizeUpdateChannel,
   resolveRegistryUpdateChannel,
@@ -80,11 +80,17 @@ const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
   "requires compiled runtime output",
 ] as const;
 
-function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boolean {
+function shouldFallbackClawHubToNpm(params: {
+  result: { ok: false; code?: string };
+  npmSpec?: string;
+}): boolean {
+  if (!isOpenClawOrgNpmSpec(params.npmSpec)) {
+    return false;
+  }
   return (
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND ||
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_DOWNLOAD_UNAVAILABLE
+    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
+    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND ||
+    params.result.code === CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_DOWNLOAD_UNAVAILABLE
   );
 }
 
@@ -795,7 +801,10 @@ async function installCandidate(params: {
         warnings: [],
       };
     }
-    if (!npmInstallSpec || !shouldFallbackClawHubToNpm(clawhubResult)) {
+    if (
+      !npmInstallSpec ||
+      !shouldFallbackClawHubToNpm({ result: clawhubResult, npmSpec: npmInstallSpec })
+    ) {
       return {
         records: params.records,
         changes: [],
