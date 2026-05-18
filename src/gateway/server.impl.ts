@@ -88,7 +88,7 @@ import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
-import type { GatewayRequestHandlers } from "./server-methods/types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
@@ -833,6 +833,7 @@ export async function startGatewayServer(
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
     resolveStartupChannelRuntime: getStartupChannelRuntime,
+    getPluginHttpRouteRegistry: () => pluginRegistry,
     startupTrace,
   });
   const getReadiness = createReadinessChecker({
@@ -846,6 +847,7 @@ export async function startGatewayServer(
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
   log.info("starting HTTP server...");
+  let currentPluginRegistryGatewayContext: GatewayRequestContext | undefined;
   const {
     releasePluginRouteRegistry,
     httpServer,
@@ -887,6 +889,8 @@ export async function startGatewayServer(
       hooksConfig: () => runtimeState?.hooksConfig ?? initialHooksConfig,
       getHookClientIpConfig: () => runtimeState?.hookClientIpConfig ?? initialHookClientIpConfig,
       pluginRegistry,
+      getPluginRouteRegistry: () => pluginRegistry,
+      getGatewayRequestContext: () => currentPluginRegistryGatewayContext,
       pinChannelRegistry: !minimalTestGateway,
       deps,
       log,
@@ -1388,6 +1392,7 @@ export async function startGatewayServer(
       unavailableGatewayMethods,
       broadcastVoiceWakeRoutingChanged,
     });
+    currentPluginRegistryGatewayContext = gatewayRequestContext;
 
     const fallbackGatewayContextCleanup: unknown = setFallbackGatewayContextResolver(
       () => gatewayRequestContext,

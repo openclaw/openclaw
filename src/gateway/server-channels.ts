@@ -18,6 +18,8 @@ import {
   runtimeForLogger,
   type SubsystemLogger,
 } from "../logging/subsystem.js";
+import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
+import type { PluginRegistry } from "../plugins/registry.js";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -187,6 +189,7 @@ type ChannelManagerOptions = {
    * the full reply/routing/session runtime graph onto the critical path.
    */
   resolveStartupChannelRuntime?: () => ChannelRuntimeSurface | Promise<ChannelRuntimeSurface>;
+  getPluginHttpRouteRegistry?: () => PluginRegistry;
   startupTrace?: GatewayStartupTrace;
 };
 
@@ -219,6 +222,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     channelRuntime,
     resolveChannelRuntime,
     resolveStartupChannelRuntime,
+    getPluginHttpRouteRegistry,
     startupTrace,
   } = opts;
 
@@ -528,17 +532,22 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             let startAccountTask: ReturnType<typeof startAccount> | undefined;
             await measureStartup(`channels.${channelId}.start-account-handoff`, () => {
-              startAccountTask = startAccount({
-                cfg,
-                accountId: id,
-                account,
-                runtime,
-                abortSignal: abort.signal,
-                log,
-                getStatus: () => getRuntime(channelId, id),
-                setStatus: (next) => setRuntime(channelId, id, next),
-                ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
-              });
+              const runStartAccount = () =>
+                startAccount({
+                  cfg,
+                  accountId: id,
+                  account,
+                  runtime,
+                  abortSignal: abort.signal,
+                  log,
+                  getStatus: () => getRuntime(channelId, id),
+                  setStatus: (next) => setRuntime(channelId, id, next),
+                  ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
+                });
+              const routeRegistry = getPluginHttpRouteRegistry?.();
+              startAccountTask = routeRegistry
+                ? withPluginHttpRouteRegistry(routeRegistry, runStartAccount)
+                : runStartAccount();
             });
             await startAccountTask;
           });
