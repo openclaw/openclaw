@@ -19,6 +19,7 @@ import {
   resolveSessionAgentIdMock,
   resolveSessionAgentIdsMock,
   rotateTranscriptAfterCompactionMock,
+  rotateTranscriptFileAfterCompactionMock,
   resetCompactHooksHarnessMocks,
   resetCompactSessionStateMocks,
   sessionAbortCompactionMock,
@@ -1323,6 +1324,70 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       authProfileId: "openai:p1",
       currentTokenCount: 333,
     });
+  });
+
+  it("rotates the active transcript after harness compaction without a delegated successor and emits side effects", async () => {
+    const listener = vi.fn();
+    const cleanup = onSessionTranscriptUpdate(listener);
+    const sync = vi.fn(async () => {});
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "",
+        firstKeptEntryId: "",
+        tokensBefore: 333,
+        details: { backend: "codex-app-server" },
+      },
+    });
+    rotateTranscriptFileAfterCompactionMock.mockResolvedValueOnce({
+      rotated: true,
+      sessionId: "rotated-session",
+      sessionFile: "/tmp/rotated-session.jsonl",
+      leafId: "leaf-1",
+    });
+
+    try {
+      const result = await compactEmbeddedPiSession(
+        wrappedCompactionArgs({
+          currentTokenCount: 333,
+          config: {
+            agents: {
+              defaults: {
+                compaction: {
+                  truncateAfterCompaction: true,
+                  postIndexSync: "await",
+                },
+              },
+            },
+          } as never,
+        }),
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.compacted).toBe(true);
+      expect(rotateTranscriptFileAfterCompactionMock).toHaveBeenCalledWith({
+        sessionFile: TEST_SESSION_FILE,
+        synthesizeMissingBoundary: true,
+      });
+      expect(result.result?.sessionId).toBe("rotated-session");
+      expect(result.result?.sessionFile).toBe("/tmp/rotated-session.jsonl");
+      expect(result.result?.tokensBefore).toBe(333);
+      expect(result.result?.details).toEqual({ backend: "codex-app-server" });
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith({
+        sessionFile: "/tmp/rotated-session.jsonl",
+        sessionKey: TEST_SESSION_KEY,
+      });
+      expect(sync).toHaveBeenCalledTimes(1);
+      expect(sync).toHaveBeenCalledWith({
+        reason: "post-compaction",
+        sessionFiles: ["/tmp/rotated-session.jsonl"],
+      });
+    } finally {
+      cleanup();
+    }
   });
 
   it("does not fire after_compaction when compaction fails", async () => {

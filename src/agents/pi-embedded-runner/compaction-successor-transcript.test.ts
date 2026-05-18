@@ -314,6 +314,52 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(result.reason).toBe("no compaction entry");
   });
 
+  it("can synthesize a compaction boundary for external harness compaction", async () => {
+    const dir = await createTmpDir();
+    const manager = SessionManager.create(dir, dir);
+    for (let index = 1; index <= 45; index += 1) {
+      manager.appendMessage({
+        role: "user",
+        content: `message ${index}`,
+        timestamp: index,
+      });
+    }
+
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile: requireString(manager.getSessionFile(), "source session file"),
+      synthesizeMissingBoundary: true,
+      now: () => new Date("2026-04-27T12:20:00.000Z"),
+    });
+
+    expect(result.rotated).toBe(true);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
+    const context = successor.buildSessionContext().messages;
+    expect(context[0]).toMatchObject({
+      role: "compactionSummary",
+      summary: expect.stringContaining("external harness compacted this thread"),
+      tokensBefore: 0,
+    });
+    const contextText = JSON.stringify(context);
+    expect(contextText).not.toContain("message 5");
+    expect(contextText).toContain("message 6");
+    expect(contextText).toContain("message 45");
+
+    const compaction = requireEntryByType(
+      successor.getEntries(),
+      "compaction",
+      "synthetic compaction entry",
+    );
+    expect(compaction.details).toEqual({
+      external: true,
+      synthetic: true,
+      reason: "external compaction without transcript boundary",
+    });
+    expect(compaction.fromHook).toBe(true);
+  });
+
   it("uses a refreshed manager after manual boundary hardening", async () => {
     const dir = await createTmpDir();
     const manager = SessionManager.create(dir, dir);

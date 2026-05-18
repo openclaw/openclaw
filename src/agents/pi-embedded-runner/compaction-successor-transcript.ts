@@ -17,7 +17,15 @@ import {
 type ReadonlySessionManagerForRotation = Pick<
   TranscriptFileState,
   "buildSessionContext" | "getBranch" | "getCwd" | "getEntries" | "getHeader"
->;
+> & {
+  appendCompaction(
+    summary: string,
+    firstKeptEntryId: string,
+    tokensBefore: number,
+    details?: unknown,
+    fromHook?: boolean,
+  ): unknown;
+};
 
 export type CompactionTranscriptRotation = {
   rotated: boolean;
@@ -29,6 +37,10 @@ export type CompactionTranscriptRotation = {
   entriesWritten?: number;
 };
 
+const SYNTHETIC_COMPACTION_TAIL_MESSAGE_COUNT = 40;
+const SYNTHETIC_COMPACTION_SUMMARY =
+  "An external harness compacted this thread without writing an OpenClaw transcript boundary. Earlier transcript entries remain in the archived parent session file; this successor preserves the recent unsummarized tail for UI and history continuity.";
+
 export function shouldRotateCompactionTranscript(config?: OpenClawConfig): boolean {
   return config?.agents?.defaults?.compaction?.truncateAfterCompaction === true;
 }
@@ -36,6 +48,7 @@ export function shouldRotateCompactionTranscript(config?: OpenClawConfig): boole
 export async function rotateTranscriptAfterCompaction(params: {
   sessionManager: ReadonlySessionManagerForRotation;
   sessionFile: string;
+  synthesizeMissingBoundary?: boolean;
   now?: () => Date;
 }): Promise<CompactionTranscriptRotation> {
   const sessionFile = params.sessionFile.trim();
@@ -43,8 +56,26 @@ export async function rotateTranscriptAfterCompaction(params: {
     return { rotated: false, reason: "missing session file" };
   }
 
-  const branch = params.sessionManager.getBranch();
-  const latestCompactionIndex = findLatestCompactionIndex(branch);
+  let branch = params.sessionManager.getBranch();
+  let latestCompactionIndex = findLatestCompactionIndex(branch);
+  if (latestCompactionIndex < 0 && params.synthesizeMissingBoundary === true) {
+    const firstKeptEntryId = findSyntheticCompactionFirstKeptEntryId(branch);
+    if (firstKeptEntryId) {
+      params.sessionManager.appendCompaction(
+        SYNTHETIC_COMPACTION_SUMMARY,
+        firstKeptEntryId,
+        0,
+        {
+          external: true,
+          synthetic: true,
+          reason: "external compaction without transcript boundary",
+        },
+        true,
+      );
+      branch = params.sessionManager.getBranch();
+      latestCompactionIndex = findLatestCompactionIndex(branch);
+    }
+  }
   if (latestCompactionIndex < 0) {
     return { rotated: false, reason: "no compaction entry" };
   }
@@ -88,14 +119,33 @@ export async function rotateTranscriptAfterCompaction(params: {
 
 export async function rotateTranscriptFileAfterCompaction(params: {
   sessionFile: string;
+  synthesizeMissingBoundary?: boolean;
   now?: () => Date;
 }): Promise<CompactionTranscriptRotation> {
   const state = await readTranscriptFileState(params.sessionFile);
   return rotateTranscriptAfterCompaction({
     sessionManager: state,
     sessionFile: params.sessionFile,
+    ...(params.synthesizeMissingBoundary
+      ? { synthesizeMissingBoundary: params.synthesizeMissingBoundary }
+      : {}),
     ...(params.now ? { now: params.now } : {}),
   });
+}
+
+function findSyntheticCompactionFirstKeptEntryId(branch: SessionEntry[]): string | undefined {
+  let seenMessages = 0;
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = branch[index];
+    if (!entry || entry.type !== "message") {
+      continue;
+    }
+    seenMessages += 1;
+    if (seenMessages >= SYNTHETIC_COMPACTION_TAIL_MESSAGE_COUNT) {
+      return entry.id;
+    }
+  }
+  return branch.find((entry) => entry.type === "message")?.id;
 }
 
 function findLatestCompactionIndex(entries: SessionEntry[]): number {

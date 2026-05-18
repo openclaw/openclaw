@@ -119,8 +119,12 @@ export async function compactEmbeddedPiSession(
     contextEngineRuntimeContext,
   });
   if (harnessResult) {
+    const finalizedHarnessResult = await finalizeHarnessCompactionTranscript({
+      params,
+      result: harnessResult,
+    });
     await contextEngine.dispose?.();
-    return harnessResult;
+    return finalizedHarnessResult;
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
@@ -200,6 +204,7 @@ export async function compactEmbeddedPiSession(
             try {
               const rotation = await rotateTranscriptFileAfterCompaction({
                 sessionFile: params.sessionFile,
+                synthesizeMissingBoundary: true,
               });
               if (rotation.rotated) {
                 postCompactionSessionId = rotation.sessionId ?? postCompactionSessionId;
@@ -316,6 +321,69 @@ export async function compactEmbeddedPiSession(
       }
     }),
   );
+}
+
+async function finalizeHarnessCompactionTranscript(params: {
+  params: CompactEmbeddedPiSessionParams;
+  result: EmbeddedPiCompactResult;
+}): Promise<EmbeddedPiCompactResult> {
+  const { result } = params;
+  if (!result.ok || !result.compacted || !shouldRotateCompactionTranscript(params.params.config)) {
+    return result;
+  }
+
+  const delegatedSessionId = result.result?.sessionId;
+  const delegatedSessionFile = result.result?.sessionFile;
+  const delegatedRotatedTranscript =
+    (typeof delegatedSessionId === "string" && delegatedSessionId !== params.params.sessionId) ||
+    (typeof delegatedSessionFile === "string" &&
+      delegatedSessionFile !== params.params.sessionFile);
+  if (delegatedRotatedTranscript) {
+    return result;
+  }
+
+  try {
+    const rotation = await rotateTranscriptFileAfterCompaction({
+      sessionFile: params.params.sessionFile,
+      synthesizeMissingBoundary: true,
+    });
+    if (!rotation.rotated) {
+      return result;
+    }
+    const postCompactionSessionFile = rotation.sessionFile ?? params.params.sessionFile;
+    log.info(
+      `[compaction] rotated active transcript after harness compaction ` +
+        `(sessionKey=${params.params.sessionKey ?? params.params.sessionId})`,
+    );
+    await runPostCompactionSideEffects({
+      config: params.params.config,
+      sessionKey: params.params.sessionKey,
+      sessionFile: postCompactionSessionFile,
+    });
+    return {
+      ...result,
+      result: {
+        summary: result.result?.summary ?? "",
+        firstKeptEntryId: result.result?.firstKeptEntryId ?? "",
+        tokensBefore: result.result?.tokensBefore ?? params.params.currentTokenCount ?? 0,
+        ...(result.result?.tokensAfter !== undefined
+          ? { tokensAfter: result.result.tokensAfter }
+          : {}),
+        ...(result.result?.details !== undefined ? { details: result.result.details } : {}),
+        ...(rotation.sessionId && rotation.sessionId !== params.params.sessionId
+          ? { sessionId: rotation.sessionId }
+          : {}),
+        ...(postCompactionSessionFile !== params.params.sessionFile
+          ? { sessionFile: postCompactionSessionFile }
+          : {}),
+      },
+    };
+  } catch (err) {
+    log.warn("failed to rotate compacted harness transcript", {
+      errorMessage: formatErrorMessage(err),
+    });
+    return result;
+  }
 }
 
 function buildCompactionContextEngineRuntimeContext(params: {
