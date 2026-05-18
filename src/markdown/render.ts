@@ -1,7 +1,7 @@
 import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir.js";
 
 export type RenderStyleMarker = {
-  open: string;
+  open: string | ((span: MarkdownStyleSpan) => string);
   close: string;
 };
 
@@ -44,6 +44,10 @@ function sortStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
     }
     return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
   });
+}
+
+function renderStyleMarkerOpen(marker: RenderStyleMarker, span: MarkdownStyleSpan): string {
+  return typeof marker.open === "function" ? marker.open(span) : marker.open;
 }
 
 export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions): string {
@@ -153,7 +157,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
         }
         openingItems.push({
           end: span.end,
-          open: marker.open,
+          open: renderStyleMarkerOpen(marker, span),
           close: marker.close,
           kind: "style",
           style: span.style,

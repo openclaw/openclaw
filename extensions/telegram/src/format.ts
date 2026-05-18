@@ -6,6 +6,7 @@ import {
   markdownToIR,
   type MarkdownLinkSpan,
   type MarkdownIR,
+  type MarkdownStyleSpan,
   renderMarkdownIRChunksWithinLimit,
 } from "openclaw/plugin-sdk/text-chunking";
 import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-chunking";
@@ -25,6 +26,14 @@ function escapeHtml(text: string): string {
 
 function escapeHtmlAttr(text: string): string {
   return escapeHtml(text).replace(/"/g, "&quot;");
+}
+
+function buildTelegramCodeBlockOpen(span: MarkdownStyleSpan): string {
+  const language = span.language?.trim();
+  if (!language) {
+    return "<pre><code>";
+  }
+  return `<pre><code class="language-${escapeHtmlAttr(language)}">`;
 }
 
 /**
@@ -67,7 +76,7 @@ function renderTelegramHtml(ir: MarkdownIR): string {
       italic: { open: "<i>", close: "</i>" },
       strikethrough: { open: "<s>", close: "</s>" },
       code: { open: "<code>", close: "</code>" },
-      code_block: { open: "<pre><code>", close: "</code></pre>" },
+      code_block: { open: buildTelegramCodeBlockOpen, close: "</code></pre>" },
       spoiler: { open: "<tg-spoiler>", close: "</tg-spoiler>" },
       blockquote: { open: "<blockquote>", close: "</blockquote>" },
     },
@@ -180,13 +189,13 @@ const TELEGRAM_SIMPLE_HTML_TAGS = new Set([
   "s",
   "strike",
   "del",
-  "code",
   "pre",
   "tg-spoiler",
   "blockquote",
 ]);
 const TELEGRAM_ATTR_HTML_TAG_PATTERNS = new Map([
   ["a", /^\s+href="[^"]+"\s*$/],
+  ["code", /^(?:\s+class="language-[^"]+")?\s*$/],
   ["span", /^\s+class="tg-spoiler"\s*$/],
   ["tg-emoji", /^\s+emoji-id="[^"]+"\s*$/],
   ["tg-time", /^\s+datetime="[^"]+"\s*$/],
