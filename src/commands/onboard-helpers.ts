@@ -17,7 +17,7 @@ import {
   resolveBrowserOpenCommand,
 } from "../infra/browser-open.js";
 import { detectBinary } from "../infra/detect-binary.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { movePathToTrash } from "../plugin-sdk/browser-maintenance.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { visibleWidth } from "../terminal/ansi.js";
@@ -255,26 +255,12 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
     return;
   }
   try {
-    await runCommandWithTimeout(["trash", pathname], { timeoutMs: 5000 });
+    await movePathToTrash(pathname);
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
-    return;
-  } catch {
-    // #83459: `trash` is not installed in every environment (notably the
-    // official Docker image, which intentionally keeps default apt packages
-    // minimal and lets operators add extras via OPENCLAW_IMAGE_APT_PACKAGES).
-    // Previously the failure path only logged and left the path on disk,
-    // producing silent leaks of `agents delete`-d workspaces and config
-    // dirs. Fall back to an unrecoverable `fs.rm({recursive,force})` so the
-    // operation completes its semantic contract; surface the fallback in
-    // the log so operators see the trash-vs-rm distinction.
-  }
-  try {
-    await fs.rm(pathname, { recursive: true, force: true });
-    runtime.log(`Deleted (trash unavailable): ${shortenHomePath(pathname)}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     runtime.log(
-      `Failed to delete ${shortenHomePath(pathname)}: ${message} (manually remove if needed)`,
+      `Failed to move to Trash ${shortenHomePath(pathname)}: ${message} (manually remove if needed)`,
     );
   }
 }

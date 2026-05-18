@@ -31,6 +31,10 @@ const mocks = vi.hoisted(() => ({
   })),
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
   probeGateway: vi.fn(),
+  movePathToTrash: vi.fn(async (targetPath: string) => {
+    fs.rmSync(targetPath, { recursive: true, force: true });
+    return path.join(os.tmpdir(), "openclaw-trash", path.basename(targetPath));
+  }),
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -43,6 +47,10 @@ vi.mock("../infra/tailnet.js", () => ({
 
 vi.mock("../gateway/probe.js", () => ({
   probeGateway: mocks.probeGateway,
+}));
+
+vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
+  movePathToTrash: mocks.movePathToTrash,
 }));
 
 afterEach(() => {
@@ -91,7 +99,7 @@ describe("handleReset", () => {
 
     await handleReset("full", workspaceDir, runtime);
 
-    const trashedPaths = mocks.runCommandWithTimeout.mock.calls.map(([argv]) => argv[1]);
+    const trashedPaths = mocks.movePathToTrash.mock.calls.map(([pathname]) => pathname);
     expect(trashedPaths).toEqual([
       profileConfigPath,
       profileCredentialsDir,
@@ -103,43 +111,35 @@ describe("handleReset", () => {
 });
 
 describe("moveToTrash", () => {
-  it("falls back to fs.rm when `trash` is unavailable (#83459)", async () => {
+  it("uses the shared fs-safe Trash helper when PATH trash is unavailable (#83459)", async () => {
     // Reproduces the official Docker image scenario: `trash-cli` is not
-    // installed, so the `trash` command rejects with ENOENT (or similar
-    // spawn failure). Previously this left the directory on disk and only
-    // logged a "manual delete" message — silent leak per #83459.
+    // installed. The command cleanup path must not depend on a PATH-resolved
+    // `trash` binary, and it must preserve Trash-style semantics.
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-fallback-"));
     const targetDir = path.join(tmpRoot, "agent-workspace");
     fs.mkdirSync(targetDir, { recursive: true });
     fs.writeFileSync(path.join(targetDir, "session.jsonl"), "{}\n");
-
-    mocks.runCommandWithTimeout.mockRejectedValueOnce(
-      Object.assign(new Error("spawn trash ENOENT"), { code: "ENOENT" }),
-    );
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
 
     await moveToTrash(targetDir, runtime);
 
     expect(fs.existsSync(targetDir)).toBe(false);
+    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(targetDir);
     const logMessages = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
       .map((call) => String(call[0]))
       .join("\n");
-    expect(logMessages).toContain("Deleted (trash unavailable)");
+    expect(logMessages).toContain("Moved to Trash:");
 
     // Cleanup
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  it("uses `trash` when available and does not fall back (#83459 — happy path)", async () => {
-    // Negative-control: when `trash` succeeds, the fallback must NOT run.
+  it("does not invoke a PATH-resolved trash command (#83459)", async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-ok-"));
     const targetDir = path.join(tmpRoot, "agent-workspace-ok");
     fs.mkdirSync(targetDir, { recursive: true });
 
-    // Default mock resolves with code:0 — simulates trash-cli present.
-    // But: trash doesn't actually move the dir in the test, so the dir
-    // still exists. We assert the log message reflects the trash path,
-    // not the fallback.
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
     await moveToTrash(targetDir, runtime);
 
@@ -147,24 +147,20 @@ describe("moveToTrash", () => {
       .map((call) => String(call[0]))
       .join("\n");
     expect(logMessages).toContain("Moved to Trash:");
-    expect(logMessages).not.toContain("Deleted (trash unavailable)");
+    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
 
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  it("logs and returns when neither trash nor fs.rm succeeds (#83459 — degraded)", async () => {
-    // Extreme-degraded case: trash fails AND fs.rm fails (e.g., permission
+  it("logs and returns when the shared Trash helper fails (#83459 — degraded)", async () => {
+    // Extreme-degraded case: movePathToTrash fails (e.g., permission
     // denied on a read-only mount). Should log the failure with the actual
     // error message instead of corrupting state.
-    const fakePath = "/nonexistent/path/that/cannot/be/removed";
-    // First need fs.access to succeed (or function returns early). Use a real
-    // temp path that exists, then point fs.rm at a path we can't remove.
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-fail-"));
     const targetDir = path.join(tmpRoot, "exists");
     fs.mkdirSync(targetDir, { recursive: true });
 
-    mocks.runCommandWithTimeout.mockRejectedValueOnce(new Error("spawn trash ENOENT"));
-    const rmSpy = vi.spyOn(fs.promises, "rm").mockRejectedValueOnce(
+    mocks.movePathToTrash.mockRejectedValueOnce(
       Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }),
     );
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
@@ -174,12 +170,10 @@ describe("moveToTrash", () => {
     const logMessages = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
       .map((call) => String(call[0]))
       .join("\n");
-    expect(logMessages).toContain("Failed to delete");
+    expect(logMessages).toContain("Failed to move to Trash");
     expect(logMessages).toContain("EACCES: permission denied");
 
-    rmSpy.mockRestore();
     fs.rmSync(tmpRoot, { recursive: true, force: true });
-    void fakePath;
   });
 });
 
