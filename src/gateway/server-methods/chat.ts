@@ -1516,10 +1516,14 @@ function areMediaSourcesEquivalent(left: string, right: string): boolean {
 }
 
 function rawMediaDirectiveCandidates(text: string): string[] {
-  return Array.from(text.matchAll(/\bMEDIA:\s*`?([^\n`]+)`?/gi))
-    .flatMap((match) => (match[1] ?? "").split(/\s+/))
-    .map((candidate) => candidate.trim())
-    .filter(Boolean);
+  const candidates = splitMediaFromOutput(text).mediaUrls ?? [];
+  for (const match of text.matchAll(/\bMEDIA:\s*`?([^\n`]+)`?/gi)) {
+    const candidate = (match[1] ?? "").trim();
+    if (candidate.startsWith("data:")) {
+      candidates.push(candidate);
+    }
+  }
+  return Array.from(new Set(candidates.map((candidate) => candidate.trim()).filter(Boolean)));
 }
 
 function payloadHasMediaDirectiveText(text: string, payloadMediaUrls: Set<string>): boolean {
@@ -1533,7 +1537,10 @@ function stripMediaDirectiveTextFromMediaSupplement(payload: ReplyPayload): Repl
     return payload;
   }
   const payloadMediaUrls = payloadMediaUrlSet(payload);
-  if (payloadMediaUrls.size === 0 || !payloadHasMediaDirectiveText(payload.text, payloadMediaUrls)) {
+  if (
+    payloadMediaUrls.size === 0 ||
+    !payloadHasMediaDirectiveText(payload.text, payloadMediaUrls)
+  ) {
     return payload;
   }
   const lines = payload.text.split("\n").filter((line) => {
@@ -1591,7 +1598,9 @@ async function replaceLatestAssistantMediaDirectiveTranscriptMessage(params: {
     const matchPayload = params.matchPayload ?? params.payload;
     const latest = index?.entries
       .toReversed()
-      .find((entry) => (entry.record.message as { role?: unknown } | undefined)?.role === "assistant");
+      .find(
+        (entry) => (entry.record.message as { role?: unknown } | undefined)?.role === "assistant",
+      );
     if (!latest?.id) {
       return { replaced: false };
     }

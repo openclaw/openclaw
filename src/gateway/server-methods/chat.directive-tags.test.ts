@@ -1102,6 +1102,70 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(assistantMessagesAfterRetry).toHaveLength(1);
   });
 
+  it("replaces raw agent MEDIA replies whose local path contains spaces", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-media-spaced-");
+    const mediaUrl = path.join(transcriptDir, "reply with spaces.png");
+    fs.writeFileSync(
+      mediaUrl,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    const rawText = `Here is the image.\nMEDIA:${mediaUrl}`;
+    const rawAssistantMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawText }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: Date.now(),
+      stopReason: "stop",
+    };
+    SessionManager.open(mockState.transcriptPath).appendMessage(rawAssistantMessage);
+    mockState.triggerAgentRunStart = true;
+    mockState.finalPayload = {
+      text: rawText,
+      mediaUrl: `file://${mediaUrl}`,
+      trustedLocalMedia: true,
+    };
+
+    await runNonStreamingChatSend({
+      context: createChatContext(),
+      respond: vi.fn(),
+      idempotencyKey: "idem-agent-media-spaced-replace",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const branch = SessionManager.open(mockState.transcriptPath).getBranch();
+    const assistantMessages = branch.filter(
+      (entry): entry is SessionMessageEntry =>
+        entry.type === "message" && entry.message.role === "assistant",
+    );
+    expect(assistantMessages).toHaveLength(1);
+    expect(JSON.stringify(assistantMessages[0]?.message)).toContain("Here is the image.");
+    expect(JSON.stringify(assistantMessages[0]?.message)).not.toContain(`MEDIA:${mediaUrl}`);
+    expect(JSON.stringify(assistantMessages[0]?.message)).toContain(
+      "idem-agent-media-spaced-replace:assistant-media",
+    );
+  });
+
   it("does not replace older matching MEDIA transcript replies after a newer assistant turn", async () => {
     const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-media-current-only-");
     const mediaUrl = path.join(transcriptDir, "reply.png");
