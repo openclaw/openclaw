@@ -12,7 +12,7 @@ import {
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { renderWikiMarkdown, type WikiPageSummary } from "./markdown.js";
+import { renderWikiMarkdown, slugifyWikiSegment, type WikiPageSummary } from "./markdown.js";
 
 type MemoryWikiLintIssue = {
   severity: "error" | "warning";
@@ -50,19 +50,43 @@ function toExpectedPageType(page: WikiPageSummary): string {
   return page.kind;
 }
 
+function normalizeLinkTarget(value: string): string {
+  return value
+    .normalize("NFKC")
+    .trim()
+    .replace(/[\u2010-\u2015]/g, "-")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function addValidLinkTarget(validTargets: Set<string>, target: string | undefined): void {
+  const trimmed = target?.trim();
+  if (!trimmed) {
+    return;
+  }
+  validTargets.add(trimmed);
+  validTargets.add(normalizeLinkTarget(trimmed));
+}
+
 function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
   const validTargets = new Set<string>();
   for (const page of pages) {
     const withoutExtension = page.relativePath.replace(/\.md$/i, "");
-    validTargets.add(page.relativePath);
-    validTargets.add(withoutExtension);
-    validTargets.add(path.basename(withoutExtension));
+    addValidLinkTarget(validTargets, page.relativePath);
+    addValidLinkTarget(validTargets, withoutExtension);
+    addValidLinkTarget(validTargets, path.basename(withoutExtension));
+    addValidLinkTarget(validTargets, page.title);
+    addValidLinkTarget(validTargets, slugifyWikiSegment(page.title));
+    for (const alias of page.aliases) {
+      addValidLinkTarget(validTargets, alias);
+      addValidLinkTarget(validTargets, slugifyWikiSegment(alias));
+    }
   }
 
   const issues: MemoryWikiLintIssue[] = [];
   for (const page of pages) {
     for (const linkTarget of page.linkTargets) {
-      if (!validTargets.has(linkTarget)) {
+      if (!validTargets.has(linkTarget) && !validTargets.has(normalizeLinkTarget(linkTarget))) {
         issues.push({
           severity: "warning",
           category: "links",

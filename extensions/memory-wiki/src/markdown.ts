@@ -107,6 +107,9 @@ const RELATED_BLOCK_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
   "g",
 );
+const FENCED_CODE_BLOCK_PATTERN = /(^|\n)(```|~~~)[^\n]*\n[\s\S]*?(?:\n\2(?=\n|$)|$)/g;
+const INLINE_CODE_PATTERN = /`[^`\n]*(?:`|$)/g;
+const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
 const MAX_WIKI_SEGMENT_BYTES = 240;
 const MAX_WIKI_FILENAME_COMPONENT_BYTES = 255;
 const FS_SAFE_PINNED_WRITE_TEMP_SUFFIX = ".00000000-0000-4000-8000-000000000000.fallback.tmp";
@@ -371,7 +374,12 @@ function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
 }
 
 function extractWikiLinks(markdown: string): string[] {
-  const searchable = markdown.replace(RELATED_BLOCK_PATTERN, "");
+  const searchable = markdown
+    .replace(FRONTMATTER_PATTERN, "")
+    .replace(RELATED_BLOCK_PATTERN, "")
+    .replace(FENCED_CODE_BLOCK_PATTERN, "")
+    .replace(INLINE_CODE_PATTERN, "")
+    .replace(HTML_COMMENT_PATTERN, "");
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
     const target = match[1]?.trim();

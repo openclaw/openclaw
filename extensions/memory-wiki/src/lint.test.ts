@@ -8,6 +8,87 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 const { createVault } = createMemoryWikiTestHarness();
 
 describe("lintMemoryWikiVault", () => {
+  it("ignores literal wikilink syntax inside markdown code and comments", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-markdown-aware-links-",
+      config: {
+        vault: { renderMode: "obsidian" },
+      },
+    });
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "transcript.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.transcript",
+          title: "Transcript",
+        },
+        body: [
+          "# Transcript",
+          "",
+          "Inline code `[[reply_to_current]]` is not a wiki link.",
+          "<!-- [[hidden-comment-target]] -->",
+          "```",
+          "assistant: [[reply_to:abc123]]",
+          "```",
+          "~~~text",
+          "[[tts:text]]",
+          "~~~",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(result.issues.map((issue) => issue.code)).not.toContain("broken-wikilink");
+  });
+
+  it("accepts obsidian wikilinks that target page titles or aliases", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-title-links-",
+      config: {
+        vault: { renderMode: "obsidian" },
+      },
+    });
+    await Promise.all(
+      ["entities", "sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "codex-harness-plugin-配置清单.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.codex-harness",
+          title: "Codex harness plugin 配置清单",
+          aliases: ["OpenClaw × Claude Code × Codex 共享 Memory 方案"],
+        },
+        body: "# Codex harness plugin 配置清单\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "reference.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.reference",
+          title: "Reference",
+          sourceIds: ["source.codex-harness"],
+        },
+        body: "# Reference\n\n[[Codex harness plugin 配置清单]]\n[[OpenClaw × Claude Code × Codex 共享 Memory 方案]]\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(result.issues.map((issue) => issue.code)).not.toContain("broken-wikilink");
+  });
+
   it("accepts native markdown links that include the relative .md target", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-native-links-",
