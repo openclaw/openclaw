@@ -1439,14 +1439,14 @@ describe("browser tool upload inbound media fallback (#83544)", () => {
     browserActionsMocks.browserArmFileChooser.mockResolvedValue({ ok: true });
 
     const tool = createBrowserTool();
-    const result = await tool.execute({
+    const result = await tool.execute?.("call-upload-1", {
       action: "upload",
       paths: [inboundPath],
       ref: "file-input-1",
     });
 
     expect(pathValidationMocks.resolveExistingPathsWithinRoot).toHaveBeenCalledTimes(2);
-    expect(result.content[0]).toHaveProperty("type", "text");
+    expect(result?.content[0]).toHaveProperty("type", "text");
   });
 
   it("rejects files outside both uploads and inbound media directories", async () => {
@@ -1457,7 +1457,11 @@ describe("browser tool upload inbound media fallback (#83544)", () => {
 
     const tool = createBrowserTool();
     await expect(
-      tool.execute({ action: "upload", paths: ["/etc/passwd"], ref: "file-input-1" }),
+      tool.execute?.("call-upload-2", {
+        action: "upload",
+        paths: ["/etc/passwd"],
+        ref: "file-input-1",
+      }),
     ).rejects.toThrow("path outside allowed directories");
   });
 });
