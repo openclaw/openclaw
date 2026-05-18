@@ -133,6 +133,11 @@ def _http(method: str, path: str, body: Optional[dict] = None) -> Any:
     data: Optional[bytes] = None
     headers: dict[str, str] = {
         "Accept": "application/json",
+        # Cloudflare's "browser_signature_banned" rule (error 1010) blocks
+        # the default urllib UA. Same mitigation as the rockie-loop daemon
+        # (`486da0f348`); use an explicit, identifying UA so Cloudflare
+        # routes us through the WAF rules instead of the bot wall.
+        "User-Agent": "rockie-gpu/1.0 (+https://api.rockielab.com)",
         "X-Tenant-Token": _get_token(),
     }
     if body is not None:
