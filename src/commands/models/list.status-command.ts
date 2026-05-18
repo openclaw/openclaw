@@ -402,12 +402,14 @@ export async function modelsStatusCommand(
     const syntheticProvidersToProbe = new Set(
       providers.map((provider) => normalizeProviderId(provider)),
     );
+    const codexRuntimeAuthProviders = new Set<string>();
     for (const usage of providerUses) {
       if (
         usage.allowCodexRuntimeFallback &&
         openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg })
       ) {
         const codexProvider = normalizeProviderId(OPENAI_CODEX_PROVIDER_ID);
+        codexRuntimeAuthProviders.add(codexProvider);
         syntheticProvidersToProbe.add(codexProvider);
         syntheticProvidersToProbe.add(aliasMap[codexProvider] ?? codexProvider);
         syntheticProvidersToProbe.add("codex");
@@ -453,7 +455,15 @@ export async function modelsStatusCommand(
     const shellFallbackEnabled =
       shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
 
-    const providerAuth = providers
+    const providerAuthProviders = new Set(providers);
+    for (const provider of codexRuntimeAuthProviders) {
+      if (syntheticAuthByProvider.has(provider)) {
+        providerAuthProviders.add(provider);
+      }
+    }
+
+    const providerAuth = Array.from(providerAuthProviders)
+      .toSorted((a, b) => a.localeCompare(b))
       .map((provider) =>
         resolveProviderAuthOverview({
           provider,
@@ -523,6 +533,33 @@ export async function modelsStatusCommand(
         hasUsableProviderAuth(OPENAI_CODEX_PROVIDER_ID)
       );
     };
+    const runtimeAuthRoutes = Array.from(
+      new Map(
+        providerUses
+          .filter(
+            (usage) =>
+              usage.allowCodexRuntimeFallback &&
+              openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg }),
+          )
+          .map((usage) => {
+            const authProvider = normalizeProviderId(OPENAI_CODEX_PROVIDER_ID);
+            const effective = providerAuthMap.get(authProvider)?.effective ?? {
+              kind: "missing" as const,
+              detail: "missing",
+            };
+            return [
+              `${usage.provider}:codex:${authProvider}`,
+              {
+                provider: usage.provider,
+                runtime: "codex",
+                authProvider,
+                status: hasUsableProviderAuth(authProvider) ? "usable" : "missing",
+                effective,
+              },
+            ] as const;
+          }),
+      ).values(),
+    ).toSorted((a, b) => a.provider.localeCompare(b.provider));
     const missingProvidersInUse = Array.from(
       new Set(
         providerUses
@@ -730,6 +767,7 @@ export async function modelsStatusCommand(
           },
           providersWithOAuth: providersWithOauth,
           missingProvidersInUse,
+          runtimeAuthRoutes,
           providers: providerAuth,
           unusableProfiles,
           oauth: {
@@ -913,6 +951,27 @@ export async function modelsStatusCommand(
         );
       }
       runtime.log(`- ${theme.heading(entry.provider)} ${bits.join(separator)}`);
+    }
+
+    if (runtimeAuthRoutes.length > 0) {
+      runtime.log("");
+      runtime.log(colorize(rich, theme.heading, "Runtime auth"));
+      for (const route of runtimeAuthRoutes) {
+        runtime.log(
+          `- ${theme.heading(route.provider)} via ${colorize(
+            rich,
+            theme.accentBright,
+            route.runtime,
+          )} uses ${theme.heading(route.authProvider)} ${formatKeyValue(
+            "effective",
+            `${colorize(rich, theme.accentBright, route.effective.kind)}:${colorize(
+              rich,
+              theme.muted,
+              route.effective.detail,
+            )}`,
+          )}${formatSeparator()}${formatKeyValue("status", route.status)}`,
+        );
+      }
     }
 
     if (missingProvidersInUse.length > 0) {
