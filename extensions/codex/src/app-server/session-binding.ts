@@ -40,6 +40,7 @@ export type CodexAppServerThreadBinding = {
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
   dynamicToolsFingerprint?: string;
+  threadBindingOrigin?: "explicit" | "managed";
   userMcpServersFingerprint?: string;
   mcpServersFingerprint?: string;
   pluginAppsFingerprint?: string;
@@ -109,6 +110,10 @@ export async function readCodexAppServerBinding(
         typeof parsed.dynamicToolsFingerprint === "string"
           ? parsed.dynamicToolsFingerprint
           : undefined,
+      threadBindingOrigin:
+        parsed.threadBindingOrigin === "explicit" || parsed.threadBindingOrigin === "managed"
+          ? parsed.threadBindingOrigin
+          : undefined,
       userMcpServersFingerprint:
         typeof parsed.userMcpServersFingerprint === "string"
           ? parsed.userMcpServersFingerprint
@@ -159,6 +164,7 @@ export async function writeCodexAppServerBinding(
     sandbox: binding.sandbox,
     serviceTier: binding.serviceTier,
     dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
+    threadBindingOrigin: binding.threadBindingOrigin,
     userMcpServersFingerprint: binding.userMcpServersFingerprint,
     mcpServersFingerprint: binding.mcpServersFingerprint,
     pluginAppsFingerprint: binding.pluginAppsFingerprint,

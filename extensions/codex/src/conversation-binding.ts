@@ -20,6 +20,10 @@ import {
   resolveCodexDynamicToolsLoading,
 } from "./app-server/dynamic-tool-profile.js";
 import {
+  handleDynamicToolCallWithTimeout,
+  resolveDynamicToolCallTimeoutMs,
+} from "./app-server/dynamic-tool-timeout.js";
+import {
   createCodexDynamicToolBridge,
   type CodexDynamicToolBridge,
 } from "./app-server/dynamic-tools.js";
@@ -317,6 +321,7 @@ async function attachExistingThread(params: {
       approvalPolicy: params.approvalPolicy ?? runtimeApprovalPolicy,
       sandbox: params.sandbox ?? runtime.sandbox,
       serviceTier: params.serviceTier ?? runtime.serviceTier,
+      threadBindingOrigin: "explicit",
     },
     {
       ...agentLookup,
@@ -392,6 +397,7 @@ async function createThread(params: {
       sandbox: params.sandbox ?? runtime.sandbox,
       serviceTier: params.serviceTier ?? runtime.serviceTier,
       dynamicToolsFingerprint: params.dynamicToolsFingerprint ?? codexDynamicToolsFingerprint([]),
+      threadBindingOrigin: "managed",
     },
     {
       ...agentLookup,
@@ -451,7 +457,9 @@ async function runBoundTurn(params: {
     }
   }
   const shouldRefreshDynamicTools =
-    (binding.dynamicToolsFingerprint === undefined && toolBridge.specs.length > 0) ||
+    (binding.dynamicToolsFingerprint === undefined &&
+      binding.threadBindingOrigin !== "explicit" &&
+      toolBridge.specs.length > 0) ||
     (binding.dynamicToolsFingerprint !== undefined &&
       !areCodexDynamicToolFingerprintsCompatible({
         previous: binding.dynamicToolsFingerprint,
@@ -509,7 +517,15 @@ async function runBoundTurn(params: {
         ) {
           return undefined;
         }
-        return toolBridge.handleToolCall(call, { signal: turnAbortController.signal });
+        return handleDynamicToolCallWithTimeout({
+          call,
+          toolBridge,
+          signal: turnAbortController.signal,
+          timeoutMs: resolveDynamicToolCallTimeoutMs({
+            call,
+            config: params.config,
+          }),
+        });
       }
       if (
         request.method === "item/commandExecution/requestApproval" ||

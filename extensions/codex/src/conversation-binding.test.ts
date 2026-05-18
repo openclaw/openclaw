@@ -550,7 +550,7 @@ describe("codex conversation binding", () => {
         schemaVersion: 1,
         threadId: "thread-1",
         cwd: tempDir,
-        dynamicToolsFingerprint: "[]",
+        threadBindingOrigin: "explicit",
       }),
     );
     let notificationHandler: ((notification: unknown) => void) | undefined;
@@ -737,6 +737,202 @@ describe("codex conversation binding", () => {
     expect(savedBinding.sandbox).toBe("workspace-write");
     expect(savedBinding.serviceTier).toBe("priority");
     expect(savedBinding.dynamicToolsFingerprint).toContain("test_plugin_echo");
+  });
+
+  it("preserves explicitly bound Codex threads without dynamic tool fingerprints", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    agentHarnessMocks.createOpenClawCodingTools.mockReturnValue([createEchoTool()] as never);
+    await fs.writeFile(
+      sessionFile + ".codex-app-server.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-explicit",
+        cwd: tempDir,
+        model: "gpt-5.4-mini",
+        threadBindingOrigin: "explicit",
+      }),
+    );
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        if (method === "turn/start") {
+          setImmediate(() => {
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-explicit",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "preserved explicit" }],
+                },
+              },
+            });
+          });
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue",
+        bodyForAgent: "continue",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+        conversationId: "5185575566",
+      },
+      {
+        channelId: "telegram",
+        conversationId: "5185575566",
+        sessionKey: "telegram:direct:5185575566",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 500 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "preserved explicit" } });
+    expect(requests.map((request) => request.method)).toEqual(["turn/start"]);
+    expect(requests[0]?.params.threadId).toBe("thread-explicit");
+    const savedBinding = JSON.parse(
+      await fs.readFile(sessionFile + ".codex-app-server.json", "utf8"),
+    );
+    expect(savedBinding.threadId).toBe("thread-explicit");
+    expect(savedBinding.threadBindingOrigin).toBe("explicit");
+    expect(savedBinding).not.toHaveProperty("dynamicToolsFingerprint");
+  });
+
+  it("times out bound Codex dynamic tool calls with per-call timeout budgets", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const execute = vi.fn(
+      (_callId: string, _params: unknown, signal?: AbortSignal) =>
+        new Promise<{ content: Array<{ type: "text"; text: string }> }>((resolve) => {
+          signal?.addEventListener(
+            "abort",
+            () => resolve({ content: [{ type: "text", text: "aborted by timeout" }] }),
+            { once: true },
+          );
+        }),
+    );
+    agentHarnessMocks.createOpenClawCodingTools.mockReturnValue([createEchoTool(execute)] as never);
+    await fs.writeFile(
+      sessionFile + ".codex-app-server.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        threadBindingOrigin: "explicit",
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    let requestHandler:
+      | ((request: { method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    let toolResponse: unknown;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string) => {
+        if (method === "turn/start") {
+          setImmediate(async () => {
+            toolResponse = await requestHandler?.({
+              method: "item/tool/call",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                callId: "call-1",
+                namespace: null,
+                tool: "test_plugin_echo",
+                arguments: { text: "slow", timeoutMs: 1 },
+              },
+            });
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+                },
+              },
+            });
+          });
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error("unexpected method: " + method);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn((handler) => {
+        requestHandler = handler;
+        return () => undefined;
+      }),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "call slow echo",
+        bodyForAgent: "call slow echo",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 500 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(toolResponse).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: "OpenClaw dynamic tool call timed out after 1ms while running tool test_plugin_echo.",
+        },
+      ],
+    });
   });
 
   it("preserves older native bound Codex threads when no dynamic tools are available", async () => {
