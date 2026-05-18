@@ -565,6 +565,35 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+  // Regression for https://github.com/openclaw/openclaw/issues/83261:
+  // explicit cron announce delivery must suppress automatic source replies so a
+  // single assistant turn does not produce both a message-tool send and an
+  // auto-reply echo when groupChat.visibleReplies = automatic.
+  it("forces message_tool_only source delivery when announce delivery has an explicit to", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob(),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.sourceReplyDeliveryMode).toBe(
+      "message_tool_only",
+    );
+  });
+
+  it("leaves sourceReplyDeliveryMode unset when no explicit delivery target is resolved", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.sourceReplyDeliveryMode).toBeUndefined();
+  });
+
   it("keeps automatic exec completion notifications when announce delivery is active", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());

@@ -238,6 +238,7 @@ export function createCronPromptExecutor(params: {
           agentAccountId: params.resolvedDelivery.accountId,
           messageTo: params.resolvedDelivery.to,
           messageThreadId: params.resolvedDelivery.threadId,
+          sourceReplyDeliveryMode: params.resolvedDelivery.to ? "message_tool_only" : undefined,
           currentChannelId,
           sessionFile,
           agentDir: params.agentDir,
