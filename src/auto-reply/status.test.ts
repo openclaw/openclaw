@@ -1593,6 +1593,77 @@ describe("buildStatusMessage", () => {
     );
   });
 
+  // Regression for #83526: a legacy session entry (totalTokensFresh undefined)
+  // combined with a transcript whose per-turn lines lack `totalTokens` falls
+  // back to aggregating `input + cacheRead + cacheWrite` across every prior
+  // turn. That aggregate is cumulative session usage, not the current prompt
+  // size, so promoting it as the Context numerator produced >100% (e.g.
+  // 2.3m/1.0m = 228%) on long cache-heavy sessions even with Compactions: 0.
+  it("does not render cumulative cache reads as context usage on legacy sessions", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-cumulative-cache-context";
+        const logPath = path.join(
+          dir,
+          ".openclaw",
+          "agents",
+          "main",
+          "sessions",
+          `${sessionId}.jsonl`,
+        );
+        fs.mkdirSync(path.dirname(logPath), { recursive: true });
+        // Many turns of cache-heavy usage with no per-turn `totalTokens`.
+        const turns: string[] = [];
+        for (let i = 0; i < 5; i++) {
+          turns.push(
+            JSON.stringify({
+              type: "message",
+              message: {
+                role: "assistant",
+                model: "claude-opus-4-6",
+                usage: {
+                  input: 4,
+                  output: 1_000,
+                  cacheRead: 460_000,
+                  cacheWrite: 2_200,
+                },
+              },
+            }),
+          );
+        }
+        fs.writeFileSync(logPath, turns.join("\n"), "utf-8");
+
+        const text = buildStatusMessage({
+          agent: {
+            model: "anthropic/claude-opus-4-6",
+            contextTokens: 1_000_000,
+          },
+          // Legacy entry: totalTokensFresh is undefined (not false).
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            inputTokens: 16,
+            outputTokens: 5_100,
+            contextTokens: 1_000_000,
+          },
+          sessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "oauth",
+        });
+        const normalized = normalizeTestText(text);
+
+        // The bug rendered "Context: 2.3m/1.0m (228%)"; the fix must never
+        // promote a cumulative cache-aggregate above the context window.
+        expect(normalized).not.toMatch(/Context: \d[\d.]*m\/1\.0m \(\d{3,}%\)/);
+        expect(normalized).not.toContain("(228%)");
+        expect(normalized).not.toContain("2.3m/1.0m");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
   it("reads transcript usage for non-default agents", async () => {
     await withTempHome(
       async (dir) => {

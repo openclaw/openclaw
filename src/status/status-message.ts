@@ -256,6 +256,7 @@ const readUsageFromSessionLog = (
       cacheRead: number;
       cacheWrite: number;
       promptTokens: number;
+      promptTokensFresh: boolean;
       total: number;
       model?: string;
     }
@@ -296,7 +297,17 @@ const readUsageFromSessionLog = (
     const output = snapshot.outputTokens ?? 0;
     const cacheRead = snapshot.cacheRead ?? 0;
     const cacheWrite = snapshot.cacheWrite ?? 0;
-    const promptTokens = snapshot.totalTokens ?? input + cacheRead + cacheWrite;
+    // promptTokens is only a valid Context-window numerator when it came from a
+    // fresh per-turn `totalTokens` snapshot. extractAggregateUsageFromTranscriptLines
+    // sums input/cacheRead/cacheWrite across every transcript line, so the
+    // input + cacheRead + cacheWrite fallback below is cumulative session usage
+    // — using it as the Context numerator produces >100% on long cache-heavy
+    // sessions (see #83526).
+    const hasFreshSnapshotTotal =
+      typeof snapshot.totalTokens === "number" && snapshot.totalTokensFresh === true;
+    const promptTokens = hasFreshSnapshotTotal
+      ? (snapshot.totalTokens as number)
+      : input + cacheRead + cacheWrite;
     const total = promptTokens + output;
     if (promptTokens === 0 && total === 0) {
       return undefined;
@@ -313,6 +324,7 @@ const readUsageFromSessionLog = (
       cacheRead,
       cacheWrite,
       promptTokens,
+      promptTokensFresh: hasFreshSnapshotTotal,
       total,
       model,
     };
@@ -600,8 +612,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     );
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;
+      // Only promote transcript-derived usage into the Context numerator when
+      // the snapshot was a fresh current-prompt snapshot. The aggregate
+      // fallback sums every prior turn, which inflates the numerator past the
+      // context window on long cache-heavy sessions (#83526).
       if (
         allowTranscriptContextUsage &&
+        logUsage.promptTokensFresh &&
         (!totalTokens || totalTokens === 0 || candidate > totalTokens)
       ) {
         totalTokens = candidate;
