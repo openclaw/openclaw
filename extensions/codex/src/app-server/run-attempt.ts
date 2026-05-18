@@ -140,6 +140,7 @@ import {
 import {
   clearCodexAppServerBinding,
   readCodexAppServerBinding,
+  readCodexAppServerBindings,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
@@ -151,6 +152,7 @@ import {
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
   isContextEngineBindingCompatible,
+  selectCodexAppServerBindingForDynamicTools,
   startOrResumeThread,
   type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
@@ -926,6 +928,10 @@ export async function runCodexAppServerAttempt(
       channelId: hookChannelId,
     },
   });
+  startupBinding = selectCodexAppServerBindingForDynamicTools(
+    await readCodexAppServerBindings(activeSessionFile),
+    codexDynamicToolsFingerprint(toolBridge.specs),
+  );
   const hadSessionFile = await pathExists(activeSessionFile);
   let historyMessages = (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? [];
   const hookContextWindowFields = {

@@ -96,7 +96,8 @@ Docs: https://docs.openclaw.ai
 - Mac app: normalize Settings pane content margins so pages share the same left and right rail.
 - Mac app: prefer explicit private/Tailscale/LAN Gateway endpoints over SSH tunnels, preserve legacy loopback tunnel configs, persist transport choices, and show captured SSH stderr when tunneling really fails.
 - Gateway/sessions: keep ACP/acpx and runtime child sessions visible in configured-only session lists when their owner or parent session belongs to a configured agent.
-- Mac app: keep app-level menu commands and Dashboard failure states reachable when the remote Gateway is disconnected.
+- Codex app-server: avoid default PreToolUse hook relay CLI launches when no before-tool policy is registered and keep owner-only tool schemas stable across sender-owner flips, preventing Codex child-process fanout and native thread restarts. Fixes #76552 and #76179. Thanks @liushuaiiu and @songshikang0111.
+- Mac app: keep app-level menu commands and Dashboard failure states reachable when the remote Gateway is disconnected, and keep the Settings sidebar toggle in the leading titlebar area.
 - Mac app: allow longer Gateway and Context errors to wrap in the menu instead of truncating the useful failure detail.
 - Mac app: tighten remote Gateway fields in Settings so the Connection pane keeps readable labels and full action button text.
 - Mac app: keep custom Settings card rows left-aligned and full-width so Discovery and status sections no longer appear centered or detached.

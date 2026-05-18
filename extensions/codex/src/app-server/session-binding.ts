@@ -50,6 +50,10 @@ export type CodexAppServerThreadBinding = {
   updatedAt: string;
 };
 
+type PersistedCodexAppServerThreadBinding = Partial<CodexAppServerThreadBinding> & {
+  bindings?: unknown;
+};
+
 export type CodexAppServerContextEngineBinding = {
   schemaVersion: 1;
   engineId: string;
@@ -72,63 +76,41 @@ export async function readCodexAppServerBinding(
   sessionFile: string,
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<CodexAppServerThreadBinding | undefined> {
+  const bindings = await readCodexAppServerBindings(sessionFile, lookup);
+  return bindings[0];
+}
+
+export async function readCodexAppServerBindings(
+  sessionFile: string,
+  lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
+): Promise<CodexAppServerThreadBinding[]> {
   const path = resolveCodexAppServerBindingPath(sessionFile);
   let raw: string;
   try {
     raw = await fs.readFile(path, "utf8");
   } catch (error) {
     if (isNotFound(error)) {
-      return undefined;
+      return [];
     }
     embeddedAgentLog.warn("failed to read codex app-server binding", { path, error });
-    return undefined;
+    return [];
   }
   try {
-    const parsed = JSON.parse(raw) as Partial<CodexAppServerThreadBinding>;
-    if (parsed.schemaVersion !== 1 || typeof parsed.threadId !== "string") {
-      return undefined;
+    const parsed = JSON.parse(raw) as PersistedCodexAppServerThreadBinding;
+    const primary = readCodexAppServerBindingRecord(parsed, sessionFile, lookup);
+    if (!primary) {
+      return [];
     }
-    const authProfileId =
-      typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined;
-    return {
-      schemaVersion: 1,
-      threadId: parsed.threadId,
-      sessionFile,
-      cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
-      authProfileId,
-      model: typeof parsed.model === "string" ? parsed.model : undefined,
-      modelProvider: normalizeCodexAppServerBindingModelProvider({
-        ...lookup,
-        authProfileId,
-        modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
-      }),
-      approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
-      sandbox: readSandboxMode(parsed.sandbox),
-      serviceTier: readServiceTier(parsed.serviceTier),
-      dynamicToolsFingerprint:
-        typeof parsed.dynamicToolsFingerprint === "string"
-          ? parsed.dynamicToolsFingerprint
-          : undefined,
-      userMcpServersFingerprint:
-        typeof parsed.userMcpServersFingerprint === "string"
-          ? parsed.userMcpServersFingerprint
-          : undefined,
-      mcpServersFingerprint:
-        typeof parsed.mcpServersFingerprint === "string" ? parsed.mcpServersFingerprint : undefined,
-      pluginAppsFingerprint:
-        typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
-      pluginAppsInputFingerprint:
-        typeof parsed.pluginAppsInputFingerprint === "string"
-          ? parsed.pluginAppsInputFingerprint
-          : undefined,
-      pluginAppPolicyContext: readPluginAppPolicyContext(parsed.pluginAppPolicyContext),
-      contextEngine: readContextEngineBinding(parsed.contextEngine),
-      createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
-      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
-    };
+    const alternates = Array.isArray(parsed.bindings)
+      ? parsed.bindings.flatMap((entry) => {
+          const binding = readCodexAppServerBindingRecord(entry, sessionFile, lookup);
+          return binding ? [binding] : [];
+        })
+      : [];
+    return dedupeCodexAppServerBindings([primary, ...alternates]);
   } catch (error) {
     embeddedAgentLog.warn("failed to parse codex app-server binding", { path, error });
-    return undefined;
+    return [];
   }
 }
 
@@ -143,7 +125,39 @@ export async function writeCodexAppServerBinding(
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<void> {
   const now = new Date().toISOString();
-  const payload: CodexAppServerThreadBinding = {
+  const payload = createCodexAppServerBindingPayload(sessionFile, binding, lookup, now);
+  let previousBindings: CodexAppServerThreadBinding[] = [];
+  try {
+    previousBindings = await readCodexAppServerBindings(sessionFile, lookup);
+  } catch {
+    previousBindings = [];
+  }
+  const bindings = upsertCodexAppServerBinding(previousBindings, payload);
+  const alternates = bindings.filter(
+    (candidate) => !isSameCodexAppServerBinding(candidate, payload),
+  );
+  const persistedPayload: PersistedCodexAppServerThreadBinding = {
+    ...payload,
+    ...(alternates.length ? { bindings: alternates.map(toPersistedCodexAppServerBinding) } : {}),
+  };
+  await fs.writeFile(
+    resolveCodexAppServerBindingPath(sessionFile),
+    `${JSON.stringify(persistedPayload, null, 2)}\n`,
+  );
+}
+
+function createCodexAppServerBindingPayload(
+  sessionFile: string,
+  binding: Omit<
+    CodexAppServerThreadBinding,
+    "schemaVersion" | "sessionFile" | "createdAt" | "updatedAt"
+  > & {
+    createdAt?: string;
+  },
+  lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId">,
+  now: string,
+): CodexAppServerThreadBinding {
+  return {
     schemaVersion: 1,
     sessionFile,
     threadId: binding.threadId,
@@ -168,10 +182,96 @@ export async function writeCodexAppServerBinding(
     createdAt: binding.createdAt ?? now,
     updatedAt: now,
   };
-  await fs.writeFile(
-    resolveCodexAppServerBindingPath(sessionFile),
-    `${JSON.stringify(payload, null, 2)}\n`,
+}
+
+function readCodexAppServerBindingRecord(
+  value: unknown,
+  sessionFile: string,
+  lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId">,
+): CodexAppServerThreadBinding | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const parsed = value as Partial<CodexAppServerThreadBinding>;
+  if (parsed.schemaVersion !== 1 || typeof parsed.threadId !== "string") {
+    return undefined;
+  }
+  const authProfileId = typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined;
+  return {
+    schemaVersion: 1,
+    threadId: parsed.threadId,
+    sessionFile,
+    cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
+    authProfileId,
+    model: typeof parsed.model === "string" ? parsed.model : undefined,
+    modelProvider: normalizeCodexAppServerBindingModelProvider({
+      ...lookup,
+      authProfileId,
+      modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
+    }),
+    approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
+    sandbox: readSandboxMode(parsed.sandbox),
+    serviceTier: readServiceTier(parsed.serviceTier),
+    dynamicToolsFingerprint:
+      typeof parsed.dynamicToolsFingerprint === "string"
+        ? parsed.dynamicToolsFingerprint
+        : undefined,
+    userMcpServersFingerprint:
+      typeof parsed.userMcpServersFingerprint === "string"
+        ? parsed.userMcpServersFingerprint
+        : undefined,
+    mcpServersFingerprint:
+      typeof parsed.mcpServersFingerprint === "string" ? parsed.mcpServersFingerprint : undefined,
+    pluginAppsFingerprint:
+      typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
+    pluginAppsInputFingerprint:
+      typeof parsed.pluginAppsInputFingerprint === "string"
+        ? parsed.pluginAppsInputFingerprint
+        : undefined,
+    pluginAppPolicyContext: readPluginAppPolicyContext(parsed.pluginAppPolicyContext),
+    contextEngine: readContextEngineBinding(parsed.contextEngine),
+    createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
+    updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
+  };
+}
+
+function toPersistedCodexAppServerBinding(
+  binding: CodexAppServerThreadBinding,
+): CodexAppServerThreadBinding {
+  return { ...binding };
+}
+
+function upsertCodexAppServerBinding(
+  bindings: CodexAppServerThreadBinding[],
+  next: CodexAppServerThreadBinding,
+): CodexAppServerThreadBinding[] {
+  return [next, ...bindings.filter((binding) => !isSameCodexAppServerBinding(binding, next))].slice(
+    0,
+    8,
   );
+}
+
+function dedupeCodexAppServerBindings(
+  bindings: CodexAppServerThreadBinding[],
+): CodexAppServerThreadBinding[] {
+  const deduped: CodexAppServerThreadBinding[] = [];
+  for (const binding of bindings) {
+    if (deduped.some((existing) => isSameCodexAppServerBinding(existing, binding))) {
+      continue;
+    }
+    deduped.push(binding);
+  }
+  return deduped;
+}
+
+function isSameCodexAppServerBinding(
+  left: CodexAppServerThreadBinding,
+  right: CodexAppServerThreadBinding,
+): boolean {
+  if (left.dynamicToolsFingerprint && right.dynamicToolsFingerprint) {
+    return left.dynamicToolsFingerprint === right.dynamicToolsFingerprint;
+  }
+  return left.threadId === right.threadId;
 }
 
 function readContextEngineBinding(value: unknown): CodexAppServerContextEngineBinding | undefined {

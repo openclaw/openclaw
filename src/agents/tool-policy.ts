@@ -13,19 +13,6 @@ export type { ToolProfileId } from "./tool-policy-shared.js";
 
 export type OwnerOnlyToolApprovalClass = "control_plane" | "exec_capable" | "interactive";
 
-// Keep tool-policy browser-safe: do not import tools/common at runtime.
-function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, authorized: boolean): AnyAgentTool {
-  if (tool.ownerOnly !== true || authorized || !tool.execute) {
-    return tool;
-  }
-  return {
-    ...tool,
-    execute: async () => {
-      throw new Error("Tool restricted to owner senders.");
-    },
-  };
-}
-
 const OWNER_ONLY_TOOL_APPROVAL_CLASS_FALLBACKS = new Map<string, OwnerOnlyToolApprovalClass>([
   ["cron", "control_plane"],
   ["gateway", "control_plane"],
@@ -44,6 +31,19 @@ export function isOwnerOnlyToolName(name: string) {
 
 function isOwnerOnlyTool(tool: AnyAgentTool) {
   return tool.ownerOnly === true || isOwnerOnlyToolName(tool.name);
+}
+
+// Keep tool-policy browser-safe: do not import tools/common at runtime.
+function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, authorized: boolean): AnyAgentTool {
+  if (!isOwnerOnlyTool(tool) || authorized || !tool.execute) {
+    return tool;
+  }
+  return {
+    ...tool,
+    execute: async () => {
+      throw new Error("Tool restricted to owner senders.");
+    },
+  };
 }
 
 /**
