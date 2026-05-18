@@ -155,7 +155,7 @@ function verifiedParams(options: {
 function satisfiesAcceptanceGate(classification: ChildResultClassification): boolean {
   return (
     classification.normalizedState === "VERIFIED_PASS" &&
-    classification.acceptanceEligible === true &&
+    classification.acceptanceEligible &&
     classification.evidenceVerifier?.decision === "VERIFIED_PASS"
   );
 }

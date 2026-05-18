@@ -42,7 +42,7 @@ function withQuarantineRoot(
   return {
     ...testCase,
     classificationParams: {
-      ...(testCase.classificationParams ?? {}),
+      ...testCase.classificationParams,
       quarantineRoot,
       allowUnsafeQuarantineRoot: true,
     },
@@ -367,7 +367,7 @@ describe("subagent child result Wave 7 rollout", () => {
     expect(report.failed).toBe(0);
     expect(report.safetyProofStatus).toBe("replay_fixture_gates_satisfied");
     expect(report.displayableAsSafetyProof).toBe(true);
-    expect(Object.keys(report.groups).sort()).toEqual(
+    expect(Object.keys(report.groups).toSorted()).toEqual(
       [
         "adversarial_fixtures",
         "clean_prose_only_subagents",
@@ -379,7 +379,7 @@ describe("subagent child result Wave 7 rollout", () => {
         "read_only_auditors",
         "restart_resume_cases",
         "timeout_cancelled_children",
-      ].sort(),
+      ].toSorted(),
     );
     expect(
       report.results.find((entry) => entry.name === "dashboard-session-history-unverified-pass")
@@ -509,7 +509,7 @@ describe("subagent child result Wave 7 rollout", () => {
       notSuccessUnlessVerified: true,
     });
 
-    const consumers = CHILD_RESULT_COMPATIBILITY_MATRIX.map((entry) => entry.consumer).sort();
+    const consumers = CHILD_RESULT_COMPATIBILITY_MATRIX.map((entry) => entry.consumer).toSorted();
     expect(consumers).toEqual(
       [
         "cron_background_flows",
@@ -520,7 +520,7 @@ describe("subagent child result Wave 7 rollout", () => {
         "read_only_auditors",
         "restart_resume",
         "session_history_search_export",
-      ].sort(),
+      ].toSorted(),
     );
     expect(CHILD_RESULT_COMPATIBILITY_MATRIX.every((entry) => entry.failClosedFallback)).toBe(true);
     expectMetadataOnly(CHILD_RESULT_COMPATIBILITY_MATRIX, []);

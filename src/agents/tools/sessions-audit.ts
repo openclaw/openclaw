@@ -6,7 +6,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
-import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { lookupExactSessionInLocalIndex } from "./sessions-index.js";
 import { normalizeUserProvidedSessionKey } from "./sessions-key-normalization.js";

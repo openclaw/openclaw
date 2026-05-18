@@ -499,10 +499,11 @@ export function extractSessionText(
   if (rawText === null) {
     return null;
   }
-  return sanitizeChildResultTextForMemory(
-    sanitizeSessionText(rawText, role),
-    "memory-session-extract",
-  );
+  const sanitizedText = sanitizeSessionText(rawText, role);
+  if (sanitizedText === null) {
+    return null;
+  }
+  return sanitizeChildResultTextForMemory(sanitizedText, "memory-session-extract");
 }
 
 function parseSessionTimestampMs(
@@ -646,10 +647,10 @@ export async function buildSessionEntry(
         lineMap.length = 0;
         messageTimestampsMs.length = 0;
       }
-      const text = sanitizeChildResultTextForMemory(
-        sanitizeSessionText(rawText, message.role),
-        "memory-session-index",
-      );
+      const sanitizedText = sanitizeSessionText(rawText, message.role);
+      const text = sanitizedText
+        ? sanitizeChildResultTextForMemory(sanitizedText, "memory-session-index")
+        : null;
       if (!text) {
         // Assistant-side machinery (silent replies, system wrappers) is already
         // dropped by sanitizeSessionText. We deliberately do NOT use the prior

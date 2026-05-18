@@ -509,8 +509,7 @@ export function spawnWatchedVitestProcess({
     logStream = openVitestGateLogStream(gate);
   } catch (error) {
     console.error(
-      `[vitest] unable to open gate log ${gate?.logPath ?? ""}: ` +
-        `${error instanceof Error ? error.message : String(error)}`,
+      `[vitest] unable to open gate log ${gate?.logPath ?? ""}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   const stdoutTarget = logStream

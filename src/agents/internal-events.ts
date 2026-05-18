@@ -196,12 +196,14 @@ function sanitizeActiveTaskArtifactDebugRefs(
   }
   return artifacts
     .filter((artifact) => Boolean(artifact?.artifactId))
-    .map((artifact) => ({
-      artifactId: sanitizeSingleLineField(String(artifact.artifactId), "unknown"),
-      ...(artifact.sha256 ? { sha256: sanitizeSingleLineField(artifact.sha256, "unknown") } : {}),
-      ...(artifact.schema ? { schema: sanitizeSingleLineField(artifact.schema, "unknown") } : {}),
-      status: sanitizeSingleLineField(artifact.status, "expected"),
-    }));
+    .map((artifact) =>
+      Object.assign(
+        { artifactId: sanitizeSingleLineField(String(artifact.artifactId), "unknown") },
+        artifact.sha256 ? { sha256: sanitizeSingleLineField(artifact.sha256, "unknown") } : {},
+        artifact.schema ? { schema: sanitizeSingleLineField(artifact.schema, "unknown") } : {},
+        { status: sanitizeSingleLineField(artifact.status, "expected") },
+      ),
+    );
 }
 
 function sanitizeActiveTaskStatusForDataBlock(
@@ -242,10 +244,10 @@ function sanitizeActiveTaskStatusForDataBlock(
   }));
   const backgroundSignals = activeTask.backgroundSignals?.map((signal) => ({
     source: sanitizeSingleLineField(signal.source, "unknown"),
-    backgrounded: signal.backgrounded === true,
-    authorizing: signal.authorizing === true,
-    blocking: signal.blocking === true,
-    inScope: signal.inScope === true,
+    backgrounded: signal.backgrounded,
+    authorizing: signal.authorizing,
+    blocking: signal.blocking,
+    inScope: signal.inScope,
     ...(signal.signal ? { signal: sanitizeSingleLineField(signal.signal, "unknown") } : {}),
     ...(signal.ignoredTaskId
       ? { ignoredTaskId: sanitizeSingleLineField(signal.ignoredTaskId, "unknown") }
@@ -281,9 +283,9 @@ function sanitizeActiveTaskStatusForDataBlock(
         }
       : {}),
     contractVerdict: sanitizeSingleLineField(activeTask.contractVerdict, "unknown"),
-    acceptanceEligible: activeTask.acceptanceEligible === true,
-    currentTaskOutput: activeTask.currentTaskOutput === true,
-    backgrounded: activeTask.backgrounded === true,
+    acceptanceEligible: activeTask.acceptanceEligible,
+    currentTaskOutput: activeTask.currentTaskOutput,
+    backgrounded: activeTask.backgrounded,
     ...(expectedOutputArtifacts ? { expectedOutputArtifacts } : {}),
     ...(taskPriorityConflicts?.length ? { taskPriorityConflicts } : {}),
     ...(backgroundSignals?.length ? { backgroundSignals } : {}),
@@ -416,8 +418,8 @@ function sanitizeEvidenceVerifierForDataBlock(
   }));
   return {
     decision: sanitizeSingleLineField(evidenceVerifier.decision, "EVIDENCE_UNVERIFIED"),
-    acceptanceEligible: evidenceVerifier.acceptanceEligible === true,
-    parentObserved: evidenceVerifier.parentObserved === true,
+    acceptanceEligible: evidenceVerifier.acceptanceEligible,
+    parentObserved: evidenceVerifier.parentObserved,
     ...(evidenceVerifier.observedBy
       ? { observedBy: sanitizeSingleLineField(evidenceVerifier.observedBy, "unknown") }
       : {}),
@@ -465,7 +467,7 @@ function sanitizePresentationForDataBlock(
       presentation.ordinaryChatBubble === "allowed_verified_summary"
         ? "allowed_verified_summary"
         : "suppressed",
-    collapsedByDefault: presentation.collapsedByDefault === true,
+    collapsedByDefault: presentation.collapsedByDefault,
     severity: sanitizeSingleLineField(presentation.severity, "warning"),
     labels: sanitizeStringList(presentation.labels) ?? [],
     ...(copyableDebugRefs ? { copyableDebugRefs } : {}),
@@ -479,7 +481,7 @@ function sanitizeRawOpenWorkflowForDataBlock(rawOpen: AgentTaskCompletionStatusC
   const artifactId = sanitizeSingleLineField(rawOpen.artifactId, "unknown");
   const payloadHash = sanitizeSingleLineField(rawOpen.payloadHash, "unknown");
   return {
-    available: rawOpen.available === true,
+    available: rawOpen.available,
     requiredAction: "open_raw_quarantine_artifact",
     localOperatorActionRequired: true,
     warning: sanitizeSingleLineField(rawOpen.warning, "raw artifact open requires explicit action"),
@@ -512,7 +514,7 @@ function sanitizeRawOpenWorkflowForDataBlock(rawOpen: AgentTaskCompletionStatusC
     },
     redactionScan: {
       scanned: true,
-      redacted: rawOpen.redactionScan.redacted === true,
+      redacted: rawOpen.redactionScan.redacted,
       flags: sanitizeStringList(rawOpen.redactionScan.flags) ?? [],
       rawSnippetStored: false,
     },
@@ -551,8 +553,8 @@ function sanitizeStatusCardForDataBlock(statusCard: AgentTaskCompletionStatusCar
         ...(finiteInteger(statusCard.dedupe.backgroundedCount) !== undefined
           ? { backgroundedCount: finiteInteger(statusCard.dedupe.backgroundedCount) }
           : {}),
-        duplicate: statusCard.dedupe.duplicate === true,
-        parentEventSuppressed: statusCard.dedupe.parentEventSuppressed === true,
+        duplicate: statusCard.dedupe.duplicate,
+        parentEventSuppressed: statusCard.dedupe.parentEventSuppressed,
         ...(statusCard.dedupe.activeTaskContractId
           ? {
               activeTaskContractId: sanitizeSingleLineField(
@@ -591,11 +593,11 @@ function sanitizeStatusCardForDataBlock(statusCard: AgentTaskCompletionStatusCar
   const schemaValid =
     typeof extended.schemaValid === "boolean"
       ? extended.schemaValid
-      : statusCard.contractVerdict === "SCHEMA_VALID" && statusCard.acceptanceEligible === true;
+      : statusCard.contractVerdict === "SCHEMA_VALID" && statusCard.acceptanceEligible;
   const notAcceptanceEvidence =
     typeof extended.notAcceptanceEvidence === "boolean"
       ? extended.notAcceptanceEvidence
-      : statusCard.acceptanceEligible !== true;
+      : !statusCard.acceptanceEligible;
   return {
     kind: "subagent_completion_status",
     ...(schemaVersion !== undefined ? { schemaVersion } : {}),
@@ -621,7 +623,7 @@ function sanitizeStatusCardForDataBlock(statusCard: AgentTaskCompletionStatusCar
     action: sanitizeSingleLineField(statusCard.action, "validate_artifact_or_retry"),
     transportOutcome: sanitizeSingleLineField(statusCard.transportOutcome, "unknown"),
     contractVerdict: sanitizeSingleLineField(statusCard.contractVerdict, "unknown"),
-    acceptanceEligible: statusCard.acceptanceEligible === true,
+    acceptanceEligible: statusCard.acceptanceEligible,
     reasons: statusCard.reasons.map((reasonValue) =>
       sanitizeSingleLineField(reasonValue, "unknown"),
     ),
@@ -630,7 +632,7 @@ function sanitizeStatusCardForDataBlock(statusCard: AgentTaskCompletionStatusCar
     ...(rawOpen ? { rawOpen } : {}),
     ...(verifiedArtifacts ? { verifiedArtifacts } : {}),
     ...(evidenceVerifier ? { evidenceVerifier } : {}),
-    rawBodySuppressed: statusCard.rawBodySuppressed === true,
+    rawBodySuppressed: statusCard.rawBodySuppressed,
     ...(typeof statusCard.userVisibleSuppressed === "boolean"
       ? { userVisibleSuppressed: statusCard.userVisibleSuppressed }
       : {}),
@@ -668,11 +670,11 @@ function formatSuppressedChildResultSummaryForPrompt(
   const schemaValid =
     typeof extended.schemaValid === "boolean"
       ? extended.schemaValid
-      : statusCard.contractVerdict === "SCHEMA_VALID" && statusCard.acceptanceEligible === true;
+      : statusCard.contractVerdict === "SCHEMA_VALID" && statusCard.acceptanceEligible;
   const notAcceptanceEvidence =
     typeof extended.notAcceptanceEvidence === "boolean"
       ? extended.notAcceptanceEvidence
-      : statusCard.acceptanceEligible !== true;
+      : !statusCard.acceptanceEligible;
   const evidenceVerifier = sanitizeEvidenceVerifierForDataBlock(extended.evidenceVerifier);
   const rawOpen = sanitizeRawOpenWorkflowForDataBlock(statusCard.rawOpen);
   const lines = [
@@ -686,7 +688,7 @@ function formatSuppressedChildResultSummaryForPrompt(
     ...(verifierDecision ? [`verifierDecision=${verifierDecision}`] : []),
     `transportOutcome=${sanitizeSingleLineField(statusCard.transportOutcome, "unknown")}`,
     `contractVerdict=${sanitizeSingleLineField(statusCard.contractVerdict, "unknown")}`,
-    `acceptanceEligible=${statusCard.acceptanceEligible === true ? "true" : "false"}`,
+    `acceptanceEligible=${statusCard.acceptanceEligible ? "true" : "false"}`,
   ];
   if (evidenceVerifier) {
     lines.push(
@@ -724,10 +726,8 @@ function formatSuppressedChildResultSummaryForPrompt(
   if (statusCard.dedupe) {
     lines.push(
       `dedupeResultHash=${sanitizeSingleLineField(statusCard.dedupe.resultHash, "unknown")}`,
-      `dedupeDuplicate=${statusCard.dedupe.duplicate === true ? "true" : "false"}`,
-      `dedupeParentEventSuppressed=${
-        statusCard.dedupe.parentEventSuppressed === true ? "true" : "false"
-      }`,
+      `dedupeDuplicate=${statusCard.dedupe.duplicate ? "true" : "false"}`,
+      `dedupeParentEventSuppressed=${statusCard.dedupe.parentEventSuppressed ? "true" : "false"}`,
     );
   }
   const text = truncateToUtf8ByteBudget(

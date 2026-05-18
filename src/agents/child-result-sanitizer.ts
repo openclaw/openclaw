@@ -20,6 +20,23 @@ const CHILD_CONTEXT_RE =
   /\b(?:subagent|sub-agent|child\s+(?:agent|result|completion|output|body|payload)|untrusted\s+child|quarantin(?:e|ed)|artifact\s+id|childResult|BEGIN_UNTRUSTED_CHILD_RESULT|END_UNTRUSTED_CHILD_RESULT)\b/i;
 const STATE_RE =
   /\b(PASS|PASSED|FAIL|FAILED|REVISE|BLOCKED_INFRA|BLOCKED|ERROR|ACCEPT|REJECTED|TIMEOUT|CANCELLED|CANCELED)\b/i;
+const NULL_BYTE = String.fromCharCode(0);
+
+function hasNonTextCodePoint(text: string): boolean {
+  for (const char of text) {
+    const codePoint = char.codePointAt(0);
+    if (codePoint === undefined) {
+      continue;
+    }
+    const allowedControl = codePoint === 9 || codePoint === 10 || codePoint === 13;
+    const allowedText =
+      (codePoint >= 0x20 && codePoint <= 0xd7ff) || (codePoint >= 0xe000 && codePoint <= 0xfffd);
+    if (!allowedControl && !allowedText) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export type ChildResultSanitizerOptions = {
   surface?: string;
@@ -64,22 +81,32 @@ function normalizeState(value?: string): string {
   const raw = value?.trim() || "";
   const match = raw.match(STATE_RE);
   const state = (match?.[1] ?? raw).toLowerCase().replace(/[^a-z0-9_]+/g, "_");
-  if (state === "passed") return "pass";
-  if (state === "failed" || state === "fail") return "failed";
-  if (state === "canceled") return "cancelled";
-  if (state === "") return "unknown";
+  if (state === "passed") {
+    return "pass";
+  }
+  if (state === "failed" || state === "fail") {
+    return "failed";
+  }
+  if (state === "canceled") {
+    return "cancelled";
+  }
+  if (state === "") {
+    return "unknown";
+  }
   return state.slice(0, 32);
 }
 
 function normalizeToken(value: string | undefined, fallback: string, maxChars = 80): string {
   const trimmed = value?.trim();
-  if (!trimmed) return fallback;
+  if (!trimmed) {
+    return fallback;
+  }
   const normalized = trimmed.replace(/[^A-Za-z0-9_.:@/-]+/g, "_").replace(/^_+|_+$/g, "");
   return (normalized || fallback).slice(0, maxChars);
 }
 
 function unique(values: string[]): string[] {
-  return [...new Set(values.filter(Boolean))].sort();
+  return [...new Set(values.filter(Boolean))].toSorted();
 }
 
 function normalizeFlexibleMarkers(text: string): string {
@@ -91,7 +118,9 @@ function normalizeFlexibleMarkers(text: string): string {
 function findParagraphStart(text: string, before: number): number {
   const bounded = Math.max(0, before - 16_384);
   const paragraph = text.lastIndexOf("\n\n", before);
-  if (paragraph >= bounded) return paragraph + 2;
+  if (paragraph >= bounded) {
+    return paragraph + 2;
+  }
   return bounded;
 }
 
@@ -105,16 +134,30 @@ function classifyRawText(
   if (text.includes(LEGACY_UNTRUSTED_RESULT_BEGIN) || text.includes(LEGACY_UNTRUSTED_RESULT_END)) {
     classifications.push("marked_untrusted_child_result");
   }
-  if (SOURCE_LIKE_RE.test(text)) classifications.push("raw_source_like");
-  if (LOG_LIKE_RE.test(text)) classifications.push("raw_log_like");
-  if (PROMPT_INJECTION_RE.test(text)) classifications.push("prompt_injection_like");
-  if (/[^\u0009\u000a\u000d\u0020-\uD7FF\uE000-\uFFFD]/u.test(text) || /\x00/.test(text)) {
+  if (SOURCE_LIKE_RE.test(text)) {
+    classifications.push("raw_source_like");
+  }
+  if (LOG_LIKE_RE.test(text)) {
+    classifications.push("raw_log_like");
+  }
+  if (PROMPT_INJECTION_RE.test(text)) {
+    classifications.push("prompt_injection_like");
+  }
+  if (hasNonTextCodePoint(text) || text.includes(NULL_BYTE)) {
     classifications.push("binary_like");
   }
-  if (byteCount > 64 * 1024 || text.split("\n").length > 800) classifications.push("huge_payload");
-  if (CHILD_CONTEXT_RE.test(text)) classifications.push("child_result_context");
-  if (options.unsafeHint) classifications.push("known_child_result_surface");
-  if (classifications.length === 0) classifications.push("untrusted_child_result");
+  if (byteCount > 64 * 1024 || text.split("\n").length > 800) {
+    classifications.push("huge_payload");
+  }
+  if (CHILD_CONTEXT_RE.test(text)) {
+    classifications.push("child_result_context");
+  }
+  if (options.unsafeHint) {
+    classifications.push("known_child_result_surface");
+  }
+  if (classifications.length === 0) {
+    classifications.push("untrusted_child_result");
+  }
   return unique(classifications);
 }
 
@@ -192,7 +235,9 @@ function sanitizeMarkedSegments(
     while (scan < normalized.length) {
       const nextBegin = normalized.indexOf(LEGACY_UNTRUSTED_RESULT_BEGIN, scan);
       const nextEnd = normalized.indexOf(LEGACY_UNTRUSTED_RESULT_END, scan);
-      if (nextEnd === -1) break;
+      if (nextEnd === -1) {
+        break;
+      }
       if (nextBegin !== -1 && nextBegin < nextEnd) {
         depth += 1;
         scan = nextBegin + LEGACY_UNTRUSTED_RESULT_BEGIN.length;
@@ -235,19 +280,24 @@ function sanitizeMarkedSegments(
 }
 
 function shouldSanitizeWholeText(text: string, options: ChildResultSanitizerOptions): boolean {
-  if (!text || CHILD_RESULT_SANITIZED_PLACEHOLDER_RE.test(text)) return false;
+  if (!text || CHILD_RESULT_SANITIZED_PLACEHOLDER_RE.test(text)) {
+    return false;
+  }
   const normalized = normalizeFlexibleMarkers(text);
   if (
     normalized.includes(LEGACY_UNTRUSTED_RESULT_BEGIN) ||
     normalized.includes(LEGACY_UNTRUSTED_RESULT_END)
-  )
+  ) {
     return true;
+  }
   const hasChildContext = CHILD_CONTEXT_RE.test(normalized);
   const sourceOrLog = SOURCE_LIKE_RE.test(normalized) || LOG_LIKE_RE.test(normalized);
   const injection = PROMPT_INJECTION_RE.test(normalized);
   const huge = utf8Bytes(normalized) > 64 * 1024 || normalized.split("\n").length > 800;
-  const binaryLike = /\x00/.test(normalized);
-  if (options.unsafeHint) return sourceOrLog || injection || huge || binaryLike || hasChildContext;
+  const binaryLike = normalized.includes(NULL_BYTE);
+  if (options.unsafeHint) {
+    return sourceOrLog || injection || huge || binaryLike || hasChildContext;
+  }
   return hasChildContext && (sourceOrLog || injection || huge || binaryLike);
 }
 

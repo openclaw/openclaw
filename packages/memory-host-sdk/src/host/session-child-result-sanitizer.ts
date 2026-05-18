@@ -29,13 +29,25 @@ function normalizeMarkers(text: string): string {
 
 function classesFor(text: string, extra: string[] = []): string[] {
   const classes = [...extra];
-  if (text.includes(BEGIN) || text.includes(END)) classes.push("marked_untrusted_child_result");
-  if (SOURCE_OR_LOG_RE.test(text)) classes.push("raw_source_or_log_like");
-  if (PROMPT_INJECTION_RE.test(text)) classes.push("prompt_injection_like");
-  if (CHILD_CONTEXT_RE.test(text)) classes.push("child_result_context");
-  if (bytes(text) > 64 * 1024 || text.split("\n").length > 800) classes.push("huge_payload");
-  if (classes.length === 0) classes.push("untrusted_child_result");
-  return [...new Set(classes)].sort();
+  if (text.includes(BEGIN) || text.includes(END)) {
+    classes.push("marked_untrusted_child_result");
+  }
+  if (SOURCE_OR_LOG_RE.test(text)) {
+    classes.push("raw_source_or_log_like");
+  }
+  if (PROMPT_INJECTION_RE.test(text)) {
+    classes.push("prompt_injection_like");
+  }
+  if (CHILD_CONTEXT_RE.test(text)) {
+    classes.push("child_result_context");
+  }
+  if (bytes(text) > 64 * 1024 || text.split("\n").length > 800) {
+    classes.push("huge_payload");
+  }
+  if (classes.length === 0) {
+    classes.push("untrusted_child_result");
+  }
+  return [...new Set(classes)].toSorted();
 }
 
 function placeholder(raw: string, classes: string[], surface: string): string {
@@ -46,7 +58,9 @@ function placeholder(raw: string, classes: string[], surface: string): string {
 function paragraphStart(text: string, before: number): number {
   const bounded = Math.max(0, before - 16_384);
   const paragraph = text.lastIndexOf("\n\n", before);
-  if (paragraph >= bounded) return paragraph + 2;
+  if (paragraph >= bounded) {
+    return paragraph + 2;
+  }
   return bounded;
 }
 
@@ -54,7 +68,9 @@ function sanitizeChildResultTextForMemoryInner(
   text: string,
   surface = "memory-extraction",
 ): string {
-  if (!text || PLACEHOLDER_RE.test(text)) return text;
+  if (!text || PLACEHOLDER_RE.test(text)) {
+    return text;
+  }
   const normalized = normalizeMarkers(text);
   let cursor = 0;
   let out = "";
@@ -82,7 +98,9 @@ function sanitizeChildResultTextForMemoryInner(
     while (scan < normalized.length) {
       const nextBegin = normalized.indexOf(BEGIN, scan);
       const nextEnd = normalized.indexOf(END, scan);
-      if (nextEnd === -1) break;
+      if (nextEnd === -1) {
+        break;
+      }
       if (nextBegin !== -1 && nextBegin < nextEnd) {
         depth += 1;
         scan = nextBegin + BEGIN.length;
@@ -104,7 +122,9 @@ function sanitizeChildResultTextForMemoryInner(
     cursor = segmentEnd === -1 ? normalized.length : segmentEnd;
     changed = true;
   }
-  if (changed) return out;
+  if (changed) {
+    return out;
+  }
   const suspicious =
     CHILD_CONTEXT_RE.test(normalized) &&
     (SOURCE_OR_LOG_RE.test(normalized) ||

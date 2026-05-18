@@ -42,6 +42,8 @@ export const CHILD_RESULT_ROLLOUT_STAGES = [
 ] as const;
 
 export type ChildResultRolloutStage = (typeof CHILD_RESULT_ROLLOUT_STAGES)[number]["stage"];
+type ChildResultRolloutStageLike = ChildResultRolloutStage | (number & {});
+type ChildResultContractVerdictLike = ChildResultContractVerdict | (string & {});
 export type ChildResultSafetyProofStatus =
   | "shadow_metrics_only_not_proof"
   | "replay_fixture_gates_missing"
@@ -97,7 +99,7 @@ export type ChildResultTelemetryCounters = {
 };
 
 export type ChildResultRolloutFlags = {
-  stage?: ChildResultRolloutStage | number;
+  stage?: ChildResultRolloutStageLike;
   classifyOnlyShadow?: boolean;
   acceptanceEnforcement?: boolean;
   uiRendering?: boolean;
@@ -137,7 +139,7 @@ export type ChildResultTelemetryEvent = {
   dimensions: ChildResultTelemetryDimensions;
   classification: {
     normalizedState: ChildResultNormalizedState;
-    contractVerdict: ChildResultContractVerdict | string;
+    contractVerdict: ChildResultContractVerdictLike;
     acceptanceEligible: boolean;
     classificationLabels: ChildResultClassificationLabel[];
     transportOutcome: string;
@@ -234,7 +236,7 @@ export type ChildResultReplayCorpusReport = {
 };
 
 export type ChildResultStageAdvancementEvidence = {
-  targetStage: ChildResultRolloutStage | number;
+  targetStage: ChildResultRolloutStageLike;
   rawBodyLeakCount: number;
   schemaValidPassAcceptedWithoutEvidenceCount: number;
   goldenAdversarialFixturePassRate: number;
@@ -465,7 +467,7 @@ function emptyCounters(): ChildResultTelemetryCounters {
 
 function classificationLooksLikeDowngradedPass(classification: ChildResultClassification): boolean {
   return (
-    classification.acceptanceEligible !== true &&
+    !classification.acceptanceEligible &&
     classification.normalizedState === "UNVERIFIED" &&
     (classification.parsedReport?.classificationLabels.includes("SCHEMA_VALID") === true ||
       classification.classificationLabels.includes("SCHEMA_VALID"))
@@ -676,8 +678,7 @@ export function runChildResultShadowVerifier(params: {
 }): ChildResultShadowVerification {
   const classification = classifyChildResultContract(params.classificationParams);
   const wouldAccept =
-    classification.acceptanceEligible === true &&
-    classification.normalizedState === "VERIFIED_PASS";
+    classification.acceptanceEligible && classification.normalizedState === "VERIFIED_PASS";
   return {
     mode: "shadow",
     verifierVersion: CHILD_RESULT_SHADOW_VERIFIER_VERSION,
@@ -734,8 +735,8 @@ export function renderChildResultDashboardStatus(
   input: ChildResultClassification | AgentTaskCompletionStatusCard,
 ): ChildResultDashboardStatus {
   const normalizedState =
-    "normalizedState" in input && input.normalizedState ? String(input.normalizedState) : "unknown";
-  const acceptanceEligible = input.acceptanceEligible === true;
+    "normalizedState" in input && input.normalizedState ? input.normalizedState : "unknown";
+  const acceptanceEligible = input.acceptanceEligible;
   const labels =
     "classificationLabels" in input && Array.isArray(input.classificationLabels)
       ? input.classificationLabels.map(String)
@@ -790,7 +791,7 @@ export function runChildResultReplayCorpus(
   const results: ChildResultReplayCaseResult[] = cases.map((testCase) => {
     const rawText = testCase.rawText ?? testCase.classificationParams?.rawText ?? "";
     const classification = classifyChildResultContract({
-      ...(testCase.classificationParams ?? {}),
+      ...testCase.classificationParams,
       rawText,
     });
     const dashboardStatus = renderChildResultDashboardStatus(classification);
@@ -851,14 +852,14 @@ export function runChildResultReplayCorpus(
     safetyProofStatus,
     displayableAsSafetyProof: safetyProofStatus === "replay_fixture_gates_satisfied",
     groups,
-    results: results.map((result) => ({
-      ...result,
-      telemetryEvent: {
-        ...result.telemetryEvent,
-        safetyProofStatus,
-        displayableAsSafetyProof: safetyProofStatus === "replay_fixture_gates_satisfied",
-      },
-    })),
+    results: results.map((result) =>
+      Object.assign({}, result, {
+        telemetryEvent: Object.assign({}, result.telemetryEvent, {
+          safetyProofStatus,
+          displayableAsSafetyProof: safetyProofStatus === "replay_fixture_gates_satisfied",
+        }),
+      }),
+    ),
   };
 }
 

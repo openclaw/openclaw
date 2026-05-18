@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
   CHILD_RESULT_SANITIZED_PLACEHOLDER_PREFIX,
@@ -145,10 +146,11 @@ END_UNTRUSTED_CHILD_RESULT`;
 
   it("sanitizes nested message content before model prompts", () => {
     const rawNeedle = "MESSAGE_CONTENT_SECRET_LINE";
-    const messages = [
+    const messages: AgentMessage[] = [
       {
-        role: "assistant" as const,
+        role: "user",
         content: [{ type: "text", text: `${BEGIN}\n${rawNeedle}\n${END}` }],
+        timestamp: 1,
       },
     ];
     const sanitized = sanitizeChildResultMessagesForModel(messages, {
@@ -168,8 +170,10 @@ END_UNTRUSTED_CHILD_RESULT`;
       unsafeHint: true,
     });
 
-    expect(typeof sanitized).toBe("string");
-    expect(String(sanitized)).toContain("[OpenClaw sanitized child result:");
-    expect(String(sanitized)).not.toContain(rawNeedle);
+    if (typeof sanitized !== "string") {
+      throw new TypeError("expected recursive object sanitizer to return a string");
+    }
+    expect(sanitized).toContain("[OpenClaw sanitized child result:");
+    expect(sanitized).not.toContain(rawNeedle);
   });
 });

@@ -116,7 +116,11 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
 }
 
 function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
-  const trimmed = sanitizeChildResultTextForModel(normalizeOptionalString(prompt), {
+  const normalizedPrompt = normalizeOptionalString(prompt);
+  if (!normalizedPrompt) {
+    return undefined;
+  }
+  const trimmed = sanitizeChildResultTextForModel(normalizedPrompt, {
     surface: "memory-extraction-prompt-estimate",
   });
   if (!trimmed) {
@@ -380,10 +384,14 @@ async function appendPostCompactionRefreshPrompt(params: {
     return;
   }
 
-  const existingPrompt = sanitizeChildResultTextForModel(
-    normalizeOptionalString(params.followupRun.run.extraSystemPrompt),
-    { surface: "post-compaction-context-existing-prompt" },
+  const normalizedExistingPrompt = normalizeOptionalString(
+    params.followupRun.run.extraSystemPrompt,
   );
+  const existingPrompt = normalizedExistingPrompt
+    ? sanitizeChildResultTextForModel(normalizedExistingPrompt, {
+        surface: "post-compaction-context-existing-prompt",
+      })
+    : undefined;
   if (existingPrompt?.includes(refreshPrompt)) {
     return;
   }

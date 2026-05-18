@@ -485,15 +485,15 @@ export function queryCanonicalOrchestratorState(params: {
   }
   const queriedIssues = selectedIssue ? [selectedIssue] : issues;
   const issueStateHash = issueStateHashFor(queriedIssues);
-  const nowMs = Number.isFinite(params.nowMs) ? Number(params.nowMs) : Date.now();
+  const nowMs =
+    typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
   const maxAgeMs = Number.isFinite(params.maxAgeMs) ? Number(params.maxAgeMs) : undefined;
-  const staleByAge = Boolean(
+  const staleByAge =
     maxAgeMs != null &&
     maxAgeMs >= 0 &&
     [orchestrator?.mtimeMs, ...queriedIssues.map((issue) => issue.mtimeMs)]
       .filter((mtime): mtime is number => typeof mtime === "number")
-      .some((mtime) => nowMs - mtime > maxAgeMs),
-  );
+      .some((mtime) => nowMs - mtime > maxAgeMs);
   const derivedStateStale = derivedState?.stale === true;
   return {
     helperId: CANONICAL_ORCHESTRATOR_STATE_QUERY_HELPER_ID,

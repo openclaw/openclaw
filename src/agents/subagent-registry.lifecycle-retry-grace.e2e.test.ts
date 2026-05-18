@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
 import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
+import * as registryRuntime from "./subagent-announce.registry.runtime.js";
 import * as mod from "./subagent-registry.js";
 
 const noop = () => {};
@@ -171,6 +173,9 @@ describe("subagent registry lifecycle error grace", () => {
         countPendingDescendantRuns: mod.countPendingDescendantRuns,
         countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
         getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
+        beginSubagentCompletionDedupe: registryRuntime.beginSubagentCompletionDedupe,
+        markSubagentCompletionDedupeDelivered:
+          registryRuntime.markSubagentCompletionDedupeDelivered,
         isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
         listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
         replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteer,
@@ -302,6 +307,28 @@ describe("subagent registry lifecycle error grace", () => {
     ]);
   }
 
+  function sha256Text(text: string): string {
+    return createHash("sha256").update(text).digest("hex");
+  }
+
+  function expectQuarantinedResultForRawText(result: string | undefined, rawText: string) {
+    expect(result).toContain("Child result summary (raw body quarantined)");
+    expect(result).toContain(`quarantineSha256=${sha256Text(rawText)}`);
+    expect(result).not.toContain(rawText);
+  }
+
+  function expectQuarantinedResultForCappedRawText(result: string | undefined) {
+    expect(result).toContain("Child result summary (raw body quarantined)");
+    expect(result).toContain("quarantineSizeBytes=102400");
+    expect(Buffer.byteLength(result ?? "", "utf8")).toBeLessThanOrEqual(100 * 1024);
+  }
+
+  function getOnlyAgentResultForChildSession(childSessionKey: string): string {
+    const results = getAgentResultsForChildSession(childSessionKey);
+    expect(results).toHaveLength(1);
+    return results[0] ?? "";
+  }
+
   function getAgentCalls() {
     return (callGatewayMock.mock.calls as [GatewayRequest][])
       .map(([request]) => request)
@@ -390,9 +417,10 @@ describe("subagent registry lifecycle error grace", () => {
     await flushAsync();
 
     await waitForAgentCallCount(1);
-    expect(getAgentResultsForChildSession("agent:main:subagent:freeze")).toEqual([
+    expectQuarantinedResultForRawText(
+      getOnlyAgentResultForChildSession("agent:main:subagent:freeze"),
       "Final answer X",
-    ]);
+    );
 
     await waitForCleanupHandledFalse("run-freeze");
 
@@ -401,10 +429,11 @@ describe("subagent registry lifecycle error grace", () => {
     await flushAsync();
 
     await waitForAgentCallCount(2);
-    expect(getAgentResultsForChildSession("agent:main:subagent:freeze")).toEqual([
-      "Final answer X",
-      "Final answer X",
-    ]);
+    const freezeResults = getAgentResultsForChildSession("agent:main:subagent:freeze");
+    expect(freezeResults).toHaveLength(2);
+    expectQuarantinedResultForRawText(freezeResults[0], "Final answer X");
+    expectQuarantinedResultForRawText(freezeResults[1], "Final answer X");
+    expect(freezeResults.join("\n")).not.toContain("Late reply Y");
   });
 
   it("refreshes frozen completion output from later turns in the same session", async () => {
@@ -420,9 +449,10 @@ describe("subagent registry lifecycle error grace", () => {
     await flushAsync();
 
     await waitForAgentCallCount(1);
-    expect(getAgentResultsForChildSession("agent:main:subagent:refresh")).toEqual([
+    expectQuarantinedResultForRawText(
+      getOnlyAgentResultForChildSession("agent:main:subagent:refresh"),
       "Both spawned. Waiting for completion events...",
-    ]);
+    );
 
     await waitForCleanupHandledFalse("run-refresh");
 
@@ -453,10 +483,16 @@ describe("subagent registry lifecycle error grace", () => {
     await flushAsync();
 
     await waitForAgentCallCount(2);
-    expect(getAgentResultsForChildSession("agent:main:subagent:refresh")).toEqual([
+    const refreshResults = getAgentResultsForChildSession("agent:main:subagent:refresh");
+    expect(refreshResults).toHaveLength(2);
+    expectQuarantinedResultForRawText(
+      refreshResults[0],
       "Both spawned. Waiting for completion events...",
+    );
+    expectQuarantinedResultForRawText(
+      refreshResults[1],
       "All 3 subagents complete. Here's the final summary.",
-    ]);
+    );
   });
 
   it("ignores silent follow-up turns when refreshing frozen completion output", async () => {
@@ -487,10 +523,13 @@ describe("subagent registry lifecycle error grace", () => {
     await flushAsync();
 
     await waitForAgentCallCount(2);
-    expect(getAgentResultsForChildSession("agent:main:subagent:refresh-silent")).toEqual([
-      "All work complete, final summary",
-      "All work complete, final summary",
-    ]);
+    const silentRefreshResults = getAgentResultsForChildSession(
+      "agent:main:subagent:refresh-silent",
+    );
+    expect(silentRefreshResults).toHaveLength(2);
+    expectQuarantinedResultForRawText(silentRefreshResults[0], "All work complete, final summary");
+    expectQuarantinedResultForRawText(silentRefreshResults[1], "All work complete, final summary");
+    expect(silentRefreshResults.join("\n")).not.toContain("NO_REPLY");
   });
 
   it("regression, captures frozen completion output with 100KB cap and retains it for keep-mode cleanup", async () => {
@@ -503,8 +542,7 @@ describe("subagent registry lifecycle error grace", () => {
     await waitForAgentCallCount(1);
     const cappedResults = getAgentResultsForChildSession("agent:main:subagent:capped");
     expect(cappedResults).toHaveLength(1);
-    expect(cappedResults[0]).toContain("[truncated: frozen completion output exceeded 100KB");
-    expect(Buffer.byteLength(cappedResults[0] ?? "", "utf8")).toBeLessThanOrEqual(100 * 1024);
+    expectQuarantinedResultForCappedRawText(cappedResults[0]);
 
     const run = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
@@ -544,13 +582,17 @@ describe("subagent registry lifecycle error grace", () => {
 
     await waitForAgentCallCount(4);
 
-    expect(getAgentResultsForChildSession("agent:main:subagent:parallel-a")).toEqual([
-      "Final answer A",
-      "Final answer A",
-    ]);
-    expect(getAgentResultsForChildSession("agent:main:subagent:parallel-b")).toEqual([
-      "Final answer B",
-      "Final answer B",
-    ]);
+    const parallelAResults = getAgentResultsForChildSession("agent:main:subagent:parallel-a");
+    const parallelBResults = getAgentResultsForChildSession("agent:main:subagent:parallel-b");
+    expect(parallelAResults).toHaveLength(2);
+    expect(parallelBResults).toHaveLength(2);
+    for (const result of parallelAResults) {
+      expectQuarantinedResultForRawText(result, "Final answer A");
+      expect(result).not.toContain("Late overwrite");
+    }
+    for (const result of parallelBResults) {
+      expectQuarantinedResultForRawText(result, "Final answer B");
+      expect(result).not.toContain("Late overwrite");
+    }
   });
 });

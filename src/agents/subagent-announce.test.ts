@@ -36,23 +36,25 @@ let mockConfig: ReturnType<(typeof import("../config/config.js"))["getRuntimeCon
 
 const { subagentRegistryRuntimeMock } = vi.hoisted(() => ({
   subagentRegistryRuntimeMock: {
-    shouldIgnorePostCompletionAnnounceForSession: vi.fn(() => false),
-    isSubagentSessionRunActive: vi.fn(() => true),
-    countActiveDescendantRuns: vi.fn(() => 0),
-    countPendingDescendantRuns: vi.fn(() => 0),
-    countPendingDescendantRunsExcludingRun: vi.fn(() => 0),
-    listSubagentRunsForRequester: vi.fn(() => []),
-    getLatestSubagentRunByChildSessionKey: vi.fn(() => null),
-    beginSubagentCompletionDedupe: vi.fn(() => ({
+    shouldIgnorePostCompletionAnnounceForSession: vi.fn((_childSessionKey?: string) => false),
+    isSubagentSessionRunActive: vi.fn((_childSessionKey?: string) => true),
+    countActiveDescendantRuns: vi.fn((_rootSessionKey?: string) => 0),
+    countPendingDescendantRuns: vi.fn((_rootSessionKey?: string) => 0),
+    countPendingDescendantRunsExcludingRun: vi.fn(
+      (_rootSessionKey?: string, _excludeRunId?: string) => 0,
+    ),
+    listSubagentRunsForRequester: vi.fn((_requesterSessionKey?: string): unknown[] => []),
+    getLatestSubagentRunByChildSessionKey: vi.fn((_childSessionKey?: string): unknown => null),
+    beginSubagentCompletionDedupe: vi.fn((_params?: unknown) => ({
       duplicate: false,
       counters: { seenCount: 1, duplicateCount: 0 },
     })),
-    markSubagentCompletionDedupeDelivered: vi.fn(() => ({
+    markSubagentCompletionDedupeDelivered: vi.fn((_params?: unknown) => ({
       duplicate: false,
       counters: { seenCount: 1, duplicateCount: 0 },
     })),
-    replaceSubagentRunAfterSteer: vi.fn(() => true),
-    resolveRequesterForChildSession: vi.fn(() => null),
+    replaceSubagentRunAfterSteer: vi.fn((_params?: unknown) => true),
+    resolveRequesterForChildSession: vi.fn((_childSessionKey?: string): unknown => null),
   },
 }));
 
@@ -234,6 +236,20 @@ function requireAgentCall() {
   return call;
 }
 
+function requireStringValue(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new TypeError(`expected ${label} to be a string`);
+  }
+  return value;
+}
+
+function requireRecordValue(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
 describe("subagent wait outcome timing", () => {
   it.each([
     { wait: { status: "ok" }, expected: { status: "ok" } },
@@ -364,7 +380,7 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     const agentCall = requireAgentCall();
-    const message = String(agentCall.params?.message ?? "");
+    const message = requireStringValue(agentCall.params?.message, "agent message");
     const event = (
       agentCall.params?.internalEvents as
         | Array<{
@@ -436,7 +452,7 @@ describe("subagent announce seam flow", () => {
       profileKey: "default",
       promptHash: "c".repeat(64),
     };
-    subagentRegistryRuntimeMock.listSubagentRunsForRequester.mockImplementation((key: string) =>
+    subagentRegistryRuntimeMock.listSubagentRunsForRequester.mockImplementation((key?: string) =>
       key === "agent:main:main"
         ? [
             {
@@ -586,7 +602,7 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     const agentCall = requireAgentCall();
-    const message = String(agentCall.params?.message ?? "");
+    const message = requireStringValue(agentCall.params?.message, "agent message");
     const event = (
       agentCall.params?.internalEvents as
         | Array<{
@@ -683,7 +699,7 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     const agentCall = requireAgentCall();
-    const message = String(agentCall.params?.message ?? "");
+    const message = requireStringValue(agentCall.params?.message, "agent message");
     const event = (
       agentCall.params?.internalEvents as
         | Array<{
@@ -727,7 +743,7 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     const agentCall = requireAgentCall();
-    const message = String(agentCall.params?.message ?? "");
+    const message = requireStringValue(agentCall.params?.message, "agent message");
     const event = (
       agentCall.params?.internalEvents as
         | Array<{
@@ -783,7 +799,7 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     const queuedCall = requireQueuedMessageCall();
-    const queuedMessage = String(queuedCall[1]);
+    const queuedMessage = queuedCall[1];
     expect(queuedMessage).toContain("Task completion status card");
     expect(queuedMessage).toContain('"normalizedState": "FAIL"');
     expect(queuedMessage).toContain('"notAcceptanceEvidence": true');
@@ -795,11 +811,23 @@ describe("subagent announce seam flow", () => {
   it("builds duplicate completion status cards as user-visible suppression data", () => {
     const decision = buildChildCompletionDeliveryDecision({
       classification: {
+        schemaVersion: 1,
+        normalizedState: "CANCELLED",
+        classificationLabels: ["DUPLICATE_ANNOUNCE_SUPPRESSED"],
         transportOutcome: "completed",
         contractVerdict: CHILD_RESULT_DUPLICATE_COMPLETION,
         acceptanceEligible: false,
         reasons: ["DUPLICATE_COMPLETION"],
         safeSummary: "duplicate",
+        sanitizedMetadata: {
+          schemaVersion: 1,
+          normalizedState: "CANCELLED",
+          contractVerdict: CHILD_RESULT_DUPLICATE_COMPLETION,
+          acceptanceEligible: false,
+          classificationLabels: ["DUPLICATE_ANNOUNCE_SUPPRESSED"],
+          reasons: ["DUPLICATE_COMPLETION"],
+          transportOutcome: "completed",
+        },
       },
       rawBodySuppressed: true,
       outcome: { status: "ok" },
@@ -942,7 +970,7 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     const agentCall = requireAgentCall();
-    const message = String(agentCall.params?.message ?? "");
+    const message = requireStringValue(agentCall.params?.message, "agent message");
     const event = (
       agentCall.params?.internalEvents as
         | Array<{
@@ -1006,7 +1034,7 @@ describe("subagent announce seam flow", () => {
 
       expect(agentSpy).toHaveBeenCalledTimes(1);
       const agentCall = requireAgentCall();
-      const message = String(agentCall.params?.message ?? "");
+      const message = requireStringValue(agentCall.params?.message, "agent message");
       const event = (
         agentCall.params?.internalEvents as
           | Array<{
@@ -1039,8 +1067,11 @@ describe("subagent announce seam flow", () => {
           parentEventSuppressed: false,
         },
       });
-      expect(String(statusCard?.dedupe?.key ?? "")).toContain("childRunId=run-duplicate-replay");
-      expect(String(statusCard?.dedupe?.resultHash ?? "")).toMatch(/^[a-f0-9]{64}$/);
+      const dedupe = requireRecordValue(statusCard?.dedupe, "statusCard.dedupe");
+      expect(requireStringValue(dedupe.key, "dedupe.key")).toContain(
+        "childRunId=run-duplicate-replay",
+      );
+      expect(requireStringValue(dedupe.resultHash, "dedupe.resultHash")).toMatch(/^[a-f0-9]{64}$/);
       expect(statusCard?.quarantine?.artifactId ?? statusCard?.quarantine?.path).toMatch(/^q_/);
       expect(statusCard?.quarantine?.payloadHash ?? statusCard?.quarantine?.sha256).toMatch(
         /^[a-f0-9]{64}$/,

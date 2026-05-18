@@ -216,7 +216,7 @@ function sanitizeSuccessorEntry(entry: SessionEntry): SessionEntry | null {
   ) {
     return null;
   }
-  return sanitized as SessionEntry;
+  return sanitized;
 }
 
 function isDedupedStateEntry(entry: SessionEntry): boolean {

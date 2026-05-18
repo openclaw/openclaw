@@ -18,7 +18,7 @@ function uniqueNormalized(values) {
     seen.add(normalized);
     result.push(normalized);
   }
-  return result.sort();
+  return result.toSorted();
 }
 
 function escapeRegExp(value) {

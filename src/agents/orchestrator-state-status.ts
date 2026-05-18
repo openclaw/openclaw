@@ -23,7 +23,9 @@ function titleCaseStatus(value: string): string {
 }
 
 function canonicalStatusText(value: unknown, depth = 0): string | undefined {
-  if (depth > 4) return undefined;
+  if (depth > 4) {
+    return undefined;
+  }
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     const text = String(value).trim();
     return text || undefined;
@@ -31,11 +33,15 @@ function canonicalStatusText(value: unknown, depth = 0): string | undefined {
   if (Array.isArray(value)) {
     for (const entry of value) {
       const nested = canonicalStatusText(entry, depth + 1);
-      if (nested) return nested;
+      if (nested) {
+        return nested;
+      }
     }
     return undefined;
   }
-  if (!isRecord(value)) return undefined;
+  if (!isRecord(value)) {
+    return undefined;
+  }
   for (const key of [
     "state",
     "status",
@@ -49,14 +55,18 @@ function canonicalStatusText(value: unknown, depth = 0): string | undefined {
     "title",
   ]) {
     const nested = canonicalStatusText(value[key], depth + 1);
-    if (nested) return nested;
+    if (nested) {
+      return nested;
+    }
   }
   return undefined;
 }
 
 export function firstCanonicalStateStatusValue(values: unknown[]): unknown {
   for (const value of values) {
-    if (canonicalStatusText(value)) return value;
+    if (canonicalStatusText(value)) {
+      return value;
+    }
   }
   return undefined;
 }

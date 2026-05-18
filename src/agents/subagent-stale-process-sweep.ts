@@ -113,12 +113,14 @@ export function detectSubagentStaleProcessRisk(params: {
     noRunningProcesses: false,
     relevantProcessCount: relevant.length,
     reasons: ["RELEVANT_CHILD_OR_TEST_PROCESS_STILL_RUNNING"],
-    processes: relevant.map((process) => ({
-      pid: process.pid,
-      ...(typeof process.ppid === "number" ? { ppid: process.ppid } : {}),
-      ...(process.command ? { command: process.command } : {}),
-      ...(process.cwd ? { cwd: process.cwd } : {}),
-    })),
+    processes: relevant.map((process) =>
+      Object.assign(
+        { pid: process.pid },
+        typeof process.ppid === "number" ? { ppid: process.ppid } : {},
+        process.command ? { command: process.command } : {},
+        process.cwd ? { cwd: process.cwd } : {},
+      ),
+    ),
   };
 }
 

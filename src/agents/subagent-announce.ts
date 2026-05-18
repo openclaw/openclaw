@@ -191,7 +191,7 @@ function latestRegistryRunIndicatesDuplicateCompletion(params: {
   );
 }
 
-function resolveAnnounceActiveTaskContract(explicit: unknown | undefined): unknown | undefined {
+function resolveAnnounceActiveTaskContract(explicit: unknown): unknown {
   if (explicit !== undefined) {
     return explicit;
   }
@@ -528,12 +528,11 @@ function buildCompletionPresentation(params: {
   })();
   return {
     mode: "status_card",
-    ordinaryChatBubble:
-      params.deliveryPolicy.userDeliveryEligible === false
-        ? "suppressed"
-        : "allowed_verified_summary",
+    ordinaryChatBubble: !params.deliveryPolicy.userDeliveryEligible
+      ? "suppressed"
+      : "allowed_verified_summary",
     collapsedByDefault:
-      params.deliveryPolicy.userDeliveryEligible === false ||
+      !params.deliveryPolicy.userDeliveryEligible ||
       params.deliveryPolicy.deliveryState === "quarantined" ||
       params.deliveryPolicy.deliveryState === "suppressed_duplicate",
     severity,
@@ -549,8 +548,7 @@ function buildRawOpenWorkflowMetadata(
     return undefined;
   }
   return {
-    available:
-      quarantineArtifact.payloadStored === true && quarantineArtifact.storageStatus === "stored",
+    available: quarantineArtifact.payloadStored && quarantineArtifact.storageStatus === "stored",
     requiredAction: "open_raw_quarantine_artifact",
     localOperatorActionRequired: true,
     warning:
@@ -598,16 +596,15 @@ function buildCompletionStatusCard(params: {
 }): AgentTaskCompletionStatusCard {
   const { classification, deliveryPolicy } = params;
   const notAcceptanceEvidence = !(
-    classification.acceptanceEligible === true && classification.normalizedState === "VERIFIED_PASS"
+    classification.acceptanceEligible && classification.normalizedState === "VERIFIED_PASS"
   );
   const schemaValid =
     classification.parsedReport?.schemaValid === true ||
     (classification.contractVerdict === CHILD_RESULT_SCHEMA_VALID &&
-      classification.acceptanceEligible === true);
+      classification.acceptanceEligible);
   const verifierDecision =
     classification.evidenceVerifier?.decision ??
-    (classification.acceptanceEligible === true &&
-    classification.normalizedState === "VERIFIED_PASS"
+    (classification.acceptanceEligible && classification.normalizedState === "VERIFIED_PASS"
       ? "VERIFIED_PASS"
       : "EVIDENCE_UNVERIFIED");
   const evidenceReasons = classification.evidenceVerifier?.reasons?.length
@@ -1122,7 +1119,7 @@ export async function runSubagentAnnounceFlow(params: {
       try {
         latestRunForChild = subagentRegistryRuntime?.getLatestSubagentRunByChildSessionKey?.(
           params.childSessionKey,
-        ) as SubagentRunRecord | null | undefined;
+        );
         return latestRegistryRunIndicatesDuplicateCompletion({
           latestRun: latestRunForChild,
           childRunId: params.childRunId,
@@ -1153,7 +1150,7 @@ export async function runSubagentAnnounceFlow(params: {
           resultHash: completionDedupe.metadata.resultHash,
           backgrounded: completionDedupe.backgrounded,
         });
-        const registryDuplicate = dedupeBegin.duplicate === true;
+        const registryDuplicate = dedupeBegin.duplicate;
         const duplicateCompletion = completionDedupe.duplicateCompletion || registryDuplicate;
         const registrySeenCount = Math.max(1, dedupeBegin.counters.seenCount ?? 1);
         const registryDeliveredCount = Math.max(0, dedupeBegin.counters.deliveredCount ?? 0);
@@ -1222,7 +1219,7 @@ export async function runSubagentAnnounceFlow(params: {
       }
       const observedAtMs = Date.now();
       return {
-        ...(params.parentRuntimeEvidence ?? {}),
+        ...params.parentRuntimeEvidence,
         observedBy: params.parentRuntimeEvidence?.observedBy ?? "parent_runtime",
         observedAtMs: params.parentRuntimeEvidence?.observedAtMs ?? observedAtMs,
         childRunId: params.parentRuntimeEvidence?.childRunId ?? params.childRunId,
@@ -1245,8 +1242,9 @@ export async function runSubagentAnnounceFlow(params: {
           return [];
         }
         return runs
-          .filter((entry): entry is SubagentRunRecord =>
-            Boolean(entry && entry.runId !== params.childRunId),
+          .filter(
+            (entry): entry is SubagentRunRecord =>
+              entry !== null && entry !== undefined && entry.runId !== params.childRunId,
           )
           .map((entry) => retryAttemptFromRunRecord(entry))
           .filter((attempt): attempt is ChildResultRetryAttempt => Boolean(attempt));

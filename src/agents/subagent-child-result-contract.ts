@@ -95,6 +95,15 @@ export const CHILD_RESULT_CONTRACT_VERDICTS = [
 ] as const;
 
 export type ChildResultContractVerdict = (typeof CHILD_RESULT_CONTRACT_VERDICTS)[number];
+type ChildResultContractVerdictLike = ChildResultContractVerdict | (string & {});
+type ChildRunOutcomeStatus =
+  | "ok"
+  | "error"
+  | "timeout"
+  | "cancelled"
+  | "canceled"
+  | "unknown"
+  | (string & {});
 export type ChildResultRetryPolicyVerdict =
   | typeof CHILD_RESULT_RETRY_ALLOWED
   | typeof CHILD_RESULT_RETRY_POLICY_EXHAUSTED;
@@ -125,7 +134,7 @@ export type ChildResultRawSource =
   | "unknown";
 
 type ChildRunOutcomeLike = {
-  status?: "ok" | "error" | "timeout" | "cancelled" | "canceled" | "unknown" | string;
+  status?: ChildRunOutcomeStatus;
   error?: string;
 };
 
@@ -172,7 +181,7 @@ export type ChildResultQuarantineArtifact = {
   createdAt: string;
   truncated: boolean;
   redacted: boolean;
-  reason: ChildResultContractVerdict | string;
+  reason: ChildResultContractVerdictLike;
   status: ChildResultNormalizedState;
   classifications: ChildResultClassificationLabel[];
   storageStatus: ChildResultQuarantineStorageStatus;
@@ -219,6 +228,7 @@ export type ChildResultScopedGateProcess = {
 };
 
 export type ChildResultParentRuntimeObserver = "parent_runtime" | "checker" | "mediator";
+type ChildResultParentRuntimeObserverLike = ChildResultParentRuntimeObserver | (string & {});
 
 export type ChildResultParentRuntimeFileEvidence = {
   artifactId?: string;
@@ -281,7 +291,7 @@ export type ChildResultParentRuntimeStaleProcessSweepEvidence = {
 };
 
 export type ChildResultParentRuntimeEvidence = {
-  observedBy: ChildResultParentRuntimeObserver | string;
+  observedBy: ChildResultParentRuntimeObserverLike;
   observedAt?: string;
   observedAtMs?: number;
   sessionId?: string;
@@ -352,7 +362,7 @@ export type ChildResultClassificationParams = {
 };
 
 export type ChildResultRetryAttempt = {
-  contractVerdict?: ChildResultContractVerdict | string;
+  contractVerdict?: ChildResultContractVerdictLike;
   mechanismKey?: string;
   mechanismChanges?: string[];
   profileKey?: string;
@@ -442,12 +452,12 @@ export type ChildResultClassification = {
   retryPolicy?: ChildResultRetryPolicyDecision;
 };
 
-const DEFAULT_MAX_QUARANTINE_BODY_CHARS = 8_192;
 const DEFAULT_MAX_PARENT_SUMMARY_CHARS = 1_200;
 const DEFAULT_MAX_VERIFIED_ARTIFACT_BYTES = 512 * 1024;
 const POSIX_PRIVATE_DIR_MODE = 0o700;
 const POSIX_PRIVATE_FILE_MODE = 0o600;
-const ANSI_ESCAPE_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
+const ANSI_ESCAPE_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[ -/]*[@-~]`, "g");
+const NULL_BYTE_RE = new RegExp(String.fromCharCode(0), "g");
 const HASH_RE = /^[a-f0-9]{64}$/i;
 const RUNNING_GATE_STATUSES = new Set(["active", "in_progress", "pending", "running", "started"]);
 const CLEAN_GATE_EVIDENCE_STATUSES = new Set([
@@ -834,7 +844,7 @@ function scanSensitivity(text: string): ChildResultRedactionSummary {
   return {
     scanned: true,
     redacted: flags.size > 0,
-    flags: [...flags].sort(),
+    flags: [...flags].toSorted(),
     tokenLikeCount,
     credentialKeyCount,
     privateKeyLikeCount,
@@ -843,7 +853,7 @@ function scanSensitivity(text: string): ChildResultRedactionSummary {
 }
 
 function normalizeForParsing(text: string): string {
-  return text.replace(ANSI_ESCAPE_RE, "").replace(/\u0000/g, "");
+  return text.replace(ANSI_ESCAPE_RE, "").replace(NULL_BYTE_RE, "");
 }
 
 function defaultOpenClawQuarantineRoot(): string {
@@ -1100,7 +1110,7 @@ function quarantineRecord(params: {
   sizeBytes: number;
   source: ChildResultRawSource;
   createdAt: string;
-  reason: ChildResultContractVerdict | string;
+  reason: ChildResultContractVerdictLike;
   status: ChildResultNormalizedState;
   classifications: ChildResultClassificationLabel[];
   storageStatus: ChildResultQuarantineStorageStatus;
@@ -1181,7 +1191,7 @@ function metadataJsonForQuarantine(
 export function quarantineChildResultOutput(params: {
   rawText: string;
   source?: ChildResultRawSource;
-  reason: ChildResultContractVerdict | string;
+  reason: ChildResultContractVerdictLike;
   quarantineRoot?: string;
   maxBodyChars?: number;
   maxArtifactBytes?: number;
@@ -1881,7 +1891,7 @@ function classification(params: {
     ...baseClassificationLabels,
     params.quarantineArtifact && "MALFORMED_QUARANTINED",
     normalizedState === "UNVERIFIED" && "UNVERIFIED",
-    acceptanceEligible !== true && "NOT_ACCEPTANCE_EVIDENCE",
+    !acceptanceEligible && "NOT_ACCEPTANCE_EVIDENCE",
   ]);
   const base = {
     schemaVersion: CHILD_RESULT_SCHEMA_VERSION,
@@ -3372,7 +3382,7 @@ function applyRetryPolicyToClassification(params: {
   }
 
   const currentAttempt: ChildResultRetryAttempt = {
-    ...(classificationParams.currentRetryAttempt ?? {}),
+    ...classificationParams.currentRetryAttempt,
     contractVerdict: classificationResult.contractVerdict,
   };
   const retryPolicy = decideChildResultRetryPolicy({

@@ -192,7 +192,7 @@ export type AgentTaskCompletionStatusCard = {
   byteCount?: number;
   schemaValid?: boolean;
   notAcceptanceEvidence?: boolean;
-  verifierDecision?: "VERIFIED_PASS" | "EVIDENCE_UNVERIFIED" | string;
+  verifierDecision?: "VERIFIED_PASS" | "EVIDENCE_UNVERIFIED" | (string & {});
   evidenceParentObserved?: boolean;
   evidenceObservedBy?: string;
   evidenceReasons?: string[];

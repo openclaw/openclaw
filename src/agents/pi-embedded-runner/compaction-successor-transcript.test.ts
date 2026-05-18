@@ -489,11 +489,7 @@ describe("shouldRotateCompactionTranscript", () => {
     const rawNeedle = ["SUCCESSOR", "TRANSCRIPT", "SECRET", "LINE"].join("_");
     const begin = ["<<<", "BEGIN_UNTRUSTED_CHILD_RESULT", ">>>"].join("");
     const end = ["<<<", "END_UNTRUSTED_CHILD_RESULT", ">>>"].join("");
-    manager.appendMessage({
-      role: "assistant",
-      content: `${begin}\n${rawNeedle}\n${end}`,
-      timestamp: 7,
-    });
+    manager.appendMessage(makeAssistant(`${begin}\n${rawNeedle}\n${end}`, 7));
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,

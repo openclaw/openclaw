@@ -940,9 +940,12 @@
   },
   {
     "deferLoading": true,
-    "description": "Fetch sanitized history for visible session. Use before replying, debugging, resuming; supports limits/tool messages.",
+    "description": "Fetch sanitized history for visible session; set audit=true for exact redacted file-backed export. Use before replying, debugging, resuming; supports limits/tool messages, but bounded views are not audit-grade.",
     "inputSchema": {
       "properties": {
+        "audit": {
+          "type": "boolean"
+        },
         "includeTools": {
           "type": "boolean"
         },
@@ -1031,6 +1034,52 @@
           "maxItems": 50,
           "type": "array"
         },
+        "capabilityPreflight": {
+          "properties": {
+            "artifactOutputPath": {
+              "type": "string"
+            },
+            "expectedRuntimeSeconds": {
+              "minimum": 0,
+              "type": "number"
+            },
+            "logOutputPath": {
+              "type": "string"
+            },
+            "profile": {
+              "enum": ["default", "read-only", "image-only"],
+              "type": "string"
+            },
+            "readableRoots": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "requiredTools": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "requiresShell": {
+              "type": "boolean"
+            },
+            "scratchPaths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "writablePaths": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        },
         "cleanup": {
           "enum": ["delete", "keep"],
           "type": "string"
@@ -1075,6 +1124,37 @@
         "taskName": {
           "description": "Stable alias for later targeting; lowercase letters/digits/underscores, starts letter.",
           "type": "string"
+        },
+        "taskSizing": {
+          "properties": {
+            "fileReferenceLimit": {
+              "minimum": 1,
+              "type": "number"
+            },
+            "finalOutputByteLimit": {
+              "minimum": 1,
+              "type": "number"
+            },
+            "primaryObjectives": {
+              "minimum": 1,
+              "type": "number"
+            },
+            "readByteSoftLimit": {
+              "minimum": 1,
+              "type": "number"
+            },
+            "requiresLogRedirection": {
+              "type": "boolean"
+            },
+            "sourceHeavy": {
+              "type": "boolean"
+            },
+            "taskPacketByteLimit": {
+              "minimum": 1,
+              "type": "number"
+            }
+          },
+          "type": "object"
         },
         "thinking": {
           "type": "string"

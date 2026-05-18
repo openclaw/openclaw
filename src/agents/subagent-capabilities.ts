@@ -189,8 +189,8 @@ function makePreflightFailure(params: {
     code: SUBAGENT_CAPABILITY_PREFLIGHT_PROFILE_MISMATCH,
     message: `${SUBAGENT_CAPABILITY_PREFLIGHT_PROFILE_MISMATCH}: ${reasons.join("; ")}`,
     reasons,
-    missingTools: [...new Set(params.missingTools ?? [])].sort(),
-    blockedPaths: [...new Set(params.blockedPaths ?? [])].sort(),
+    missingTools: [...new Set(params.missingTools ?? [])].toSorted(),
+    blockedPaths: [...new Set(params.blockedPaths ?? [])].toSorted(),
   };
 }
 
@@ -267,7 +267,9 @@ export function validateSubagentCapabilityPreflight(
     }
   }
   if (missingTools.length > 0) {
-    reasons.push(`required tool(s) unavailable: ${[...new Set(missingTools)].sort().join(", ")}`);
+    reasons.push(
+      `required tool(s) unavailable: ${[...new Set(missingTools)].toSorted().join(", ")}`,
+    );
   }
 
   if (expectedRuntimeSeconds && runtime?.runTimeoutSeconds && runtime.runTimeoutSeconds > 0) {
@@ -334,7 +336,7 @@ export function validateSubagentCapabilityPreflight(
     ok: true,
     normalized: {
       profile,
-      requiredTools: [...effectiveRequiredTools].sort(),
+      requiredTools: [...effectiveRequiredTools].toSorted(),
       writablePaths,
       readableRoots,
       scratchPaths,

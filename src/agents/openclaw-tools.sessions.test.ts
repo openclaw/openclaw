@@ -739,7 +739,7 @@ describe("sessions tools", () => {
 
   it("sessions_history sets contentRedacted when sensitive data is redacted", async () => {
     callGatewayMock.mockReset();
-    const fakeOpenAiKey = "sk-" + "1234567890abcdef1234";
+    const fakeOpenAiKey = ["sk-", "1234567890abcdef1234"].join("");
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "chat.history") {
@@ -781,7 +781,7 @@ describe("sessions tools", () => {
   it("sessions_history sets both contentRedacted and contentTruncated independently", async () => {
     callGatewayMock.mockReset();
     const longPrefix = "safe text ".repeat(420);
-    const fakeOpenAiKey = "sk-" + "9876543210fedcba9876";
+    const fakeOpenAiKey = ["sk-", "9876543210fedcba9876"].join("");
     const sensitiveText = `${longPrefix} ${fakeOpenAiKey} end`;
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };

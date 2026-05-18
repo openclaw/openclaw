@@ -245,7 +245,7 @@ async function summarizeViaLLM(params: {
     surface: "compaction-llm-summary-input",
   });
   const messages = prependPreviousSummaryForRedistill({
-    messages: params.messages,
+    messages: sanitizedMessagesForSummary,
     previousSummary: params.previousSummary,
   });
   return compactionSafeguardDeps.summarizeInStages({

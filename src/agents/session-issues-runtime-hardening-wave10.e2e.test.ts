@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+// @ts-expect-error -- scripts/run-vitest.mjs is a checked ESM script without a declaration in src test config.
 import { buildVitestProgressPulse } from "../../scripts/run-vitest.mjs";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
 import {
@@ -51,6 +52,13 @@ function fixtureById(corpus: FixtureCorpus, id: string) {
     throw new Error(`missing fixture ${id}`);
   }
   return fixture;
+}
+
+function requireString(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`missing ${label}`);
+  }
+  return value;
 }
 
 function activeContract(outputPath: string): ActiveTaskContract {
@@ -175,6 +183,7 @@ describe("Wave 10 session-issues runtime hardening integration", () => {
         rawSource: "tool_log",
         outcome: { status: "ok" },
         quarantineRoot,
+        allowUnsafeQuarantineRoot: true,
         activeTaskContract: contract,
         childTaskId: contract.taskId,
       });
@@ -184,7 +193,11 @@ describe("Wave 10 session-issues runtime hardening integration", () => {
       expect(parentVisible.rawBodySuppressed).toBe(true);
       expect(parentVisible.parentVisibleText).not.toContain(sentinel);
       expect(parentVisible.classification.quarantineArtifact?.path).toBeTruthy();
-      expect(fs.existsSync(parentVisible.classification.quarantineArtifact!.path)).toBe(true);
+      expect(
+        fs.existsSync(
+          requireString(parentVisible.classification.quarantineArtifact?.path, "quarantine path"),
+        ),
+      ).toBe(true);
       expect(parentVisible.classification.quarantineArtifact?.sha256).toMatch(/^[a-f0-9]{64}$/);
 
       const duplicateVisible = buildParentVisibleChildResult({
@@ -193,6 +206,7 @@ describe("Wave 10 session-issues runtime hardening integration", () => {
         outcome: { status: "ok" },
         duplicateCompletion: true,
         quarantineRoot,
+        allowUnsafeQuarantineRoot: true,
         activeTaskContract: contract,
         childTaskId: contract.taskId,
       });

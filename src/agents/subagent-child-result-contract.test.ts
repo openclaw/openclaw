@@ -119,7 +119,7 @@ function verifiedRuntimeEvidence(
   const logSnapshot = fileSnapshot(log.path);
   const artifacts = (options.artifacts ?? []).map((artifact) => {
     const snapshot = fileSnapshot(artifact.path);
-    return { ...snapshot, sha256: artifact.sha256 ?? snapshot.sha256 };
+    return Object.assign({}, snapshot, { sha256: artifact.sha256 ?? snapshot.sha256 });
   });
   const childRunId = options.childRunId ?? "run-runtime-hardening-wave1";
   const childSessionKey = options.childSessionKey ?? "agent:main:subagent:wave1";

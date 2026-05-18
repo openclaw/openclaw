@@ -129,11 +129,7 @@ export type ActiveTaskPriorityHint = {
   taskId?: string;
   currentUserRequest?: string;
   activeTaskContractId?: string;
-  signal?:
-    | typeof ACTIVE_MEMORY_UNAVAILABLE
-    | typeof ACTIVE_MEMORY_TIMEOUT
-    | typeof ACTIVE_TASK_PRIORITY_CONFLICT
-    | string;
+  signal?: string;
   status?: string;
   reasonCode?: string;
   blocker?: boolean;

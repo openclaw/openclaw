@@ -981,7 +981,10 @@ function readResearchAutomationActionKind(
   ) {
     return requested as ResearchAutomationActionKind;
   }
-  const haystack = [allInputText, String(explicitSessionsSpawnArgs?.task ?? "")].join("\n");
+  const explicitSessionsSpawnTask = explicitSessionsSpawnArgs
+    ? (stringField(explicitSessionsSpawnArgs, "task") ?? "")
+    : "";
+  const haystack = [allInputText, explicitSessionsSpawnTask].join("\n");
   if (/\bmanual research\b/i.test(haystack)) {
     return "manual_research";
   }
@@ -1007,7 +1010,10 @@ function isAuthorizationSensitiveResearchRequest(
   allInputText: string,
   explicitSessionsSpawnArgs: Record<string, unknown> | null,
 ) {
-  const haystack = [allInputText, String(explicitSessionsSpawnArgs?.task ?? "")].join("\n");
+  const explicitSessionsSpawnTask = explicitSessionsSpawnArgs
+    ? (stringField(explicitSessionsSpawnArgs, "task") ?? "")
+    : "";
+  const haystack = [allInputText, explicitSessionsSpawnTask].join("\n");
   return QA_AUTHORIZATION_SENSITIVE_RESEARCH_PROMPT_RE.test(haystack);
 }
 
