@@ -69,7 +69,7 @@ Core releases are performed by the release script:
 Usage:
 
 ```bash
-node scripts/polytropos-release.mjs release
+node scripts/polytropos-release.mjs release [--tgz <path>]
 ```
 
 What it does (high level):
@@ -77,12 +77,23 @@ What it does (high level):
 - finds the nearest reachable release tag (`v<ver>` or `v<ver>+poly.<N>`) and derives the base upstream version `v<ver>` from it
 - computes next global build number `poly.N` (always increments)
 - creates tag `v<ver>+poly.<N>`
-- builds prepared artifacts (`pnpm install`, `pnpm build`, `pnpm ui:build` via the pack workflow)
+- obtains a release tarball either by building locally (default) or by promoting a provided CI-built tarball via --tgz
 - runs `npm pack` to produce `v<ver>+poly.<N>.tgz`
 - updates symlinks (mandatory): `previous.tgz` then `current.tgz`
 - installs `current.tgz` globally into `/home/ec2-user/.npm-global`
 - runs the Polytropos bundled plugin deps helper from the installed package (`scripts/polytropos-bundled-plugin-deps-helper.mjs`); it self-discovers the installed package root and ensures bundled plugin runtime deps are present
 - does not restart/activate the gateway (activation is a separate manual step)
+
+
+## CI-built artifacts (recommended)
+
+If local builds are unreliable or too heavy for the gateway host, run the GitHub Actions build+pack workflow and pass the resulting `.tgz` into the release script:
+
+```bash
+node scripts/polytropos-release.mjs release --tgz /path/to/openclaw-<ver>.tgz
+```
+
+The script validates the tarball (`package/package.json` name/version), stages it into `~/polytropos/releases/`, updates symlinks safely, installs globally, and runs the bundled plugin deps helper.
 
 ## Dev mode (without a second gateway)
 

@@ -285,6 +285,43 @@ function lnSfn(target, linkPath) {
   fs.symlinkSync(target, linkPath);
 }
 
+
+function assertSymlink(p, what) {
+  try {
+    const st = fs.lstatSync(p);
+    if (!st.isSymbolicLink()) {
+      fail(`${what} must be a symlink at ${p}`);
+    }
+  } catch (e) {
+    // ok if missing
+  }
+}
+
+function tgzInternalVersion(tgzPath) {
+  const raw = execFileSync("tar", ["-xOzf", tgzPath, "package/package.json"], { encoding: "utf8" });
+  const obj = JSON.parse(raw);
+  return { name: obj?.name, version: obj?.version };
+}
+
+function assertReleaseStoreConsistent(relRoot) {
+  const entries = fs.readdirSync(relRoot, { withFileTypes: true });
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    if (!e.name.startsWith("v") || !e.name.endsWith(".tgz")) continue;
+    const m = e.name.match(/^v([^+]+)(?:\+poly\.\d+)?\.tgz$/);
+    if (!m) continue;
+    const expected = m[1];
+    const full = path.join(relRoot, e.name);
+    const info = tgzInternalVersion(full);
+    if (info.name !== "openclaw") {
+      fail(`release store corruption: ${e.name} package name ${info.name}`);
+    }
+    if (info.version !== expected) {
+      fail(`release store corruption: ${e.name} contains version ${info.version} (expected ${expected})`);
+    }
+  }
+}
+
 function usage() {
   console.log(`polytropos-release.mjs
 
@@ -357,6 +394,8 @@ if (!tgzPath) {
 // Produce tarball into releases
 const relRoot = releasesRoot();
 fs.mkdirSync(relRoot, { recursive: true });
+assertReleaseStoreConsistent(relRoot);
+
 const tarName = `${polyTag}.tgz`;
 let tarPath;
 if (!tgzPath) {
@@ -379,13 +418,18 @@ if (!tgzPath) {
     fail(`release: tarball version ${pkg?.version} != expected ${expectedVersion}`);
   }
   tarPath = path.join(relRoot, tarName);
+  if (fs.existsSync(tarPath)) {
+    fail(`refusing to overwrite existing tarball: ${tarPath}`);
+  }
   fs.copyFileSync(srcAbs, tarPath);
   banner(logStream, `Promoted tarball: ${tarPath}`);
 }
 
 // Update symlinks: previous.tgz then current.tgz (mandatory)
 const currentTgz = path.join(relRoot, "current.tgz");
+assertSymlink(currentTgz, "current.tgz");
 const previousTgz = path.join(relRoot, "previous.tgz");
+assertSymlink(previousTgz, "previous.tgz");
 const currentTarget = readlinkAbs(currentTgz);
 if (currentTarget) {
   banner(logStream, `Setting previous.tgz -> ${currentTarget}`);
