@@ -549,6 +549,13 @@ export class CodexAppServerEventProjector {
           channelId: this.params.messageChannel ?? this.params.messageProvider ?? undefined,
         },
       });
+      // Signal completion to the runner. Without `completed: true`,
+      // src/auto-reply/reply/agent-runner-execution.ts treats this end event
+      // as a failure and emits the "\uD83E\uDDF9 Compaction incomplete" notice
+      // when agents.defaults.compaction.notifyUser is enabled. `item/completed`
+      // for a contextCompaction item is itself the Codex success signal
+      // (see compact.ts::compactCodexNativeThread), so this branch only fires
+      // on actual completion.
       this.emitAgentEvent({
         stream: "compaction",
         data: {
@@ -558,6 +565,7 @@ export class CodexAppServerEventProjector {
           threadId: this.threadId,
           turnId: this.turnId,
           itemId,
+          completed: true,
         },
       });
     }

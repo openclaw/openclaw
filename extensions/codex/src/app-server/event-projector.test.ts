@@ -1102,6 +1102,19 @@ describe("CodexAppServerEventProjector", () => {
         completed: true,
       },
     );
+    // Without `completed: true` on the end event, the auto-reply runner
+    // surfaces a misleading "\uD83E\uDDF9 Compaction incomplete" notice to
+    // users who opt into agents.defaults.compaction.notifyUser.
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "compaction",
+        data: expect.objectContaining({
+          phase: "end",
+          itemId: "compact-1",
+          completed: true,
+        }),
+      }),
+    );
     expect(result.toolMetas).toEqual([{ toolName: "sessions_send" }]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
       "user",
