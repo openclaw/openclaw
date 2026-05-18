@@ -1147,6 +1147,54 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("Risk: Low");
   });
 
+  it("treats noclobber override redirects as file writes", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-cat-noclobber-redirect",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: cat notes.txt>|out.txt",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("Action\nRun a terminal command");
+    expect(payload.text).toContain("- write terminal output into a file: out.txt");
+    expect(payload.text).toContain("Command preview\ncat notes.txt>|out.txt");
+    expect(payload.text).toContain("Risk: Medium");
+    expect(payload.text).toContain("Shell redirection can create or overwrite files.");
+    expect(payload.text).not.toContain("- read file contents: notes.txt");
+    expect(payload.text).not.toContain("Risk: Low");
+  });
+
+  it("skips leading noclobber override redirects before summarizing the command", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-leading-noclobber-redirect",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: >| /tmp/out rm -rf /tmp/x",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- delete files or folders: /tmp/x");
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain("Delete commands can permanently remove data.");
+    expect(payload.text).not.toContain("- run >|");
+    expect(payload.text).not.toContain("Risk: Medium");
+  });
+
   it("preserves leading input redirection targets before summarizing reads", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {

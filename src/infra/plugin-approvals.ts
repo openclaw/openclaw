@@ -39,7 +39,7 @@ export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 256;
 const SIMPLE_COMMAND_PREVIEW_MAX_LENGTH = 180;
 const SHELL_OUTPUT_REDIRECTION_RE =
-  /(?<![<>])(?:&>>?|\d*>>?)\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s;&|]+)/g;
+  /(?<![<>])(?:&>\||&>>?|\d*>\||\d*>>?)\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s;&|]+)/g;
 const SHELL_INPUT_REDIRECTION_RE =
   /(?<![<>])(?:\d*)<(?![<&])\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s;&|]+)/g;
 export const DEFAULT_PLUGIN_APPROVAL_LANGUAGE =
@@ -706,7 +706,7 @@ function splitPipelineStages(segment: string): string[] {
       current += char;
       continue;
     }
-    if (char === "|" && next !== "|") {
+    if (char === "|" && next !== "|" && !isShellRedirectionPipe(segment, index)) {
       pushCurrent();
       if (next === "&") {
         index += 1;
@@ -717,6 +717,10 @@ function splitPipelineStages(segment: string): string[] {
   }
   pushCurrent();
   return stages;
+}
+
+function isShellRedirectionPipe(command: string, index: number): boolean {
+  return (command[index - 1] ?? "") === ">";
 }
 
 function isPipeToShellSegment(segment: string): boolean {
@@ -1924,7 +1928,7 @@ function stripLeadingShellRedirectionWords(words: string[]): void {
 
 function parseLeadingShellRedirectionWord(word: string): { consumesNext: boolean } | null {
   const token = stripShellWordQuotes(word);
-  const operator = String.raw`(?:<<<|<<|<&|<>|<|>&|>>?|&>>?)`;
+  const operator = String.raw`(?:<<<|<<|<&|<>|<|>&|>\||>>?|&>\||&>>?)`;
   if (new RegExp(`^\\d*${operator}$`).test(token)) {
     return { consumesNext: true };
   }
