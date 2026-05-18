@@ -40,11 +40,10 @@
               "cacheWrite": 0
             },
             "compat": {
-              "supportsTools": false,
+              "supportsTools": true,
               "supportsUsageInStreaming": true,
               "maxTokensField": "max_tokens",
-              "requiresStringContent": true,
-              "strictMessageKeys": true
+              "requiresStringContent": true
             }
           },
           {
@@ -61,11 +60,10 @@
               "cacheWrite": 0
             },
             "compat": {
-              "supportsTools": false,
+              "supportsTools": true,
               "supportsUsageInStreaming": true,
               "maxTokensField": "max_tokens",
-              "requiresStringContent": true,
-              "strictMessageKeys": true
+              "requiresStringContent": true
             }
           },
           {
@@ -82,11 +80,10 @@
               "cacheWrite": 0
             },
             "compat": {
-              "supportsTools": false,
+              "supportsTools": true,
               "supportsUsageInStreaming": true,
               "maxTokensField": "max_tokens",
-              "requiresStringContent": true,
-              "strictMessageKeys": true
+              "requiresStringContent": true
             }
           }
         ]

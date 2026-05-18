@@ -55,7 +55,7 @@ describe("gigachat provider plugin", () => {
       "GigaChat-2-Max",
     ]);
     expect(models.every((model) => model.input.includes("text"))).toBe(true);
-    expect(models.every((model) => model.compat?.supportsTools === false)).toBe(true);
+    expect(models.every((model) => model.compat?.supportsTools === true)).toBe(true);
   });
 
   it("uses the business endpoint when plugin config requests it", async () => {

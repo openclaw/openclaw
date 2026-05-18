@@ -4,6 +4,7 @@ import { GIGACHAT_PROVIDER_ID } from "./config.js";
 import { applyGigachatConfig, GIGACHAT_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildGigachatProvider } from "./provider-catalog.js";
 import { prepareGigachatRuntimeAuth } from "./runtime-auth.js";
+import { wrapGigachatProviderStream } from "./stream.js";
 
 export default defineSingleProviderPluginEntry({
   id: GIGACHAT_PROVIDER_ID,
@@ -55,6 +56,7 @@ export default defineSingleProviderPluginEntry({
       family: "openai-compatible",
     }),
     prepareRuntimeAuth: async (ctx) => await prepareGigachatRuntimeAuth(ctx),
+    wrapStreamFn: (ctx) => wrapGigachatProviderStream(ctx.streamFn),
     matchesContextOverflowError: ({ errorMessage }) =>
       /\bgigachat\b.*(?:context|контекст|too large|payload too large|unprocessable entity|422|413)/i.test(
         errorMessage,

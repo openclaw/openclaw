@@ -20,7 +20,7 @@ GigaChat is Sber's hosted model API. OpenClaw uses the GigaChat REST chat comple
 
 Create a GigaChat API project in the Sber developer cabinet and copy the **Authorization key**. This is the Basic authorization key used to request access tokens; it is not the 30-minute access token returned by the OAuth endpoint.
 
-GigaChat REST requests require the Russian Ministry of Digital Development root certificate on hosts that do not already trust it. Install the certificate at the OS level, set `NODE_EXTRA_CA_CERTS`, or configure a provider-specific CA bundle with `models.providers.gigachat.request.tls.ca`.
+GigaChat REST requests require the Russian Ministry of Digital Development root certificate on hosts that do not already trust it. Prefer a provider-scoped CA bundle with `models.providers.gigachat.request.tls.ca` so the certificate applies only to GigaChat OAuth and chat requests. Use OS trust or `NODE_EXTRA_CA_CERTS` only when you intentionally want process-wide trust.
 
 ## Set up GigaChat
 
@@ -99,13 +99,7 @@ Business endpoint example:
 
 ## Configure certificates
 
-If token exchange fails with a certificate validation error, configure trust before retrying:
-
-```bash
-export NODE_EXTRA_CA_CERTS="/path/to/russian_trusted_root_ca_pem.crt"
-```
-
-Provider-specific CA bundle:
+If token exchange fails with a certificate validation error, configure a GigaChat-specific CA bundle before retrying:
 
 ```json5
 {
@@ -130,6 +124,12 @@ Provider-specific CA bundle:
 
 Avoid `request.tls.insecureSkipVerify` except in a controlled development environment.
 
+If you manage trust at the host or process level instead, `NODE_EXTRA_CA_CERTS` also works, but it affects the whole Node.js process rather than only GigaChat:
+
+```bash
+export NODE_EXTRA_CA_CERTS="/path/to/russian_trusted_root_ca_pem.crt"
+```
+
 ## Built-in catalog
 
 | Model ref                 | Input | Context | Max output | Notes                                   |
@@ -138,7 +138,19 @@ Avoid `request.tls.insecureSkipVerify` except in a controlled development enviro
 | `gigachat/GigaChat-2-Pro` | text  | 128,000 | 8,192      | Higher quality for complex instructions |
 | `gigachat/GigaChat-2-Max` | text  | 128,000 | 8,192      | Highest quality and creativity          |
 
-OpenClaw currently registers the GigaChat models as text-only. GigaChat supports files, images, audio, and function calling through provider-specific request fields, but those payloads do not map directly to OpenAI multimodal message parts or `tools`. OpenClaw will keep those capabilities disabled until a dedicated adapter is implemented and tested.
+OpenClaw currently registers the GigaChat models as text-only. GigaChat supports files, images, and audio through provider-specific request fields, but those payloads do not map directly to OpenAI multimodal message parts. OpenClaw keeps those multimodal capabilities disabled until a dedicated adapter is implemented and tested.
+
+## Function calling
+
+GigaChat uses `functions` and `function_call` instead of OpenAI's `tools` and `tool_choice` fields. The bundled plugin adapts OpenClaw custom tools to GigaChat's wire format:
+
+- OpenAI-style `tools[].function` definitions become GigaChat `functions`.
+- `tool_choice: "auto"` and `tool_choice: "none"` become `function_call: "auto"` and `function_call: "none"`.
+- Pinned OpenAI function choices become `function_call: { "name": "..." }`.
+- `tool_choice: "required"` is downgraded to `function_call: "auto"` because GigaChat has no equivalent required-any-tool mode.
+- Tool result replay uses GigaChat `role: "function"` messages with JSON-object string content.
+
+This adapter is for OpenClaw custom tools. It does not expose GigaChat built-in functions such as `text2image`, `get_file_content`, or `text2model3d`.
 
 ## Limits and troubleshooting
 

@@ -184,6 +184,11 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
+type LegacyFunctionCallDelta = {
+  name?: string;
+  argumentsDelta?: string;
+};
+
 export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 function stringifyUnknown(value: unknown, fallback = ""): string {
@@ -207,6 +212,26 @@ function stringifyJsonLike(value: unknown, fallback = ""): string {
     return String(value);
   }
   return fallback;
+}
+
+function readLegacyFunctionCallDelta(value: unknown): LegacyFunctionCallDelta | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const name = typeof record.name === "string" && record.name ? record.name : undefined;
+  const rawArguments = record.arguments;
+  const argumentsDelta =
+    rawArguments === undefined || rawArguments === null
+      ? undefined
+      : stringifyJsonLike(rawArguments);
+  if (!name && !argumentsDelta) {
+    return undefined;
+  }
+  return {
+    ...(name ? { name } : {}),
+    ...(argumentsDelta ? { argumentsDelta } : {}),
+  };
 }
 
 function getServiceTierCostMultiplier(serviceTier: ResponseCreateParamsStreaming["service_tier"]) {
@@ -2373,6 +2398,47 @@ async function processOpenAICompletionsStream(
             type: "toolcall_delta",
             contentIndex: blockIndex(),
             delta: toolCall.function.arguments,
+            partial: output,
+          });
+        }
+      }
+    }
+    const legacyFunctionCall = readLegacyFunctionCallDelta(
+      (choiceDelta as unknown as { function_call?: unknown }).function_call,
+    );
+    if (legacyFunctionCall) {
+      if (!currentBlock || currentBlock.type !== "toolCall") {
+        finishCurrentBlock();
+        currentBlock = {
+          type: "toolCall",
+          id: `call_${randomUUID().replaceAll("-", "")}`,
+          name: legacyFunctionCall.name ?? "",
+          arguments: {},
+          partialArgs: "",
+        };
+        currentToolCallArgumentBytes = 0;
+        output.content.push(currentBlock);
+        stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+      }
+      if (currentBlock.type === "toolCall") {
+        if (legacyFunctionCall.name) {
+          currentBlock.name = legacyFunctionCall.name;
+        }
+        if (legacyFunctionCall.argumentsDelta) {
+          const nextArgumentBytes = measureUtf8Bytes(legacyFunctionCall.argumentsDelta);
+          if (
+            currentToolCallArgumentBytes + nextArgumentBytes >
+            MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES
+          ) {
+            throw new Error("Exceeded tool-call argument buffer limit");
+          }
+          currentToolCallArgumentBytes += nextArgumentBytes;
+          currentBlock.partialArgs += legacyFunctionCall.argumentsDelta;
+          currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
+          stream.push({
+            type: "toolcall_delta",
+            contentIndex: blockIndex(),
+            delta: legacyFunctionCall.argumentsDelta,
             partial: output,
           });
         }
