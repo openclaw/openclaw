@@ -5,7 +5,7 @@
 **Related plan:** `docs/superpowers/plans/2026-05-17-qdrant-workspace-reconciliation.md`
 **Trigger:** OpenClaw agent reported `Error calling tool 'qdrant-find': 'document'` after the workspace-reconciler rollout
 
-This document tracks the **2 open issues** still worth keeping on the board after Sprint 2. Eight earlier issues are now worked off: the two initial P1 bugs, the three Sprint 1 cleanup items, and the three Sprint 2 reconciler hardening items. See Appendix B for the fix record.
+This document tracks the **1 open issue** still worth keeping on the board after Sprint 3. Nine earlier issues are now worked off: the two initial P1 bugs, the three Sprint 1 cleanup items, the three Sprint 2 reconciler hardening items, and the Sprint 3 session-corpus invariant test. See Appendix B for the fix record.
 
 Severity legend:
 
@@ -17,10 +17,9 @@ Severity legend:
 
 ## Status Index
 
-| #   | Title                                                                                         | Severity           |
-| --- | --------------------------------------------------------------------------------------------- | ------------------ |
-| 1   | `indexed_vectors_count` is 0 because HNSW indexing threshold is 20000                         | Informational / P3 |
-| 2   | Stale `agents/main/sessions/sessions.json` and large session history may bloat search corpora | Informational / P3 |
+| #   | Title                                                                 | Severity           |
+| --- | --------------------------------------------------------------------- | ------------------ |
+| 1   | `indexed_vectors_count` is 0 because HNSW indexing threshold is 20000 | Informational / P3 |
 
 ---
 
@@ -51,23 +50,6 @@ optimizer_config:
   indexing_threshold: 2000
 ```
 
----
-
-## 2. Stale `agents/main/sessions/sessions.json` and large session history may bloat search corpora
-
-### Observation
-
-`/home/node/.openclaw/agents/main/sessions/sessions.json` is multiple megabytes and includes tool-call records from the user's exploratory testing earlier today. Conversation transcripts (`*.jsonl`) include `qdrant__qdrant-find` calls with their results.
-
-If/when a future memory feature ingests session corpora into Qdrant, these files will dominate the embedding corpus and could leak secrets (the `qdrant-find` results may quote `document` payloads which include workspace markdown that may contain non-public references).
-
-### Action
-
-- Decide whether session files are in scope for the workspace reconciler. Today the reconciler only walks `MEMORY.md`, `memory`, `rules-vault`, `projects` — sessions are excluded. Make that exclusion an explicit, tested invariant.
-- If session ingestion is planned, add redaction passes (PII, API keys, file paths under `~/.openclaw/credentials`) before any vectorization.
-
----
-
 ## Appendix A — Diagnosis recipes useful for the open items
 
 1. **Live state inspection of the `agent-memory` collection:**
@@ -90,19 +72,16 @@ If/when a future memory feature ingests session corpora into Qdrant, these files
 
    Useful if future large-workspace regressions reintroduce slow reconcile or socket-lifecycle failures.
 
-3. **Session corpus scope reminder:**
-   - Reconciler roots are still `MEMORY.md`, `memory`, `rules-vault`, and `projects`.
-   - Session files remain out of scope by omission, not by an explicit walked-root assertion.
-
 ## Appendix B — Already-fixed bugs from the same session (for cross-reference)
 
-The initial P1 bugs, Sprint 1 cleanup items, and Sprint 2 reconciler hardening work are recorded in:
+The initial P1 bugs, Sprint 1 cleanup items, Sprint 2 reconciler hardening work, and Sprint 3 session-corpus invariant test are recorded in:
 
 - `docs/superpowers/plans/2026-05-17-qdrant-workspace-reconciliation.md` § _Post-Rollout Corrections_
 - Commit `be224c265c` — `fix(memory): add document payload key and retry EPIPE in qdrant reconciler`
 - Commit `e27ac4cab7` — `docs: qdrant post-implementation bug report and plan corrections`
 - Commit `65bc177037` — `fix(build): preserve dist bind mounts and add deploy wrapper`
 - Commit `17ec1927de` — `fix(memory): harden qdrant workspace reconcile updates`
+- Commit `b49c190d28` — `test(memory): pin workspace reconcile session exclusion`
 - Host stack change on 2026-05-18 — upgraded `/home/ubuntu/.qdrant/docker-compose.yml` from `qdrant/qdrant:v1.12.4` to `qdrant/qdrant:v1.18.0` via consecutive minor hops after taking a volume snapshot and re-verifying `qdrant-find`
 - Local environment repair on 2026-05-18 — `pnpm install` restored the already-declared `web-tree-sitter@0.26.8`, after which `pnpm build:plugin-sdk:dts` passed cleanly with no manifest delta
 
