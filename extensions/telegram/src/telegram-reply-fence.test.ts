@@ -36,5 +36,11 @@ describe("shouldSupersedeTelegramReplyFence", () => {
         CommandAuthorized: false,
       }),
     ).toBe(false);
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        CommandBody: "/export-trajectory bundle",
+        CommandAuthorized: true,
+      }),
+    ).toBe(true);
   });
 });

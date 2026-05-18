@@ -147,6 +147,14 @@ describe("getTelegramSequentialKey", () => {
     ],
     [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/export" }) }, "telegram:123"],
     [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/export-trajectory" }) },
+      "telegram:123",
+    ],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/trajectory" }) },
+      "telegram:123",
+    ],
+    [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/btw what is the time?" }) },
       "telegram:123:btw:1",
     ],
