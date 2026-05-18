@@ -1458,32 +1458,31 @@ async function runGatewaySample(options: {
       const signalSentAt = performance.now();
       iteration.signalSentMs = signalSentAt - sampleStartAt;
       events.push({ iteration: index, ms: iteration.signalSentMs, type: "restart-signal-sent" });
-      iteration.resourceSnapshots.push(snapshotResources(child, sampleStartAt, "after-signal"));
 
-      const [healthz, readyz] = await Promise.all([
-        waitForRestartProbe({
-          deadlineAt,
-          events,
-          isDone: () => hasRestartReadySignal(iteration),
-          isProcessDone: () => childExited,
-          iteration: index,
-          path: "/healthz",
-          port,
-          sampleStartAt,
-          signalSentAt,
-        }),
-        waitForRestartProbe({
-          deadlineAt,
-          events,
-          isDone: () => hasRestartReadySignal(iteration),
-          isProcessDone: () => childExited,
-          iteration: index,
-          path: "/readyz",
-          port,
-          sampleStartAt,
-          signalSentAt,
-        }),
-      ]);
+      const healthzPromise = waitForRestartProbe({
+        deadlineAt,
+        events,
+        isDone: () => hasRestartReadySignal(iteration),
+        isProcessDone: () => childExited,
+        iteration: index,
+        path: "/healthz",
+        port,
+        sampleStartAt,
+        signalSentAt,
+      });
+      const readyzPromise = waitForRestartProbe({
+        deadlineAt,
+        events,
+        isDone: () => hasRestartReadySignal(iteration),
+        isProcessDone: () => childExited,
+        iteration: index,
+        path: "/readyz",
+        port,
+        sampleStartAt,
+        signalSentAt,
+      });
+      iteration.resourceSnapshots.push(snapshotResources(child, sampleStartAt, "after-signal"));
+      const [healthz, readyz] = await Promise.all([healthzPromise, readyzPromise]);
       iteration.healthz = healthz;
       iteration.readyz = readyz;
       iteration.resourceSnapshots.push(snapshotResources(child, sampleStartAt, "after-next-ready"));
