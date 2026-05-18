@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isCliRuntimeAlias } from "../model-runtime-aliases.js";
 import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -59,6 +60,8 @@ type AgentHarnessSelectionDecision = {
     | "forced_plugin"
     // Implicit Codex preference found no registered Codex harness, so PI handled the run.
     | "implicit_plugin_unavailable_pi"
+    // CLI runtime alias (e.g. claude-cli) routed to PI which dispatches via cli-backend.
+    | "cli_runtime_alias_pi"
     // Auto mode chose a registered plugin harness that supports the provider/model.
     | "auto_plugin"
     // Auto mode found no supporting plugin harness, so PI handled the run.
@@ -168,6 +171,17 @@ function selectAgentHarnessDecision(params: {
           runtime: "pi",
         },
         selectedReason: "implicit_plugin_unavailable_pi",
+        candidates: listHarnessCandidates(pluginHarnesses),
+      });
+    }
+    if (isCliRuntimeAlias(runtime)) {
+      return buildSelectionDecision({
+        harness: piHarness,
+        policy: {
+          ...policy,
+          runtime: "pi",
+        },
+        selectedReason: "cli_runtime_alias_pi",
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }
