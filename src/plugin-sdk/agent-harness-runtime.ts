@@ -171,6 +171,7 @@ export {
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
   runBeforeToolCallHook,
+  setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
 } from "../agents/pi-tools.before-tool-call.js";
 export {

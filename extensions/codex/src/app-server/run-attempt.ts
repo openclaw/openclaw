@@ -44,7 +44,11 @@ import {
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  emitTrustedDiagnosticEvent,
+  onInternalDiagnosticEvent,
+  type DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
@@ -81,6 +85,11 @@ import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
+import {
+  emitDynamicToolErrorDiagnostic,
+  emitDynamicToolStartedDiagnostic,
+  emitDynamicToolTerminalDiagnostic,
+} from "./dynamic-tool-diagnostics.js";
 import {
   filterCodexDynamicTools,
   isForcedPrivateQaCodexRuntime,
@@ -1381,7 +1390,7 @@ export async function runCodexAppServerAttempt(
   let turnAttemptLastProgressDetails: Record<string, unknown> | undefined;
   let nativeHookRelayLastRenewedAt = 0;
   let activeAppServerTurnRequests = 0;
-  const activeOpenClawDynamicToolCallIds = new Set<string>();
+  const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   const activeTurnItemIds = new Set<string>();
   let turnCrossedToolHandoff = false;
 
@@ -1820,9 +1829,9 @@ export async function runCodexAppServerAttempt(
       turnAssistantCompletionIdleWatchArmed &&
       notification.method === "item/completed" &&
       activeTurnItemIds.size === 0;
-    const trackedDynamicToolCompletion = isTrackedOpenClawDynamicToolCompletionNotification(
+    const trackedDynamicToolCompletion = isPendingOpenClawDynamicToolCompletionNotification(
       notification,
-      activeOpenClawDynamicToolCallIds,
+      pendingOpenClawDynamicToolCompletionIds,
     );
     const rawToolOutputCompletion = isRawToolOutputCompletionNotification(notification);
     if (
@@ -1892,6 +1901,12 @@ export async function runCodexAppServerAttempt(
       // dynamic tool item is still part of that handoff, so keep the short
       // watchdog armed for that notification.
       disarmTurnCompletionIdleWatch();
+    }
+    if (trackedDynamicToolCompletion) {
+      const itemId = readNotificationItemId(notification);
+      if (itemId) {
+        pendingOpenClawDynamicToolCompletionIds.delete(itemId);
+      }
     }
     // Determine terminal-turn status before invoking the projector so a throw
     // inside projector.handleNotification still releases the session lane.
@@ -2018,7 +2033,7 @@ export async function runCodexAppServerAttempt(
       armCompletionWatchOnResponse = true;
       markCurrentTurnRequestProgress();
       turnCrossedToolHandoff = true;
-      activeOpenClawDynamicToolCallIds.add(call.callId);
+      pendingOpenClawDynamicToolCompletionIds.add(call.callId);
       trajectoryRecorder?.recordEvent("tool.call", {
         threadId: call.threadId,
         turnId: call.turnId,
@@ -2035,6 +2050,12 @@ export async function runCodexAppServerAttempt(
         phase: "tool_execution_started",
         tool: call.tool,
         toolCallId: call.callId,
+      });
+      emitDynamicToolStartedDiagnostic({
+        call,
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
       });
       const toolProgressDetailMode = resolveCodexToolProgressDetailMode(params.toolProgressDetail);
       const toolMeta = inferCodexDynamicToolMeta(call, toolProgressDetailMode);
@@ -2056,49 +2077,94 @@ export async function runCodexAppServerAttempt(
         call,
         config: params.config,
       });
-      const response = await handleDynamicToolCallWithTimeout({
-        call,
-        toolBridge,
-        signal: runAbortController.signal,
-        timeoutMs: dynamicToolTimeoutMs,
-        onTimeout: () => {
-          trajectoryRecorder?.recordEvent("tool.timeout", {
-            threadId: call.threadId,
-            turnId: call.turnId,
-            toolCallId: call.callId,
-            name: call.tool,
-            timeoutMs: dynamicToolTimeoutMs,
-          });
-        },
+      const toolStartedAt = Date.now();
+      let terminalDiagnosticObserved = false;
+      const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent((event) => {
+        if (isDynamicToolTerminalDiagnosticEvent(event)) {
+          if (
+            isMatchingDynamicToolTerminalDiagnostic({
+              event,
+              call,
+              runId: params.runId,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+            })
+          ) {
+            terminalDiagnosticObserved = true;
+          }
+        }
       });
-      trajectoryRecorder?.recordEvent("tool.result", {
-        threadId: call.threadId,
-        turnId: call.turnId,
-        toolCallId: call.callId,
-        name: call.tool,
-        success: response.success,
-        contentItems: response.contentItems,
-      });
-      projector?.recordDynamicToolResult({
-        callId: call.callId,
-        tool: call.tool,
-        success: response.success,
-        contentItems: response.contentItems,
-      });
-      if (shouldEmitDynamicToolProgress) {
-        emitCodexAppServerEvent(params, {
-          stream: "tool",
-          data: {
-            phase: "result",
-            name: call.tool,
-            toolCallId: call.callId,
-            ...(toolMeta ? { meta: toolMeta } : {}),
-            isError: !response.success,
-            result: sanitizeCodexToolResponse(response),
+      try {
+        const response = await handleDynamicToolCallWithTimeout({
+          call,
+          toolBridge,
+          signal: runAbortController.signal,
+          timeoutMs: dynamicToolTimeoutMs,
+          onTimeout: () => {
+            trajectoryRecorder?.recordEvent("tool.timeout", {
+              threadId: call.threadId,
+              turnId: call.turnId,
+              toolCallId: call.callId,
+              name: call.tool,
+              timeoutMs: dynamicToolTimeoutMs,
+            });
           },
         });
+        const protocolResponse = toCodexDynamicToolProtocolResponse(response);
+        trajectoryRecorder?.recordEvent("tool.result", {
+          threadId: call.threadId,
+          turnId: call.turnId,
+          toolCallId: call.callId,
+          name: call.tool,
+          success: protocolResponse.success,
+          contentItems: protocolResponse.contentItems,
+        });
+        projector?.recordDynamicToolResult({
+          callId: call.callId,
+          tool: call.tool,
+          success: protocolResponse.success,
+          contentItems: protocolResponse.contentItems,
+        });
+        if (shouldEmitDynamicToolProgress) {
+          emitCodexAppServerEvent(params, {
+            stream: "tool",
+            data: {
+              phase: "result",
+              name: call.tool,
+              toolCallId: call.callId,
+              ...(toolMeta ? { meta: toolMeta } : {}),
+              isError: !protocolResponse.success,
+              result: sanitizeCodexToolResponse(protocolResponse),
+            },
+          });
+        }
+        await waitForDiagnosticEventDrain();
+        if (!terminalDiagnosticObserved) {
+          emitDynamicToolTerminalDiagnostic({
+            response,
+            call,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            durationMs: Math.max(0, Date.now() - toolStartedAt),
+          });
+        }
+        return protocolResponse as JsonValue;
+      } catch (error) {
+        await waitForDiagnosticEventDrain();
+        if (!terminalDiagnosticObserved) {
+          emitDynamicToolErrorDiagnostic({
+            call,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            durationMs: Math.max(0, Date.now() - toolStartedAt),
+          });
+        }
+        throw error;
+      } finally {
+        unsubscribeToolDiagnosticObserver();
       }
-      return response as JsonValue;
     } finally {
       if (requestCountsAsTurnActivity) {
         activeAppServerTurnRequests = Math.max(0, activeAppServerTurnRequests - 1);
@@ -2804,10 +2870,73 @@ async function handleDynamicToolCallWithTimeout(params: {
 }
 
 function failedDynamicToolResponse(message: string): CodexDynamicToolCallResponse {
-  return {
-    success: false,
+  const response: CodexDynamicToolCallResponse = {
     contentItems: [{ type: "inputText", text: message }],
+    success: false,
   };
+  Object.defineProperty(response, "diagnosticTerminalType", {
+    configurable: true,
+    enumerable: false,
+    value: "error",
+  });
+  return response;
+}
+
+function toCodexDynamicToolProtocolResponse(
+  response: CodexDynamicToolCallResponse,
+): CodexDynamicToolCallResponse {
+  return {
+    contentItems: response.contentItems,
+    success: response.success,
+  };
+}
+
+function waitForDiagnosticEventDrain(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+type TerminalToolExecutionDiagnostic = Extract<
+  DiagnosticEventPayload,
+  { type: "tool.execution.blocked" | "tool.execution.completed" | "tool.execution.error" }
+>;
+
+function isDynamicToolTerminalDiagnosticEvent(
+  event: DiagnosticEventPayload,
+): event is TerminalToolExecutionDiagnostic {
+  return (
+    event.type === "tool.execution.completed" ||
+    event.type === "tool.execution.error" ||
+    event.type === "tool.execution.blocked"
+  );
+}
+
+function isMatchingDynamicToolTerminalDiagnostic(params: {
+  event: TerminalToolExecutionDiagnostic;
+  call: CodexDynamicToolCallParams;
+  runId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+}): boolean {
+  if (
+    params.event.toolCallId !== params.call.callId ||
+    params.event.toolName !== params.call.tool
+  ) {
+    return false;
+  }
+  if (params.runId !== undefined) {
+    return params.event.runId === params.runId;
+  }
+  if (params.sessionId !== undefined) {
+    return params.event.sessionId === params.sessionId;
+  }
+  if (params.sessionKey !== undefined) {
+    return params.event.sessionKey === params.sessionKey;
+  }
+  return (
+    params.event.runId === undefined &&
+    params.event.sessionId === undefined &&
+    params.event.sessionKey === undefined
+  );
 }
 
 function resolveDynamicToolCallTimeoutMs(params: {
@@ -3092,6 +3221,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     config: params.config,
     authProfileStore: params.authProfileStore,
     abortSignal: input.runAbortController.signal,
+    emitBeforeToolCallDiagnostics: false,
     modelProvider: params.model.provider,
     modelId: params.modelId,
     modelCompat:
@@ -3685,15 +3815,15 @@ function readNotificationItemId(notification: CodexServerNotification): string |
   );
 }
 
-function isTrackedOpenClawDynamicToolCompletionNotification(
+function isPendingOpenClawDynamicToolCompletionNotification(
   notification: CodexServerNotification,
-  activeOpenClawDynamicToolCallIds: ReadonlySet<string>,
+  pendingOpenClawDynamicToolCompletionIds: ReadonlySet<string>,
 ): boolean {
   if (notification.method !== "item/completed" || !isJsonObject(notification.params)) {
     return false;
   }
   const itemId = readNotificationItemId(notification);
-  if (!itemId || !activeOpenClawDynamicToolCallIds.has(itemId)) {
+  if (!itemId || !pendingOpenClawDynamicToolCompletionIds.has(itemId)) {
     return false;
   }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
