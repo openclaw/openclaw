@@ -294,7 +294,8 @@ function resolveCliTranscriptReplyText(result: EmbeddedPiRunResult): string {
 }
 
 function isClaudeCliProvider(provider: string): boolean {
-  return provider.trim().toLowerCase() === "claude-cli";
+  const p = provider.trim().toLowerCase();
+  return p === "claude-cli" || p === "claude-cli-interactive";
 }
 
 export async function persistAcpTurnTranscript(params: {
@@ -410,7 +411,8 @@ export function runAgentAttempt(params: {
     isClaudeCliProvider(params.originalProvider) &&
     !isClaudeCliProvider(params.providerOverride)
       ? buildClaudeCliFallbackContextPrelude({
-          cliSessionId: getCliSessionBinding(params.sessionEntry, "claude-cli")?.sessionId,
+          cliSessionId: getCliSessionBinding(params.sessionEntry, params.originalProvider)
+            ?.sessionId,
         })
       : "";
   const resolvedPrompt = resolveFallbackRetryPrompt({

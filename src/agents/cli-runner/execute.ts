@@ -464,7 +464,15 @@ export async function executePreparedCliRun(
             useResume,
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
-            onAssistantDelta: ({ text, delta }) => {
+            onAssistantDelta: ({ text, delta, thinkingDelta, thinkingText }) => {
+              if (thinkingDelta !== undefined && thinkingText !== undefined) {
+                emitAgentEvent({
+                  runId: params.runId,
+                  stream: "thinking",
+                  data: { text: thinkingText, delta: thinkingDelta },
+                });
+                return;
+              }
               emitAgentEvent({
                 runId: params.runId,
                 stream: "assistant",
@@ -503,7 +511,15 @@ export async function executePreparedCliRun(
           ? createCliJsonlStreamingParser({
               backend,
               providerId: context.backendResolved.id,
-              onAssistantDelta: ({ text, delta }) => {
+              onAssistantDelta: ({ text, delta, thinkingDelta, thinkingText }) => {
+                if (thinkingDelta !== undefined && thinkingText !== undefined) {
+                  emitAgentEvent({
+                    runId: params.runId,
+                    stream: "thinking",
+                    data: { text: thinkingText, delta: thinkingDelta },
+                  });
+                  return;
+                }
                 emitAgentEvent({
                   runId: params.runId,
                   stream: "assistant",

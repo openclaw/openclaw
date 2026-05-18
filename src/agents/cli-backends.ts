@@ -69,6 +69,13 @@ type FallbackCliBackendPolicy = {
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   nativeToolMode?: CliBackendNativeToolMode;
+  // Carried through from setup-registered backends so cold-setup / live-test
+  // / fallback resolution paths can honour the same inheritance metadata
+  // that the main `registered` path uses (line 221 below). Without this,
+  // a user who configures only `cliBackends.claude-cli.command` would lose
+  // the inherited Claude binary on those paths and the wrapper would fall
+  // back to a PATH lookup of `claude`.
+  inheritUserConfigFrom?: CliBackendPlugin["inheritUserConfigFrom"];
 };
 
 const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
@@ -108,6 +115,7 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     prepareExecution: entry.backend.prepareExecution,
     resolveExecutionArgs: entry.backend.resolveExecutionArgs,
     nativeToolMode: entry.backend.nativeToolMode,
+    inheritUserConfigFrom: entry.backend.inheritUserConfigFrom,
   };
 }
 
@@ -220,8 +228,35 @@ export function resolveCliBackendConfig(
   };
   const runtimeTextTransforms = resolveRuntimeTextTransforms();
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
-  const override = pickBackendConfig(configured, normalized);
+  const directOverride = pickBackendConfig(configured, normalized);
   const registered = resolveRegisteredBackend(normalized);
+  // Fallback policy is resolved here (early) instead of after the
+  // `registered` branch so its `inheritUserConfigFrom` can be consulted
+  // alongside `registered.inheritUserConfigFrom`. Cold setup / live-test
+  // paths reach this function with `registered === undefined` but with a
+  // setup-registered policy in `fallbackPolicy`; without consulting its
+  // inheritance metadata, those paths would lose the inherited Claude
+  // binary that a user has configured via `cliBackends.claude-cli`.
+  const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);
+  const inheritSpec =
+    registered?.inheritUserConfigFrom ?? fallbackPolicy?.inheritUserConfigFrom;
+  let override = directOverride;
+  if (!override && inheritSpec) {
+    const inherited = pickBackendConfig(
+      configured,
+      normalizeBackendKey(inheritSpec.backendId),
+    );
+    if (inherited) {
+      const filterArgs = inheritSpec.filterArgs;
+      override = filterArgs
+        ? {
+            ...inherited,
+            ...(inherited.args ? { args: [...filterArgs(inherited.args)] } : {}),
+            ...(inherited.resumeArgs ? { resumeArgs: [...filterArgs(inherited.resumeArgs)] } : {}),
+          }
+        : inherited;
+    }
+  }
   if (registered) {
     const merged = mergeBackendConfig(registered.config, override);
     const config = registered.normalizeConfig
@@ -251,7 +286,6 @@ export function resolveCliBackendConfig(
     };
   }
 
-  const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);
   if (!override) {
     if (!fallbackPolicy?.baseConfig) {
       return null;

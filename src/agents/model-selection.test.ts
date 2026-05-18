@@ -435,6 +435,17 @@ describe("model-selection", () => {
       });
     });
 
+    it("migrates claude-cli-interactive runtime refs to canonical Anthropic refs", () => {
+      expect(migrateLegacyRuntimeModelRef("claude-cli-interactive/claude-opus-4-7")).toEqual({
+        ref: "anthropic/claude-opus-4-7",
+        legacyProvider: "claude-cli-interactive",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        runtime: "claude-cli-interactive",
+        cli: true,
+      });
+    });
+
     it("normalizes retired Gemini ids while migrating legacy Gemini CLI refs", () => {
       expect(migrateLegacyRuntimeModelRef("google-gemini-cli/gemini-3-pro-preview")).toEqual({
         ref: "google/gemini-3.1-pro-preview",

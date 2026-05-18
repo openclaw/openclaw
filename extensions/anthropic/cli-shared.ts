@@ -4,9 +4,10 @@ import type {
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_INTERACTIVE_BACKEND_ID } from "./cli-constants.js";
 export {
   CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_INTERACTIVE_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
   CLAUDE_CLI_MODEL_ALIASES,
@@ -68,7 +69,8 @@ const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
 type ClaudeCliEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export function isClaudeCliProvider(providerId: string): boolean {
-  return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
+  const normalized = normalizeOptionalLowercaseString(providerId);
+  return normalized === CLAUDE_CLI_BACKEND_ID || normalized === CLAUDE_CLI_INTERACTIVE_BACKEND_ID;
 }
 
 function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): boolean {

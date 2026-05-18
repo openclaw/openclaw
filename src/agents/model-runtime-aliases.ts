@@ -41,6 +41,19 @@ const LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES = [
     requiresRuntimePolicy: true,
   },
   {
+    // claude-cli-interactive shares the anthropic provider but runs the
+    // interactive (subscription) wrapper instead of the headless `claude -p`
+    // path. Without this entry, resolveCliRuntimeExecutionProvider() would
+    // never return "claude-cli-interactive" and a model ref like
+    // claude-cli-interactive/claude-opus-4-7 would normalize back to the
+    // anthropic provider, silently routing the turn to the wrong backend.
+    legacyProvider: "claude-cli-interactive",
+    provider: "anthropic",
+    runtime: "claude-cli-interactive",
+    cli: true,
+    requiresRuntimePolicy: true,
+  },
+  {
     legacyProvider: "google-gemini-cli",
     provider: "google",
     runtime: "google-gemini-cli",

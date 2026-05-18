@@ -54,7 +54,7 @@ import {
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
@@ -1834,35 +1834,79 @@ export async function runAgentTurnWithFallback(params: {
               originatingChannel: params.followupRun.originatingChannel,
               provider: params.sessionCtx.Provider,
             });
-            const result = await runCliAgentWithLifecycle({
-              runId,
-              provider: cliExecutionProvider,
-              onAgentRunStart: notifyAgentRunStart,
-              suppressAssistantBridge: params.followupRun.run.silentExpected,
-              onAssistantText: async (text) => {
-                const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
-                if (textForTyping === undefined || !params.opts?.onPartialReply) {
-                  return;
-                }
-                await params.opts.onPartialReply({ text: textForTyping });
-              },
-              onReasoningText: async (text) => {
-                await params.opts?.onReasoningStream?.({ text });
-              },
-              onErrorBeforeLifecycle: async () => {
-                if (!rollbackFallbackCandidateSelection) {
-                  return;
-                }
-                try {
-                  await rollbackFallbackCandidateSelection();
-                  clearPendingFallbackRollback(rollbackFallbackCandidateSelection);
-                } catch (rollbackError) {
-                  logVerbose(
-                    `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
-                  );
-                }
-              },
-              runParams: {
+            // Bridge stream:"thinking" agent events (cli-interactive MITM proxy
+            // thinking_delta) into onReasoningStream. Plain claude-cli already
+            // routes its assistant text into the reasoning lane via
+            // runCliAgentWithLifecycle's reasoningBridge gate — that path
+            // remains unchanged. The cliThinkingArrived flag prevents the
+            // onReasoningText callback below from double-delivering when
+            // thinking arrives for cli-interactive.
+            let cliThinkingArrived = false;
+            const cliThinkingBridge = (() => {
+              let delivery = Promise.resolve<void>(undefined);
+              const rawUnsubscribe = onAgentEvent((evt) => {
+                if (evt.runId !== runId || evt.stream !== "thinking") {return;}
+                if (params.followupRun.run.silentExpected) {return;}
+                const text = typeof evt.data?.text === "string" ? evt.data.text : undefined;
+                if (!text) {return;}
+                cliThinkingArrived = true;
+                delivery = delivery
+                  .then(() => params.opts?.onReasoningStream?.({ text }) ?? Promise.resolve())
+                  .catch(() => undefined);
+              });
+              return {
+                unsubscribe: rawUnsubscribe,
+                async drain(): Promise<void> {
+                  await delivery;
+                },
+              };
+            })();
+            try {
+              const result = await runCliAgentWithLifecycle({
+                runId,
+                provider: cliExecutionProvider,
+                onAgentRunStart: notifyAgentRunStart,
+                suppressAssistantBridge: params.followupRun.run.silentExpected,
+                onAssistantText: async (text) => {
+                  const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
+                  if (textForTyping === undefined || !params.opts?.onPartialReply) {
+                    return;
+                  }
+                  await params.opts.onPartialReply({ text: textForTyping });
+                },
+                onReasoningText: async (text) => {
+                  // Skip when the cli-interactive MITM proxy is already feeding
+                  // thinking_delta into the reasoning lane (cliThinkingBridge
+                  // above) — otherwise we'd double-deliver.
+                  if (cliThinkingArrived) {return;}
+                  await params.opts?.onReasoningStream?.({ text });
+                },
+                onToolEvent: async ({ name, phase, args }) => {
+                  const toolStartProgressPromise = params.opts?.onToolStart?.({
+                    name,
+                    phase,
+                    args,
+                    detailMode: params.toolProgressDetail,
+                  });
+                  await Promise.all([
+                    params.typingSignals.signalToolStart(),
+                    toolStartProgressPromise,
+                  ]);
+                },
+                onErrorBeforeLifecycle: async () => {
+                  if (!rollbackFallbackCandidateSelection) {
+                    return;
+                  }
+                  try {
+                    await rollbackFallbackCandidateSelection();
+                    clearPendingFallbackRollback(rollbackFallbackCandidateSelection);
+                  } catch (rollbackError) {
+                    logVerbose(
+                      `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
+                    );
+                  }
+                },
+                runParams: {
                 sessionId: params.followupRun.run.sessionId,
                 sessionKey: params.sessionKey,
                 agentId: params.followupRun.run.agentId,
@@ -1905,28 +1949,32 @@ export async function runAgentTurnWithFallback(params: {
                 abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                 replyOperation: params.replyOperation,
               },
-              transformResult: (rawResult) =>
-                isRoomEventCliRun && rawResult.meta.agentMeta
-                  ? (() => {
-                      const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
-                        rawResult.meta.agentMeta;
-                      return {
-                        ...rawResult,
-                        meta: {
-                          ...rawResult.meta,
-                          agentMeta: {
-                            ...agentMeta,
-                            sessionId: "",
+                transformResult: (rawResult) =>
+                  isRoomEventCliRun && rawResult.meta.agentMeta
+                    ? (() => {
+                        const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
+                          rawResult.meta.agentMeta;
+                        return {
+                          ...rawResult,
+                          meta: {
+                            ...rawResult.meta,
+                            agentMeta: {
+                              ...agentMeta,
+                              sessionId: "",
+                            },
                           },
-                        },
-                      };
-                    })()
-                  : rawResult,
-            });
-            bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-              result.meta?.systemPromptReport,
-            );
-            return result;
+                        };
+                      })()
+                    : rawResult,
+              });
+              bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                result.meta?.systemPromptReport,
+              );
+              return result;
+            } finally {
+              cliThinkingBridge.unsubscribe();
+              await cliThinkingBridge.drain();
+            }
           }
           const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams(
             {

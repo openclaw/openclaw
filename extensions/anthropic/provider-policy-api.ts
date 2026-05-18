@@ -17,6 +17,7 @@ export function resolveThinkingProfile(params: { provider: string; modelId: stri
   switch (params.provider.trim().toLowerCase()) {
     case "anthropic":
     case "claude-cli":
+    case "claude-cli-interactive":
       return resolveClaudeThinkingProfile(params.modelId);
     default:
       return null;
