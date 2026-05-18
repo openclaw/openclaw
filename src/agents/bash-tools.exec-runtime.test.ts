@@ -537,6 +537,39 @@ describe("emitExecSystemEvent", () => {
     expect(requireHeartbeatCall()).not.toHaveProperty("sessionKey");
   });
 
+  it("routes single-owner dmScope=main direct exec events to the agent main session", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "agent:main:telegram:default:direct:123",
+      contextKey: "exec:run-dm",
+      deliveryContext: {
+        channel: "telegram",
+        to: "123",
+      },
+      eventRouting: {
+        dmScope: "main",
+        allowFrom: ["123"],
+        channel: "telegram",
+        accountId: "default",
+      },
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "agent:main:main",
+      contextKey: "exec:run-dm",
+      deliveryContext: {
+        channel: "telegram",
+        to: "123",
+      },
+      forceSenderIsOwnerFalse: true,
+      trusted: false,
+    });
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:main:main");
+  });
+
   it("keeps wake unscoped for non-agent session keys", () => {
     emitExecSystemEvent("Exec finished", {
       sessionKey: "global",
