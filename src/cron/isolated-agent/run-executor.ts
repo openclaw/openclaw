@@ -177,6 +177,12 @@ export function createCronPromptExecutor(params: {
           }) ?? providerOverride;
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+        registerAgentRunContext(params.cronSession.sessionEntry.sessionId, {
+          sessionKey: params.runSessionKey,
+          verboseLevel: params.resolvedVerboseLevel,
+          isControlUiVisible: false,
+        });
+
         if (isCliProvider(executionProvider, params.cfgWithAgentDefaults)) {
           const cliSessionId = params.cronSession.isNewSession
             ? undefined
