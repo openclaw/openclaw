@@ -127,4 +127,22 @@ describe("configured model manifest workspace scope", () => {
     ]);
     expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
   });
+
+  it("skips manifest metadata when provider config has no model rows", async () => {
+    const { buildConfiguredModelCatalog } = await import("./model-selection-shared.js");
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.invalid/v1",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(buildConfiguredModelCatalog({ cfg, workspaceDir: "/workspace/a" })).toEqual([]);
+    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
 });

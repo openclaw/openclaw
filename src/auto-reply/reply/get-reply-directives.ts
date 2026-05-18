@@ -2,6 +2,7 @@ import { listAgentEntries } from "../../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
+import type { ModelManifestNormalizationContext } from "../../agents/model-selection-normalize.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -64,7 +65,7 @@ function canUseFastExplicitModelDirective(params: {
   directives: InlineDirectives;
   defaultProvider: string;
   aliasIndex: ModelAliasIndex;
-}): boolean {
+} & ModelManifestNormalizationContext): boolean {
   const raw = normalizeOptionalString(params.directives.rawModelDirective);
   if (!raw || /^[0-9]+$/.test(raw)) {
     return false;
@@ -74,6 +75,7 @@ function canUseFastExplicitModelDirective(params: {
       raw,
       defaultProvider: params.defaultProvider,
       aliasIndex: params.aliasIndex,
+      manifestPlugins: params.manifestPlugins,
     }),
   );
 }
@@ -176,7 +178,7 @@ export async function resolveReplyDirectives(params: {
   typing: TypingController;
   opts?: GetReplyOptions;
   skillFilter?: string[];
-}): Promise<ReplyDirectiveResult> {
+} & ModelManifestNormalizationContext): Promise<ReplyDirectiveResult> {
   const {
     ctx,
     cfg,
@@ -512,6 +514,7 @@ export async function resolveReplyDirectives(params: {
         directives,
         defaultProvider,
         aliasIndex: params.aliasIndex,
+        manifestPlugins: params.manifestPlugins,
       }));
 
   const modelState = useFastModelSelection
@@ -540,6 +543,7 @@ export async function resolveReplyDirectives(params: {
         skipStoredModelOverride,
         hasResolvedHeartbeatModelOverride,
         isHeartbeat: opts?.isHeartbeat === true,
+        manifestPlugins: params.manifestPlugins,
       });
   provider = modelState.provider;
   model = modelState.model;

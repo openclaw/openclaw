@@ -917,7 +917,9 @@ export function hasConfiguredProviderModelRows(cfg: OpenClawConfig): boolean {
   if (!providers || typeof providers !== "object") {
     return false;
   }
-  return Object.values(providers).some((provider) => Array.isArray(provider?.models));
+  return Object.values(providers).some(
+    (provider) => Array.isArray(provider?.models) && provider.models.length > 0,
+  );
 }
 
 function resolveConfiguredModelManifestPlugins(params: {

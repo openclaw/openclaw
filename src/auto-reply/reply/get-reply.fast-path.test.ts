@@ -32,6 +32,7 @@ function emptyAliasIndex(): ModelAliasIndex {
 const mocks = vi.hoisted(() => ({
   ensureAgentWorkspace: vi.fn(),
   initSessionState: vi.fn(),
+  loadManifestMetadataSnapshot: vi.fn(() => ({ plugins: [] })),
   loadModelCatalog: vi.fn<LoadModelCatalogFn>(async () => [
     {
       provider: "openai",
@@ -57,6 +58,16 @@ vi.mock("../../agents/workspace.js", () => ({
   DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/openclaw-workspace",
   ensureAgentWorkspace: (...args: unknown[]) => mocks.ensureAgentWorkspace(...args),
 }));
+
+vi.mock("../../plugins/manifest-contract-eligibility.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugins/manifest-contract-eligibility.js")>(
+    "../../plugins/manifest-contract-eligibility.js",
+  );
+  return {
+    ...actual,
+    loadManifestMetadataSnapshot: mocks.loadManifestMetadataSnapshot,
+  };
+});
 registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
@@ -107,6 +118,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     mocks.ensureAgentWorkspace.mockReset();
     mocks.initSessionState.mockReset();
+    mocks.loadManifestMetadataSnapshot.mockReset();
+    mocks.loadManifestMetadataSnapshot.mockReturnValue({ plugins: [] });
     mocks.loadModelCatalog.mockReset();
     mocks.loadModelCatalog.mockResolvedValue([
       {
@@ -201,6 +214,62 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+  });
+
+  it("does not preload manifest metadata for provider config without model rows", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-config-only-"));
+    const cfg = markCompleteReplyConfig({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://example.invalid/v1",
+            models: [],
+          },
+        },
+      },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+
+    await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, cfg)).resolves.toEqual({
+      text: "ok",
+    });
+
+    expect(mocks.loadManifestMetadataSnapshot).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+  });
+
+  it("passes image model overrides as one-turn selections to prepared replies", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-model-directives-"));
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-4o",
+          models: {
+            "openai/gpt-4o": {},
+          },
+          workspace: home,
+        },
+      },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      aliasIndex: emptyAliasIndex(),
+    });
+    vi.mocked(resolveModelRefFromStringMock).mockReturnValueOnce({
+      ref: { provider: "openai", model: "gpt-4o-mini" },
+    });
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), { modelOverride: "openai/gpt-4o-mini" }, cfg),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    const preparedReplyParams = requirePreparedReplyParams();
+    expect(preparedReplyParams.provider).toBe("openai");
+    expect(preparedReplyParams.model).toBe("gpt-4o-mini");
+    expect(preparedReplyParams.hasAppliedImageModelOverride).toBe(true);
   });
 
   it("clears stale ack-only heartbeat pending delivery before replay", async () => {

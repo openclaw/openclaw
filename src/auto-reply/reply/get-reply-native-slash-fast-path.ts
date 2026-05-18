@@ -3,6 +3,7 @@ import {
   resolveThinkingDefaultWithRuntimeCatalog,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
+import type { ModelManifestNormalizationContext } from "../../agents/model-selection-normalize.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -77,7 +78,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   typing: ReturnType<typeof createTypingController>;
   opts?: GetReplyOptions;
   skillFilter?: string[];
-}): Promise<
+} & ModelManifestNormalizationContext): Promise<
   { handled: true; reply: ReplyPayload | ReplyPayload[] | undefined } | { handled: false }
 > {
   if (!shouldRunNativeSlashCommandFastPath(params.ctx)) {
@@ -208,6 +209,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     typing: params.typing,
     opts: params.opts,
     skillFilter: params.skillFilter,
+    manifestPlugins: params.manifestPlugins,
   });
   if (directiveResult.kind === "reply") {
     return { handled: true, reply: directiveResult.reply };
