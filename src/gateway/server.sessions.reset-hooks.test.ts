@@ -524,3 +524,60 @@ test("sessions.reset drops cli session bindings so the next turn does not --resu
   expect(nextEntry?.cliSessionBindings).toBeUndefined();
   expect(nextEntry?.cliSessionIds).toBeUndefined();
 });
+
+test("sessions.reset preserves cli session bindings for spawned subagents (Tak Hoffman's fa56682b3ced contract)", async () => {
+  const { dir } = await createSessionStoreDir();
+  const childTranscript = path.join(dir, "sess-spawned-child.jsonl");
+  await fs.writeFile(
+    childTranscript,
+    `${JSON.stringify({
+      type: "message",
+      id: "m-child",
+      message: { role: "user", content: "hello from spawned child" },
+    })}\n`,
+    "utf-8",
+  );
+
+  await writeSessionStore({
+    entries: {
+      "subagent:child": sessionStoreEntry("sess-spawned-child", {
+        sessionFile: childTranscript,
+        parentSessionKey: "agent:main:main",
+        spawnedBy: "agent:main:main",
+        subagentRole: "orchestrator",
+        claudeCliSessionId: "claude-cli-child-session",
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "claude-cli-child-session" },
+        },
+        cliSessionIds: { "claude-cli": "claude-cli-child-session" },
+      }),
+    },
+  });
+
+  const [{ getRuntimeConfig }, { resolveGatewaySessionStoreTarget }, { loadSessionStore }] =
+    await Promise.all([
+      import("../config/config.js"),
+      import("./session-utils.js"),
+      import("../config/sessions.js"),
+    ]);
+  const gatewayStorePath = resolveGatewaySessionStoreTarget({
+    cfg: getRuntimeConfig(),
+    key: "subagent:child",
+  }).storePath;
+
+  const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
+    key: "subagent:child",
+    reason: "new",
+  });
+  expect(reset.ok).toBe(true);
+
+  const store = loadSessionStore(gatewayStorePath, { skipCache: true });
+  const nextEntry = store["agent:main:subagent:child"];
+  expect(nextEntry).toBeDefined();
+  expect(nextEntry?.sessionId).not.toBe("sess-spawned-child");
+  expect(nextEntry?.claudeCliSessionId).toBe("claude-cli-child-session");
+  expect(nextEntry?.cliSessionBindings).toEqual({
+    "claude-cli": { sessionId: "claude-cli-child-session" },
+  });
+  expect(nextEntry?.cliSessionIds).toEqual({ "claude-cli": "claude-cli-child-session" });
+});

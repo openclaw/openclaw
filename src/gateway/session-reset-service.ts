@@ -773,6 +773,9 @@ export async function performGatewaySessionReset(params: {
       space: currentEntry?.space,
       origin: snapshotSessionOrigin(currentEntry),
       deliveryContext: currentEntry?.deliveryContext,
+      cliSessionBindings: currentEntry?.cliSessionBindings,
+      cliSessionIds: currentEntry?.cliSessionIds,
+      claudeCliSessionId: currentEntry?.claudeCliSessionId,
       lastChannel: currentEntry?.lastChannel,
       lastTo: currentEntry?.lastTo,
       lastAccountId: currentEntry?.lastAccountId,
@@ -787,7 +790,14 @@ export async function performGatewaySessionReset(params: {
       totalTokens: 0,
       totalTokensFresh: true,
     };
-    clearAllCliSessions(nextEntry);
+    // Drop the claude-cli `--resume` binding so the next turn after reset
+    // starts a fresh CLI conversation on the provider side. Preserved only
+    // for spawned subagents, where Tak Hoffman's fa56682b3ced regression fix
+    // intentionally protects CLI continuity for orchestration-driven resets.
+    const isSpawnedSubagent = Boolean(currentEntry?.parentSessionKey || currentEntry?.spawnedBy);
+    if (!isSpawnedSubagent) {
+      clearAllCliSessions(nextEntry);
+    }
     store[primaryKey] = nextEntry;
     return nextEntry;
   });
