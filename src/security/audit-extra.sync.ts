@@ -15,6 +15,9 @@ import {
   listDangerousPluginNodeCommands,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
+import { peerKindMatches } from "../routing/peer-kind-match.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -389,7 +392,313 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
   return Array.from(out);
 }
 
-function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
+type ExposureSessionKind = "main" | "external";
+type SharedIngressPeerKind = "direct" | "group" | "channel";
+
+type SharedIngressTarget = {
+  channelId: string;
+  accountId?: string;
+  peerKind?: SharedIngressPeerKind;
+  peerId?: string;
+  guildId?: string;
+};
+
+type SharedIngressAgentIds = {
+  main: Set<string>;
+  external: Set<string>;
+};
+
+function listAuditAgentEntries(cfg: OpenClawConfig) {
+  return (cfg.agents?.list ?? []).filter(
+    (entry): entry is NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number] =>
+      entry != null && typeof entry === "object" && typeof entry.id === "string",
+  );
+}
+
+function resolveAuditDefaultAgentId(cfg: OpenClawConfig): string {
+  const agents = listAuditAgentEntries(cfg);
+  const chosen = (agents.find((entry) => entry.default) ?? agents[0])?.id?.trim();
+  return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
+}
+
+function findAuditAgentEntry(cfg: OpenClawConfig, agentId: string) {
+  const normalized = normalizeAgentId(agentId);
+  return listAuditAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === normalized);
+}
+
+function normalizeAgentIdFromUnknown(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  return normalizeAgentId(value);
+}
+
+function addAgentId(out: Set<string>, value: unknown): void {
+  const normalized = normalizeAgentIdFromUnknown(value);
+  if (normalized) {
+    out.add(normalized);
+  }
+}
+
+function listBroadcastAgentIdsForPeer(cfg: OpenClawConfig, peerId: string | undefined): string[] {
+  if (!peerId || !cfg.broadcast || typeof cfg.broadcast !== "object") {
+    return [];
+  }
+  const value = cfg.broadcast[peerId];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => normalizeAgentIdFromUnknown(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function resolveAgentIdsForExplicitSharedTarget(
+  cfg: OpenClawConfig,
+  target: SharedIngressTarget,
+): string[] {
+  const broadcastAgentIds = listBroadcastAgentIdsForPeer(cfg, target.peerId);
+  if (broadcastAgentIds.length > 0) {
+    return broadcastAgentIds;
+  }
+
+  const route = resolveAgentRoute({
+    cfg,
+    channel: target.channelId,
+    accountId: target.accountId,
+    peer: target.peerKind && target.peerId ? { kind: target.peerKind, id: target.peerId } : null,
+    guildId: target.guildId,
+  });
+  return [route.agentId];
+}
+
+function routeBindingCanReachBroadSharedTarget(
+  binding: NonNullable<OpenClawConfig["bindings"]>[number],
+  target: SharedIngressTarget,
+): boolean {
+  if (binding.type === "acp") {
+    return false;
+  }
+  const match = binding.match;
+  if (!match || match.channel !== target.channelId) {
+    return false;
+  }
+  if (
+    match.accountId &&
+    match.accountId !== "*" &&
+    target.accountId &&
+    match.accountId !== target.accountId
+  ) {
+    return false;
+  }
+  if (match.peer && target.peerKind && !peerKindMatches(match.peer.kind, target.peerKind)) {
+    return false;
+  }
+  if (match.guildId && target.guildId && match.guildId !== target.guildId) {
+    return false;
+  }
+  return true;
+}
+
+function resolveAgentIdsForBroadSharedTarget(
+  cfg: OpenClawConfig,
+  target: SharedIngressTarget,
+): string[] {
+  const out = new Set<string>([resolveAuditDefaultAgentId(cfg)]);
+  for (const binding of Array.isArray(cfg.bindings) ? cfg.bindings : []) {
+    if (routeBindingCanReachBroadSharedTarget(binding, target)) {
+      addAgentId(out, binding.agentId);
+    }
+  }
+  return Array.from(out);
+}
+
+function resolveSharedIngressSessionKind(
+  cfg: OpenClawConfig,
+  target: SharedIngressTarget,
+): ExposureSessionKind {
+  if (target.peerKind !== "direct") {
+    return "external";
+  }
+  return (cfg.session?.dmScope ?? "main") === "main" ? "main" : "external";
+}
+
+function collectConfiguredSharedTargets(params: {
+  section: Record<string, unknown>;
+  channelId: string;
+  accountId?: string;
+}): SharedIngressTarget[] {
+  const targets: SharedIngressTarget[] = [];
+  const addRecordTargets = (key: string, peerKind: SharedIngressPeerKind) => {
+    const value = params.section[key];
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    for (const peerId of Object.keys(value)) {
+      targets.push({
+        channelId: params.channelId,
+        accountId: params.accountId,
+        peerKind,
+        peerId: peerId === "*" ? undefined : peerId,
+      });
+    }
+  };
+
+  addRecordTargets("groups", "group");
+  addRecordTargets("rooms", "group");
+  addRecordTargets("channels", "channel");
+
+  const guilds = params.section.guilds;
+  if (guilds && typeof guilds === "object") {
+    for (const [guildId, guildValue] of Object.entries(guilds)) {
+      if (!guildValue || typeof guildValue !== "object") {
+        targets.push({
+          channelId: params.channelId,
+          accountId: params.accountId,
+          guildId: guildId === "*" ? undefined : guildId,
+        });
+        continue;
+      }
+      const channels = (guildValue as Record<string, unknown>).channels;
+      if (!channels || typeof channels !== "object" || Object.keys(channels).length === 0) {
+        targets.push({
+          channelId: params.channelId,
+          accountId: params.accountId,
+          guildId: guildId === "*" ? undefined : guildId,
+        });
+        continue;
+      }
+      for (const channelPeerId of Object.keys(channels)) {
+        targets.push({
+          channelId: params.channelId,
+          accountId: params.accountId,
+          peerKind: "channel",
+          peerId: channelPeerId === "*" ? undefined : channelPeerId,
+          guildId: guildId === "*" ? undefined : guildId,
+        });
+      }
+    }
+  }
+
+  return targets;
+}
+
+function collectSharedIngressAgentIds(cfg: OpenClawConfig): SharedIngressAgentIds {
+  const out: SharedIngressAgentIds = {
+    main: new Set<string>(),
+    external: new Set<string>(),
+  };
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  if (!channels || typeof channels !== "object") {
+    return out;
+  }
+
+  const inspectSection = (
+    section: Record<string, unknown>,
+    channelId: string,
+    accountId?: string,
+  ) => {
+    const configuredGroupTargets = collectConfiguredSharedTargets({
+      section,
+      channelId,
+      accountId,
+    });
+    const addTargets = (targets: SharedIngressTarget[]) => {
+      for (const target of targets) {
+        const ids =
+          target.peerId || target.guildId
+            ? resolveAgentIdsForExplicitSharedTarget(cfg, target)
+            : resolveAgentIdsForBroadSharedTarget(cfg, target);
+        const bucket = out[resolveSharedIngressSessionKind(cfg, target)];
+        for (const id of ids) {
+          bucket.add(id);
+        }
+      }
+    };
+    const addBroadTarget = (peerKind: SharedIngressPeerKind) => {
+      const target = {
+        channelId,
+        accountId,
+        peerKind,
+      };
+      const bucket = out[resolveSharedIngressSessionKind(cfg, target)];
+      for (const id of resolveAgentIdsForBroadSharedTarget(cfg, target)) {
+        bucket.add(id);
+      }
+    };
+
+    const groupPolicy = typeof section.groupPolicy === "string" ? section.groupPolicy : null;
+    if (groupPolicy === "open") {
+      addBroadTarget("group");
+    } else if (groupPolicy === "allowlist" && configuredGroupTargets.length > 0) {
+      addTargets(configuredGroupTargets);
+    }
+
+    const dmPolicy = typeof section.dmPolicy === "string" ? section.dmPolicy : null;
+    if (dmPolicy === "open") {
+      addBroadTarget("direct");
+    }
+
+    const allowFrom = Array.isArray(section.allowFrom) ? section.allowFrom : [];
+    if (allowFrom.some((entry) => isWildcardEntry(entry))) {
+      addBroadTarget("direct");
+    }
+
+    const groupAllowFrom = Array.isArray(section.groupAllowFrom) ? section.groupAllowFrom : [];
+    if (groupAllowFrom.some((entry) => isWildcardEntry(entry))) {
+      if (configuredGroupTargets.length > 0) {
+        addTargets(configuredGroupTargets);
+      } else {
+        addBroadTarget("group");
+      }
+    }
+
+    const dm = section.dm;
+    if (dm && typeof dm === "object") {
+      const dmSection = dm as Record<string, unknown>;
+      const dmLegacyPolicy = typeof dmSection.policy === "string" ? dmSection.policy : null;
+      const dmAllowFrom = Array.isArray(dmSection.allowFrom) ? dmSection.allowFrom : [];
+      if (dmLegacyPolicy === "open" || dmAllowFrom.some((entry) => isWildcardEntry(entry))) {
+        addBroadTarget("direct");
+      }
+    }
+  };
+
+  for (const [channelId, value] of Object.entries(channels)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    const section = value as Record<string, unknown>;
+    inspectSection(section, channelId);
+    const accounts = section.accounts;
+    if (!accounts || typeof accounts !== "object") {
+      continue;
+    }
+    for (const [accountId, accountValue] of Object.entries(accounts)) {
+      if (!accountValue || typeof accountValue !== "object") {
+        continue;
+      }
+      inspectSection(accountValue as Record<string, unknown>, channelId, accountId);
+    }
+  }
+
+  return out;
+}
+
+function isSandboxGuardedForExposure(
+  sandboxMode: "off" | "non-main" | "all",
+  sessionKind: ExposureSessionKind,
+): boolean {
+  return sandboxMode === "all" || (sessionKind === "external" && sandboxMode === "non-main");
+}
+
+function collectRiskyToolExposureContexts(
+  cfg: OpenClawConfig,
+  options: {
+    agentIds?: ReadonlySet<string>;
+    sessionKind?: ExposureSessionKind;
+  } = {},
+): {
   riskyContexts: string[];
   hasRuntimeRisk: boolean;
 } {
@@ -397,20 +706,38 @@ function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
     label: string;
     agentId?: string;
     tools?: AgentToolsConfig;
-  }> = [{ label: "agents.defaults" }];
-  for (const agent of cfg.agents?.list ?? []) {
-    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
-      continue;
+  }> = [];
+  if (options.agentIds) {
+    const defaultAgentId = resolveAuditDefaultAgentId(cfg);
+    for (const agentId of Array.from(options.agentIds).toSorted()) {
+      const agent = findAuditAgentEntry(cfg, agentId);
+      contexts.push({
+        label: agent
+          ? `agents.list.${agent.id}`
+          : agentId === defaultAgentId
+            ? "agents.defaults"
+            : `agents.defaults(agent=${agentId})`,
+        agentId,
+        tools: agent?.tools,
+      });
     }
-    contexts.push({
-      label: `agents.list.${agent.id}`,
-      agentId: agent.id,
-      tools: agent.tools,
-    });
+  } else {
+    contexts.push({ label: "agents.defaults" });
+    for (const agent of cfg.agents?.list ?? []) {
+      if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
+        continue;
+      }
+      contexts.push({
+        label: `agents.list.${agent.id}`,
+        agentId: agent.id,
+        tools: agent.tools,
+      });
+    }
   }
 
   const riskyContexts: string[] = [];
   let hasRuntimeRisk = false;
+  const sessionKind = options.sessionKind ?? "main";
   for (const context of contexts) {
     const sandboxMode = resolveSandboxConfigForAgent(cfg, context.agentId).mode;
     const policies = resolveToolPolicies({
@@ -426,8 +753,9 @@ function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
       isToolAllowedByPolicies(tool, policies),
     );
     const fsWorkspaceOnly = context.tools?.fs?.workspaceOnly ?? cfg.tools?.fs?.workspaceOnly;
-    const runtimeUnguarded = runtimeTools.length > 0 && sandboxMode !== "all";
-    const fsUnguarded = fsTools.length > 0 && sandboxMode !== "all" && fsWorkspaceOnly !== true;
+    const sandboxGuarded = isSandboxGuardedForExposure(sandboxMode, sessionKind);
+    const runtimeUnguarded = runtimeTools.length > 0 && !sandboxGuarded;
+    const fsUnguarded = fsTools.length > 0 && !sandboxGuarded && fsWorkspaceOnly !== true;
     if (!runtimeUnguarded && !fsUnguarded) {
       continue;
     }
@@ -1073,7 +1401,9 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
     });
   }
 
-  const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg);
+  const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg, {
+    sessionKind: "external",
+  });
 
   if (riskyContexts.length > 0) {
     findings.push({
@@ -1099,7 +1429,33 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
     return findings;
   }
 
-  const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg);
+  const sharedIngressAgentIds = collectSharedIngressAgentIds(cfg);
+  const riskyContextSet = new Set<string>();
+  let hasRuntimeRisk = false;
+  const collectScopedRisk = (params: {
+    agentIds?: ReadonlySet<string>;
+    sessionKind: ExposureSessionKind;
+  }) => {
+    const result = collectRiskyToolExposureContexts(cfg, params);
+    for (const context of result.riskyContexts) {
+      riskyContextSet.add(context);
+    }
+    hasRuntimeRisk ||= result.hasRuntimeRisk;
+  };
+  if (sharedIngressAgentIds.main.size > 0) {
+    collectScopedRisk({ agentIds: sharedIngressAgentIds.main, sessionKind: "main" });
+  }
+  if (sharedIngressAgentIds.external.size > 0) {
+    collectScopedRisk({ agentIds: sharedIngressAgentIds.external, sessionKind: "external" });
+  }
+  if (sharedIngressAgentIds.main.size === 0 && sharedIngressAgentIds.external.size === 0) {
+    collectScopedRisk({ sessionKind: "main" });
+  }
+  const riskyContexts = Array.from(riskyContextSet);
+  if (riskyContexts.length === 0) {
+    return findings;
+  }
+
   const impactLine = hasRuntimeRisk
     ? "Runtime/process tools are exposed without full sandboxing in at least one context."
     : "No unguarded runtime/process tools were detected by this heuristic.";

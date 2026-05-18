@@ -146,6 +146,152 @@ describe("security audit trust model findings", () => {
           ).toBe(false);
         },
       },
+      {
+        name: "does not flag open group exposure when non-main sessions are sandboxed",
+        cfg: {
+          channels: { whatsapp: { groupPolicy: "open" } },
+          tools: {
+            elevated: { enabled: false },
+            profile: "coding",
+          },
+          agents: {
+            defaults: {
+              sandbox: { mode: "non-main" },
+            },
+          },
+        } satisfies OpenClawConfig,
+        assert: () => {
+          const findings = audit(cases[6].cfg);
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+            ),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "does not warn when allowlisted WhatsApp groups run as non-main sandbox sessions",
+        cfg: {
+          channels: {
+            whatsapp: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+15551234567"],
+              groups: { "120363403215116621@g.us": { requireMention: true } },
+            },
+          },
+          tools: {
+            elevated: { enabled: false },
+            profile: "coding",
+          },
+          agents: {
+            defaults: {
+              sandbox: { mode: "non-main" },
+            },
+          },
+        } satisfies OpenClawConfig,
+        assert: () => {
+          const findings = audit(cases[7].cfg);
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
+            ),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "does not warn for unsandboxed main when the group route targets a sandboxed agent",
+        cfg: {
+          agents: {
+            list: [
+              {
+                id: "main",
+                default: true,
+                sandbox: { mode: "off" },
+                tools: { fs: { workspaceOnly: true } },
+              },
+              {
+                id: "friends",
+                sandbox: { mode: "all" },
+              },
+            ],
+          },
+          bindings: [
+            {
+              agentId: "friends",
+              match: {
+                channel: "whatsapp",
+                peer: { kind: "group", id: "120363403215116621@g.us" },
+              },
+            },
+          ],
+          channels: {
+            whatsapp: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+15551234567"],
+              groups: { "120363403215116621@g.us": { requireMention: true } },
+            },
+          },
+          tools: {
+            elevated: { enabled: false },
+            fs: { workspaceOnly: true },
+          },
+        } satisfies OpenClawConfig,
+        assert: () => {
+          const findings = audit(cases[8].cfg);
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
+            ),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "warns for open direct DMs when only non-main sessions are sandboxed",
+        cfg: {
+          channels: { whatsapp: { dmPolicy: "open" } },
+          tools: {
+            elevated: { enabled: false },
+            profile: "coding",
+          },
+          agents: {
+            defaults: {
+              sandbox: { mode: "non-main" },
+            },
+          },
+        } satisfies OpenClawConfig,
+        assert: () => {
+          const findings = audit(cases[9].cfg);
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
+            ),
+          ).toBe(true);
+        },
+      },
+      {
+        name: "does not warn for open direct DMs when secure DM sessions are sandboxed",
+        cfg: {
+          session: { dmScope: "per-channel-peer" },
+          channels: { whatsapp: { dmPolicy: "open" } },
+          tools: {
+            elevated: { enabled: false },
+            profile: "coding",
+          },
+          agents: {
+            defaults: {
+              sandbox: { mode: "non-main" },
+            },
+          },
+        } satisfies OpenClawConfig,
+        assert: () => {
+          const findings = audit(cases[10].cfg);
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
+            ),
+          ).toBe(false);
+        },
+      },
     ] as const;
 
     for (const testCase of cases) {
