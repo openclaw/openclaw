@@ -44,6 +44,7 @@ Docs: https://docs.openclaw.ai
 
 - Agents/image generation: allow distinct `image_generate` prompts to start separate session-backed background tasks while same-prompt retries still return the active task status. (#83614) Thanks @Elarwei001.
 - Sessions: skip trailing custom transcript entries when checking tail assistant replies so embedded CLI gap-fill does not duplicate canonical assistant output. (#83635) Thanks @yaoyi1222.
+- Replies: show `/models openai` auth labels using Codex-first `auth.order.openai` profile preference before env API-key fallbacks. (#83581) Thanks @hclsys.
 - Telegram: keep verbose tool progress visible without mirroring non-final progress into active session transcripts, preventing embedded provider replies from aborting mid-run. (#83631) Thanks @kurplunkin.
 - Cron: link isolated scheduled task runs to their stable cron session so task status and cleanup can follow the backing agent run. (#83606) Thanks @jai.
 - CLI: enforce the documented Node.js 22.19 runtime floor in the source launcher.
