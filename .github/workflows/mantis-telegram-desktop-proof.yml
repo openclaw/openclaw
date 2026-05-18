@@ -479,7 +479,7 @@ jobs:
       - name: Upload Mantis Telegram desktop artifacts
         id: upload_artifact
         if: ${{ always() && steps.inspect.outputs.output_dir != '' }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: mantis-telegram-desktop-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.inspect.outputs.output_dir }}
