@@ -116,6 +116,7 @@ vi.mock("../../../plugins/clawhub.js", () => ({
   CLAWHUB_INSTALL_ERROR_CODE: {
     PACKAGE_NOT_FOUND: "package_not_found",
     VERSION_NOT_FOUND: "version_not_found",
+    ARTIFACT_UNAVAILABLE: "artifact_unavailable",
     ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
   },
   installPluginFromClawHub: mocks.installPluginFromClawHub,
@@ -340,11 +341,11 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.warnings).toStrictEqual([]);
   });
 
-  it("falls back to npm when an OpenClaw channel plugin is not on ClawHub", async () => {
+  it("falls back to npm when an OpenClaw channel plugin artifact is unavailable on ClawHub", async () => {
     mocks.installPluginFromClawHub.mockResolvedValueOnce({
       ok: false,
-      code: "package_not_found",
-      error: "Package not found on ClawHub.",
+      code: "artifact_unavailable",
+      error: "ClawHub artifact download is not available yet.",
     });
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {

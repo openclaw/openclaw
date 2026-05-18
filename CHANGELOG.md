@@ -44,6 +44,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: deliver generated media completions back into forum topics by preserving topic IDs across requester-agent handoff. (#83556) Thanks @fuller-stack-dev.
 - Gateway: defer update-check startup until after readiness so package update checks no longer block sidecar-ready startup, while preserving update broadcasts and shutdown cleanup. (#83520) Thanks @samzong.
 - Agents/video: hide `video_generate` reference-audio parameters unless a registered video provider supports audio inputs.
+- Plugins: fall back to npm for official ClawHub updates when artifact downloads are unavailable, including beta-to-default fallback and dry-run version reporting.
 - Plugins/xAI: echo PKCE challenge fields during OAuth authorization-code token exchange for xAI token-endpoint compatibility. (#83499) Thanks @fuller-stack-dev.
 - Codex app-server: hydrate current inbound image attachments before queued runs so Responses-backed agents receive Discord and other channel images as native vision input. Fixes #83466. Thanks @iannwu.
 - Codex app-server: keep native code mode available without forcing code-mode-only so OpenClaw dynamic tool turns complete through the app-server tool bridge. Fixes #83109. Thanks @daswass.
