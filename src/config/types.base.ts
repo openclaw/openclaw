@@ -307,6 +307,12 @@ export type DiagnosticsCacheTraceConfig = {
   includeMessages?: boolean;
   includePrompt?: boolean;
   includeSystem?: boolean;
+  /** Maximum cache-trace file size in bytes; further appends are dropped once exceeded. Default: 50 MiB. Set to 0 to disable the cap. */
+  maxFileBytes?: number;
+  /** Number of cache-trace files to retain (active file plus numeric-suffix archives). Default: 3. Set to 0 to disable rotation and drop appends once `maxFileBytes` is reached, or 1 to keep only the active file. */
+  maxFiles?: number;
+  /** Maximum bytes allowed in the in-flight write queue; further events are dropped while the queue is full. Default: unlimited. */
+  maxQueuedBytes?: number;
 };
 
 export type DiagnosticsConfig = {

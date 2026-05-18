@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { createCacheTrace } from "./cache-trace.js";
@@ -287,6 +290,147 @@ describe("createCacheTrace", () => {
       messageFingerprints: [fingerprint],
       messagesDigest: crypto.createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex"),
       messages: [{ role: "user", content: "hello", child: { ref: "[Circular]" } }],
+    });
+  });
+
+  describe("size caps", () => {
+    const tempDirs: string[] = [];
+
+    afterEach(() => {
+      for (const dir of tempDirs.splice(0)) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    function makeTempDir(): string {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cache-trace-"));
+      tempDirs.push(dir);
+      return dir;
+    }
+
+    it("stops appending once maxFileBytes is reached when rotation is disabled", async () => {
+      const tmpDir = makeTempDir();
+      const filePath = path.join(tmpDir, "cache-trace.jsonl");
+      const trace = createCacheTrace({
+        cfg: {
+          diagnostics: {
+            cacheTrace: {
+              enabled: true,
+              filePath,
+              // Generous enough for a single small event but not two.
+              maxFileBytes: 200,
+              // Opt out of rotation so the cap drops appends instead.
+              maxFiles: 0,
+              includeMessages: false,
+              includePrompt: false,
+              includeSystem: false,
+            },
+          },
+        },
+        env: {},
+      });
+
+      expect(trace?.filePath).toBe(filePath);
+      trace?.recordStage("session:loaded", { note: "first" });
+      trace?.recordStage("session:loaded", {
+        note: "second-event-with-padding-to-blow-the-cap-".repeat(8),
+      });
+
+      // Allow the queued writer to flush both attempts.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const written = fs.readFileSync(filePath, "utf8");
+      const eventLines = written.split("\n").filter((line) => line.length > 0);
+      expect(eventLines.length).toBe(1);
+      const event = JSON.parse(eventLines[0] ?? "{}") as Record<string, unknown>;
+      expect(event.note).toBe("first");
+      expect(fs.existsSync(`${filePath}.1`)).toBe(false);
+    });
+
+    it("honors OPENCLAW_CACHE_TRACE_MAX_BYTES env override", async () => {
+      const tmpDir = makeTempDir();
+      const filePath = path.join(tmpDir, "cache-trace.jsonl");
+      const trace = createCacheTrace({
+        cfg: {
+          diagnostics: {
+            cacheTrace: {
+              enabled: true,
+              filePath,
+              // Config would allow plenty of room...
+              maxFileBytes: 10_000_000,
+              maxFiles: 0,
+              includeMessages: false,
+              includePrompt: false,
+              includeSystem: false,
+            },
+          },
+        },
+        // ...but env override clamps it.
+        env: { OPENCLAW_CACHE_TRACE_MAX_BYTES: "200" },
+      });
+
+      trace?.recordStage("session:loaded", { note: "first" });
+      trace?.recordStage("session:loaded", {
+        note: "second-event-with-padding-to-blow-the-cap-".repeat(8),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const eventLines = fs
+        .readFileSync(filePath, "utf8")
+        .split("\n")
+        .filter((line) => line.length > 0);
+      expect(eventLines.length).toBe(1);
+    });
+
+    it("rotates to .1 once maxFileBytes is reached when maxFiles >= 2", async () => {
+      const tmpDir = makeTempDir();
+      const filePath = path.join(tmpDir, "cache-trace.jsonl");
+      const trace = createCacheTrace({
+        cfg: {
+          diagnostics: {
+            cacheTrace: {
+              enabled: true,
+              filePath,
+              maxFileBytes: 200,
+              maxFiles: 3,
+              includeMessages: false,
+              includePrompt: false,
+              includeSystem: false,
+            },
+          },
+        },
+        env: {},
+      });
+
+      trace?.recordStage("session:loaded", { note: "first" });
+      trace?.recordStage("session:loaded", {
+        note: "second-event-padding-to-blow-cap-".repeat(8),
+      });
+      trace?.recordStage("session:loaded", { note: "third" });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // First event lives alone in the rotated archive; the second event
+      // triggered the rotation and lands in the new active file along with
+      // the third.
+      expect(fs.existsSync(`${filePath}.1`)).toBe(true);
+      const archiveLines = fs
+        .readFileSync(`${filePath}.1`, "utf8")
+        .split("\n")
+        .filter((line) => line.length > 0);
+      expect(archiveLines.length).toBe(1);
+      expect(JSON.parse(archiveLines[0] ?? "{}").note).toBe("first");
+
+      const activeLines = fs
+        .readFileSync(filePath, "utf8")
+        .split("\n")
+        .filter((line) => line.length > 0);
+      expect(activeLines.length).toBeGreaterThanOrEqual(1);
+      expect(JSON.parse(activeLines.at(-1) ?? "{}").note).toBe("third");
+
+      // No older archive should appear yet.
+      expect(fs.existsSync(`${filePath}.2`)).toBe(false);
     });
   });
 });

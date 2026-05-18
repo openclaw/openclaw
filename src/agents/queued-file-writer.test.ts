@@ -92,4 +92,61 @@ describe("getQueuedFileWriter", () => {
 
     expect(fs.readFileSync(filePath, "utf8")).toBe("12345\n");
   });
+
+  it("rotates the active file into .1 when maxFiles is configured", async () => {
+    const tmpDir = makeTempDir();
+    const filePath = path.join(tmpDir, "trace.jsonl");
+    const writer = getQueuedFileWriter(new Map(), filePath, {
+      maxFileBytes: 6,
+      maxFiles: 3,
+    });
+
+    writer.write("12345\n");
+    writer.write("after\n");
+    await writer.flush();
+
+    expect(fs.readFileSync(`${filePath}.1`, "utf8")).toBe("12345\n");
+    expect(fs.readFileSync(filePath, "utf8")).toBe("after\n");
+    expect(fs.existsSync(`${filePath}.2`)).toBe(false);
+  });
+
+  it("shifts older archives up and unlinks the oldest beyond maxFiles", async () => {
+    const tmpDir = makeTempDir();
+    const filePath = path.join(tmpDir, "trace.jsonl");
+    const writer = getQueuedFileWriter(new Map(), filePath, {
+      maxFileBytes: 6,
+      maxFiles: 3,
+    });
+
+    // Each line is 6 bytes (matches the cap), so the next 6-byte write forces
+    // a rotation. After three rotations the oldest archive must drop.
+    writer.write("aaaaa\n"); // active = aaaaa
+    writer.write("bbbbb\n"); // rotates aaaaa -> .1; active = bbbbb
+    writer.write("ccccc\n"); // rotates: .1 (aaaaa) -> .2, bbbbb -> .1, active = ccccc
+    writer.write("ddddd\n"); // rotates: .2 (aaaaa) unlinked, .1 (bbbbb) -> .2,
+    //                                   ccccc -> .1, active = ddddd
+    await writer.flush();
+
+    expect(fs.readFileSync(filePath, "utf8")).toBe("ddddd\n");
+    expect(fs.readFileSync(`${filePath}.1`, "utf8")).toBe("ccccc\n");
+    expect(fs.readFileSync(`${filePath}.2`, "utf8")).toBe("bbbbb\n");
+    expect(fs.existsSync(`${filePath}.3`)).toBe(false);
+  });
+
+  it("truncates the active file when maxFiles is 1", async () => {
+    const tmpDir = makeTempDir();
+    const filePath = path.join(tmpDir, "trace.jsonl");
+    const writer = getQueuedFileWriter(new Map(), filePath, {
+      maxFileBytes: 6,
+      maxFiles: 1,
+    });
+
+    writer.write("12345\n");
+    writer.write("after\n");
+    await writer.flush();
+
+    // No archives kept; second write replaces the active file content.
+    expect(fs.readFileSync(filePath, "utf8")).toBe("after\n");
+    expect(fs.existsSync(`${filePath}.1`)).toBe(false);
+  });
 });

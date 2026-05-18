@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/exec approvals: forward approval-runtime credentials on agent-owned Gateway approval calls so approved async commands complete through the existing runtime path instead of stalling on unauthenticated follow-up calls. Thanks @IWhatsskill, @Patrick-Erichsen, and @jesse-merhi.
+- Diagnostics: bound `diagnostics.cacheTrace` log files via numeric-suffix rotation, defaulting to 50 MiB per file and 3 retained files (`cache-trace.jsonl`, `.1`, `.2`); new `maxFileBytes` / `maxFiles` / `maxQueuedBytes` config and matching `OPENCLAW_CACHE_TRACE_MAX_BYTES` / `OPENCLAW_CACHE_TRACE_MAX_FILES` / `OPENCLAW_CACHE_TRACE_MAX_QUEUED_BYTES` env overrides let operators tune retention or fall back to drop-on-cap. Enabling cache tracing on long-lived sessions no longer grows the JSONL unbounded.
 - Gateway/skills: preflight remote macOS skill-bin refreshes with a WebSocket connectivity check so stale node sessions skip quickly instead of logging slow `system.which` timeout warnings.
 - GitHub Copilot: drop unsafe native Responses reasoning replay items with non-replayable IDs before dispatch, preventing affected Copilot sessions from failing with `invalid_request_body`. Fixes #83220. Thanks @galiniliev.
 - Agents/Codex: fail closed when an explicitly requested Codex harness is not registered instead of silently trying configured model fallbacks. Fixes #83349. Thanks @r2-vibes.

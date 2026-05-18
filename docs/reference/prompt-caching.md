@@ -312,6 +312,9 @@ diagnostics:
     includeMessages: false # default true
     includePrompt: false # default true
     includeSystem: false # default true
+    maxFileBytes: 52428800 # default 50 MiB; 0 disables the cap
+    maxFiles: 3 # default 3 (active + 2 archives); 0 disables rotation
+    maxQueuedBytes: 0 # default unlimited; bound in-flight write queue
 ```
 
 Defaults:
@@ -320,6 +323,9 @@ Defaults:
 - `includeMessages`: `true`
 - `includePrompt`: `true`
 - `includeSystem`: `true`
+- `maxFileBytes`: `52428800` (50 MiB). Once the active file reaches this size, it is rotated (see `maxFiles`) before the next event is appended. With rotation disabled (`maxFiles: 0`), additional events are dropped instead.
+- `maxFiles`: `3` — keep the active file plus two numeric-suffix archives (`cache-trace.jsonl`, `cache-trace.jsonl.1`, `cache-trace.jsonl.2`). On rotation the active file becomes `.1`, existing archives shift up one slot, and anything beyond the retained count is unlinked. Set to `0` to disable rotation entirely (drops appends once the cap is reached) or `1` to keep only the active file.
+- `maxQueuedBytes`: unset (unlimited). Set this if disk writes back up under load and you want to bound the in-flight queue; new events are dropped while the queue is full.
 
 ### Env toggles (one-off debugging)
 
@@ -328,6 +334,9 @@ Defaults:
 - `OPENCLAW_CACHE_TRACE_MESSAGES=0|1` toggles full message payload capture.
 - `OPENCLAW_CACHE_TRACE_PROMPT=0|1` toggles prompt text capture.
 - `OPENCLAW_CACHE_TRACE_SYSTEM=0|1` toggles system prompt capture.
+- `OPENCLAW_CACHE_TRACE_MAX_BYTES=<int>` overrides the file-size cap (bytes; `0` disables).
+- `OPENCLAW_CACHE_TRACE_MAX_FILES=<int>` overrides the archive retention count (`0` disables rotation).
+- `OPENCLAW_CACHE_TRACE_MAX_QUEUED_BYTES=<int>` overrides the in-flight queue cap (bytes).
 
 ### What to inspect
 

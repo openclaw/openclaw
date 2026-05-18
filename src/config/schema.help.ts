@@ -699,6 +699,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Include full message payloads in trace output (default: true).",
   "diagnostics.cacheTrace.includePrompt": "Include prompt text in trace output (default: true).",
   "diagnostics.cacheTrace.includeSystem": "Include system prompt in trace output (default: true).",
+  "diagnostics.cacheTrace.maxFileBytes":
+    "Maximum cache-trace file size in bytes before rotation or drop (default: 52428800, i.e. 50 MiB; set to 0 to disable the cap). Cache tracing is a debugging diagnostic; the cap prevents unbounded growth on long-lived sessions.",
+  "diagnostics.cacheTrace.maxFiles":
+    "Number of cache-trace files to retain, counting the active file plus numeric-suffix archives (default: 3, e.g. cache-trace.jsonl + .1 + .2). When the active file reaches maxFileBytes it is renamed to .1 (older archives shift up) and a new active file is started. Set to 0 to disable rotation and drop appends once the cap is reached, or 1 to keep only the active file.",
+  "diagnostics.cacheTrace.maxQueuedBytes":
+    "Maximum bytes allowed in the in-flight cache-trace write queue before new events are dropped (default: unlimited). Use this to bound memory pressure if disk writes back up under load.",
   "tools.exec.applyPatch.enabled":
     "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
   "tools.exec.applyPatch.workspaceOnly":

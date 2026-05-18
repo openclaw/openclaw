@@ -496,6 +496,9 @@ export const OpenClawSchema = z
             includeMessages: z.boolean().optional(),
             includePrompt: z.boolean().optional(),
             includeSystem: z.boolean().optional(),
+            maxFileBytes: z.number().int().nonnegative().optional(),
+            maxFiles: z.number().int().nonnegative().optional(),
+            maxQueuedBytes: z.number().int().nonnegative().optional(),
           })
           .strict()
           .optional(),

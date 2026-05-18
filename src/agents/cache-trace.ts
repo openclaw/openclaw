@@ -74,11 +74,38 @@ type CacheTraceConfig = {
   includeMessages: boolean;
   includePrompt: boolean;
   includeSystem: boolean;
+  maxFileBytes: number;
+  maxFiles: number;
+  maxQueuedBytes: number | undefined;
 };
 
 type CacheTraceWriter = QueuedFileWriter;
 
 const writers = new Map<string, CacheTraceWriter>();
+
+// Default cap: cache tracing is a debugging diagnostic; bound the file so a long
+// session does not silently fill the disk. 0 disables the cap explicitly.
+const DEFAULT_CACHE_TRACE_MAX_FILE_BYTES = 50 * 1024 * 1024;
+
+// Default archive depth: keep the active file plus two numeric-suffix backups
+// (~150 MiB total at the default size). Set maxFiles to 0 to revert to the
+// drop-on-cap behavior, or 1 to keep only the active file.
+const DEFAULT_CACHE_TRACE_MAX_FILES = 3;
+
+function parseNonNegativeIntEnv(raw: string | undefined): number | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return undefined;
+  }
+  return parsed;
+}
 
 function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
   const env = params.env ?? process.env;
@@ -95,17 +122,58 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
   const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
   const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
 
+  const maxFileBytesEnv = parseNonNegativeIntEnv(env.OPENCLAW_CACHE_TRACE_MAX_BYTES);
+  const maxFileBytesConfig =
+    typeof config?.maxFileBytes === "number" && Number.isFinite(config.maxFileBytes)
+      ? Math.max(0, Math.floor(config.maxFileBytes))
+      : undefined;
+  const maxFileBytes = maxFileBytesEnv ?? maxFileBytesConfig ?? DEFAULT_CACHE_TRACE_MAX_FILE_BYTES;
+
+  const maxFilesEnv = parseNonNegativeIntEnv(env.OPENCLAW_CACHE_TRACE_MAX_FILES);
+  const maxFilesConfig =
+    typeof config?.maxFiles === "number" && Number.isFinite(config.maxFiles)
+      ? Math.max(0, Math.floor(config.maxFiles))
+      : undefined;
+  const maxFiles = maxFilesEnv ?? maxFilesConfig ?? DEFAULT_CACHE_TRACE_MAX_FILES;
+
+  const maxQueuedBytesEnv = parseNonNegativeIntEnv(env.OPENCLAW_CACHE_TRACE_MAX_QUEUED_BYTES);
+  const maxQueuedBytesConfig =
+    typeof config?.maxQueuedBytes === "number" && Number.isFinite(config.maxQueuedBytes)
+      ? Math.max(0, Math.floor(config.maxQueuedBytes))
+      : undefined;
+  const maxQueuedBytes = maxQueuedBytesEnv ?? maxQueuedBytesConfig;
+
   return {
     enabled,
     filePath,
     includeMessages: includeMessages ?? true,
     includePrompt: includePrompt ?? true,
     includeSystem: includeSystem ?? true,
+    maxFileBytes,
+    maxFiles,
+    maxQueuedBytes,
   };
 }
 
-function getWriter(filePath: string): CacheTraceWriter {
-  return getQueuedFileWriter(writers, filePath);
+function getWriter(
+  filePath: string,
+  options: { maxFileBytes?: number; maxFiles?: number; maxQueuedBytes?: number } = {},
+): CacheTraceWriter {
+  // 0 means "no cap" in our public surface; translate to undefined so the
+  // underlying writer skips the size check entirely.
+  const maxFileBytes =
+    options.maxFileBytes !== undefined && options.maxFileBytes > 0
+      ? options.maxFileBytes
+      : undefined;
+  // 0 means "do not rotate, drop on cap" (legacy behavior). Anything >= 1 turns
+  // on numeric-suffix archive rotation in the queued writer.
+  const maxFiles =
+    options.maxFiles !== undefined && options.maxFiles > 0 ? options.maxFiles : undefined;
+  return getQueuedFileWriter(writers, filePath, {
+    maxFileBytes,
+    maxFiles,
+    maxQueuedBytes: options.maxQueuedBytes,
+  });
 }
 
 function digest(value: unknown): string {
@@ -134,7 +202,13 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     return null;
   }
 
-  const writer = params.writer ?? getWriter(cfg.filePath);
+  const writer =
+    params.writer ??
+    getWriter(cfg.filePath, {
+      maxFileBytes: cfg.maxFileBytes,
+      maxFiles: cfg.maxFiles,
+      maxQueuedBytes: cfg.maxQueuedBytes,
+    });
   let seq = 0;
 
   const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = buildAgentTraceBase(params);
