@@ -425,6 +425,102 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(events).toEqual(["startup-log-start", "sidecars", "startup-log-end"]);
   });
 
+  it("starts the gateway update check after post-attach returns", async () => {
+    const events: string[] = [];
+    const stopUpdateCheck = vi.fn();
+    const scheduleGatewayUpdateCheck = vi.fn(async () => {
+      events.push("update-check");
+      return stopUpdateCheck;
+    });
+    const startGatewaySidecars = vi.fn(async () => {
+      events.push("sidecars");
+      return { pluginServices: null, postReadySidecars: [] };
+    });
+
+    const result = await startGatewayPostAttachRuntime(
+      createPostAttachParams(),
+      createPostAttachRuntimeDeps({
+        refreshLatestUpdateRestartSentinel: vi.fn(async () => null),
+        scheduleGatewayUpdateCheck,
+        startGatewaySidecars,
+      }),
+    );
+    events.push("returned");
+
+    expect(scheduleGatewayUpdateCheck).not.toHaveBeenCalled();
+    expect(events).toEqual(["sidecars", "returned"]);
+
+    await vi.waitFor(() => {
+      expect(scheduleGatewayUpdateCheck).toHaveBeenCalledTimes(1);
+    });
+    expect(events).toEqual(["sidecars", "returned", "update-check"]);
+
+    result.stopGatewayUpdateCheck();
+    expect(stopUpdateCheck).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the gateway update check if close wins the deferred startup race", async () => {
+    let finishUpdateCheckSchedule: (() => void) | undefined;
+    const stopUpdateCheck = vi.fn();
+    const scheduleGatewayUpdateCheck = vi.fn(
+      async () =>
+        await new Promise<() => void>((resolve) => {
+          finishUpdateCheckSchedule = () => resolve(stopUpdateCheck);
+        }),
+    );
+
+    const result = await startGatewayPostAttachRuntime(
+      createPostAttachParams(),
+      createPostAttachRuntimeDeps({
+        refreshLatestUpdateRestartSentinel: vi.fn(async () => null),
+        scheduleGatewayUpdateCheck,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(scheduleGatewayUpdateCheck).toHaveBeenCalledTimes(1);
+    });
+    result.stopGatewayUpdateCheck();
+    expect(stopUpdateCheck).not.toHaveBeenCalled();
+
+    if (!finishUpdateCheckSchedule) {
+      throw new Error("Expected update check schedule release callback to be initialized");
+    }
+    finishUpdateCheckSchedule();
+
+    await vi.waitFor(() => {
+      expect(stopUpdateCheck).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("logs deferred gateway update check startup failures without failing ready", async () => {
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const scheduleGatewayUpdateCheck = vi.fn(async () => {
+      throw new Error("boom");
+    });
+
+    await expect(
+      startGatewayPostAttachRuntime(
+        {
+          ...createPostAttachParams(),
+          log,
+        },
+        createPostAttachRuntimeDeps({
+          refreshLatestUpdateRestartSentinel: vi.fn(async () => null),
+          scheduleGatewayUpdateCheck,
+        }),
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        stopGatewayUpdateCheck: expect.any(Function),
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(log.warn).toHaveBeenCalledWith("gateway update check failed to start: Error: boom");
+    });
+  });
+
   it("skips heavy restart sentinel refresh when no sentinel file exists", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-no-sentinel-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);

@@ -745,6 +745,66 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
     (await import("./server-tailscale.js")).startGatewayTailscaleExposure(...args),
 };
 
+function createDeferredGatewayUpdateCheck(params: {
+  startupTrace?: GatewayStartupTrace;
+  runtimeDeps: GatewayPostAttachRuntimeDeps;
+  cfg: OpenClawConfig;
+  log: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+  };
+  isNixMode: boolean;
+  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+}): { start: () => void; stop: () => void } {
+  let started = false;
+  let stopped = false;
+  let stopUpdateCheck: (() => void) | null = null;
+
+  const stop = () => {
+    stopped = true;
+    stopUpdateCheck?.();
+    stopUpdateCheck = null;
+  };
+
+  const start = () => {
+    if (started || stopped) {
+      return;
+    }
+    started = true;
+    setImmediate(() => {
+      if (stopped) {
+        return;
+      }
+      void measureStartup(params.startupTrace, "post-attach.update-check", () =>
+        params.runtimeDeps.scheduleGatewayUpdateCheck({
+          cfg: params.cfg,
+          log: params.log,
+          isNixMode: params.isNixMode,
+          onUpdateAvailableChange: (updateAvailable) => {
+            const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
+            params.broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
+          },
+        }),
+      )
+        .then((nextStop) => {
+          if (stopped) {
+            nextStop();
+            return;
+          }
+          stopUpdateCheck = nextStop;
+        })
+        .catch((err) => {
+          if (stopped) {
+            return;
+          }
+          params.log.warn(`gateway update check failed to start: ${String(err)}`);
+        });
+    });
+  };
+
+  return { start, stop };
+}
+
 export async function startGatewayPostAttachRuntime(
   params: {
     minimalTestGateway: boolean;
@@ -833,19 +893,16 @@ export async function startGatewayPostAttachRuntime(
     }),
   );
 
-  const stopGatewayUpdateCheckPromise = params.minimalTestGateway
-    ? Promise.resolve(() => {})
-    : measureStartup(params.startupTrace, "post-attach.update-check", () =>
-        runtimeDeps.scheduleGatewayUpdateCheck({
-          cfg: params.cfgAtStart,
-          log: params.log,
-          isNixMode: params.isNixMode,
-          onUpdateAvailableChange: (updateAvailable) => {
-            const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
-            params.broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
-          },
-        }),
-      );
+  const updateCheck = params.minimalTestGateway
+    ? { start: () => {}, stop: () => {} }
+    : createDeferredGatewayUpdateCheck({
+        startupTrace: params.startupTrace,
+        runtimeDeps,
+        cfg: params.cfgAtStart,
+        log: params.log,
+        isNixMode: params.isNixMode,
+        broadcast: params.broadcast,
+      });
 
   const tailscaleCleanupPromise = params.minimalTestGateway
     ? Promise.resolve(null)
@@ -961,26 +1018,27 @@ export async function startGatewayPostAttachRuntime(
     });
 
   if (params.deferSidecars !== true) {
-    const [, stopGatewayUpdateCheck, tailscaleCleanup, sidecarsResult] = await Promise.all([
+    const [, tailscaleCleanup, sidecarsResult] = await Promise.all([
       startupLogPromise,
-      stopGatewayUpdateCheckPromise,
       tailscaleCleanupPromise,
       sidecarsPromise,
     ]);
+    updateCheck.start();
     return {
-      stopGatewayUpdateCheck,
+      stopGatewayUpdateCheck: updateCheck.stop,
       tailscaleCleanup,
       pluginServices: sidecarsResult.pluginServices,
     };
   }
 
-  const [, stopGatewayUpdateCheck, tailscaleCleanup] = await Promise.all([
-    startupLogPromise,
-    stopGatewayUpdateCheckPromise,
-    tailscaleCleanupPromise,
-  ]);
+  const [, tailscaleCleanup] = await Promise.all([startupLogPromise, tailscaleCleanupPromise]);
+  updateCheck.start();
 
-  return { stopGatewayUpdateCheck, tailscaleCleanup, pluginServices: reportedPluginServices };
+  return {
+    stopGatewayUpdateCheck: updateCheck.stop,
+    tailscaleCleanup,
+    pluginServices: reportedPluginServices,
+  };
 }
 
 export const __testing = {
