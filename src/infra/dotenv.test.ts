@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadCliDotEnv } from "../cli/dotenv.js";
+import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
 import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
 
 const loggerMocks = vi.hoisted(() => ({
@@ -725,6 +726,33 @@ describe("loadCliDotEnv", () => {
 });
 
 describe("workspace .env blocklist completeness", () => {
+  it("keeps registered provider auth vars from trusted global dotenv", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        const providerAuthKeys = listKnownProviderAuthEnvVarNames().toSorted();
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          `${providerAuthKeys.map((key) => `${key}=workspace-${key}`).join("\n")}\n`,
+        );
+        await writeEnvFile(
+          path.join(stateDir, ".env"),
+          `${providerAuthKeys.map((key) => `${key}=global-${key}`).join("\n")}\n`,
+        );
+
+        clearEnv(providerAuthKeys);
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+
+        loadDotEnv({ quiet: true });
+
+        for (const key of providerAuthKeys) {
+          expect(process.env[key], `${key} should come from trusted global .env`).toBe(
+            `global-${key}`,
+          );
+        }
+      });
+    });
+  });
+
   it("blocks runtime-control variables from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
