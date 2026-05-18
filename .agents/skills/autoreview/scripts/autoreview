@@ -326,12 +326,15 @@ cleanup() {
 trap cleanup EXIT
 
 run_review() {
+  local status=0
   mkdir -p "$(dirname "$review_output")"
   if [[ "$codex_review_prompt_file" == true ]]; then
     build_prompt_file || return
     "${review_cmd[@]}" < "$prompt_file" 2>&1 | tee "$review_output"
+    status=${PIPESTATUS[0]}
     rm -f "$prompt_file"
     prompt_file=
+    return "$status"
   elif [[ "$codex_review_stdin_prompt" == true ]]; then
     printf '%s\n' "$codex_review_prompt" | "${review_cmd[@]}" 2>&1 | tee "$review_output"
   else
