@@ -1481,7 +1481,6 @@ async function runGatewaySample(options: {
         sampleStartAt,
         signalSentAt,
       });
-      iteration.resourceSnapshots.push(snapshotResources(child, sampleStartAt, "after-signal"));
       const [healthz, readyz] = await Promise.all([healthzPromise, readyzPromise]);
       iteration.healthz = healthz;
       iteration.readyz = readyz;
