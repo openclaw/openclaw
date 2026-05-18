@@ -982,7 +982,17 @@ export const AgentEntrySchema = z
       .object({
         delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
-        model: AgentModelSchema.optional(),
+        model: z
+          .union([
+            z.string(),
+            z
+              .object({
+                primary: z.string().optional(),
+                fallbacks: z.array(z.string()).optional(),
+              })
+              .strict(),
+          ])
+          .optional(),
         thinking: z.string().optional(),
         requireAgentId: z.boolean().optional(),
       })
