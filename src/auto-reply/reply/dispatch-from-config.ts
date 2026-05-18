@@ -10,6 +10,11 @@ import {
 } from "../../agents/agent-scope.js";
 import { selectAgentHarness } from "../../agents/harness/selection.js";
 import {
+  buildModelAliasIndex,
+  resolveDefaultModelForAgent,
+  resolveModelRefFromString,
+} from "../../agents/model-selection.js";
+import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -26,6 +31,7 @@ import {
   touchConversationBindingRecord,
 } from "../../bindings/records.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -91,6 +97,7 @@ import {
 } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
+import { resolveSessionRuntimeOverrideForProvider } from "./agent-runner-execution.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import {
   createInternalHookEvent,
@@ -114,6 +121,7 @@ import {
   isExplicitSourceReplyCommand,
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
+import { resolveStoredModelOverride } from "./stored-model-override.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
@@ -254,6 +262,7 @@ const resolveSessionStoreLookup = (
   sessionKey?: string;
   storePath?: string;
   entry?: SessionEntry;
+  store?: Record<string, SessionEntry>;
 } => {
   const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
   const sessionKey = normalizeOptionalString(targetSessionKey ?? ctx.SessionKey);
@@ -267,6 +276,7 @@ const resolveSessionStoreLookup = (
     return {
       sessionKey,
       storePath,
+      store,
       entry: resolveSessionStoreEntry({ store, sessionKey }).existing,
     };
   } catch {
@@ -336,24 +346,101 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
   entry?: SessionEntry;
   sessionAgentId: string;
   sessionKey?: string;
+  sessionStore?: Record<string, SessionEntry>;
+  turnModelOverride?: string;
 }): "automatic" | "message_tool" | undefined => {
   if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
     return undefined;
   }
   try {
-    const provider =
-      normalizeOptionalString(params.entry?.modelProvider) ??
-      normalizeOptionalString(params.ctx.Provider) ??
-      normalizeOptionalString(params.ctx.Surface) ??
-      "";
-    const harness = selectAgentHarness({
-      provider,
-      modelId: normalizeOptionalString(params.entry?.model),
-      config: params.cfg,
+    const defaultModelRef = resolveDefaultModelForAgent({
+      cfg: params.cfg,
       agentId: params.sessionAgentId,
-      sessionKey: params.sessionKey,
     });
-    return harness.deliveryDefaults?.sourceVisibleReplies;
+    const aliasIndex = buildModelAliasIndex({
+      cfg: params.cfg,
+      defaultProvider: defaultModelRef.provider,
+    });
+    const channelModelOverride = params.cfg.channels?.modelByChannel
+      ? resolveChannelModelOverride({
+          cfg: params.cfg,
+          channel:
+            params.entry?.channel ??
+            params.entry?.origin?.provider ??
+            (typeof params.ctx.OriginatingChannel === "string"
+              ? params.ctx.OriginatingChannel
+              : undefined) ??
+            params.ctx.Provider ??
+            params.ctx.Surface,
+          groupId: params.entry?.groupId,
+          groupChatType: params.entry?.chatType ?? params.ctx.ChatType,
+          groupChannel: params.entry?.groupChannel ?? params.ctx.GroupChannel,
+          groupSubject: params.entry?.subject ?? params.ctx.GroupSubject,
+          parentSessionKey:
+            params.entry?.parentSessionKey ??
+            params.ctx.ModelParentSessionKey ??
+            params.ctx.ParentSessionKey,
+        })
+      : null;
+    const channelModelRef = channelModelOverride
+      ? resolveModelRefFromString({
+          raw: channelModelOverride.model,
+          defaultProvider: defaultModelRef.provider,
+          aliasIndex,
+        })?.ref
+      : undefined;
+    const storedModelRef = resolveStoredModelOverride({
+      sessionEntry: params.entry,
+      sessionStore: params.sessionStore,
+      sessionKey: params.sessionKey,
+      parentSessionKey:
+        params.entry?.parentSessionKey ??
+        params.ctx.ModelParentSessionKey ??
+        params.ctx.ParentSessionKey,
+      defaultProvider: defaultModelRef.provider,
+    });
+    const storedModelCandidate = storedModelRef
+      ? {
+          provider: storedModelRef.provider ?? defaultModelRef.provider,
+          model: storedModelRef.model,
+        }
+      : undefined;
+    const turnModelRef = params.turnModelOverride
+      ? resolveModelRefFromString({
+          raw: params.turnModelOverride,
+          defaultProvider: defaultModelRef.provider,
+          aliasIndex,
+        })?.ref
+      : undefined;
+    const resolveCandidateDefault = (candidate: { provider: string; model?: string }) => {
+      const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+        provider: candidate.provider,
+        entry: params.entry,
+      });
+      const harness = selectAgentHarness({
+        provider: candidate.provider,
+        modelId: candidate.model,
+        config: params.cfg,
+        agentId: params.sessionAgentId,
+        sessionKey: params.sessionKey,
+        agentHarnessRuntimeOverride,
+      });
+      return harness.deliveryDefaults?.sourceVisibleReplies;
+    };
+    const selectedModelRef = turnModelRef ?? storedModelCandidate ?? channelModelRef;
+    if (selectedModelRef) {
+      return resolveCandidateDefault(selectedModelRef);
+    }
+    const sourceProvider = normalizeOptionalString(
+      params.entry?.origin?.provider ?? params.ctx.Provider ?? params.ctx.Surface,
+    );
+    if (sourceProvider) {
+      const sourceDefault = resolveCandidateDefault({ provider: sourceProvider });
+      if (sourceDefault) {
+        return sourceDefault;
+      }
+    }
+    return resolveCandidateDefault(defaultModelRef);
   } catch (error) {
     logVerbose(
       `dispatch-from-config: could not resolve harness visible-reply defaults: ${formatErrorMessage(error)}`,
@@ -766,6 +853,12 @@ export async function dispatchReplyFromConfig(
           entry: sessionStoreEntry.entry,
           sessionAgentId,
           sessionKey: acpDispatchSessionKey,
+          sessionStore: sessionStoreEntry.store,
+          turnModelOverride:
+            normalizeOptionalString(params.replyOptions?.modelOverride) ??
+            (params.replyOptions?.isHeartbeat === true
+              ? normalizeOptionalString(params.replyOptions.heartbeatModelOverride)
+              : undefined),
         })
       : undefined;
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
