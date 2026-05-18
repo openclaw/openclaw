@@ -254,7 +254,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
         snippetMaxChars: 200,
         sourceFilter: { sql: "", params: [] },
         buildFtsQuery: brokenBuildFtsQuery,
-        bm25RankToScore: bm25RankToScore,
+        bm25RankToScore,
       });
 
       // LIKE fallback should find "Agent" in the first row
@@ -377,7 +377,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
         snippetMaxChars: 200,
         sourceFilter: { sql: "", params: [] },
         buildFtsQuery: brokenBuildFtsQuery,
-        bm25RankToScore: bm25RankToScore,
+        bm25RankToScore,
       });
 
       // Per-token fallback: both "Agent" AND "cron" must match
@@ -407,7 +407,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
         snippetMaxChars: 200,
         sourceFilter: { sql: "", params: [] },
         buildFtsQuery: () => "BROKEN <<<",
-        bm25RankToScore: bm25RankToScore,
+        bm25RankToScore,
       });
 
       expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -487,8 +487,9 @@ describe("searchVector sqlite-vec KNN", () => {
     // Real Nextcloud-scale corpus where the vec0 fast path is unavailable
     // (e.g., extension not loaded or dimension mismatch with active model)
     // used to pin the main thread for the entire fallback scan, blocking
-    // channel I/O. After fix the loop yields every FALLBACK_VECTOR_YIELD_EVERY
-    // rows so a setImmediate-scheduled task can interleave between batches.
+    // channel I/O. After fix the loop yields after each full
+    // FALLBACK_VECTOR_BATCH_SIZE batch so a setImmediate-scheduled task can
+    // interleave between batches.
     const db = new DatabaseSync(":memory:");
     try {
       ensureMemoryIndexSchema({
@@ -502,7 +503,7 @@ describe("searchVector sqlite-vec KNN", () => {
       const insertChunk = db.prepare(
         "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       );
-      // Just over 3× the yield batch (FALLBACK_VECTOR_YIELD_EVERY=256) so we
+      // Just over 3x the yield batch (FALLBACK_VECTOR_BATCH_SIZE=256), so we
       // expect at least 3 yield points to fire during the scan.
       const N = 1024;
       for (let i = 0; i < N; i += 1) {
@@ -593,7 +594,7 @@ describe("searchVector sqlite-vec KNN", () => {
   it("returns an empty result set when no chunks match the provider model", async () => {
     const db = createFallbackDb();
     try {
-      // One chunk with a different model — must not appear in results.
+      // One chunk with a different model must not appear in results.
       insertFallbackChunk(db, { id: "other-only", model: "other-model", vector: [1, 0] });
       const results = await searchVector({
         db,
@@ -636,7 +637,7 @@ describe("searchVector sqlite-vec KNN", () => {
   it("handles an exact batch-size boundary (FALLBACK_VECTOR_BATCH_SIZE rows)", async () => {
     // When N === FALLBACK_VECTOR_BATCH_SIZE exactly, the loop produces one
     // full batch and then must take one extra empty-batch step before
-    // breaking — verify no row is dropped or double-counted at the seam.
+    // breaking; verify no row is dropped or double-counted at the seam.
     const db = createFallbackDb();
     try {
       const N = 256;
@@ -660,7 +661,7 @@ describe("searchVector sqlite-vec KNN", () => {
         sourceFilterChunks: { sql: "", params: [] },
       });
       expect(results).toHaveLength(3);
-      // Strictly decreasing scores — confirms top-K maintenance is intact.
+      // Strictly decreasing scores confirms top-K maintenance is intact.
       for (let i = 1; i < results.length; i += 1) {
         expect(results[i - 1].score).toBeGreaterThan(results[i].score);
       }
@@ -672,7 +673,7 @@ describe("searchVector sqlite-vec KNN", () => {
   it("preserves top-K ordering vs. a naive reference cosine implementation", async () => {
     // Guards against accidental algorithmic regressions from the control-flow
     // refactor: insert 200 chunks with random vectors and assert our patched
-    // fallback search returns the same top-K (by id, in the same order) as a
+    // fallback search returns the same top-K by id, in the same order, as a
     // straight-line JS reference that scores every row.
     const db = createFallbackDb();
     try {
@@ -707,7 +708,7 @@ describe("searchVector sqlite-vec KNN", () => {
       }
       const referenceTopIds = chunks
         .map((c) => ({ id: c.id, score: refCosine(queryVec, c.vector) }))
-        .sort((a, b) => b.score - a.score)
+        .toSorted((a, b) => b.score - a.score)
         .slice(0, limit)
         .map((r) => r.id);
 
@@ -731,17 +732,17 @@ describe("searchVector sqlite-vec KNN", () => {
   it("picks up rows inserted during the inter-batch event-loop yield (rowid cursor)", async () => {
     // The fix's rowid-paginated batches yield via setImmediate between batches.
     // Schedule an INSERT to land in that yield gap and verify the search picks
-    // up the new rows in the next batch — no double-counting, no missed rows.
+    // up the new rows in the next batch: no double-counting, no missed rows.
     const db = createFallbackDb();
     try {
       // 257 baseline rows: first batch sees 256 (score 0 vs. query), second
-      // batch would have seen just 1 — until our setImmediate insert lands.
+      // batch would have seen just 1 until our setImmediate insert lands.
       const baselineCount = 257;
       for (let i = 0; i < baselineCount; i += 1) {
         insertFallbackChunk(db, {
           id: `baseline-${i}`,
           model: "target-model",
-          // perpendicular to the query → cosine 0
+          // Perpendicular to the query: cosine 0.
           vector: [0, 1],
         });
       }
@@ -752,7 +753,9 @@ describe("searchVector sqlite-vec KNN", () => {
       // must include them in batch 2.
       let inserted = false;
       const insertDuringYield = (): void => {
-        if (inserted) return;
+        if (inserted) {
+          return;
+        }
         inserted = true;
         insertFallbackChunk(db, {
           id: "winner-A",
