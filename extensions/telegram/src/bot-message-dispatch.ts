@@ -1383,6 +1383,9 @@ export const dispatchTelegramMessage = async ({
                     };
 
                     if (segments.length > 0) {
+                      if (info.kind === "final") {
+                        await flushBufferedFinalAnswer();
+                      }
                       trackBlockMedia(blockDelivered);
                       return;
                     }

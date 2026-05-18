@@ -1587,6 +1587,46 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
   });
 
+  it("flushes buffered final answers after a skipped reasoning segment", async () => {
+    deliverInboundReplyWithMessageSendContext
+      .mockResolvedValueOnce({ status: "handled_no_send" })
+      .mockResolvedValueOnce({
+        status: "handled_visible",
+        delivery: { messageIds: ["1001"], visibleReplySent: true },
+      });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>Hidden reasoning</think>Visible answer" },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:direct:123",
+          ChatType: "direct",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: { agents: { defaults: { reasoningDefault: "on" } } },
+      streamMode: "off",
+      telegramDeps: telegramDepsForTest,
+    });
+
+    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext, 0), {
+      info: { kind: "final" },
+    });
+    expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext, 0).payload, {
+      text: "Reasoning:\n_Hidden reasoning_",
+    });
+    expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext, 1).payload, {
+      text: "Visible answer",
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("suppresses reasoning-only finals without raw text fallback", async () => {
     setupDraftStreams({ answerMessageId: 2001, reasoningMessageId: 3001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
