@@ -10,14 +10,16 @@ Options:
                               Target selection. Default: auto.
   --base REF                 Base ref for branch review. Default: PR base or origin/main.
   --commit REF               Commit ref for commit review. Default: HEAD.
-  --reviewer codex|claude|pi|opencode|auto
+  --reviewer codex|claude|pi|opencode|droid|copilot|auto
                               Review engine. Default: auto (Codex, fallback reviewer on error).
-  --fallback-reviewer claude|pi|opencode|none
+  --fallback-reviewer claude|pi|opencode|droid|copilot|none
                               Fallback when Codex is unavailable or exits nonzero. Default: claude.
   --codex-bin PATH           Codex binary. Default: codex.
   --claude-bin PATH          Claude binary. Default: claude.
   --pi-bin PATH              Pi binary. Default: pi.
   --opencode-bin PATH        OpenCode binary. Default: opencode.
+  --droid-bin PATH           Droid binary. Default: droid.
+  --copilot-bin PATH         GitHub Copilot binary. Default: copilot.
   --full-access              Keep yolo/full-access mode enabled. Default.
   --no-yolo                  Run nested Codex review with normal sandbox/approval prompts.
   --output FILE              Also save output to file.
@@ -42,6 +44,8 @@ codex_bin=${CODEX_BIN:-codex}
 claude_bin=${CLAUDE_BIN:-claude}
 pi_bin=${PI_BIN:-pi}
 opencode_bin=${OPENCODE_BIN:-opencode}
+droid_bin=${DROID_BIN:-droid}
+copilot_bin=${COPILOT_BIN:-copilot}
 codex_args=()
 yolo=${AUTOREVIEW_YOLO:-${CODEX_REVIEW_YOLO:-1}}
 output=${AUTOREVIEW_OUTPUT:-${CODEX_REVIEW_OUTPUT:-}}
@@ -84,6 +88,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --opencode-bin)
       opencode_bin=${2:-}
+      shift 2
+      ;;
+    --droid-bin)
+      droid_bin=${2:-}
+      shift 2
+      ;;
+    --copilot-bin)
+      copilot_bin=${2:-}
       shift 2
       ;;
     --full-access)
@@ -131,7 +143,7 @@ case "$mode" in
 esac
 
 case "$reviewer" in
-  auto|codex|claude|pi|opencode) ;;
+  auto|codex|claude|pi|opencode|droid|copilot) ;;
   *)
     echo "invalid --reviewer: $reviewer" >&2
     exit 2
@@ -139,7 +151,7 @@ case "$reviewer" in
 esac
 
 case "$fallback_reviewer" in
-  claude|pi|opencode|none) ;;
+  claude|pi|opencode|droid|copilot|none) ;;
   *)
     echo "invalid --fallback-reviewer: $fallback_reviewer" >&2
     exit 2
@@ -198,6 +210,15 @@ printf 'reviewer: %s\n' "$reviewer"
 if [[ "$reviewer" == auto ]]; then
   printf 'fallback-reviewer: %s\n' "$fallback_reviewer"
 fi
+case "$reviewer" in
+  codex) ;;
+  auto)
+    printf 'note: Codex native review mode is the recommended and best-supported review path; fallback reviewers use a generated diff prompt.\n'
+    ;;
+  *)
+    printf 'note: Codex native review mode is the recommended and best-supported review path; %s uses a generated diff prompt.\n' "$reviewer"
+    ;;
+esac
 if [[ "$reviewer" == auto || "$reviewer" == codex ]]; then
   printf 'review:'
   printf ' %q' "${review_cmd[@]}"
@@ -284,10 +305,14 @@ Base: ${base_ref:-}
 Commit: ${commit_ref:-}
 
 Rules:
-- Review only the diff below.
+- Review the proposed code change as a closeout reviewer.
+- Focus on the diff below. If your CLI exposes read-only repository tools, inspect surrounding code and tests to verify findings; never modify files.
 - Do not modify files.
-- Prioritize correctness bugs, regressions, security issues, and missing tests.
-- Ignore speculative edge cases and broad rewrites.
+- Report only discrete, actionable issues introduced by this change.
+- Prioritize correctness, regressions, security, data loss, performance cliffs, and missing tests that would catch a real bug.
+- Do not report pre-existing issues, speculative risks, broad rewrites, style nits, changelog gaps, or findings that depend on unstated assumptions.
+- Identify the concrete scenario where the issue appears, and keep the line reference as small as possible.
+- A finding should overlap changed code or clearly cite changed code as the cause.
 - For each accepted/actionable finding, use exactly this format:
   [P<0-3>] Short title
   File: path:line
@@ -302,8 +327,15 @@ EOF
   } > "$prompt_file" || return
 }
 
+reviewer_output_has_clean_marker() {
+  local path=$1
+  grep -Eq '^[^[:alnum:]]*autoreview clean: no accepted/actionable findings reported[[:space:]]*$' "$path"
+}
+
 run_prompt_reviewer() {
   local selected=$1
+  local copilot_prompt=
+  local prompt_bytes=0
   local reviewer_output
   local status=0
 
@@ -343,9 +375,42 @@ run_prompt_reviewer() {
         echo "fallback reviewer unavailable: $opencode_bin" >&2
         status=127
       elif printf 'fallback: opencode run\n' | tee -a "$review_output"; then
-        "$opencode_bin" run --pure --dir "$(dirname "$prompt_file")" --file "$prompt_file" \
-          "Review the attached prompt file. Do not modify files." 2>&1 | tee -a "$review_output" "$reviewer_output"
+        "$opencode_bin" run --pure --dir "$repo_root" \
+          "Review the attached prompt file. Do not modify files." \
+          --file "$prompt_file" 2>&1 | tee -a "$review_output" "$reviewer_output"
         status=$?
+      else
+        status=$?
+      fi
+      ;;
+    droid)
+      if ! command -v "$droid_bin" >/dev/null 2>&1; then
+        echo "fallback reviewer unavailable: $droid_bin" >&2
+        status=127
+      elif printf 'fallback: droid exec\n' | tee -a "$review_output"; then
+        "$droid_bin" exec --cwd "$repo_root" -f "$prompt_file" 2>&1 | tee -a "$review_output" "$reviewer_output"
+        status=$?
+      else
+        status=$?
+      fi
+      ;;
+    copilot)
+      if ! command -v "$copilot_bin" >/dev/null 2>&1; then
+        echo "fallback reviewer unavailable: $copilot_bin" >&2
+        status=127
+      elif printf 'fallback: copilot\n' | tee -a "$review_output"; then
+        prompt_bytes=$(wc -c < "$prompt_file" | tr -d '[:space:]')
+        if (( prompt_bytes > 120000 )); then
+          echo "copilot reviewer unavailable: generated prompt is too large for copilot -p; use codex, droid, or another file/stdin-capable reviewer" \
+            2>&1 | tee -a "$review_output" "$reviewer_output"
+          status=1
+        else
+          copilot_prompt=$(< "$prompt_file")
+          "$copilot_bin" -C "$repo_root" --available-tools=none --stream off --output-format text --silent \
+            -p "$copilot_prompt" \
+            2>&1 | tee -a "$review_output" "$reviewer_output"
+          status=$?
+        fi
       else
         status=$?
       fi
@@ -360,7 +425,7 @@ run_prompt_reviewer() {
       status=1
     elif ! grep -q '[^[:space:]]' "$reviewer_output"; then
       status=1
-    elif ! grep -Fxq 'autoreview clean: no accepted/actionable findings reported' "$reviewer_output"; then
+    elif ! reviewer_output_has_clean_marker "$reviewer_output"; then
       status=1
     fi
   fi
@@ -380,7 +445,7 @@ run_selected_review() {
       fi
       run_review
       ;;
-    claude|pi|opencode)
+    claude|pi|opencode|droid|copilot)
       run_prompt_reviewer "$selected"
       ;;
     *)
