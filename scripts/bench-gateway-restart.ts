@@ -229,6 +229,14 @@ function hasHelpFlag(): boolean {
   return hasFlag("--help") || hasFlag("-h");
 }
 
+function ensureSupportedRestartPlatform(platform: NodeJS.Platform = process.platform): void {
+  if (platform === "win32") {
+    throw new Error(
+      "Gateway restart benchmark is not supported on Windows because it requires SIGUSR1 in-process restarts; run it on macOS or Linux.",
+    );
+  }
+}
+
 function parseRepeatableFlag(flag: string): string[] {
   const values: string[] = [];
   for (let index = 0; index < process.argv.length; index += 1) {
@@ -1061,6 +1069,29 @@ function classifyGatewayReadyLog(line: string): "gateway-ready" | "http-listen" 
   return null;
 }
 
+function collectOutputLines(carry: string, chunk: string): { carry: string; lines: string[] } {
+  const parts = `${carry}${chunk}`.split(/\r?\n/u);
+  return {
+    carry: parts.pop() ?? "",
+    lines: parts,
+  };
+}
+
+function flushOutputLineBuffers(
+  buffers: Record<"stderr" | "stdout", string>,
+  onLine: (line: string, nowMs: number) => void,
+  nowMs: number,
+): void {
+  for (const stream of ["stdout", "stderr"] as const) {
+    const line = buffers[stream];
+    if (!line) {
+      continue;
+    }
+    buffers[stream] = "";
+    onLine(line, nowMs);
+  }
+}
+
 function createEmptyProbeResult(): ProbeResult {
   return {
     downtimeMs: null,
@@ -1109,6 +1140,15 @@ function resolveIterationFailure(iteration: RestartIteration): GatewayRestartFai
     return "no_unavailable_window";
   }
   return null;
+}
+
+function finalizeRestartIteration(
+  iteration: RestartIteration,
+  childExited: boolean,
+  flushOutputBuffers: () => void,
+): GatewayRestartFailureCode | null {
+  flushOutputBuffers();
+  return childExited ? "restart_child_exited" : resolveIterationFailure(iteration);
 }
 
 function hasRestartReadySignal(iteration: RestartIteration): boolean {
@@ -1185,6 +1225,7 @@ async function runGatewaySample(options: {
   postReadyDelayMs: number;
   timeoutMs: number;
 }): Promise<GatewayRestartSample> {
+  ensureSupportedRestartPlatform();
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-restart-bench-"));
   const port = await getFreePort();
   const configPath = writeConfig(root, options.benchCase);
@@ -1194,6 +1235,7 @@ async function runGatewaySample(options: {
   const initialStartupTrace: Record<string, number> = {};
   const events: BenchmarkEvent[] = [{ ms: 0, type: "process.spawn.start" }];
   const output: string[] = [];
+  const outputBuffers: Record<"stderr" | "stdout", string> = { stderr: "", stdout: "" };
   let currentIteration: RestartIteration | null = null;
   let firstOutputMs: number | null = null;
   let initialGatewayReadyLogLine: string | null = null;
@@ -1245,7 +1287,47 @@ async function runGatewaySample(options: {
     },
   );
 
-  const onChunk = (chunk: Buffer) => {
+  const onLine = (line: string, nowMs: number) => {
+    if (!line) {
+      return;
+    }
+    const readyLogKind = classifyGatewayReadyLog(line);
+    if (readyLogKind === "http-listen") {
+      if (currentIteration) {
+        currentIteration.httpListenLogMs ??= nowMs - (currentIteration.signalSentMs ?? nowMs);
+        currentIteration.httpListenLogLine ??= line;
+      } else if (initialHttpListenLogMs == null) {
+        initialHttpListenLogMs = nowMs;
+        initialHttpListenLogLine = line;
+      }
+    }
+    if (readyLogKind === "gateway-ready") {
+      if (currentIteration) {
+        currentIteration.gatewayReadyLogMs ??= nowMs - (currentIteration.signalSentMs ?? nowMs);
+        currentIteration.gatewayReadyLogLine ??= line;
+      } else if (initialGatewayReadyLogMs == null) {
+        initialGatewayReadyLogMs = nowMs;
+        initialGatewayReadyLogLine = line;
+      }
+    }
+    const traceTarget = currentIteration?.startupTrace ?? initialStartupTrace;
+    if (collectTraceLine(line, "startup trace", traceTarget)) {
+      events.push({
+        iteration: currentIteration?.index,
+        line,
+        ms: nowMs,
+        type: "startup-trace",
+      });
+    }
+    if (
+      currentIteration &&
+      collectTraceLine(line, "restart trace", currentIteration.restartTrace)
+    ) {
+      events.push({ iteration: currentIteration.index, line, ms: nowMs, type: "restart-trace" });
+    }
+  };
+
+  const onChunk = (stream: "stderr" | "stdout", chunk: Buffer) => {
     const nowMs = performance.now() - sampleStartAt;
     if (firstOutputMs == null) {
       firstOutputMs = nowMs;
@@ -1256,48 +1338,14 @@ async function runGatewaySample(options: {
     if (output.length > 30) {
       output.splice(0, output.length - 30);
     }
-    for (const line of text.split(/\r?\n/u)) {
-      if (!line) {
-        continue;
-      }
-      const readyLogKind = classifyGatewayReadyLog(line);
-      if (readyLogKind === "http-listen") {
-        if (currentIteration) {
-          currentIteration.httpListenLogMs ??= nowMs - (currentIteration.signalSentMs ?? nowMs);
-          currentIteration.httpListenLogLine ??= line;
-        } else if (initialHttpListenLogMs == null) {
-          initialHttpListenLogMs = nowMs;
-          initialHttpListenLogLine = line;
-        }
-      }
-      if (readyLogKind === "gateway-ready") {
-        if (currentIteration) {
-          currentIteration.gatewayReadyLogMs ??= nowMs - (currentIteration.signalSentMs ?? nowMs);
-          currentIteration.gatewayReadyLogLine ??= line;
-        } else if (initialGatewayReadyLogMs == null) {
-          initialGatewayReadyLogMs = nowMs;
-          initialGatewayReadyLogLine = line;
-        }
-      }
-      const traceTarget = currentIteration?.startupTrace ?? initialStartupTrace;
-      if (collectTraceLine(line, "startup trace", traceTarget)) {
-        events.push({
-          iteration: currentIteration?.index,
-          line,
-          ms: nowMs,
-          type: "startup-trace",
-        });
-      }
-      if (
-        currentIteration &&
-        collectTraceLine(line, "restart trace", currentIteration.restartTrace)
-      ) {
-        events.push({ iteration: currentIteration.index, line, ms: nowMs, type: "restart-trace" });
-      }
+    const parsed = collectOutputLines(outputBuffers[stream], text);
+    outputBuffers[stream] = parsed.carry;
+    for (const line of parsed.lines) {
+      onLine(line, nowMs);
     }
   };
-  child.stdout.on("data", onChunk);
-  child.stderr.on("data", onChunk);
+  child.stdout.on("data", (chunk: Buffer) => onChunk("stdout", chunk));
+  child.stderr.on("data", (chunk: Buffer) => onChunk("stderr", chunk));
 
   let failureCode: GatewayRestartFailureCode | null = null;
   const initialHealthz = await waitForProbeReady({
@@ -1403,9 +1451,9 @@ async function runGatewaySample(options: {
         iteration.cpuMs == null
           ? null
           : iteration.cpuMs / Math.max(1, performance.now() - signalSentAt);
-      iteration.failureCode = childExited
-        ? "restart_child_exited"
-        : resolveIterationFailure(iteration);
+      iteration.failureCode = finalizeRestartIteration(iteration, childExited, () =>
+        flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt),
+      );
       iterations.push(iteration);
       console.error(
         `[gateway-restart-bench] ${options.benchCase.id} restart ${index}/${options.restarts}: readyz=${formatMs(iteration.readyz.ms)} downtime=${formatMs(iteration.readyz.downtimeMs ?? iteration.healthz.downtimeMs)} restartReady=${formatMs(traceValue(iteration, "restart.ready.total"))} cpu=${formatMs(iteration.cpuMs)} rss=${formatMb(traceValue(iteration, "restart.ready.rssMb", "restart.ready.memory.ready.rssMb") ?? lastSnapshotValue(iteration, "rssMb"))} failure=${iteration.failureCode ?? "none"}`,
@@ -1418,6 +1466,7 @@ async function runGatewaySample(options: {
   }
 
   currentIteration = null;
+  flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
   const exit = await stopChild(child);
   clearInterval(rssTimer);
   sampleRss();
@@ -1513,6 +1562,7 @@ async function main() {
     return;
   }
 
+  ensureSupportedRestartPlatform();
   const options = parseOptions();
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
@@ -1555,8 +1605,13 @@ async function main() {
 export const __testing = {
   classifyGatewayReadyLog,
   classifyProbeErrorKind,
+  collectOutputLines,
   collectTraceLine,
   computeResourceSlope,
+  createRestartIteration,
+  ensureSupportedRestartPlatform,
+  finalizeRestartIteration,
+  flushOutputLineBuffers,
   parseNonNegativeInt,
   parsePositiveInt,
   resolveEntry,

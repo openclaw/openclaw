@@ -43,6 +43,75 @@ describe("gateway restart benchmark script", () => {
     expect(() => __testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
   });
 
+  it("guards the SIGUSR1 restart benchmark on Windows", () => {
+    expect(() => __testing.ensureSupportedRestartPlatform("linux")).not.toThrow();
+    expect(() => __testing.ensureSupportedRestartPlatform("darwin")).not.toThrow();
+    expect(() => __testing.ensureSupportedRestartPlatform("win32")).toThrow(
+      /not supported on Windows/u,
+    );
+  });
+
+  it("buffers child output lines split across chunks", () => {
+    const first = __testing.collectOutputLines("", "[gateway] restart trace: restart.ready 12");
+    expect(first.lines).toEqual([]);
+
+    const second = __testing.collectOutputLines(first.carry, ".5ms total=45.0ms\r");
+    expect(second.lines).toEqual([]);
+
+    const third = __testing.collectOutputLines(second.carry, "\n[gateway] ready\npartial");
+    expect(third.lines).toEqual([
+      "[gateway] restart trace: restart.ready 12.5ms total=45.0ms",
+      "[gateway] ready",
+    ]);
+    expect(third.carry).toBe("partial");
+  });
+
+  it("flushes buffered restart output before classifying an iteration", () => {
+    const iteration = __testing.createRestartIteration(1);
+    iteration.healthz = {
+      downtimeMs: 10,
+      firstErrorKind: "econnreset",
+      firstRecoveryMs: 30,
+      ms: 30,
+      status: 200,
+      transitions: [],
+      unavailableMs: 20,
+    };
+    iteration.readyz = {
+      downtimeMs: 12,
+      firstErrorKind: "http-503",
+      firstRecoveryMs: 42,
+      ms: 42,
+      status: 200,
+      transitions: [],
+      unavailableMs: 30,
+    };
+
+    const failure = __testing.finalizeRestartIteration(iteration, false, () => {
+      iteration.gatewayReadyLogLine = "[gateway] ready";
+      iteration.gatewayReadyLogMs = 45;
+      iteration.restartTrace["restart.ready.total"] = 50;
+    });
+
+    expect(failure).toBeNull();
+  });
+
+  it("flushes and clears buffered child output carry", () => {
+    const buffers = {
+      stderr: "[gateway] ready",
+      stdout: "[gateway] restart trace: restart.ready 12.5ms total=45.0ms",
+    };
+    const lines: string[] = [];
+
+    __testing.flushOutputLineBuffers(buffers, (line) => lines.push(line), 1);
+
+    expect(lines).toEqual([
+      "[gateway] restart trace: restart.ready 12.5ms total=45.0ms",
+      "[gateway] ready",
+    ]);
+    expect(buffers).toEqual({ stderr: "", stdout: "" });
+  });
+
   it("enables both startup and restart trace in the child gateway environment", () => {
     const env = __testing.sanitizedEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {
       config: {},
