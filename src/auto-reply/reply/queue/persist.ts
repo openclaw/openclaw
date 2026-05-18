@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { loadConfig } from "../../../config/io.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
@@ -191,11 +193,32 @@ function projectRunForPersist(run: FollowupRun["run"]): PersistedRunFields {
   return projected as PersistedRunFields;
 }
 
-// On restore the dispatcher reassigns run.config via resolveQueuedReplyExecutionConfig
-// before any read, so a stubbed empty config is safe and avoids carrying the live
-// app config (which contains secret refs and provider/channel state) across disk.
-function rehydrateRun(run: PersistedRunFields): FollowupRun["run"] {
-  return { ...run, config: {} as OpenClawConfig };
+// Resolve the current process config for restored runs. Prefer the live runtime
+// snapshot (set by the agent runtime layer) so callers never pay disk IO. If
+// the snapshot is not yet populated — e.g. restore runs before
+// setRuntimeConfigSnapshot has been called during cold start — fall back to a
+// fresh loadConfig() so restored followups dispatch with the current
+// provider/channel/auth state rather than an empty stub. If both paths fail,
+// log and return an empty config; the dispatcher's
+// resolveQueuedReplyExecutionConfig still has another chance to fill it from
+// the runtime snapshot before the run is consumed.
+function resolveCurrentRunConfig(): OpenClawConfig {
+  const snapshot = getRuntimeConfigSnapshot();
+  if (snapshot) {
+    return snapshot;
+  }
+  try {
+    return loadConfig();
+  } catch (err) {
+    defaultRuntime.error?.(
+      `failed to load current config for followup queue restore: ${String(err)}`,
+    );
+    return {} as OpenClawConfig;
+  }
+}
+
+function rehydrateRun(run: PersistedRunFields, currentConfig: OpenClawConfig): FollowupRun["run"] {
+  return { ...run, config: currentConfig };
 }
 
 function toPersistedRun(item: FollowupRun): PersistedFollowupRun {
@@ -299,6 +322,10 @@ export function restoreFollowupQueues(): void {
       entries?: unknown;
     };
     const entries = Array.isArray(raw?.entries) ? raw.entries : [];
+    // Resolve the current process config once and share it across all restored
+    // items. The snapshot path is cheap; the loadConfig() fallback only fires
+    // when restore runs before the runtime layer has set the snapshot.
+    const currentConfig = entries.length > 0 ? resolveCurrentRunConfig() : ({} as OpenClawConfig);
     for (const entry of entries) {
       const key = normalizeOptionalString(Array.isArray(entry) ? entry[0] : undefined);
       const data = Array.isArray(entry) ? (entry[1] as Partial<PersistedQueueEntry>) : undefined;
@@ -307,7 +334,7 @@ export function restoreFollowupQueues(): void {
       }
       const rehydratedItems: FollowupRun[] = data.items.map((persisted) => ({
         ...persisted,
-        run: rehydrateRun(persisted.run),
+        run: rehydrateRun(persisted.run, currentConfig),
       }));
       const restored: FollowupQueueState = {
         items: rehydratedItems,
@@ -325,7 +352,9 @@ export function restoreFollowupQueues(): void {
           typeof data.droppedCount === "number" ? Math.max(0, Math.floor(data.droppedCount)) : 0,
         summaryLines: Array.isArray(data.summaryLines) ? data.summaryLines : [],
         summarySources: [],
-        ...(data.lastRun !== undefined ? { lastRun: rehydrateRun(data.lastRun) } : {}),
+        ...(data.lastRun !== undefined
+          ? { lastRun: rehydrateRun(data.lastRun, currentConfig) }
+          : {}),
       };
       FOLLOWUP_QUEUES.set(key, restored);
       if (restored.items.length > 0) {

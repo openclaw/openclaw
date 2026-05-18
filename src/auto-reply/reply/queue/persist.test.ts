@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
   clearRestoredPendingDrainKey,
   clearRestoredPendingDrainKeysForTest,
   peekRestoredPendingDrainKeys,
@@ -69,10 +74,12 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     FOLLOWUP_QUEUES.clear();
     clearRestoredPendingDrainKeysForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   afterEach(() => {
     FOLLOWUP_QUEUES.clear();
+    clearRuntimeConfigSnapshot();
     if (originalEnv === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -245,19 +252,28 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(persistedLastRun.skillsSnapshot).toBeUndefined();
   });
 
-  it("stubs run.config and leaves other stripped fields undefined on restore", () => {
+  it("rehydrates run.config from the live runtime snapshot on restore", () => {
+    // Simulate a configured gateway: the runtime snapshot is the source of
+    // truth at the moment restore runs, so restored items should pick it up.
+    const liveConfig = {
+      defaults: { agent: { provider: "anthropic-live", model: "claude-live" } },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(liveConfig);
+
     const queue = getFollowupQueue(TEST_KEY, SETTINGS);
     queue.items.push(makeFollowupRun("rehydrate"));
+    queue.lastRun = makeRun();
     persistFollowupQueues();
     FOLLOWUP_QUEUES.delete(TEST_KEY);
-    restoreFollowupQueues();
 
+    restoreFollowupQueues();
     const restored = FOLLOWUP_QUEUES.get(TEST_KEY);
     expect(restored).toBeDefined();
     const rerun = restored!.items[0].run;
-    // config is stubbed (empty object). The dispatcher reassigns it via
-    // resolveQueuedReplyExecutionConfig on the next turn.
-    expect(rerun.config).toEqual({});
+    expect(rerun.config).toBe(liveConfig);
+    expect(restored!.lastRun?.config).toBe(liveConfig);
+    // Other stripped fields stay undefined; the dispatcher fills them when
+    // they're actually needed.
     expect(rerun.skillsSnapshot).toBeUndefined();
     expect(rerun.extraSystemPrompt).toBeUndefined();
     expect(rerun.authProfileId).toBeUndefined();
@@ -270,6 +286,28 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(rerun.model).toBe("claude");
     expect(rerun.timeoutMs).toBe(30000);
     expect(rerun.blockReplyBreak).toBe("message_end");
+  });
+
+  it("picks up a refreshed snapshot across separate restore passes", () => {
+    // First persist+restore with one snapshot, then update the snapshot and
+    // restore again — restored items should reflect the latest config, not
+    // anything carried over from disk.
+    const oldConfig = { defaults: { agent: { model: "claude-old" } } } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(oldConfig);
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push(makeFollowupRun("first"));
+    persistFollowupQueues();
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    restoreFollowupQueues();
+    expect(FOLLOWUP_QUEUES.get(TEST_KEY)!.items[0].run.config).toBe(oldConfig);
+
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    const newConfig = {
+      defaults: { agent: { model: "claude-new" } },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(newConfig);
+    restoreFollowupQueues();
+    expect(FOLLOWUP_QUEUES.get(TEST_KEY)!.items[0].run.config).toBe(newConfig);
   });
 
   it("skips entries with missing or invalid items array", () => {
