@@ -47,12 +47,12 @@ newly selected model.
 
 ## Visible replies and heartbeats
 
-When a source chat turn runs through the Codex harness, visible replies default
-to the OpenClaw `message` tool if the deployment has not explicitly configured
-`messages.visibleReplies`. The agent can still finish its Codex turn privately;
-it only posts to the channel when it calls `message(action="send")`. Set
-`messages.visibleReplies: "automatic"` to keep direct-chat final replies on the
-legacy automatic delivery path.
+When a source chat turn runs through the Codex harness, visible replies follow
+the same source-delivery defaults as other runtimes. Direct chats, normal group
+requests, and normal channel requests automatically post final assistant text
+unless config opts into tool-only delivery. Set `messages.visibleReplies:
+"message_tool"` when direct/source chats should post visible output only after
+the agent calls `message(action="send")`.
 
 Codex heartbeat turns also get `heartbeat_respond` in the searchable OpenClaw
 tool catalog by default, so the agent can record whether the wake should stay

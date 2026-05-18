@@ -5249,12 +5249,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible direct reply");
   });
 
-  it("uses harness defaults for direct source delivery when config is unset", async () => {
+  it("keeps Codex direct source delivery automatic when config is unset", async () => {
     setNoAbort();
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
       supports: () => ({ supported: true, priority: 100 }),
       runAttempt: vi.fn(async () => ({}) as never),
     });
@@ -5266,7 +5265,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     };
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
       return { text: "final reply" } satisfies ReplyPayload;
     });
 
@@ -5274,6 +5273,44 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       ctx: buildTestCtx({
         ChatType: "direct",
         CommandSource: undefined,
+        SessionKey: "agent:main:main",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("final reply");
+  });
+
+  it("preserves non-Codex harness direct source delivery defaults", async () => {
+    setNoAbort();
+    registerAgentHarness({
+      id: "custom",
+      label: "Custom",
+      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      supports: () => ({ supported: true, priority: 200 }),
+      runAttempt: vi.fn(async () => ({}) as never),
+    });
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      agentHarnessId: "custom",
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      return { text: "private final reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        CommandSource: undefined,
+        Provider: "custom",
         SessionKey: "agent:main:main",
       }),
       cfg: emptyConfig,
