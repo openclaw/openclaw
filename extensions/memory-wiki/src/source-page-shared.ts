@@ -51,12 +51,18 @@ export async function writeImportedSourcePage(params: {
   const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
   if (existing !== rendered) {
     try {
-      if (pageStat && pageStat.nlink > 1) {
+      if (pageStat && pageStat.isFile && pageStat.nlink > 1) {
         await vault.remove(params.pagePath);
       }
       await vault.write(params.pagePath, rendered);
     } catch (error) {
       if (error instanceof FsSafeError) {
+        if (error.code !== "symlink" && error.code !== "path-alias") {
+          throw new Error(
+            `Refusing to write imported source page (${error.code}): ${params.pagePath}: ${error.message}`,
+            { cause: error },
+          );
+        }
         throw new Error(
           `Refusing to write imported source page through symlink: ${params.pagePath}`,
           { cause: error },

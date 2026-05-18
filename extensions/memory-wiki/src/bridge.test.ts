@@ -346,6 +346,51 @@ describe("syncMemoryWikiBridgeSources", () => {
     await expect(fs.readFile(externalTarget, "utf8")).resolves.toBe("external target\n");
   });
 
+  it("reports non-symlink bridge source write safety failures without symlink wording", async () => {
+    const workspaceDir = await createBridgeWorkspace("not-file-workspace");
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("not-file-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: true,
+        },
+      },
+    });
+    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    await fs.writeFile(memoryPath, "# Durable Memory\n", "utf8");
+    registerBridgeArtifacts([
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath: memoryPath,
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+    const first = await syncMemoryWikiBridgeSources({ config, appConfig });
+    const pagePath = first.pagePaths[0] ?? "";
+    const pageAbsPath = path.join(vaultDir, pagePath);
+    await fs.rm(pageAbsPath);
+    await fs.mkdir(pageAbsPath);
+    await fs.writeFile(path.join(pageAbsPath, "child.md"), "blocking child\n", "utf8");
+    await fs.writeFile(memoryPath, "# Updated Durable Memory\n", "utf8");
+
+    const second = syncMemoryWikiBridgeSources({ config, appConfig });
+    await expect(second).rejects.toThrow(
+      /Refusing to write imported source page \((not-empty|not-file|path-mismatch)\): sources\//u,
+    );
+    await expect(second).rejects.not.toThrow("through symlink");
+  });
+
   it("replaces bridge source page hardlinks without clobbering their target", async () => {
     const workspaceDir = await createBridgeWorkspace("hardlink-workspace");
     const { rootDir: vaultDir, config } = await createVault({
