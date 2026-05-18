@@ -36,6 +36,9 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
   if (!Object.hasOwn(overrides, "CI")) {
     delete env.CI;
   }
+  if (!Object.hasOwn(overrides, "GITHUB_ACTIONS")) {
+    delete env.GITHUB_ACTIONS;
+  }
   return env;
 }
 
