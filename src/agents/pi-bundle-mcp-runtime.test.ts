@@ -1,8 +1,13 @@
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeBundleProbeMcpServer } from "./bundle-mcp-shared.test-harness.js";
 import { createBundleMcpJsonSchemaValidator } from "./pi-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./pi-bundle-mcp-test-harness.js";
 import {
   __testing,
+  createSessionMcpRuntime,
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
   retireSessionMcpRuntime,
@@ -139,6 +144,64 @@ describe("session MCP runtime", () => {
         },
       },
     ]);
+  });
+
+  it("emits diagnostics timeline spans for bundle MCP server catalog discovery", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-bundle-mcp-timeline-"));
+    const serverScriptPath = join(dir, "bundle-probe-server.mjs");
+    const timelinePath = join(dir, "timeline.jsonl");
+    await writeBundleProbeMcpServer(serverScriptPath);
+    const previousDiagnostics = process.env.OPENCLAW_DIAGNOSTICS;
+    const previousTimelinePath = process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH;
+    process.env.OPENCLAW_DIAGNOSTICS = "timeline";
+    process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
+    try {
+      const runtime = createSessionMcpRuntime({
+        sessionId: "session-timeline",
+        workspaceDir: dir,
+        cfg: {
+          mcp: {
+            servers: {
+              bundleProbe: {
+                command: "node",
+                args: [serverScriptPath],
+              },
+            },
+          },
+        },
+      });
+      const materialized = await materializeBundleMcpToolsForRun({ runtime });
+      await materialized.dispose();
+      await runtime.dispose();
+
+      const events = (await readFile(timelinePath, "utf-8"))
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { name: string; type: string; durationMs?: number });
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "bundle-mcp.server", type: "span.end" }),
+          expect.objectContaining({ name: "bundle-mcp.connect", type: "span.end" }),
+          expect.objectContaining({ name: "bundle-mcp.tools-list", type: "span.end" }),
+        ]),
+      );
+      const toolsListSpan = events.find(
+        (event) => event.name === "bundle-mcp.tools-list" && event.type === "span.end",
+      );
+      expect(toolsListSpan?.durationMs).toEqual(expect.any(Number));
+    } finally {
+      if (previousDiagnostics === undefined) {
+        delete process.env.OPENCLAW_DIAGNOSTICS;
+      } else {
+        process.env.OPENCLAW_DIAGNOSTICS = previousDiagnostics;
+      }
+      if (previousTimelinePath === undefined) {
+        delete process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH;
+      } else {
+        process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = previousTimelinePath;
+      }
+    }
   });
 
   it("holds a runtime lease until the materialized tool runtime is disposed", async () => {
