@@ -13,8 +13,8 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { pluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const distFile = resolve(__dirname, "..", "dist", "plugin-sdk", "index.js");
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const distFile = resolve(scriptDir, "..", "dist", "plugin-sdk", "index.js");
 if (!existsSync(distFile)) {
   console.error("ERROR: dist/plugin-sdk/index.js not found. Run `pnpm build` first.");
   process.exit(1);

@@ -228,7 +228,7 @@ export async function createGatewayRuntimeState(params: {
 
     const httpServers: HttpServer[] = [];
     const httpBindHosts: string[] = [];
-    for (const _host of bindHosts) {
+    for (const _ of bindHosts) {
       const httpServer = createGatewayHttpServer({
         clients,
         controlUiEnabled: params.controlUiEnabled,

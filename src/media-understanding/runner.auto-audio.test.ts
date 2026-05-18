@@ -287,8 +287,8 @@ describe("runCapability auto audio entries", () => {
               enabled: true,
               prompt: "configured prompt",
               language: "fr",
-              _requestPromptOverride: "Focus on names",
-              _requestLanguageOverride: "en",
+              requestPromptOverride: "Focus on names",
+              requestLanguageOverride: "en",
               models: [
                 {
                   provider: "openai",

@@ -41,7 +41,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
   createOpenClawCodingTools: (...args: unknown[]) => createOpenClawCodingToolsMock(...args),
 }));
 
-const { __testing, runCodexAppServerSideQuestion } = await import("./side-question.js");
+const { testing, runCodexAppServerSideQuestion } = await import("./side-question.js");
 
 type ServerRequest = Required<Pick<RpcRequest, "id" | "method">> & {
   params?: RpcRequest["params"];
@@ -946,7 +946,7 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("uses configured image generation timeout for side-thread image_generate calls", () => {
-    const timeoutMs = __testing.resolveSideDynamicToolCallTimeoutMs({
+    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
       call: {
         threadId: "side-thread",
         turnId: "turn-1",

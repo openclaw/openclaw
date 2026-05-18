@@ -506,13 +506,17 @@ afterEach(() => {
   if (!FOLLOWUP_DEBUG) {
     return;
   }
-  const handles = (process as NodeJS.Process & { _getActiveHandles?: () => unknown[] })
-    ._getActiveHandles?.()
-    .map((handle) => handle?.constructor?.name ?? typeof handle);
+  const processWithDebugHandles = process as NodeJS.Process & {
+    _getActiveHandles?: () => unknown[];
+    _getActiveRequests?: () => unknown[];
+  };
+  const handles = processWithDebugHandles["_getActiveHandles"]?.().map(
+    (handle) => handle?.constructor?.name ?? typeof handle,
+  );
   debugFollowupTest(`active handles: ${JSON.stringify(handles ?? [])}`);
-  const requests = (process as NodeJS.Process & { _getActiveRequests?: () => unknown[] })
-    ._getActiveRequests?.()
-    .map((request) => request?.constructor?.name ?? typeof request);
+  const requests = processWithDebugHandles["_getActiveRequests"]?.().map(
+    (request) => request?.constructor?.name ?? typeof request,
+  );
   debugFollowupTest(`active requests: ${JSON.stringify(requests ?? [])}`);
 });
 

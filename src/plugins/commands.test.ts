@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
 import {
-  __testing,
+  testing,
   clearPluginCommands,
   executePluginCommand,
   getPluginCommandSpecs,
@@ -92,9 +92,9 @@ function registerVoiceCommandForTest(
 }
 
 function resolveBindingConversationFromCommand(
-  params: Parameters<typeof __testing.resolveBindingConversationFromCommand>[0],
+  params: Parameters<typeof testing.resolveBindingConversationFromCommand>[0],
 ) {
-  return __testing.resolveBindingConversationFromCommand(params);
+  return testing.resolveBindingConversationFromCommand(params);
 }
 
 function expectCommandMatch(
