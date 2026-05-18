@@ -169,10 +169,12 @@ case "$fallback_reviewer" in
 esac
 
 repo_root=$(git rev-parse --show-toplevel)
+printf -v quoted_repo_root '%q' "$repo_root"
 
 has_package_check_script() {
   command -v node >/dev/null 2>&1 || return 1
-  node -e 'const p = require("./package.json"); process.exit(p.scripts?.check ? 0 : 1)' \
+  node -e 'const { readFileSync } = require("node:fs"); const p = JSON.parse(readFileSync(process.argv[1], "utf8")); process.exit(p.scripts?.check ? 0 : 1)' \
+    "$repo_root/package.json" \
     >/dev/null 2>&1
 }
 
@@ -231,10 +233,10 @@ case "$openclaw_maintainer_validation" in
 esac
 if [[ -z "$parallel_tests" && "$openclaw_maintainer_validation" != 1 ]] &&
   ! auto_tests_disabled; then
-  if [[ -f package.json && -f pnpm-lock.yaml && -d node_modules ]] &&
+  if [[ -f "$repo_root/package.json" && -f "$repo_root/pnpm-lock.yaml" && -d "$repo_root/node_modules" ]] &&
     command -v pnpm >/dev/null 2>&1 &&
     has_package_check_script; then
-    parallel_tests="PNPM_CONFIG_OFFLINE=true pnpm run check"
+    parallel_tests="cd $quoted_repo_root && PNPM_CONFIG_OFFLINE=true pnpm run check"
     parallel_tests_auto=true
   fi
 fi
