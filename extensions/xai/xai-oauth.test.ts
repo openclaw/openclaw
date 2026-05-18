@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildXaiOAuthAuthorizationCodeTokenBody,
   buildXaiOAuthAuthorizeUrl,
   fetchXaiOAuthDiscovery,
   isTrustedXaiOAuthEndpoint,
@@ -54,6 +55,24 @@ describe("xAI OAuth", () => {
     expect(url.searchParams.get("plan")).toBe("generic");
     expect(url.searchParams.get("referrer")).toBe("openclaw");
     expect(XAI_OAUTH_REDIRECT_URI).toContain(`:${XAI_OAUTH_CALLBACK_PORT}/`);
+  });
+
+  it("echoes PKCE challenge fields when exchanging authorization codes with xAI", () => {
+    expect(
+      buildXaiOAuthAuthorizationCodeTokenBody({
+        code: "AUTHCODE",
+        codeVerifier: "verifier-1",
+        codeChallenge: "challenge-1",
+      }),
+    ).toEqual({
+      grant_type: "authorization_code",
+      code: "AUTHCODE",
+      redirect_uri: XAI_OAUTH_REDIRECT_URI,
+      client_id: XAI_OAUTH_CLIENT_ID,
+      code_verifier: "verifier-1",
+      code_challenge: "challenge-1",
+      code_challenge_method: "S256",
+    });
   });
 
   it("validates discovered endpoints before using them", async () => {
