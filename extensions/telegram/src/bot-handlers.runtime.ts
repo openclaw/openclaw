@@ -1785,10 +1785,7 @@ export const registerTelegramHandlers = ({
           debounceLane,
         })
       : null;
-    const authorizedAbortControlMessage = senderId
-      ? await isAuthorizedAbortControlMessage()
-      : false;
-    if (authorizedAbortControlMessage) {
+    if (senderId && (await isAuthorizedAbortControlMessage())) {
       for (const lane of ["default", "forward"] as const) {
         inboundDebouncer.cancelKey(
           buildTelegramInboundDebounceKey({
@@ -1806,7 +1803,7 @@ export const registerTelegramHandlers = ({
       allMedia,
       storeAllowFrom,
       receivedAtMs: Date.now(),
-      debounceKey: authorizedAbortControlMessage ? null : debounceKey,
+      debounceKey: isAbortControlMessage ? null : debounceKey,
       debounceLane,
       botUsername,
       ...promptContextBoundaryOptions(promptContextMinTimestampMs),

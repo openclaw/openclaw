@@ -79,7 +79,7 @@ async function buildPolicyCheckReport(
   if (severityMin === null) {
     throw new Error("Invalid --severity-min value. Expected one of: info, warning, error.");
   }
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await readConfigFileSnapshot({ observe: false });
   if (!snapshot.valid) {
     const findings: HealthFinding[] = snapshot.issues.map((issue) => ({
       checkId: "policy/config-invalid",
