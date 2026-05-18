@@ -38,7 +38,7 @@ function resolveHome() {
 }
 
 function defaultLogPath() {
-  const logsDir = path.join(resolveHome(), ".openclaw", "logs");
+  const logsDir = path.join(resolveHome(), ".openclaw", "logs", "polytropos-release");
   return path.join(logsDir, `polytropos-release-${timestampForFilename()}.log`);
 }
 
