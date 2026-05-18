@@ -12,6 +12,9 @@ title: "OpenRouter"
 OpenRouter provides a **unified API** that routes requests to many models behind a single
 endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
 
+For an end-to-end encrypted OpenRouter-compatible router, OpenClaw also includes
+[TrustedRouter.com](/providers/trustedrouter) as a separate provider option.
+
 ## Getting started
 
 <Steps>

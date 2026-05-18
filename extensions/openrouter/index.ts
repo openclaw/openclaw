@@ -15,12 +15,20 @@ import {
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
-import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
+import {
+  applyOpenrouterConfig,
+  applyTrustedRouterConfig,
+  OPENROUTER_DEFAULT_MODEL_REF,
+  TRUSTEDROUTER_DEFAULT_MODEL_REF,
+} from "./onboard.js";
 import {
   buildOpenrouterProvider,
+  buildTrustedRouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
+  normalizeTrustedRouterBaseUrl,
   OPENROUTER_BASE_URL,
+  TRUSTEDROUTER_BASE_URL,
 } from "./provider-catalog.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
@@ -33,7 +41,8 @@ import {
   listOpenRouterVideoModelCatalog,
 } from "./video-generation-provider.js";
 
-const PROVIDER_ID = "openrouter";
+const OPENROUTER_PROVIDER_ID = "openrouter";
+const TRUSTEDROUTER_PROVIDER_ID = "trustedrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
   "anthropic/",
@@ -59,6 +68,24 @@ function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model:
   };
 }
 
+function normalizeTrustedRouterResolvedModel<T extends ProviderRuntimeModel>(
+  model: T,
+): T | undefined {
+  const normalizedBaseUrl = normalizeTrustedRouterBaseUrl(model.baseUrl);
+  const reasoning = isOpenRouterProxyReasoningUnsupportedModel(model.id) ? false : model.reasoning;
+  if (
+    (!normalizedBaseUrl || normalizedBaseUrl === model.baseUrl) &&
+    reasoning === model.reasoning
+  ) {
+    return undefined;
+  }
+  return {
+    ...model,
+    ...(normalizedBaseUrl ? { baseUrl: normalizedBaseUrl } : {}),
+    reasoning,
+  };
+}
+
 export default definePluginEntry({
   id: "openrouter",
   name: "OpenRouter Provider",
@@ -66,14 +93,16 @@ export default definePluginEntry({
   register(api) {
     function buildDynamicOpenRouterModel(
       ctx: ProviderResolveDynamicModelContext,
+      providerId = OPENROUTER_PROVIDER_ID,
+      baseUrl = OPENROUTER_BASE_URL,
     ): ProviderRuntimeModel {
       const capabilities = getOpenRouterModelCapabilities(ctx.modelId);
       return {
         id: ctx.modelId,
         name: capabilities?.name ?? ctx.modelId,
         api: "openai-completions",
-        provider: PROVIDER_ID,
-        baseUrl: OPENROUTER_BASE_URL,
+        provider: providerId,
+        baseUrl,
         reasoning:
           (capabilities?.reasoning ?? false) &&
           !isOpenRouterProxyReasoningUnsupportedModel(ctx.modelId),
@@ -92,13 +121,13 @@ export default definePluginEntry({
     }
 
     api.registerProvider({
-      id: PROVIDER_ID,
+      id: OPENROUTER_PROVIDER_ID,
       label: "OpenRouter",
       docsPath: "/providers/models",
       envVars: ["OPENROUTER_API_KEY"],
       auth: [
         createProviderApiKeyAuthMethod({
-          providerId: PROVIDER_ID,
+          providerId: OPENROUTER_PROVIDER_ID,
           methodId: "api-key",
           label: "OpenRouter API key",
           hint: "API key",
@@ -113,7 +142,7 @@ export default definePluginEntry({
             choiceId: "openrouter-api-key",
             choiceLabel: "OpenRouter API key",
             groupId: "openrouter",
-            groupLabel: "OpenRouter",
+            groupLabel: "OpenRouter-compatible routers",
             groupHint: "API key",
             onboardingScopes: ["text-inference", "music-generation"],
           },
@@ -122,7 +151,7 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          const apiKey = ctx.resolveProviderApiKey(OPENROUTER_PROVIDER_ID).apiKey;
           if (!apiKey) {
             return null;
           }
@@ -168,12 +197,92 @@ export default definePluginEntry({
       wrapStreamFn: wrapOpenRouterProviderStream,
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
     });
+    api.registerProvider({
+      id: TRUSTEDROUTER_PROVIDER_ID,
+      label: "TrustedRouter.com",
+      docsPath: "/providers/trustedrouter",
+      envVars: ["TRUSTEDROUTER_API_KEY"],
+      auth: [
+        createProviderApiKeyAuthMethod({
+          providerId: TRUSTEDROUTER_PROVIDER_ID,
+          methodId: "api-key",
+          label: "TrustedRouter.com API key",
+          hint: "E2EE OpenRouter-compatible API key",
+          optionKey: "trustedrouterApiKey",
+          flagName: "--trustedrouter-api-key",
+          envVar: "TRUSTEDROUTER_API_KEY",
+          promptMessage: "Enter TrustedRouter.com API key",
+          defaultModel: TRUSTEDROUTER_DEFAULT_MODEL_REF,
+          expectedProviders: ["trustedrouter"],
+          applyConfig: (cfg) => applyTrustedRouterConfig(cfg),
+          wizard: {
+            choiceId: "trustedrouter-api-key",
+            choiceLabel: "TrustedRouter.com API key",
+            choiceHint: "End-to-end encrypted OpenRouter-compatible router",
+            groupId: "openrouter",
+            groupLabel: "OpenRouter-compatible routers",
+            groupHint: "API key",
+            onboardingScopes: ["text-inference"],
+          },
+        }),
+      ],
+      catalog: {
+        order: "simple",
+        run: async (ctx) => {
+          const apiKey = ctx.resolveProviderApiKey(TRUSTEDROUTER_PROVIDER_ID).apiKey;
+          if (!apiKey) {
+            return null;
+          }
+          return {
+            provider: {
+              ...buildTrustedRouterProvider(),
+              apiKey,
+            },
+          };
+        },
+      },
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({
+          provider: buildTrustedRouterProvider(),
+        }),
+      },
+      resolveDynamicModel: (ctx) =>
+        buildDynamicOpenRouterModel(ctx, TRUSTEDROUTER_PROVIDER_ID, TRUSTEDROUTER_BASE_URL),
+      prepareDynamicModel: async (ctx) => {
+        if (ctx.modelId !== TRUSTEDROUTER_DEFAULT_MODEL_REF) {
+          await loadOpenRouterModelCapabilities(ctx.modelId);
+        }
+      },
+      normalizeConfig: ({ providerConfig }) => {
+        const normalizedBaseUrl = normalizeTrustedRouterBaseUrl(providerConfig.baseUrl);
+        return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
+          ? { ...providerConfig, baseUrl: normalizedBaseUrl }
+          : undefined;
+      },
+      normalizeResolvedModel: ({ model }) => normalizeTrustedRouterResolvedModel(model),
+      normalizeTransport: ({ api, baseUrl }) => {
+        const normalizedBaseUrl = normalizeTrustedRouterBaseUrl(baseUrl);
+        return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
+          ? {
+              api,
+              baseUrl: normalizedBaseUrl,
+            }
+          : undefined;
+      },
+      ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      resolveReasoningOutputMode: () => "native",
+      supportsXHighThinking: ({ modelId }) => supportsOpenRouterXHighThinking(modelId),
+      resolveThinkingProfile: ({ modelId }) => resolveOpenRouterThinkingProfile(modelId),
+      isModernModelRef: () => true,
+      wrapStreamFn: wrapOpenRouterProviderStream,
+    });
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
     api.registerMusicGenerationProvider(buildOpenRouterMusicGenerationProvider());
     api.registerVideoGenerationProvider(buildOpenRouterVideoGenerationProvider());
     api.registerModelCatalogProvider({
-      provider: PROVIDER_ID,
+      provider: OPENROUTER_PROVIDER_ID,
       kinds: ["video_generation"],
       liveCatalog: listOpenRouterVideoModelCatalog,
     });

@@ -4,11 +4,14 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["openrouter"],
+  "providers": ["openrouter", "trustedrouter"],
   "modelIdNormalization": {
     "providers": {
       "openrouter": {
         "prefixWhenBare": "openrouter"
+      },
+      "trustedrouter": {
+        "prefixWhenBare": "trustedrouter"
       }
     }
   },
@@ -26,17 +29,25 @@
     {
       "endpointClass": "openrouter",
       "hostSuffixes": ["openrouter.ai"]
+    },
+    {
+      "endpointClass": "openrouter",
+      "hostSuffixes": ["quillrouter.com", "trustedrouter.com"]
     }
   ],
   "providerRequest": {
     "providers": {
       "openrouter": {
         "family": "openrouter"
+      },
+      "trustedrouter": {
+        "family": "openrouter"
       }
     }
   },
   "providerAuthEnvVars": {
-    "openrouter": ["OPENROUTER_API_KEY"]
+    "openrouter": ["OPENROUTER_API_KEY"],
+    "trustedrouter": ["TRUSTEDROUTER_API_KEY"]
   },
   "providerAuthChoices": [
     {
@@ -45,13 +56,28 @@
       "choiceId": "openrouter-api-key",
       "choiceLabel": "OpenRouter API key",
       "groupId": "openrouter",
-      "groupLabel": "OpenRouter",
+      "groupLabel": "OpenRouter-compatible routers",
       "groupHint": "API key",
       "onboardingScopes": ["text-inference", "music-generation"],
       "optionKey": "openrouterApiKey",
       "cliFlag": "--openrouter-api-key",
       "cliOption": "--openrouter-api-key <key>",
       "cliDescription": "OpenRouter API key"
+    },
+    {
+      "provider": "trustedrouter",
+      "method": "api-key",
+      "choiceId": "trustedrouter-api-key",
+      "choiceLabel": "TrustedRouter.com API key",
+      "choiceHint": "End-to-end encrypted OpenRouter-compatible router",
+      "groupId": "openrouter",
+      "groupLabel": "OpenRouter-compatible routers",
+      "groupHint": "API key",
+      "onboardingScopes": ["text-inference"],
+      "optionKey": "trustedrouterApiKey",
+      "cliFlag": "--trustedrouter-api-key",
+      "cliOption": "--trustedrouter-api-key <key>",
+      "cliDescription": "TrustedRouter.com API key"
     }
   ],
   "contracts": {

@@ -7,7 +7,7 @@ title: "OpenRouter plugin"
 
 # OpenRouter plugin
 
-Adds OpenRouter model provider support to OpenClaw.
+Adds OpenRouter and TrustedRouter.com model provider support to OpenClaw.
 
 ## Distribution
 
@@ -16,7 +16,7 @@ Adds OpenRouter model provider support to OpenClaw.
 
 ## Surface
 
-providers: openrouter; contracts: imageGenerationProviders, mediaUnderstandingProviders, musicGenerationProviders, speechProviders, videoGenerationProviders
+providers: openrouter, trustedrouter; contracts: imageGenerationProviders, mediaUnderstandingProviders, musicGenerationProviders, speechProviders, videoGenerationProviders
 
 ## Related docs
 

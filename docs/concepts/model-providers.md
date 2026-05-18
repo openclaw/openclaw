@@ -311,6 +311,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 | Qwen Cloud              | `qwen`                           | `QWEN_API_KEY` / `MODELSTUDIO_API_KEY` / `DASHSCOPE_API_KEY` | `qwen/qwen3.5-plus`                           |
 | StepFun                 | `stepfun` / `stepfun-plan`       | `STEPFUN_API_KEY`                                            | `stepfun/step-3.5-flash`                      |
 | Together                | `together`                       | `TOGETHER_API_KEY`                                           | `together/moonshotai/Kimi-K2.5`               |
+| TrustedRouter.com       | `trustedrouter`                  | `TRUSTEDROUTER_API_KEY`                                      | `trustedrouter/auto`                          |
 | Venice                  | `venice`                         | `VENICE_API_KEY`                                             | -                                             |
 | Vercel AI Gateway       | `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY`                                         | `vercel-ai-gateway/anthropic/claude-opus-4.6` |
 | Volcano Engine (Doubao) | `volcengine` / `volcengine-plan` | `VOLCANO_ENGINE_API_KEY`                                     | `volcengine-plan/ark-code-latest`             |
@@ -322,6 +323,9 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 <AccordionGroup>
   <Accordion title="OpenRouter">
     Applies its app-attribution headers and Anthropic `cache_control` markers only on verified `openrouter.ai` routes. DeepSeek, Moonshot, and ZAI refs are cache-TTL eligible for OpenRouter-managed prompt caching but do not receive Anthropic cache markers. As a proxy-style OpenAI-compatible path, it skips native-OpenAI-only shaping (`serviceTier`, Responses `store`, prompt-cache hints, OpenAI reasoning-compat). Gemini-backed refs keep proxy-Gemini thought-signature sanitation only.
+  </Accordion>
+  <Accordion title="TrustedRouter.com">
+    Uses the OpenRouter-compatible OpenAI chat completions path at `https://api.quillrouter.com/v1`, with its own `TRUSTEDROUTER_API_KEY` and default `trustedrouter/auto` route. OpenClaw keeps it separate from OpenRouter so credentials and default model refs do not collide.
   </Accordion>
   <Accordion title="Kilo Gateway">
     Gemini-backed refs follow the same proxy-Gemini sanitation path; `kilocode/kilo/auto` and other proxy-reasoning-unsupported refs skip proxy reasoning injection.

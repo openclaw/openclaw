@@ -10,12 +10,13 @@ import { describe, expect, it, vi } from "vitest";
 import openrouterPlugin from "./index.js";
 import {
   buildOpenrouterProvider,
+  buildTrustedRouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("openrouter provider hooks", () => {
-  it("registers OpenRouter speech alongside model, media, and catalog providers", async () => {
+  it("registers OpenRouter and TrustedRouter model providers", async () => {
     const {
       providers,
       speechProviders,
@@ -36,13 +37,20 @@ describe("openrouter provider hooks", () => {
       kind: "video_generation",
     });
 
-    expect(providers.map((provider) => provider.id)).toEqual(["openrouter"]);
+    expect(providers.map((provider) => provider.id)).toEqual(["openrouter", "trustedrouter"]);
     expect(speechProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(mediaProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(imageProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(musicProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(videoProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(modelCatalogProvider.liveCatalog).toBeTypeOf("function");
+  });
+
+  it("includes TrustedRouter.com as an end-to-end encrypted OpenRouter-compatible route", () => {
+    const provider = buildTrustedRouterProvider();
+
+    expect(provider.baseUrl).toBe("https://api.quillrouter.com/v1");
+    expect(provider.models?.map((model) => model.id)).toEqual(["trustedrouter/auto"]);
   });
 
   it("includes current Kimi models in the bundled catalog", () => {
@@ -197,6 +205,35 @@ describe("openrouter provider hooks", () => {
     ).toEqual({
       api: "openai-completions",
       baseUrl: "https://openrouter.ai/api/v1",
+    });
+  });
+
+  it("canonicalizes TrustedRouter.com runtime metadata", async () => {
+    const registered = await registerProviderPlugin({
+      plugin: openrouterPlugin,
+      id: "openrouter",
+      name: "OpenRouter Provider",
+    });
+    const provider = registered.providers.find((entry) => entry.id === "trustedrouter");
+
+    expect(provider?.normalizeConfig?.({
+      provider: "trustedrouter",
+      providerConfig: {
+        api: "openai-completions",
+        baseUrl: "https://api.quillrouter.com/v1/",
+        models: [],
+      },
+    } as never)?.baseUrl).toBe("https://api.quillrouter.com/v1");
+
+    expect(
+      provider?.normalizeTransport?.({
+        provider: "trustedrouter",
+        api: "openai-completions",
+        baseUrl: "https://api.quillrouter.com/v1/",
+      } as never),
+    ).toEqual({
+      api: "openai-completions",
+      baseUrl: "https://api.quillrouter.com/v1",
     });
   });
 

@@ -1,8 +1,10 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export const TRUSTEDROUTER_BASE_URL = "https://api.quillrouter.com/v1";
 const OPENROUTER_LEGACY_BASE_URL = "https://openrouter.ai/v1";
 const OPENROUTER_DEFAULT_MODEL_ID = "openrouter/auto";
+const TRUSTEDROUTER_DEFAULT_MODEL_ID = "trustedrouter/auto";
 const OPENROUTER_DEFAULT_CONTEXT_WINDOW = 200000;
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_DEFAULT_COST = {
@@ -38,6 +40,14 @@ export function normalizeOpenRouterBaseUrl(baseUrl: string | undefined): string 
     return OPENROUTER_BASE_URL;
   }
   return undefined;
+}
+
+export function normalizeTrustedRouterBaseUrl(baseUrl: string | undefined): string | undefined {
+  const normalized = normalizeBaseUrl(baseUrl);
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized === TRUSTEDROUTER_BASE_URL ? TRUSTEDROUTER_BASE_URL : undefined;
 }
 
 export function isOpenRouterProxyReasoningUnsupportedModel(modelId: string | undefined): boolean {
@@ -82,6 +92,24 @@ export function buildOpenrouterProvider(): ModelProviderConfig {
         cost: OPENROUTER_KIMI_K2_5_COST,
         contextWindow: 262144,
         maxTokens: 262144,
+      },
+    ],
+  };
+}
+
+export function buildTrustedRouterProvider(): ModelProviderConfig {
+  return {
+    baseUrl: TRUSTEDROUTER_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: TRUSTEDROUTER_DEFAULT_MODEL_ID,
+        name: "TrustedRouter Auto",
+        reasoning: false,
+        input: ["text"],
+        cost: OPENROUTER_DEFAULT_COST,
+        contextWindow: OPENROUTER_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: OPENROUTER_DEFAULT_MAX_TOKENS,
       },
     ],
   };
