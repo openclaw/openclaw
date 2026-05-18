@@ -69,4 +69,14 @@ export type SubscribeEmbeddedPiSessionParams = {
    */
   builtinToolNames?: ReadonlySet<string>;
   internalEvents?: AgentInternalEvent[];
+  /**
+   * Phase 8: optional per-turn tool call soft limit.
+   * When the number of completed tool calls in a single assistant turn reaches
+   * this value, a structured warning is injected into the model-visible tool
+   * result instructing it to stop, summarize, and ask rather than continuing.
+   *
+   * `0` (default) disables the guard entirely — behavior is preserved for all
+   * existing callers that do not set this param.
+   */
+  maxToolCallsPerTurn?: number;
 };

@@ -5,6 +5,7 @@ vi.mock("../context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: async () => ({ llm: undefined }),
 }));
 import type { OpenClawConfig } from "../../../config/config.js";
+import { advanceTaskStep, createTaskState, startTask } from "../../agent-task-state.js";
 import { addSession, resetProcessRegistryForTests } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
@@ -638,6 +639,41 @@ describe("resolvePromptBuildHookResult", () => {
 
     expect(hookRunner.runHeartbeatPromptContribution).not.toHaveBeenCalled();
     expect(userResult.prependContext).toBeUndefined();
+    expect(userResult.appendContext).toBeUndefined();
+  });
+
+  it("appends heartbeat task progress only when heartbeat task state is supplied", async () => {
+    const taskState = advanceTaskStep(
+      startTask(
+        createTaskState({
+          task_id: "phase-12",
+          title: "Phase 12 heartbeat integration",
+          goal: "surface progress",
+          pending_steps: ["wire helper", "test integration"],
+        }),
+      ),
+    );
+
+    const heartbeatResult = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hello",
+      messages: [],
+      hookCtx: { trigger: "heartbeat", sessionKey: "agent:main:main" },
+      heartbeatTaskState: taskState,
+    });
+
+    expect(heartbeatResult.appendContext).toContain("## Current Task Progress");
+    expect(heartbeatResult.appendContext).toContain("Phase 12 heartbeat integration");
+    expect(heartbeatResult.appendContext).toContain("1/2 steps");
+
+    const userResult = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hello",
+      messages: [],
+      hookCtx: { trigger: "user", sessionKey: "agent:main:main" },
+      heartbeatTaskState: taskState,
+    });
+
     expect(userResult.appendContext).toBeUndefined();
   });
 });

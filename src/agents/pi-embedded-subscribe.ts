@@ -133,6 +133,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     itemActiveIds: new Set(),
     itemStartedCount: 0,
     itemCompletedCount: 0,
+    toolCallsThisTurn: 0,
     lastToolError: undefined,
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,

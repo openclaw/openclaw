@@ -391,7 +391,9 @@ export function handleMessageStart(
   // may deliver late text_end updates after message_end, which would otherwise
   // re-trigger block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
-  // Use assistant message_start as the earliest "writing" signal for typing.
+  // Phase 8: reset per-turn tool call counter at the start of each assistant message.
+  ctx.state.toolCallsThisTurn = 0;
+  // Use assistant message_start as the earliest “writing” signal for typing.
   void ctx.params.onAssistantMessageStart?.();
 }
 

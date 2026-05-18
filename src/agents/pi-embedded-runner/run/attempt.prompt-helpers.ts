@@ -14,6 +14,8 @@ import type {
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { buildHeartbeatTaskProgressContext } from "../../agent-heartbeat-task-progress.js";
+import type { AgentTaskState } from "../../agent-task-state.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
@@ -46,7 +48,12 @@ export type PromptBuildHookRunner = {
     ctx: PluginHookAgentContext,
   ) => Promise<PluginAgentTurnPrepareResult | undefined>;
   runHeartbeatPromptContribution?: (
-    event: { sessionKey?: string; agentId?: string; heartbeatName?: string },
+    event: {
+      sessionKey?: string;
+      agentId?: string;
+      heartbeatName?: string;
+      taskState?: AgentTaskState;
+    },
     ctx: PluginHookAgentContext,
   ) => Promise<PluginAgentTurnPrepareResult | undefined>;
   runBeforePromptBuild: (
@@ -99,6 +106,8 @@ export async function resolvePromptBuildHookResult(params: {
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  /** Optional Phase 12 task state used to surface heartbeat progress. */
+  heartbeatTaskState?: AgentTaskState;
 }): Promise<PluginHookBeforePromptBuildResult> {
   const runId = params.hookCtx.runId;
   const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
@@ -140,6 +149,7 @@ export async function resolvePromptBuildHookResult(params: {
               sessionKey: params.hookCtx.sessionKey,
               agentId: params.hookCtx.agentId,
               heartbeatName: "heartbeat",
+              taskState: params.heartbeatTaskState,
             },
             params.hookCtx,
           )
@@ -193,6 +203,9 @@ export async function resolvePromptBuildHookResult(params: {
       queuedContext.appendContext,
       turnPrepareResult?.appendContext,
       heartbeatContribution?.appendContext,
+      params.hookCtx.trigger === "heartbeat"
+        ? buildHeartbeatTaskProgressContext(params.heartbeatTaskState)
+        : undefined,
       promptBuildResult?.appendContext,
       legacyResult?.appendContext,
     ]),

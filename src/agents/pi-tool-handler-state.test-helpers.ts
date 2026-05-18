@@ -9,6 +9,7 @@ export function createBaseToolHandlerState() {
     itemActiveIds: new Set<string>(),
     itemStartedCount: 0,
     itemCompletedCount: 0,
+    toolCallsThisTurn: 0,
     lastToolError: undefined,
     pendingMessagingTexts: new Map<string, string>(),
     pendingMessagingTargets: new Map<string, unknown>(),

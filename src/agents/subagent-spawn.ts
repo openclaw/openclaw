@@ -42,6 +42,11 @@ export {
   SUBAGENT_SPAWN_ACCEPTED_NOTE,
   SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
 } from "./subagent-spawn-accepted-note.js";
+import {
+  buildTaskContextForChildPrompt,
+  startTaskForSubagentSpawn,
+} from "./agent-subagent-task-bridge.js";
+import type { AgentTaskState } from "./agent-task-state.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
@@ -143,6 +148,15 @@ export type SpawnSubagentParams = {
     mimeType?: string;
   }>;
   attachMountPath?: string;
+  /**
+   * Optional task state to propagate into the child system prompt.
+   * When provided, the task is transitioned to "running" and a summary is
+   * appended to the subagent's system prompt so the child is oriented about
+   * the parent task it is contributing to.
+   * The started task state is returned as `taskStateAtDispatch` in the result.
+   * Phase 5 addition — additive, ignored when absent.
+   */
+  taskState?: AgentTaskState;
 };
 
 export type SpawnSubagentContext = {
@@ -179,6 +193,14 @@ export type SpawnSubagentResult = {
     files: Array<{ name: string; bytes: number; sha256: string }>;
     relDir: string;
   };
+  /**
+   * The task state at the moment of dispatch, already transitioned to "running".
+   * Only present when `params.taskState` was provided.
+   * Callers should use `mergeSubagentResultIntoTask` (from agent-subagent-task-bridge)
+   * to record accepted/error outcomes, and `completeTaskAfterSubagent` when done.
+   * Phase 5 addition — absent when no taskState was passed.
+   */
+  taskStateAtDispatch?: AgentTaskState;
 };
 
 export { splitModelRef } from "./subagent-spawn-plan.js";
@@ -1078,6 +1100,16 @@ export async function spawnSubagentDirect(
     childSystemPrompt = `${childSystemPrompt}\n\n${materializedAttachments.systemPromptSuffix}`;
   }
 
+  // Phase 5: inject parent task context into the child system prompt.
+  // When the caller passes a pre-created AgentTaskState, transition it to "running"
+  // and append a compact summary so the subagent is oriented about the parent goal.
+  // Fully additive — no change when params.taskState is absent.
+  let taskStateAtDispatch: AgentTaskState | undefined;
+  if (params.taskState) {
+    taskStateAtDispatch = startTaskForSubagentSpawn(params.taskState);
+    childSystemPrompt = `${childSystemPrompt}\n\n${buildTaskContextForChildPrompt(taskStateAtDispatch)}`;
+  }
+
   const bootstrapContextMode: BootstrapContextMode | undefined = params.lightContext
     ? "lightweight"
     : undefined;
@@ -1346,6 +1378,7 @@ export async function spawnSubagentDirect(
       : acceptedNote,
     modelApplied: resolvedModel ? modelApplied : undefined,
     attachments: attachmentsReceipt,
+    ...(taskStateAtDispatch ? { taskStateAtDispatch } : {}),
   };
 }
 

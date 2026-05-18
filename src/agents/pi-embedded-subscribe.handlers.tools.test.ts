@@ -51,6 +51,7 @@ function createTestContext(): {
       itemActiveIds: new Set<string>(),
       itemStartedCount: 0,
       itemCompletedCount: 0,
+      toolCallsThisTurn: 0,
       pendingMessagingTargets: new Map<string, MessagingToolSend>(),
       pendingMessagingTexts: new Map<string, string>(),
       pendingMessagingMediaUrls: new Map<string, string[]>(),
@@ -132,7 +133,7 @@ function expectInteractiveApprovalButtons(
   result: Record<string, unknown>,
   expectedButtons: readonly Record<string, unknown>[],
 ) {
-  expect(requireNestedRecord(result, "interactive payload", ["interactive"])).toEqual({
+  expect(requireNestedRecord(result, "interactive payload", ["presentation"])).toEqual({
     blocks: [{ type: "buttons", buttons: expectedButtons }],
   });
 }

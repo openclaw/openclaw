@@ -5,7 +5,17 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import {
+  buildPostCompactionMemoryJudgment,
+  type PostCompactionMemorySignals,
+} from "../agent-compaction-memory-judgment.js";
+import {
+  buildCompactionTaskSummaryIfPresent,
+  type CompactionTaskSummaryExtra,
+} from "../agent-compaction-task-summary.js";
+import type { MemoryJudgmentResult } from "../agent-memory-judgment.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import type { AgentTaskState } from "../agent-task-state.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import { log } from "./logger.js";
 
@@ -79,14 +89,38 @@ function syncPostCompactionSessionMemory(params: {
   return Promise.resolve();
 }
 
+export type PostCompactionSideEffectsResult = {
+  /**
+   * Memory-write judgment computed from the optional task state and signals.
+   * Present only when `params.taskState` was provided; undefined otherwise
+   * (backcompat — callers that omit taskState see no behavior change).
+   *
+   * This is a decision only — no file write occurs here. A future writer
+   * path can consume `memoryJudgment.suggested_entry` once a safe, tested
+   * writer exists.
+   */
+  memoryJudgment?: MemoryJudgmentResult;
+};
+
 export async function runPostCompactionSideEffects(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionFile: string;
-}): Promise<void> {
+  /**
+   * Optional task state. When present, a memory-write judgment is computed
+   * (via `judgeMemoryWrite`) and returned in the result. Existing callers
+   * that omit this field are unaffected — they receive an empty result object.
+   */
+  taskState?: AgentTaskState;
+  /**
+   * Optional memory signals to pass into the judgment. Only meaningful when
+   * `taskState` is also provided.
+   */
+  memorySignals?: PostCompactionMemorySignals;
+}): Promise<PostCompactionSideEffectsResult> {
   const sessionFile = params.sessionFile.trim();
   if (!sessionFile) {
-    return;
+    return {};
   }
   emitSessionTranscriptUpdate({ sessionFile, sessionKey: params.sessionKey });
   await syncPostCompactionSessionMemory({
@@ -95,6 +129,18 @@ export async function runPostCompactionSideEffects(params: {
     sessionFile,
     mode: resolvePostCompactionIndexSyncMode(params.config),
   });
+
+  // Phase 7: compute memory-write judgment when task state is available.
+  // Does NOT write to any file — returns the decision for callers to act on.
+  const memoryJudgment = buildPostCompactionMemoryJudgment({
+    taskState: params.taskState,
+    signals: params.memorySignals,
+  });
+
+  if (memoryJudgment !== undefined) {
+    return { memoryJudgment };
+  }
+  return {};
 }
 
 export type CompactionHookRunner = {
@@ -260,6 +306,16 @@ export function estimateTokensAfterCompaction(params: {
   return tokensAfter;
 }
 
+export type AfterCompactionHooksResult = {
+  /**
+   * Formatted continuation-prompt text built from the optional task state.
+   * Present only when `params.taskState` was provided and the build succeeded.
+   * Callers may include this in custom instructions or append it to the
+   * compacted session to help the model resume without context loss.
+   */
+  compactionTaskSummary?: string;
+};
+
 export async function runAfterCompactionHooks(params: {
   hookRunner?: CompactionHookRunner | null;
   sessionId: string;
@@ -275,13 +331,31 @@ export async function runAfterCompactionHooks(params: {
   summaryLength?: number;
   tokensBefore?: number;
   firstKeptEntryId?: string;
+  /**
+   * Optional task state. When present, a structured compaction summary is
+   * built before the hooks fire and included in the hook event payload.
+   * Existing callers that omit this field are unaffected.
+   */
+  taskState?: AgentTaskState;
+  /**
+   * Optional extra metadata to merge into the task summary (tools called,
+   * key findings, next step override, user constraints).
+   */
+  taskSummaryExtra?: CompactionTaskSummaryExtra;
   onHookMessages?: (payload: {
     phase: "after";
     messages: string[];
     sessionId: string;
     sessionKey: string;
   }) => void | Promise<void>;
-}) {
+}): Promise<AfterCompactionHooksResult> {
+  // Phase 6: build task summary before hooks fire so plugin consumers can
+  // read it from the hook event context. Never throws.
+  const compactionTaskSummary = buildCompactionTaskSummaryIfPresent(
+    params.taskState,
+    params.taskSummaryExtra,
+  );
+
   try {
     const hookEvent = createInternalHookEvent("session", "compact:after", params.hookSessionKey, {
       sessionId: params.sessionId,
@@ -293,6 +367,8 @@ export async function runAfterCompactionHooks(params: {
       tokensBefore: params.tokensBefore,
       tokensAfter: params.tokensAfter,
       firstKeptEntryId: params.firstKeptEntryId,
+      // Included when task state was provided; undefined otherwise (no payload bloat).
+      compactionTaskSummary,
     });
     await triggerInternalHook(hookEvent);
     if (hookEvent.messages.length > 0) {
@@ -333,4 +409,6 @@ export async function runAfterCompactionHooks(params: {
       });
     }
   }
+
+  return { compactionTaskSummary };
 }

@@ -106,6 +106,12 @@ export type EmbeddedPiSubscribeState = {
   pendingToolAudioAsVoice: boolean;
   pendingToolTrustedLocalMedia: boolean;
   visibleBlockReplyCount: number;
+  /**
+   * Phase 8: number of tool_execution_end events observed since the last
+   * assistant message_start. Reset to 0 on each message_start. Used by the
+   * per-turn tool call limit guard.
+   */
+  toolCallsThisTurn: number;
   pendingAssistantReplyDirectives?: Pick<
     BlockReplyPayload,
     "mediaUrls" | "audioAsVoice" | "replyToId" | "replyToTag" | "replyToCurrent"
@@ -195,6 +201,7 @@ type ToolHandlerParams = Pick<
   | "agentId"
   | "toolResultFormat"
   | "toolProgressDetail"
+  | "maxToolCallsPerTurn"
 >;
 
 type ToolHandlerState = Pick<
@@ -223,6 +230,7 @@ type ToolHandlerState = Pick<
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
   | "toolExecutionSinceLastBlockReply"
+  | "toolCallsThisTurn"
 >;
 
 export type ToolHandlerContext = {
