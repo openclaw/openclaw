@@ -932,8 +932,22 @@ function readProcessFdCount(pid: number | undefined): number | null {
   if (result.status !== 0) {
     return null;
   }
-  const lines = result.stdout.trim().split(/\r?\n/u).filter(Boolean);
-  return lines.length > 1 ? lines.length - 1 : null;
+  return countLsofFileDescriptors(result.stdout);
+}
+
+function countLsofFileDescriptors(raw: string): number | null {
+  const lines = raw.trim().split(/\r?\n/u).filter(Boolean);
+  if (lines.length <= 1) {
+    return null;
+  }
+  let count = 0;
+  for (const line of lines.slice(1)) {
+    const columns = line.trim().split(/\s+/u);
+    if (/^\d+/u.test(columns[3] ?? "")) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function parsePsCpuTimeMs(raw: string): number | null {
@@ -1092,7 +1106,11 @@ function flushOutputLineBuffers(
   buffers: Record<"stderr" | "stdout", string>,
   onLine: (line: string, nowMs: number) => void,
   nowMs: number,
+  options: { flushPartial?: boolean } = {},
 ): void {
+  if (!options.flushPartial) {
+    return;
+  }
   for (const stream of ["stdout", "stderr"] as const) {
     const line = buffers[stream];
     if (!line) {
@@ -1505,6 +1523,9 @@ async function runGatewaySample(options: {
   clearInterval(rssTimer);
   sampleRss();
   await childExitPromise.catch(() => null);
+  flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt, {
+    flushPartial: true,
+  });
   if (exit.exitCode !== null && exit.exitCode !== 0 && failureCode === null) {
     failureCode = "child_nonzero_exit";
   }
@@ -1641,6 +1662,7 @@ export const __testing = {
   classifyProbeErrorKind,
   collectOutputLines,
   collectTraceLine,
+  countLsofFileDescriptors,
   computeResourceSlope,
   createRestartIteration,
   ensureSupportedRestartPlatform,

@@ -96,7 +96,7 @@ describe("gateway restart benchmark script", () => {
     expect(failure).toBeNull();
   });
 
-  it("flushes and clears buffered child output carry", () => {
+  it("preserves buffered child output carry until stream end", () => {
     const buffers = {
       stderr: "[gateway] ready",
       stdout: "[gateway] restart trace: restart.ready 12.5ms total=45.0ms",
@@ -105,11 +105,42 @@ describe("gateway restart benchmark script", () => {
 
     __testing.flushOutputLineBuffers(buffers, (line) => lines.push(line), 1);
 
+    expect(lines).toEqual([]);
+    expect(buffers).toEqual({
+      stderr: "[gateway] ready",
+      stdout: "[gateway] restart trace: restart.ready 12.5ms total=45.0ms",
+    });
+  });
+
+  it("flushes buffered child output carry at stream end", () => {
+    const buffers = {
+      stderr: "[gateway] ready",
+      stdout: "[gateway] restart trace: restart.ready 12.5ms total=45.0ms",
+    };
+    const lines: string[] = [];
+
+    __testing.flushOutputLineBuffers(buffers, (line) => lines.push(line), 1, {
+      flushPartial: true,
+    });
+
     expect(lines).toEqual([
       "[gateway] restart trace: restart.ready 12.5ms total=45.0ms",
       "[gateway] ready",
     ]);
     expect(buffers).toEqual({ stderr: "", stdout: "" });
+  });
+
+  it("counts only numeric descriptors from lsof output", () => {
+    expect(
+      __testing.countLsofFileDescriptors(`COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+node    1234 user  cwd    DIR    1,2      128    2 /tmp
+node    1234 user  txt    REG    1,2    12345    3 /usr/bin/node
+node    1234 user  mem    REG    1,2    12345    4 /usr/lib/lib.dylib
+node    1234 user    0r   CHR    3,2      0t0    5 /dev/null
+node    1234 user    1w   REG    1,2      123    6 /tmp/stdout
+node    1234 user   12u  IPv4    0t0      TCP localhost:1234
+`),
+    ).toBe(3);
   });
 
   it("enables both startup and restart trace in the child gateway environment", () => {
