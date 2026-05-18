@@ -318,6 +318,20 @@ describe("update global helpers", () => {
           globalRoot: brewRoot,
           packageRoot: pkgRoot,
         });
+        await expect(
+          resolveGlobalInstallTarget({
+            manager: "npm",
+            runCommand,
+            timeoutMs: 1000,
+            pkgRoot,
+            honorPackageRoot: true,
+          }),
+        ).resolves.toEqual({
+          manager: "npm",
+          command: brewNpm,
+          globalRoot: brewRoot,
+          packageRoot: pkgRoot,
+        });
         expect(globalInstallArgs("npm", "openclaw@latest", pkgRoot)).toEqual([
           brewNpm,
           "i",
@@ -365,6 +379,43 @@ describe("update global helpers", () => {
         "--loglevel=error",
         "--min-release-age=0",
       ]);
+    });
+  });
+
+  it("honors an explicitly selected direct npm node_modules package root", async () => {
+    await withTempDir({ prefix: "openclaw-update-managed-service-root-" }, async (base) => {
+      const managedNpmRoot = path.join(base, ".openclaw", "npm", "node_modules");
+      const pkgRoot = path.join(managedNpmRoot, "openclaw");
+      const pathNpmRoot = path.join(base, "shell", "lib", "node_modules");
+      await fs.mkdir(pkgRoot, { recursive: true });
+
+      const runCommand = createNpmRootRunner({ defaultNpmRoot: pathNpmRoot });
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "npm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot,
+          honorPackageRoot: true,
+        }),
+      ).resolves.toEqual({
+        manager: "npm",
+        command: "npm",
+        globalRoot: managedNpmRoot,
+        packageRoot: pkgRoot,
+        directNodeModulesRoot: true,
+      });
+
+      expect(
+        resolveNpmGlobalPrefixLayoutFromGlobalRoot(managedNpmRoot, {
+          allowDirectNodeModulesRoot: true,
+        }),
+      ).toEqual({
+        prefix: path.dirname(managedNpmRoot),
+        globalRoot: managedNpmRoot,
+        binDir: path.join(managedNpmRoot, ".bin"),
+      });
     });
   });
 

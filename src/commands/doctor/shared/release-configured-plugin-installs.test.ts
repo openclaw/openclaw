@@ -374,7 +374,7 @@ describe("configured plugin install release step", () => {
     });
   });
 
-  it("defers package-manager plugin repair when an older updater supports post-doctor config writes", async () => {
+  it("repairs package-manager plugins for legacy parents that only support doctor config writes", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
       changes: [],
       warnings: [],
@@ -405,8 +405,8 @@ describe("configured plugin install release step", () => {
     expect(result).toEqual({
       changes: [],
       warnings: [],
-      completed: false,
-      touchedConfig: false,
+      completed: true,
+      touchedConfig: true,
     });
   });
 

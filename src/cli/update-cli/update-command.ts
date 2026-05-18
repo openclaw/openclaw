@@ -32,6 +32,7 @@ import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/const
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
+import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import {
   readGatewayServiceState,
   resolveGatewayService,
@@ -1208,6 +1209,35 @@ async function tryInstallShellCompletion(opts: {
   }
 }
 
+async function tryRealpathOrResolve(value: string): Promise<string> {
+  try {
+    return await fs.realpath(path.resolve(value));
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+async function resolveManagedServicePackageUpdateRoot(params: {
+  root: string;
+}): Promise<{ root: string; previousRoot: string } | null> {
+  const command = await resolveGatewayService()
+    .readCommand(process.env)
+    .catch(() => null);
+  const layout = await summarizeGatewayServiceLayout(command);
+  const serviceRoot = layout?.packageRoot;
+  if (!serviceRoot || layout.entrypointSourceCheckout === true) {
+    return null;
+  }
+  const [currentRootReal, serviceRootReal] = await Promise.all([
+    tryRealpathOrResolve(params.root),
+    tryRealpathOrResolve(serviceRoot),
+  ]);
+  if (currentRootReal === serviceRootReal) {
+    return null;
+  }
+  return { root: serviceRoot, previousRoot: params.root };
+}
+
 async function runPackageInstallUpdate(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -1218,6 +1248,7 @@ async function runPackageInstallUpdate(params: {
   jsonMode: boolean;
   managedServiceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
+  honorPackageRoot?: boolean;
 }): Promise<UpdateRunResult> {
   const manager = await resolveGlobalManager({
     root: params.root,
@@ -1231,6 +1262,7 @@ async function runPackageInstallUpdate(params: {
     runCommand,
     timeoutMs: params.timeoutMs,
     pkgRoot: params.root,
+    honorPackageRoot: params.honorPackageRoot === true,
   });
   const pkgRoot = installTarget.packageRoot;
   const packageName =
@@ -2722,7 +2754,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
-  const root = await resolveUpdateRoot();
+  let root = await resolveUpdateRoot();
   if (postCoreUpdateResume) {
     if (
       postCoreUpdateChannel !== "stable" &&
@@ -2852,6 +2884,21 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   let fallbackToLatest = false;
   let packageInstallSpec: string | null = null;
   let packageAlreadyCurrent = false;
+  let managedServiceRootRedirect: { root: string; previousRoot: string } | null = null;
+
+  if (updateInstallKind === "package") {
+    managedServiceRootRedirect = await resolveManagedServicePackageUpdateRoot({ root });
+    if (managedServiceRootRedirect) {
+      root = managedServiceRootRedirect.root;
+      if (!opts.json) {
+        defaultRuntime.log(
+          theme.muted(
+            `Targeting managed gateway service package root: ${managedServiceRootRedirect.root}`,
+          ),
+        );
+      }
+    }
+  }
 
   if (updateInstallKind !== "git") {
     currentVersion = switchToPackage ? null : await readPackageVersion(root);
@@ -2928,6 +2975,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
     if (fallbackToLatest) {
       notes.push("Beta channel resolves to latest for this run (fallback).");
+    }
+    if (managedServiceRootRedirect) {
+      notes.push(
+        `Package update targets managed service root ${managedServiceRootRedirect.root} instead of invoking root ${managedServiceRootRedirect.previousRoot}.`,
+      );
     }
     if (explicitTag && !canResolveRegistryVersionForPackageTarget(tag)) {
       notes.push("Non-registry package specs skip npm version lookup and downgrade previews.");
@@ -3062,6 +3114,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
             jsonMode: Boolean(opts.json),
             managedServiceEnv: prePackageServiceStop?.serviceEnv,
             invocationCwd,
+            honorPackageRoot: managedServiceRootRedirect !== null,
           })
         : await runGitUpdate({
             root,
