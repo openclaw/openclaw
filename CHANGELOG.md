@@ -58,6 +58,7 @@ Docs: https://docs.openclaw.ai
 - Release stability: recover stale session diagnostics and Codex OAuth fallback state so stuck runs and reused refresh tokens clear without blocking follow-up work. (#83503) Thanks @100yenadmin.
 - Messages/TTS: apply TTS directives before message-tool sends reach core, gateway, or plugin delivery so opt-in message-tool rooms and proactive sends attach voice notes instead of leaking raw tags. Fixes #81598. Thanks @CG-Intelligence-Agent-Jack and @CoronovirusG10.
 - Messages/Codex: keep Codex direct/source chats on message-tool visible delivery by default while documenting and testing `messages.visibleReplies: "automatic"` as the old-mode opt-out; channel wildcard model overrides now apply to direct chats before harness delivery defaults.
+- Memory/QMD: keep archived session transcript hits visible after QMD export while preserving normal `.md` session ids that only resemble archive names. (#83518; fixes #83506) Thanks @tanshanshan.
 - Codex app-server: preserve network access for sandboxed Codex code-mode turns when the OpenClaw sandbox allows outbound egress. Fixes #83347. Thanks @YusukeIt0.
 - QA-Lab: keep the OTLP smoke decoder independent of removed OpenTelemetry generated-root internals.
 - Messages: default group/channel visible replies to automatic final delivery again, keeping `message_tool` opt-in for ambient/shared rooms and tool-reliable models.
