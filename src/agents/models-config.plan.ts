@@ -178,7 +178,14 @@ export async function planOpenClawModelsJsonWithDeps(
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
   const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
-  const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
+  // Strip apiKey from each provider before writing to models.json
+  // to prevent secret leakage into prompt context (CVE-2026-XXXX).
+  const sanitizedProviders: Record<string, unknown> = {};
+  for (const [id, provider] of Object.entries(finalProviders)) {
+    const { apiKey: _, ...rest } = provider as Record<string, unknown>;
+    sanitizedProviders[id] = rest;
+  }
+  const nextContents = `${JSON.stringify({ providers: sanitizedProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {
     return { action: "noop" };
