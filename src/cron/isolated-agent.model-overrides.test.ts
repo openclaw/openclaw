@@ -1,5 +1,5 @@
 import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
@@ -68,11 +68,16 @@ const OPENAI_PI_RUNTIME_CONFIG: Partial<OpenClawConfig> = {
 
 describe("runCronIsolatedAgentTurn model overrides", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     resetPluginRuntimeStateForTest();
     installThinkingTestProviders();
     vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("treats blank model overrides as unset", async () => {
