@@ -621,9 +621,7 @@ describe("browser config", () => {
 
       const websocket = resolveProfile(resolved, "websocket");
       expect(websocket?.cdpPort).toBe(443);
-      expect(websocket?.cdpUrl).toBe(
-        "wss://remote-browser.example.com:443/json/version?token=abc",
-      );
+      expect(websocket?.cdpUrl).toBe("wss://remote-browser.example.com:443/json/version?token=abc");
 
       const ipv6 = resolveProfile(resolved, "ipv6");
       expect(ipv6?.cdpPort).toBe(80);
@@ -716,9 +714,7 @@ describe("browser config", () => {
           },
         },
       });
-      expect(() => resolveProfile(resolved, "bad")).toThrow(
-        'must define cdpPort or cdpUrl',
-      );
+      expect(() => resolveProfile(resolved, "bad")).toThrow("must define cdpPort or cdpUrl");
     });
 
     it("stale WS devtools URL + cdpPort drops path and uses cdpPort", () => {
@@ -735,6 +731,8 @@ describe("browser config", () => {
       const profile = resolveProfile(resolved, "chrome-cdp");
       expect(profile?.cdpUrl).toBe("http://127.0.0.1:9222");
       expect(profile?.cdpPort).toBe(9222);
+      expect(profile?.cdpIsLoopback).toBe(true);
+      expect(profile?.attachOnly).toBe(true);
     });
 
     it("IPv6 URL without port defers to cdpPort", () => {

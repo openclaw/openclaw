@@ -28,17 +28,14 @@ export { isLoopbackHost };
 function hasRawExplicitPort(raw: string): boolean {
   // Strip scheme (e.g. "http://") and take only the authority portion
   // (everything before the first /, ?, or #).
-  const authority =
-    raw
-      .replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
-      .split(/[/?#]/, 1)[0] ?? "";
+  const authority = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").split(/[/?#]/, 1)[0] ?? "";
 
-  // Strip userinfo (user:pass@) — the colon there is NOT a port separator.
+  // Strip userinfo (user:pass@); the colon there is not a port separator.
   const hostPort = authority.includes("@")
     ? authority.slice(authority.lastIndexOf("@") + 1)
     : authority;
 
-  // IPv6: [::1]:9222 → port after closing bracket
+  // IPv6: [::1]:9222 has a port after the closing bracket.
   if (hostPort.startsWith("[")) {
     return /^\[[^\]]+\]:\d+$/.test(hostPort);
   }
@@ -88,7 +85,7 @@ export function parseBrowserHttpUrl(raw: string, label: string) {
     const atIdx = rest.indexOf("@");
     const hostStart = atIdx >= 0 ? atIdx + 1 : 0;
     const hostPart = rest.slice(hostStart);
-    // Find end of host: IPv6 brackets or first : / /
+    // Find the end of the host: IPv6 brackets, a path slash, or a port colon.
     const hostLen = hostPart.startsWith("[")
       ? hostPart.indexOf("]") + 1
       : (() => {
@@ -96,8 +93,7 @@ export function parseBrowserHttpUrl(raw: string, label: string) {
           return idx < 0 ? hostPart.length : idx;
         })();
     const insertAt = hostStart + hostLen;
-    normalizedWithPort =
-      proto + rest.slice(0, insertAt) + ":" + port + rest.slice(insertAt);
+    normalizedWithPort = proto + rest.slice(0, insertAt) + ":" + port + rest.slice(insertAt);
   } else {
     normalizedWithPort = normalized;
   }
