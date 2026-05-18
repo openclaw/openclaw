@@ -790,6 +790,7 @@ async function collectSessionIngestionBatches(params: {
     absolutePath: string;
     generatedByDreamingNarrative: boolean;
     generatedByCronRun: boolean;
+    generatedByBootRun: boolean;
     sessionPath: string;
   }> = [];
   for (const agentId of agentIds) {
@@ -800,6 +801,7 @@ async function collectSessionIngestionBatches(params: {
         : {
             dreamingNarrativeTranscriptPaths: new Set<string>(),
             cronRunTranscriptPaths: new Set<string>(),
+            bootRunTranscriptPaths: new Set<string>(),
           };
     for (const absolutePath of files) {
       if (isCheckpointSessionTranscriptPath(absolutePath)) {
@@ -812,6 +814,7 @@ async function collectSessionIngestionBatches(params: {
         generatedByDreamingNarrative:
           transcriptClassification.dreamingNarrativeTranscriptPaths.has(normalizedPath),
         generatedByCronRun: transcriptClassification.cronRunTranscriptPaths.has(normalizedPath),
+        generatedByBootRun: transcriptClassification.bootRunTranscriptPaths.has(normalizedPath),
         sessionPath: sessionPathForFile(absolutePath),
       });
     }
@@ -871,11 +874,16 @@ async function collectSessionIngestionBatches(params: {
     const entry = await buildSessionEntry(file.absolutePath, {
       generatedByDreamingNarrative: file.generatedByDreamingNarrative,
       generatedByCronRun: file.generatedByCronRun,
+      generatedByBootRun: file.generatedByBootRun,
     });
     if (!entry) {
       continue;
     }
-    if (entry.generatedByDreamingNarrative || entry.generatedByCronRun) {
+    if (
+      entry.generatedByDreamingNarrative ||
+      entry.generatedByCronRun ||
+      entry.generatedByBootRun
+    ) {
       nextFiles[stateKey] = {
         mtimeMs: fingerprint.mtimeMs,
         size: fingerprint.size,

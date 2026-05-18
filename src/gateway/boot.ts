@@ -6,15 +6,14 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommand } from "../commands/agent.js";
 import {
   resolveAgentIdFromSessionKey,
-  resolveAgentMainSessionKey,
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { updateSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
 
 function generateBootSessionId(): string {
@@ -24,13 +23,9 @@ function generateBootSessionId(): string {
   return `boot-${ts}-${suffix}`;
 }
 
-type SessionMappingSnapshot = {
-  storePath: string;
-  sessionKey: string;
-  canRestore: boolean;
-  hadEntry: boolean;
-  entry?: SessionEntry;
-};
+function buildBootRunSessionKey(params: { agentId: string; sessionId: string }): string {
+  return `agent:${normalizeAgentId(params.agentId)}:boot:run:${params.sessionId}`;
+}
 
 const log = createSubsystemLogger("gateway/boot");
 const BOOT_FILENAME = "BOOT.md";
@@ -74,61 +69,19 @@ async function loadBootFile(
   }
 }
 
-function snapshotMainSessionMapping(params: {
+async function clearBootRunSessionMapping(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
-}): SessionMappingSnapshot {
+}): Promise<string | undefined> {
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
   try {
-    const store = loadSessionStore(storePath, { skipCache: true });
-    const entry = store[params.sessionKey];
-    if (!entry) {
-      return {
-        storePath,
-        sessionKey: params.sessionKey,
-        canRestore: true,
-        hadEntry: false,
-      };
-    }
-    return {
-      storePath,
-      sessionKey: params.sessionKey,
-      canRestore: true,
-      hadEntry: true,
-      entry: structuredClone(entry),
-    };
-  } catch (err) {
-    log.debug("boot: could not snapshot main session mapping", {
-      sessionKey: params.sessionKey,
-      error: String(err),
-    });
-    return {
-      storePath,
-      sessionKey: params.sessionKey,
-      canRestore: false,
-      hadEntry: false,
-    };
-  }
-}
-
-async function restoreMainSessionMapping(
-  snapshot: SessionMappingSnapshot,
-): Promise<string | undefined> {
-  if (!snapshot.canRestore) {
-    return undefined;
-  }
-  try {
     await updateSessionStore(
-      snapshot.storePath,
+      storePath,
       (store) => {
-        if (snapshot.hadEntry && snapshot.entry) {
-          store[snapshot.sessionKey] = snapshot.entry;
-          return;
-        }
-        delete store[snapshot.sessionKey];
+        delete store[params.sessionKey];
       },
-      { activeSessionKey: snapshot.sessionKey },
+      { activeSessionKey: params.sessionKey },
     );
     return undefined;
   } catch (err) {
@@ -160,15 +113,10 @@ export async function runBootOnce(params: {
     return { status: "skipped", reason: result.status };
   }
 
-  const sessionKey = params.agentId
-    ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
-    : resolveMainSessionKey(params.cfg);
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(resolveMainSessionKey(params.cfg));
   const message = buildBootPrompt(result.content ?? "");
   const sessionId = generateBootSessionId();
-  const mappingSnapshot = snapshotMainSessionMapping({
-    cfg: params.cfg,
-    sessionKey,
-  });
+  const sessionKey = buildBootRunSessionKey({ agentId, sessionId });
 
   let agentFailure: string | undefined;
   try {
@@ -188,17 +136,20 @@ export async function runBootOnce(params: {
     log.error(`boot: agent run failed: ${agentFailure}`);
   }
 
-  const mappingRestoreFailure = await restoreMainSessionMapping(mappingSnapshot);
-  if (mappingRestoreFailure) {
-    log.error(`boot: failed to restore main session mapping: ${mappingRestoreFailure}`);
+  const mappingClearFailure = await clearBootRunSessionMapping({
+    cfg: params.cfg,
+    sessionKey,
+  });
+  if (mappingClearFailure) {
+    log.error(`boot: failed to clear boot session mapping: ${mappingClearFailure}`);
   }
 
-  if (!agentFailure && !mappingRestoreFailure) {
+  if (!agentFailure && !mappingClearFailure) {
     return { status: "ran" };
   }
   const reasonParts = [
     agentFailure ? `agent run failed: ${agentFailure}` : undefined,
-    mappingRestoreFailure ? `mapping restore failed: ${mappingRestoreFailure}` : undefined,
+    mappingClearFailure ? `mapping clear failed: ${mappingClearFailure}` : undefined,
   ].filter((part): part is string => Boolean(part));
   return { status: "failed", reason: reasonParts.join("; ") };
 }
