@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _getTrustedDirs, _resetResolveSystemBin, resolveSystemBin } from "./resolve-system-bin.js";
 import {
   _resetWindowsInstallRootsForTests,
@@ -151,6 +151,77 @@ describe("resolveSystemBin", () => {
 });
 
 describe("trusted directory list", () => {
+  it("includes Windows image fallback tool directories under trusted install roots", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    _resetWindowsInstallRootsForTests({
+      queryRegistryValue: (key, valueName) => {
+        if (
+          key === "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion" &&
+          valueName === "SystemRoot"
+        ) {
+          return "D:\\Windows";
+        }
+        if (
+          key === "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion" &&
+          valueName === "ProgramFilesDir"
+        ) {
+          return "D:\\Program Files";
+        }
+        if (
+          key === "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion" &&
+          valueName === "ProgramFilesDir (x86)"
+        ) {
+          return "E:\\Program Files (x86)";
+        }
+        return null;
+      },
+    });
+    try {
+      _resetResolveSystemBin((p: string) => executables.has(path.resolve(p)));
+      const dirs = _getTrustedDirs("standard");
+      expectDirsContainAll(dirs, [
+        path.win32.join("D:\\Windows", "System32", "WindowsPowerShell", "v1.0"),
+        path.win32.join("D:\\", "ProgramData", "chocolatey", "bin"),
+        path.win32.join("D:\\Program Files", "ImageMagick"),
+        path.win32.join("D:\\Program Files", "GraphicsMagick"),
+        path.win32.join("E:\\Program Files (x86)", "ImageMagick"),
+        path.win32.join("E:\\Program Files (x86)", "GraphicsMagick"),
+      ]);
+      const strictDirs = _getTrustedDirs("strict");
+      expect(strictDirs).not.toContain(path.win32.join("D:\\Program Files", "ImageMagick"));
+      expect(strictDirs).not.toContain(path.win32.join("D:\\Program Files", "GraphicsMagick"));
+    } finally {
+      platformSpy.mockRestore();
+      _resetResolveSystemBin();
+      _resetWindowsInstallRootsForTests();
+    }
+  });
+
+  it("resolves machine-wide Chocolatey shims only with standard trust on Windows", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    _resetWindowsInstallRootsForTests({
+      queryRegistryValue: (key, valueName) => {
+        if (
+          key === "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion" &&
+          valueName === "SystemRoot"
+        ) {
+          return "D:\\Windows";
+        }
+        return null;
+      },
+    });
+    try {
+      const chocoFfmpeg = path.win32.join("D:\\", "ProgramData", "chocolatey", "bin", "ffmpeg.exe");
+      _resetResolveSystemBin((p: string) => p === chocoFfmpeg);
+      expect(resolveSystemBin("ffmpeg")).toBeNull();
+      expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe(chocoFfmpeg);
+    } finally {
+      platformSpy.mockRestore();
+      _resetResolveSystemBin();
+      _resetWindowsInstallRootsForTests();
+    }
+  });
+
   it("never includes user-writable home directories", () => {
     const dirs = _getTrustedDirs();
     for (const dir of dirs) {
@@ -239,7 +310,11 @@ describe("trusted directory list", () => {
     });
   }
 
-  if (process.platform !== "darwin" && process.platform !== "linux") {
+  if (
+    process.platform !== "darwin" &&
+    process.platform !== "linux" &&
+    process.platform !== "win32"
+  ) {
     it("standard trust equals strict trust on platforms without expansion", () => {
       const strict = _getTrustedDirs("strict");
       const standard = _getTrustedDirs("standard");
