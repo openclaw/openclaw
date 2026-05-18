@@ -1086,8 +1086,8 @@ class TalkModeManager internal constructor(
         putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
         // Use cloud recognition — it handles natural speech and pauses better
         // than on-device which cuts off aggressively after short silences.
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500L)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800)
       }
 
     if (markListening) {
