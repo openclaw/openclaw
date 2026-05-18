@@ -10,6 +10,10 @@ import {
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
 import {
+  assertExecDeniedPaths,
+  resolveExecDeniedPathNamespaceForNode,
+} from "./bash-tools.exec-denied-paths.js";
+import {
   analyzeNodeApprovalRequirement,
   buildNodeSystemRunInvoke,
   formatNodeRunToolResult,
@@ -42,6 +46,13 @@ export async function executeNodeHostCommand(
     host: "node",
   });
   const target = await resolveNodeExecutionTarget(params);
+  assertExecDeniedPaths({
+    deniedPaths: params.deniedPaths,
+    command: params.command,
+    workdir: params.workdir,
+    env: target.env ?? {},
+    namespace: resolveExecDeniedPathNamespaceForNode(target.platform),
+  });
   if (
     shouldSkipNodeApprovalPrepare({
       hostSecurity,

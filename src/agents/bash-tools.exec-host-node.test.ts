@@ -428,6 +428,64 @@ describe("executeNodeHostCommand", () => {
     expect(Object.hasOwn(runParams, "systemRunPlan")).toBe(false);
   });
 
+  it("blocks denied Windows node paths using the node platform namespace", async () => {
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+        platform: "win32",
+      },
+    ]);
+
+    await expect(
+      executeNodeHostCommand({
+        command: "type C:\\Secrets\\provider.key",
+        workdir: "C:\\Work",
+        env: {},
+        security: "full",
+        ask: "off",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+        deniedPaths: ["C:\\Secrets\\**"],
+      }),
+    ).rejects.toThrow(
+      "Security Violation: exec command references denied path C:\\Secrets\\provider.key",
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("matches denied Windows node paths case-insensitively", async () => {
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+        platform: "win32",
+      },
+    ]);
+
+    await expect(
+      executeNodeHostCommand({
+        command: "type c:\\secrets\\provider.key",
+        workdir: "C:\\Work",
+        env: {},
+        security: "full",
+        ask: "off",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+        deniedPaths: ["C:\\Secrets\\**"],
+      }),
+    ).rejects.toThrow(
+      "Security Violation: exec command references denied path c:\\secrets\\provider.key",
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
   it("rejects disconnected node targets before invoking system.run", async () => {
     listNodesMock.mockResolvedValueOnce([
       {
