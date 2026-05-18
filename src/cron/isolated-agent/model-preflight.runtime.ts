@@ -156,10 +156,14 @@ function buildUnavailableResult(params: {
 async function probeLocalProviderEndpoint(params: {
   api: PreflightApi;
   baseUrl: string;
+  apiKey?: string;
 }): Promise<void> {
+  const headers: Record<string, string> | undefined = params.apiKey
+    ? { Authorization: `Bearer ${params.apiKey}` }
+    : undefined;
   const { response, release } = await fetchWithSsrFGuard({
     url: buildProbeUrl(params.api, params.baseUrl),
-    init: { method: "GET" },
+    init: { method: "GET", ...(headers ? { headers } : {}) },
     policy: buildLocalProviderSsrFPolicy(params.baseUrl),
     timeoutMs: PREFLIGHT_TIMEOUT_MS,
     auditContext: "cron-model-provider-preflight",
@@ -207,7 +211,11 @@ export async function preflightCronModelProvider(params: {
 
   let result: EndpointPreflightResult;
   try {
-    await probeLocalProviderEndpoint({ api, baseUrl });
+    await probeLocalProviderEndpoint({
+      api,
+      baseUrl,
+      apiKey: providerConfig.apiKey,
+    });
     result = { status: "available" };
   } catch (error) {
     result = { status: "unavailable", error };
