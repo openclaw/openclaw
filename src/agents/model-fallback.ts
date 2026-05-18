@@ -48,6 +48,7 @@ import {
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers/errors.js";
 import type { FailoverReason } from "./pi-embedded-helpers/types.js";
 import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
+import { isSessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 const log = createSubsystemLogger("model-fallback");
 
@@ -114,6 +115,23 @@ function isFallbackAbortError(err: unknown): boolean {
 
 function shouldRethrowAbort(err: unknown): boolean {
   return isFallbackAbortError(err) && !isTimeoutError(err);
+}
+
+function isEmbeddedAttemptSessionTakeoverError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const name = "name" in err ? String(err.name) : "";
+  if (name === "EmbeddedAttemptSessionTakeoverError") {
+    return true;
+  }
+  return formatErrorMessage(err).includes(
+    "session file changed while embedded prompt lock was released",
+  );
+}
+
+function shouldRethrowSessionOwnershipError(err: unknown): boolean {
+  return isEmbeddedAttemptSessionTakeoverError(err) || isSessionWriteLockTimeoutError(err);
 }
 
 function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
@@ -229,6 +247,9 @@ async function runFallbackCandidate<T>(params: {
     };
   } catch (err) {
     if (isCommandLaneTaskTimeoutError(err)) {
+      throw err;
+    }
+    if (shouldRethrowSessionOwnershipError(err)) {
       throw err;
     }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
