@@ -916,7 +916,6 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
 }
 
 function extractToolErrorForNamedCall(params: {
-  allInputText: string;
   input: ResponsesInputItem[];
   name: string;
   toolJson: Record<string, unknown> | null;
@@ -928,8 +927,7 @@ function extractToolErrorForNamedCall(params: {
   const namedFunctionCall = params.input.some(
     (item) => item.type === "function_call" && item.name === params.name,
   );
-  const namedPromptReference = new RegExp(`\\b${params.name}\\b`, "i").test(params.allInputText);
-  if (namedFunctionCall || namedPromptReference) {
+  if (namedFunctionCall) {
     return error;
   }
   return undefined;
@@ -1015,7 +1013,6 @@ function buildAssistantText(
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
   const sessionsSpawnError = extractToolErrorForNamedCall({
-    allInputText,
     input,
     name: "sessions_spawn",
     toolJson,
