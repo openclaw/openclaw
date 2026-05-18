@@ -1,0 +1,10 @@
+{
+  "id": "portable-context",
+  "name": "Portable Context",
+  "description": "Export this person's USER.md + MEMORY.md as a single portable .md document (DM only).",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
