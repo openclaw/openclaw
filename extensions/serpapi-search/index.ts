@@ -22,6 +22,7 @@ import {
   createSerpApiYouTubeTool,
   createSerpApiYouTubeTranscriptTool,
   createSerpApiYouTubeVideoTool,
+  createSerpApiYahooTool,
 } from "./src/tools/index.js";
 
 export default definePluginEntry({
@@ -52,5 +53,6 @@ export default definePluginEntry({
     api.registerTool((ctx) => createSerpApiEventsTool(api, ctx), { name: "serpapi_events" });
     api.registerTool((ctx) => createSerpApiFacebookProfileTool(api, ctx), { name: "serpapi_facebook_profile" });
     api.registerTool((ctx) => createSerpApiFinanceTool(api, ctx), { name: "serpapi_finance" });
+    api.registerTool((ctx) => createSerpApiYahooTool(api, ctx), { name: "serpapi_yahoo" });
   },
 });
