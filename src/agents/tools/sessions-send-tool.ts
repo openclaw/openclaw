@@ -41,6 +41,12 @@ import {
   resolveSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
+import {
+  buildSessionsSendHandoffAck,
+  recordSessionsSendHandoffEvent,
+  type SessionsSendHandoffAck,
+  type SessionsSendHandoffDelivery,
+} from "./sessions-send-handoff.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
@@ -152,6 +158,7 @@ function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
 
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
+  handoff?: SessionsSendHandoffAck;
   runId: string;
   sendParams: Record<string, unknown>;
   sessionKey: string;
@@ -176,6 +183,7 @@ async function startAgentRun(params: {
         status: "error",
         error: messageText,
         sessionKey: params.sessionKey,
+        ...(params.handoff ? { handoff: params.handoff } : {}),
       }),
     };
   }
@@ -357,14 +365,35 @@ export function createSessionsSendTool(opts?: {
       const timeoutMs = timeoutSeconds * 1000;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
+      const handoffId = crypto.randomUUID();
       let runId: string = idempotencyKey;
+      const skippedHandoffDelivery: SessionsSendHandoffDelivery = {
+        status: "skipped",
+        mode: "announce",
+      };
       if (parseSessionThreadInfoFast(resolvedKey).threadId) {
+        const handoff = buildSessionsSendHandoffAck({
+          id: handoffId,
+          status: "rejected",
+          delivery: skippedHandoffDelivery,
+        });
+        await recordSessionsSendHandoffEvent({
+          handoffId,
+          type: "rejected",
+          status: "rejected",
+          requesterSessionKey: effectiveRequesterKey,
+          requesterChannel: opts?.agentChannel,
+          targetSessionKey: resolvedKey,
+          targetDisplayKey: displayKey,
+          error: "thread_session_target",
+        });
         return jsonResult({
           runId: crypto.randomUUID(),
           status: "error",
           error:
             "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
           sessionKey: displayKey,
+          handoff,
         });
       }
       const visibilityGuard = await createSessionVisibilityGuard({
@@ -375,11 +404,27 @@ export function createSessionsSendTool(opts?: {
       });
       const access = visibilityGuard.check(resolvedKey);
       if (!access.allowed) {
+        const handoff = buildSessionsSendHandoffAck({
+          id: handoffId,
+          status: "rejected",
+          delivery: skippedHandoffDelivery,
+        });
+        await recordSessionsSendHandoffEvent({
+          handoffId,
+          type: "rejected",
+          status: "rejected",
+          requesterSessionKey: effectiveRequesterKey,
+          requesterChannel: opts?.agentChannel,
+          targetSessionKey: resolvedKey,
+          targetDisplayKey: displayKey,
+          error: access.status,
+        });
         return jsonResult({
           runId: crypto.randomUUID(),
           status: access.status,
           error: access.error,
           sessionKey: displayKey,
+          handoff,
         });
       }
 
@@ -390,11 +435,27 @@ export function createSessionsSendTool(opts?: {
         mainKey,
       });
       if (!ensuredSession.ok) {
+        const handoff = buildSessionsSendHandoffAck({
+          id: handoffId,
+          status: "rejected",
+          delivery: skippedHandoffDelivery,
+        });
+        await recordSessionsSendHandoffEvent({
+          handoffId,
+          type: "rejected",
+          status: "rejected",
+          requesterSessionKey: effectiveRequesterKey,
+          requesterChannel: opts?.agentChannel,
+          targetSessionKey: resolvedKey,
+          targetDisplayKey: displayKey,
+          error: ensuredSession.error,
+        });
         return jsonResult({
           runId: crypto.randomUUID(),
           status: "error",
           error: ensuredSession.error,
           sessionKey: displayKey,
+          handoff,
         });
       }
 
@@ -472,6 +533,21 @@ export function createSessionsSendTool(opts?: {
       const delivery = skipA2AFlow
         ? ({ status: "skipped", mode: "announce" } as const)
         : ({ status: "pending", mode: "announce" } as const);
+      const handoff = buildSessionsSendHandoffAck({
+        id: handoffId,
+        status: "accepted",
+        delivery,
+      });
+
+      await recordSessionsSendHandoffEvent({
+        handoffId,
+        type: "created",
+        status: "queued",
+        requesterSessionKey: effectiveRequesterKey,
+        requesterChannel,
+        targetSessionKey: resolvedKey,
+        targetDisplayKey: displayKey,
+      });
 
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
         if (skipA2AFlow) {
@@ -486,6 +562,7 @@ export function createSessionsSendTool(opts?: {
           requesterSessionKey,
           requesterChannel,
           baseline: baselineReply,
+          handoffId,
           roundOneReply,
           waitRunId,
         });
@@ -494,6 +571,7 @@ export function createSessionsSendTool(opts?: {
       if (timeoutSeconds === 0) {
         const start = await startAgentRun({
           callGateway: gatewayCall,
+          handoff,
           runId,
           sendParams,
           sessionKey: displayKey,
@@ -502,17 +580,29 @@ export function createSessionsSendTool(opts?: {
           return start.result;
         }
         runId = start.runId;
+        await recordSessionsSendHandoffEvent({
+          handoffId,
+          type: "accepted",
+          status: "accepted",
+          runId,
+          requesterSessionKey: effectiveRequesterKey,
+          requesterChannel,
+          targetSessionKey: resolvedKey,
+          targetDisplayKey: displayKey,
+        });
         startA2AFlow(undefined, runId);
         return jsonResult({
           runId,
           status: "accepted",
           sessionKey: displayKey,
           delivery,
+          handoff,
         });
       }
 
       const start = await startAgentRun({
         callGateway: gatewayCall,
+        handoff,
         runId,
         sendParams,
         sessionKey: displayKey,
@@ -521,6 +611,16 @@ export function createSessionsSendTool(opts?: {
         return start.result;
       }
       runId = start.runId;
+      await recordSessionsSendHandoffEvent({
+        handoffId,
+        type: "accepted",
+        status: "accepted",
+        runId,
+        requesterSessionKey: effectiveRequesterKey,
+        requesterChannel,
+        targetSessionKey: resolvedKey,
+        targetDisplayKey: displayKey,
+      });
       const result = await waitForAgentRunAndReadUpdatedAssistantReply({
         runId,
         sessionKey: resolvedKey,
@@ -538,21 +638,46 @@ export function createSessionsSendTool(opts?: {
             status: "accepted",
             sessionKey: displayKey,
             delivery,
+            handoff,
           });
         }
+        await recordSessionsSendHandoffEvent({
+          handoffId,
+          type: "failed",
+          status: "accepted",
+          runId,
+          requesterSessionKey: effectiveRequesterKey,
+          requesterChannel,
+          targetSessionKey: resolvedKey,
+          targetDisplayKey: displayKey,
+          error: result.error ?? "timeout",
+        });
         return jsonResult({
           runId,
           status: "timeout",
           error: result.error,
           sessionKey: displayKey,
+          handoff,
         });
       }
       if (result.status === "error") {
+        await recordSessionsSendHandoffEvent({
+          handoffId,
+          type: "failed",
+          status: "accepted",
+          runId,
+          requesterSessionKey: effectiveRequesterKey,
+          requesterChannel,
+          targetSessionKey: resolvedKey,
+          targetDisplayKey: displayKey,
+          error: result.error ?? "agent error",
+        });
         return jsonResult({
           runId,
           status: "error",
           error: result.error ?? "agent error",
           sessionKey: displayKey,
+          handoff,
         });
       }
       const reply = result.replyText;
@@ -564,6 +689,7 @@ export function createSessionsSendTool(opts?: {
         reply,
         sessionKey: displayKey,
         delivery,
+        handoff,
       });
     },
   };

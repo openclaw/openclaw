@@ -12,6 +12,10 @@ import {
 import { runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
+  classifySessionsSendControlOutcome,
+  recordSessionsSendHandoffEvent,
+} from "./sessions-send-handoff.js";
+import {
   buildAgentToAgentAnnounceContext,
   buildAgentToAgentReplyContext,
   isAnnounceSkip,
@@ -43,6 +47,7 @@ export async function runSessionsSendA2AFlow(params: {
   requesterSessionKey?: string;
   requesterChannel?: GatewayMessageChannel;
   baseline?: AssistantReplySnapshot;
+  handoffId?: string;
   roundOneReply?: string;
   waitRunId?: string;
 }) {
@@ -71,9 +76,35 @@ export async function runSessionsSendA2AFlow(params: {
       }
     }
     if (!latestReply) {
+      if (params.handoffId) {
+        await recordSessionsSendHandoffEvent({
+          handoffId: params.handoffId,
+          type: "target_reply_missing",
+          status: "accepted",
+          runId: params.waitRunId,
+          requesterSessionKey: params.requesterSessionKey,
+          requesterChannel: params.requesterChannel,
+          targetSessionKey: params.targetSessionKey,
+          targetDisplayKey: params.displayKey,
+        });
+      }
       return;
     }
-    if (isNonDeliverableSessionsReply(latestReply)) {
+    const initialControlOutcome = classifySessionsSendControlOutcome(latestReply);
+    if (initialControlOutcome || isNonDeliverableSessionsReply(latestReply)) {
+      if (params.handoffId) {
+        await recordSessionsSendHandoffEvent({
+          handoffId: params.handoffId,
+          type: "control_outcome_observed",
+          status: "delivered",
+          runId: params.waitRunId,
+          requesterSessionKey: params.requesterSessionKey,
+          requesterChannel: params.requesterChannel,
+          targetSessionKey: params.targetSessionKey,
+          targetDisplayKey: params.displayKey,
+          controlOutcome: initialControlOutcome,
+        });
+      }
       return;
     }
 
@@ -82,6 +113,19 @@ export async function runSessionsSendA2AFlow(params: {
       displayKey: params.displayKey,
     });
     const targetChannel = announceTarget?.channel ?? "unknown";
+    if (params.handoffId) {
+      await recordSessionsSendHandoffEvent({
+        handoffId: params.handoffId,
+        type: "target_reply_observed",
+        status: "accepted",
+        runId: params.waitRunId,
+        requesterSessionKey: params.requesterSessionKey,
+        requesterChannel: params.requesterChannel,
+        targetSessionKey: params.targetSessionKey,
+        targetDisplayKey: params.displayKey,
+        targetChannel,
+      });
+    }
 
     if (
       params.maxPingPongTurns > 0 &&
@@ -114,7 +158,27 @@ export async function runSessionsSendA2AFlow(params: {
             nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",
         });
-        if (!replyText || isReplySkip(replyText) || isNonDeliverableSessionsReply(replyText)) {
+        const replyControlOutcome = classifySessionsSendControlOutcome(replyText);
+        if (
+          !replyText ||
+          isReplySkip(replyText) ||
+          replyControlOutcome ||
+          isNonDeliverableSessionsReply(replyText)
+        ) {
+          if (params.handoffId && replyControlOutcome) {
+            await recordSessionsSendHandoffEvent({
+              handoffId: params.handoffId,
+              type: "control_outcome_observed",
+              status: "delivered",
+              runId: params.waitRunId,
+              requesterSessionKey: params.requesterSessionKey,
+              requesterChannel: params.requesterChannel,
+              targetSessionKey: nextSessionKey,
+              targetDisplayKey: params.displayKey,
+              targetChannel,
+              controlOutcome: replyControlOutcome,
+            });
+          }
           break;
         }
         latestReply = replyText;
@@ -145,10 +209,26 @@ export async function runSessionsSendA2AFlow(params: {
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
     });
+    const announceControlOutcome = classifySessionsSendControlOutcome(announceReply);
+    if (params.handoffId && announceControlOutcome) {
+      await recordSessionsSendHandoffEvent({
+        handoffId: params.handoffId,
+        type: "control_outcome_observed",
+        status: "delivered",
+        runId: params.waitRunId,
+        requesterSessionKey: params.requesterSessionKey,
+        requesterChannel: params.requesterChannel,
+        targetSessionKey: params.targetSessionKey,
+        targetDisplayKey: params.displayKey,
+        targetChannel,
+        controlOutcome: announceControlOutcome,
+      });
+    }
     if (
       announceTarget &&
       announceReply &&
       announceReply.trim() &&
+      !announceControlOutcome &&
       !isAnnounceSkip(announceReply) &&
       !isNonDeliverableSessionsReply(announceReply)
     ) {
@@ -165,7 +245,34 @@ export async function runSessionsSendA2AFlow(params: {
           },
           timeoutMs: 10_000,
         });
+        if (params.handoffId) {
+          await recordSessionsSendHandoffEvent({
+            handoffId: params.handoffId,
+            type: "announce_delivered",
+            status: "delivered",
+            runId: params.waitRunId,
+            requesterSessionKey: params.requesterSessionKey,
+            requesterChannel: params.requesterChannel,
+            targetSessionKey: params.targetSessionKey,
+            targetDisplayKey: params.displayKey,
+            targetChannel: announceTarget.channel,
+          });
+        }
       } catch (err) {
+        if (params.handoffId) {
+          await recordSessionsSendHandoffEvent({
+            handoffId: params.handoffId,
+            type: "announce_delivery_failed",
+            status: "accepted",
+            runId: params.waitRunId,
+            requesterSessionKey: params.requesterSessionKey,
+            requesterChannel: params.requesterChannel,
+            targetSessionKey: params.targetSessionKey,
+            targetDisplayKey: params.displayKey,
+            targetChannel: announceTarget.channel,
+            error: formatErrorMessage(err),
+          });
+        }
         log.warn("sessions_send announce delivery failed", {
           runId: runContextId,
           channel: announceTarget.channel,
@@ -175,6 +282,19 @@ export async function runSessionsSendA2AFlow(params: {
       }
     }
   } catch (err) {
+    if (params.handoffId) {
+      await recordSessionsSendHandoffEvent({
+        handoffId: params.handoffId,
+        type: "failed",
+        status: "accepted",
+        runId: params.waitRunId,
+        requesterSessionKey: params.requesterSessionKey,
+        requesterChannel: params.requesterChannel,
+        targetSessionKey: params.targetSessionKey,
+        targetDisplayKey: params.displayKey,
+        error: formatErrorMessage(err),
+      });
+    }
     log.warn("sessions_send announce flow failed", {
       runId: runContextId,
       error: formatErrorMessage(err),
