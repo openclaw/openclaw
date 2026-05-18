@@ -507,13 +507,49 @@ function isBlockedToolCallRecoveryEligible(params: {
   );
 }
 
+function isStalledModelCallRecoveryEligible(params: {
+  classification: SessionAttentionClassification | undefined;
+  activity?: DiagnosticSessionActivitySnapshot;
+  stuckSessionAbortMs: number;
+}): boolean {
+  const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
+  return (
+    params.classification?.eventType === "session.stalled" &&
+    params.classification.classification === "stalled_agent_run" &&
+    params.classification.activeWorkKind === "model_call" &&
+    params.activity?.hasActiveEmbeddedRun === true &&
+    typeof lastProgressAgeMs === "number" &&
+    lastProgressAgeMs >= params.stuckSessionAbortMs
+  );
+}
+
 function isActiveAbortRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
   activity?: DiagnosticSessionActivitySnapshot;
   ageMs: number;
   stuckSessionAbortMs: number;
 }): boolean {
-  return isStalledEmbeddedRunRecoveryEligible(params) || isBlockedToolCallRecoveryEligible(params);
+  return (
+    isStalledEmbeddedRunRecoveryEligible(params) ||
+    isBlockedToolCallRecoveryEligible(params) ||
+    isStalledModelCallRecoveryEligible(params)
+  );
+}
+
+function isIdleQueuedEmbeddedRunStall(params: {
+  state: {
+    state: SessionStateValue;
+    queueDepth: number;
+  };
+  activity: DiagnosticSessionActivitySnapshot;
+  staleMs: number;
+}): boolean {
+  return (
+    params.state.state === "idle" &&
+    params.state.queueDepth > 0 &&
+    params.activity.activeWorkKind === "embedded_run" &&
+    (params.activity.lastProgressAgeMs ?? 0) > params.staleMs
+  );
 }
 
 export function logWebhookReceived(params: {
@@ -1053,16 +1089,27 @@ export function startDiagnosticHeartbeat(
 
     for (const [, state] of diagnosticSessionStates) {
       const ageMs = now - state.lastActivity;
-      if (state.state === "processing" && ageMs > stuckSessionWarnMs) {
-        const activity = getDiagnosticSessionActivitySnapshot(
-          { sessionId: state.sessionId, sessionKey: state.sessionKey },
-          now,
-        );
+      const activity = getDiagnosticSessionActivitySnapshot(
+        { sessionId: state.sessionId, sessionKey: state.sessionKey },
+        now,
+      );
+      const idleQueuedEmbeddedRunStall = isIdleQueuedEmbeddedRunStall({
+        state,
+        activity,
+        staleMs: stuckSessionWarnMs,
+      });
+      if (
+        (state.state === "processing" && ageMs > stuckSessionWarnMs) ||
+        idleQueuedEmbeddedRunStall
+      ) {
+        const attentionAgeMs = idleQueuedEmbeddedRunStall
+          ? (activity.lastProgressAgeMs ?? ageMs)
+          : ageMs;
         const classification = logSessionAttention({
           sessionId: state.sessionId,
           sessionKey: state.sessionKey,
           state: state.state,
-          ageMs,
+          ageMs: attentionAgeMs,
           thresholdMs: stuckSessionWarnMs,
           abortThresholdMs: stuckSessionAbortMs,
         });
@@ -1073,8 +1120,9 @@ export function startDiagnosticHeartbeat(
             request: {
               sessionId: state.sessionId,
               sessionKey: state.sessionKey,
-              ageMs,
+              ageMs: attentionAgeMs,
               queueDepth: state.queueDepth,
+              expectedState: state.state,
               stateGeneration: state.generation,
             },
           });
@@ -1083,7 +1131,7 @@ export function startDiagnosticHeartbeat(
           isActiveAbortRecoveryEligible({
             classification,
             activity,
-            ageMs,
+            ageMs: attentionAgeMs,
             stuckSessionAbortMs,
           })
         ) {
@@ -1093,9 +1141,10 @@ export function startDiagnosticHeartbeat(
             request: {
               sessionId: state.sessionId,
               sessionKey: state.sessionKey,
-              ageMs,
+              ageMs: attentionAgeMs,
               queueDepth: state.queueDepth,
               allowActiveAbort: true,
+              expectedState: state.state,
               stateGeneration: state.generation,
             },
           });

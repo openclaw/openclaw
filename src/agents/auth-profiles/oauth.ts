@@ -16,6 +16,7 @@ import { resolveSecretRefString, type SecretRefResolveCache } from "../../secret
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
@@ -25,8 +26,17 @@ import {
 } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
+import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
-import { loadAuthProfileStoreForSecretsRuntime } from "./store.js";
+import {
+  getRuntimeAuthProfileStoreSnapshot,
+  hasRuntimeAuthProfileStoreSnapshot,
+  setRuntimeAuthProfileStoreSnapshot,
+} from "./runtime-snapshots.js";
+import {
+  loadAuthProfileStoreForSecretsRuntime,
+  resolvePersistedAuthProfileOwnerAgentDir,
+} from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 export {
@@ -378,7 +388,7 @@ export async function resolveApiKeyForProfile(
       email: resolved.credential.email ?? cred.email,
     });
   } catch (error) {
-    const refreshedStore =
+    let refreshedStore =
       error instanceof OAuthManagerRefreshError
         ? error.getRefreshedStore()
         : loadAuthProfileStoreForSecretsRuntime(params.agentDir);
@@ -388,6 +398,32 @@ export async function resolveApiKeyForProfile(
       error instanceof OAuthManagerRefreshError && error.code === "refresh_contention"
         ? error
         : surfacedCause;
+    if (isRefreshTokenReusedError(surfacedCause)) {
+      const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+        agentDir: params.agentDir,
+        profileId,
+      });
+      await clearLastGoodProfileWithLock({
+        provider: cred.provider,
+        profileId,
+        agentDir: ownerAgentDir,
+      });
+      if (
+        params.agentDir !== ownerAgentDir &&
+        hasRuntimeAuthProfileStoreSnapshot(params.agentDir)
+      ) {
+        const snapshot = getRuntimeAuthProfileStoreSnapshot(params.agentDir);
+        const providerKey = resolveProviderIdForAuth(cred.provider);
+        if (snapshot?.lastGood?.[providerKey] === profileId) {
+          delete snapshot.lastGood[providerKey];
+          if (Object.keys(snapshot.lastGood).length === 0) {
+            snapshot.lastGood = undefined;
+          }
+          setRuntimeAuthProfileStoreSnapshot(snapshot, params.agentDir);
+        }
+      }
+      refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+    }
     const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
       cfg,
       store: refreshedStore,
