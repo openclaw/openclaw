@@ -744,8 +744,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(promptSubmitted?.data?.prompt).not.toContain("secret runtime context");
   });
 
-  it("marks inter-session transcriptPrompt before submitting the visible prompt", async () => {
-    let seenPrompt: string | undefined;
+  it("keeps inter-session provenance hidden while submitting the visible prompt", async () => {
+    const seen: { prompt?: string; messages?: unknown[] } = {};
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -767,7 +767,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         },
       },
       sessionPrompt: async (session, prompt) => {
-        seenPrompt = prompt;
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
@@ -775,10 +776,17 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenPrompt).toMatch(/^\[Inter-session message\]/);
-    expect(seenPrompt).toContain("isUser=false");
-    expect(seenPrompt).toContain("visible ask");
-    expect(result.finalPromptText).toBe(seenPrompt);
+    expect(seen.prompt).toBe("visible ask");
+    expect(result.finalPromptText).toBe("visible ask");
+    const runtimeContext = findRecord(
+      requireRecords(seen.messages, "seen messages"),
+      (message) => message.customType === "openclaw.runtime-context",
+      "runtime context message",
+    );
+    expect(runtimeContext.content).toContain("[Inter-session message]");
+    expect(runtimeContext.content).toContain("isUser=false");
+    expect(runtimeContext.content).not.toContain("visible ask");
+    expect(runtimeContext.content).toContain("secret runtime context");
   });
 
   it("submits runtime-only context through system prompt without visible prompt", async () => {

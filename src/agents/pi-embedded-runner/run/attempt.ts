@@ -3591,11 +3591,7 @@ export async function runEmbeddedAttempt(
           effectivePrompt = annotateInterSessionPromptText(effectivePrompt, params.inputProvenance);
         }
         const effectiveTranscriptPrompt =
-          params.transcriptPrompt === undefined
-            ? undefined
-            : isRawModelRun
-              ? params.transcriptPrompt
-              : annotateInterSessionPromptText(params.transcriptPrompt, params.inputProvenance);
+          params.transcriptPrompt === undefined ? undefined : params.transcriptPrompt;
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
         const heartbeatSummary =
