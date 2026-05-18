@@ -443,6 +443,7 @@ export const buildTelegramMessageContext = async ({
     direction: "inbound",
   });
 
+  const forumOriginThreadSpec = threadSpec.scope === "forum" ? threadSpec : undefined;
   const bodyResult = await resolveTelegramInboundBody({
     cfg,
     primaryCtx,
@@ -455,6 +456,7 @@ export const buildTelegramMessageContext = async ({
     senderUsername,
     resolvedThreadId,
     replyThreadId,
+    ...(forumOriginThreadSpec ? { forumOriginThreadSpec } : {}),
     routeAgentId: route.agentId,
     sessionKey,
     effectiveGroupAllow,

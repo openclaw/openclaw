@@ -40,7 +40,11 @@ import {
   hasBotMention,
   resolveTelegramPrimaryMedia,
 } from "./bot/body-helpers.js";
-import { buildTelegramGroupPeerId } from "./bot/helpers.js";
+import {
+  buildTelegramGroupPeerId,
+  buildTelegramRoutingTarget,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
@@ -142,6 +146,7 @@ export async function resolveTelegramInboundBody(params: {
   sessionKey?: string;
   resolvedThreadId?: number;
   replyThreadId?: number;
+  forumOriginThreadSpec?: TelegramThreadSpec;
   routeAgentId?: string;
   effectiveGroupAllow: NormalizedAllowFrom;
   effectiveDmAllow: NormalizedAllowFrom;
@@ -166,6 +171,7 @@ export async function resolveTelegramInboundBody(params: {
     sessionKey,
     resolvedThreadId,
     replyThreadId,
+    forumOriginThreadSpec,
     routeAgentId,
     effectiveGroupAllow,
     effectiveDmAllow,
@@ -204,6 +210,9 @@ export async function resolveTelegramInboundBody(params: {
   });
   const commandAuthorized = commandGate.authorized;
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
+  const originatingTo = forumOriginThreadSpec
+    ? buildTelegramRoutingTarget(chatId, forumOriginThreadSpec)
+    : `telegram:${chatId}`;
 
   const primaryMedia = resolveTelegramPrimaryMedia(msg);
   let placeholder = primaryMedia?.placeholder ?? "";
@@ -262,7 +271,7 @@ export async function resolveTelegramInboundBody(params: {
         Provider: "telegram",
         Surface: "telegram",
         OriginatingChannel: "telegram",
-        OriginatingTo: `telegram:${chatId}`,
+        OriginatingTo: originatingTo,
         AccountId: accountId,
         MessageThreadId: replyThreadId,
         MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
@@ -386,12 +395,12 @@ export async function resolveTelegramInboundBody(params: {
             sessionKey,
             toInternalMessageReceivedContext({
               from: `telegram:group:${historyKey ?? chatId}`,
-              to: `telegram:${chatId}`,
+              to: originatingTo,
               content: rawBody,
               timestamp: msg.date ? msg.date * 1000 : undefined,
               channelId: "telegram",
               accountId,
-              conversationId: `telegram:${chatId}`,
+              conversationId: originatingTo,
               messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
               senderId: senderId || undefined,
               senderName: buildSenderName(msg),
@@ -400,7 +409,7 @@ export async function resolveTelegramInboundBody(params: {
               surface: "telegram",
               threadId: resolvedThreadId,
               originatingChannel: "telegram",
-              originatingTo: `telegram:${chatId}`,
+              originatingTo,
               isGroup: true,
               groupId: `telegram:${chatId}`,
             }),
