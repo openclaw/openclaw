@@ -347,10 +347,8 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
           voiceCaptureMode == VoiceCaptureMode.TalkMode && talkModeSpeaking -> "Talk speaking"
           voiceCaptureMode == VoiceCaptureMode.TalkMode && talkModeListening -> "Talk listening"
           voiceCaptureMode == VoiceCaptureMode.TalkMode -> "Talk on"
+          micEnabled || micIsSending || micCooldown -> micStatusText
           queueCount > 0 -> "$queueCount queued"
-          micIsSending -> "Sending"
-          micCooldown -> "Cooldown"
-          micEnabled -> "Listening"
           else -> "Mic off"
         }
       val stateColor =

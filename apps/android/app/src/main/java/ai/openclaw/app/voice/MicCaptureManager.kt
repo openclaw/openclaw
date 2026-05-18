@@ -50,9 +50,9 @@ class MicCaptureManager(
 ) {
   companion object {
     private const val tag = "MicCapture"
-    private const val speechMinSessionMs = 30_000L
-    private const val speechCompleteSilenceMs = 1_500L
-    private const val speechPossibleSilenceMs = 900L
+    private const val speechMinSessionMs = 30_000
+    private const val speechCompleteSilenceMs = 1_500
+    private const val speechPossibleSilenceMs = 900
     private const val transcriptIdleFlushMs = 1_600L
     private const val maxConversationEntries = 40
     private const val pendingRunTimeoutMs = 45_000L
@@ -625,8 +625,8 @@ class MicCaptureManager(
           when (error) {
             SpeechRecognizer.ERROR_AUDIO -> "Audio error"
             SpeechRecognizer.ERROR_CLIENT -> "Client error"
-            SpeechRecognizer.ERROR_NETWORK -> "Network error"
-            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
+            SpeechRecognizer.ERROR_NETWORK -> "Speech network error"
+            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Speech network timeout"
             SpeechRecognizer.ERROR_NO_MATCH -> "Listening"
             SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy"
             SpeechRecognizer.ERROR_SERVER -> "Server error"
@@ -638,8 +638,6 @@ class MicCaptureManager(
             SpeechRecognizer.ERROR_TOO_MANY_REQUESTS -> "Speech requests limited; retrying"
             else -> "Speech error ($error)"
           }
-        _statusText.value = status
-
         if (
           error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ||
           error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
@@ -654,9 +652,17 @@ class MicCaptureManager(
             SpeechRecognizer.ERROR_NO_MATCH,
             SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
             -> 1_200L
+            SpeechRecognizer.ERROR_AUDIO,
+            SpeechRecognizer.ERROR_CLIENT,
+            SpeechRecognizer.ERROR_NETWORK,
+            SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
+            SpeechRecognizer.ERROR_SERVER,
+            SpeechRecognizer.ERROR_SERVER_DISCONNECTED,
             SpeechRecognizer.ERROR_TOO_MANY_REQUESTS -> 2_500L
             else -> 600L
           }
+        _statusText.value = if (status == "Listening") status else "$status · retrying"
         scheduleRestart(delayMs = restartDelayMs)
       }
 
