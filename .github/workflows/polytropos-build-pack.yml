@@ -64,10 +64,11 @@ jobs:
         run: pnpm ui:build
       - name: Compute artifact tag
         run: |
-          ver=$(node -p "require("./package.json").version")
-          sha7=${GITHUB_SHA:0:7}
-          echo "RELEASE_TAG=v${ver}+sha.${sha7}" >> "$GITHUB_ENV"
-
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "RELEASE_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_TAG=" >> "$GITHUB_ENV"
+          fi
       - name: Pack
         id: pack
         run: |
