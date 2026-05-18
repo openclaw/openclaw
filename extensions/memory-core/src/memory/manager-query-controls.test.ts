@@ -72,6 +72,14 @@ describe("memory manager query reliability controls", () => {
     return manager;
   }
 
+  function queryCacheSize(memoryManager: MemoryIndexManager): number {
+    return (
+      memoryManager as unknown as {
+        queryResultCache: Map<string, unknown>;
+      }
+    ).queryResultCache.size;
+  }
+
   it("caches successful query results for the configured TTL", async () => {
     const memoryManager = await createManager({
       cacheTtlMs: 60000,
@@ -102,6 +110,41 @@ describe("memory manager query reliability controls", () => {
     await memoryManager.search("alpha project");
 
     expect(embedQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache provider failure fallback results", async () => {
+    const memoryManager = await createManager({
+      cacheTtlMs: 60000,
+      minScore: 0,
+      retry: { attempts: 1, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+    const embedQuery = getEmbedQueryMock();
+    embedQuery.mockReset();
+    embedQuery.mockRejectedValueOnce(new Error("fetch failed")).mockResolvedValue([0, 1, 0]);
+
+    const first = await memoryManager.search("alpha project");
+    const second = await memoryManager.search("alpha project");
+
+    if (memoryManager.status().fts?.available === true) {
+      expect(first.length).toBeGreaterThan(0);
+    } else {
+      expect(first).toEqual([]);
+    }
+    expect(second.length).toBeGreaterThan(0);
+    expect(embedQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it("prunes expired query cache entries before storing new results", async () => {
+    const memoryManager = await createManager({
+      cacheTtlMs: 1,
+      retry: { attempts: 1 },
+    });
+
+    await memoryManager.search("alpha project");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await memoryManager.search("reliability note");
+
+    expect(queryCacheSize(memoryManager)).toBe(1);
   });
 
   it("retries transient query embedding failures", async () => {

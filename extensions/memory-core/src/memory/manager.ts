@@ -83,6 +83,11 @@ type QueryResultCacheEntry = {
   expireAtMs: number;
 };
 
+type ProviderQueryResults = {
+  results: MemorySearchResult[];
+  cacheable: boolean;
+};
+
 type MemoryQueryHybridConfig = ResolvedMemorySearchConfig["query"]["hybrid"];
 
 const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
@@ -368,14 +373,24 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return this.cloneQueryResults(cached.results);
   }
 
+  private pruneExpiredQueryResults(nowMs = Date.now()): void {
+    for (const [cacheKey, cached] of this.queryResultCache) {
+      if (nowMs >= cached.expireAtMs) {
+        this.queryResultCache.delete(cacheKey);
+      }
+    }
+  }
+
   private setCachedQueryResults(cacheKey: string, results: MemorySearchResult[]): void {
     const ttlMs = this.settings.query.cacheTtlMs;
     if (ttlMs <= 0) {
       return;
     }
+    const nowMs = Date.now();
+    this.pruneExpiredQueryResults(nowMs);
     this.queryResultCache.set(cacheKey, {
       results: this.cloneQueryResults(results),
-      expireAtMs: Date.now() + ttlMs,
+      expireAtMs: nowMs + ttlMs,
     });
   }
 
@@ -484,7 +499,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return results;
     }
 
-    const results = await this.searchWithProvider({
+    const providerResults = await this.searchWithProvider({
       cleaned,
       candidates,
       sourceFilterList,
@@ -492,10 +507,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       minScore,
       hybrid,
     });
-    if (queryCacheKey) {
-      this.setCachedQueryResults(queryCacheKey, results);
+    if (queryCacheKey && providerResults.cacheable) {
+      this.setCachedQueryResults(queryCacheKey, providerResults.results);
     }
-    return results;
+    return providerResults.results;
   }
 
   private async searchKeywordOnly(params: {
@@ -601,10 +616,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     maxResults: number;
     minScore: number;
     hybrid: MemoryQueryHybridConfig;
-  }): Promise<MemorySearchResult[]> {
+  }): Promise<ProviderQueryResults> {
     const retry = this.settings.query.retry;
     try {
-      return await runMemoryOperationRetryLoop({
+      const results = await runMemoryOperationRetryLoop({
         run: async (attemptIndex) =>
           await this.searchWithProviderAttempt({
             ...params,
@@ -620,6 +635,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         attempts: retry.attempts,
         baseDelayMs: retry.minDelayMs,
       });
+      return { results, cacheable: true };
     } catch (err) {
       const message = formatErrorMessage(err);
       if (!isRetryableMemoryEmbeddingError(message)) {
@@ -629,12 +645,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         log.warn(
           `memory search: provider query failed after ${retry.attempts} attempt(s) and FTS is unavailable: ${message}`,
         );
-        return [];
+        return { results: [], cacheable: false };
       }
       log.warn(
         `memory search: provider query failed after ${retry.attempts} attempt(s); falling back to keyword search: ${message}`,
       );
-      return await this.searchKeywordOnly(params);
+      return { results: await this.searchKeywordOnly(params), cacheable: false };
     }
   }
 
