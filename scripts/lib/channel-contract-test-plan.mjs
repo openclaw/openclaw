@@ -30,19 +30,19 @@ const CONTRACT_FILE_WEIGHTS = new Map([
   ["outbound-payload.contract.test.ts", 18],
   ["plugins-core.catalog.paths.contract.test.ts", 28],
   ["plugins-core.catalog.entries.contract.test.ts", 16],
-  ["session-binding.registry-backed.contract.test.ts", 16],
+  ["session-binding.registry-backed.contract.test.ts", 40],
 ]);
 
 function resolveContractFileWeight(file) {
   const name = file.replaceAll("\\", "/").split("/").pop();
   if (name.startsWith("plugin.registry-backed-shard-")) {
-    return 40;
+    return 48;
   }
   if (name.startsWith("surfaces-only.registry-backed-shard-")) {
     return 40;
   }
   if (name.startsWith("directory.registry-backed-shard-")) {
-    return 24;
+    return 36;
   }
   if (name.startsWith("threading.registry-backed-shard-")) {
     return 18;

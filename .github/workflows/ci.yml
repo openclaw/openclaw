@@ -60,14 +60,11 @@ jobs:
       plugin_contracts_matrix: ${{ steps.manifest.outputs.plugin_contracts_matrix }}
       channel_contracts_matrix: ${{ steps.manifest.outputs.channel_contracts_matrix }}
       run_checks: ${{ steps.manifest.outputs.run_checks }}
-      checks_matrix: ${{ steps.manifest.outputs.checks_matrix }}
       run_checks_node_core_nondist: ${{ steps.manifest.outputs.run_checks_node_core_nondist }}
       checks_node_core_nondist_matrix: ${{ steps.manifest.outputs.checks_node_core_nondist_matrix }}
       run_checks_node_core_dist: ${{ steps.manifest.outputs.run_checks_node_core_dist }}
-      checks_node_core_dist_matrix: ${{ steps.manifest.outputs.checks_node_core_dist_matrix }}
       run_check: ${{ steps.manifest.outputs.run_check }}
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
-      run_build_smoke: ${{ steps.manifest.outputs.run_build_smoke }}
       run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
       run_checks_windows: ${{ steps.manifest.outputs.run_checks_windows }}
@@ -134,6 +131,7 @@ jobs:
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
+          OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
@@ -175,6 +173,7 @@ jobs:
           const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
+          const eventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
           const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
           const runNodeFastOnly =
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
@@ -199,7 +198,7 @@ jobs:
           const checksFastCoreTasks = [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
-              { check_name: "checks-fast-bundled", runtime: "node", task: "bundled" },
+              { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
             );
           } else {
             if (runNodeFastCiRouting) {
@@ -248,21 +247,12 @@ jobs:
               runNodeFull ? createChannelContractTestShards() : [],
             ),
             run_checks: runNodeFull,
-            checks_matrix: createMatrix(
-              runNodeFull
-                ? [
-                    { check_name: "checks-node-channels", runtime: "node", task: "channels" },
-                  ]
-                : [],
-            ),
             run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
             run_checks_node_core_dist: nodeTestDistShards.length > 0,
-            checks_node_core_dist_matrix: createMatrix(nodeTestDistShards),
             run_check: runNodeFull,
             run_check_additional: runNodeFull,
-            run_build_smoke: runNodeFull,
-            run_check_docs: docsChanged,
+            run_check_docs: docsChanged && eventName !== "push",
             run_control_ui_i18n: runControlUiI18n,
             run_skills_python_job: runSkillsPython,
             run_checks_windows: runWindows,
@@ -297,9 +287,9 @@ jobs:
           }
           EOF
 
-  # Run the fast security/SCM checks in parallel with scope detection so the
+  # Run dependency-free security checks in parallel with scope detection so the
   # main Node jobs do not have to wait for Python/pre-commit setup.
-  security-scm-fast:
+  security-fast:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
@@ -392,22 +382,6 @@ jobs:
           printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
           pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
 
-  security-dependency-audit:
-    permissions:
-      contents: read
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.target_ref || github.sha }}
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
-
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -416,35 +390,6 @@ jobs:
 
       - name: Audit production dependencies
         run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
-
-  security-fast:
-    permissions: {}
-    needs: [security-scm-fast, security-dependency-audit]
-    if: ${{ !cancelled() && always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 5
-    steps:
-      - name: Verify fast security jobs
-        env:
-          DEPENDENCY_AUDIT_RESULT: ${{ needs.security-dependency-audit.result }}
-          SCM_RESULT: ${{ needs.security-scm-fast.result }}
-        run: |
-          set -euo pipefail
-          failed=0
-
-          for result in \
-            "security-scm-fast=${SCM_RESULT}" \
-            "security-dependency-audit=${DEPENDENCY_AUDIT_RESULT}"
-          do
-            job="${result%%=*}"
-            status="${result#*=}"
-            if [ "$status" != "success" ]; then
-              echo "::error::${job} ended with ${status}"
-              failed=1
-            fi
-          done
-
-          exit "$failed"
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   # Keep this overlapping with the fast correctness lanes so green PRs get heavy
@@ -733,14 +678,9 @@ jobs:
         run: |
           set -euo pipefail
           case "$TASK" in
-            bundled)
+            bundled-protocol)
               pnpm test:bundled
-              ;;
-            contracts-channels)
-              pnpm test:contracts:channels
-              ;;
-            contracts-plugins)
-              pnpm test:contracts:plugins
+              pnpm protocol:check
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
@@ -922,71 +862,6 @@ jobs:
           writeFileSync(process.env.INCLUDE_FILE, JSON.stringify(includePatterns), "utf8");
           EOF
           OPENCLAW_VITEST_INCLUDE_FILE="$include_file" pnpm test:contracts:channels
-
-  checks-fast-protocol:
-    permissions:
-      contents: read
-    name: "checks-fast-protocol"
-    needs: [preflight]
-    if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM 30s git -C "$workdir" \
-              -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-
-      - name: Run protocol check
-        run: pnpm protocol:check
 
   checks-node-compat:
     permissions:
@@ -1188,8 +1063,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - check_name: check-preflight-guards
-            task: preflight-guards
+          - check_name: check-guards
+            task: guards
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-prod-types
             task: prod-types
@@ -1200,14 +1075,8 @@ jobs:
           - check_name: check-dependencies
             task: dependencies
             runner: blacksmith-8vcpu-ubuntu-2404
-          - check_name: check-policy-guards
-            task: policy-guards
-            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-test-types
             task: test-types
-            runner: blacksmith-4vcpu-ubuntu-2404
-          - check_name: check-strict-smoke
-            task: strict-smoke
             runner: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -1271,12 +1140,18 @@ jobs:
         run: |
           set -euo pipefail
           case "$TASK" in
-            preflight-guards)
+            guards)
               pnpm check:no-conflict-markers
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
               pnpm deps:patches:check
+              pnpm lint:webhook:no-low-level-body-read
+              pnpm lint:auth:no-pairing-store-group
+              pnpm lint:auth:pairing-account-scope
+              pnpm check:import-cycles
+              # build-artifacts already runs the tsdown/runtime build for the same Node-relevant changes.
+              pnpm build:plugin-sdk:strict-smoke
               ;;
             prod-types)
               pnpm tsgo:prod
@@ -1293,18 +1168,8 @@ jobs:
                 pnpm deadcode:ci
               fi
               ;;
-            policy-guards)
-              pnpm lint:webhook:no-low-level-body-read
-              pnpm lint:auth:no-pairing-store-group
-              pnpm lint:auth:pairing-account-scope
-              pnpm check:import-cycles
-              ;;
             test-types)
               pnpm check:test-types
-              ;;
-            strict-smoke)
-              # build-artifacts already runs the tsdown/runtime build for the same Node-relevant changes.
-              pnpm build:plugin-sdk:strict-smoke
               ;;
             *)
               echo "Unsupported check task: $TASK" >&2
@@ -1335,15 +1200,9 @@ jobs:
           - check_name: check-additional-boundaries-a
             group: boundaries
             boundary_shard: 1/4
-          - check_name: check-additional-boundaries-b
+          - check_name: check-additional-boundaries-bcd
             group: boundaries
-            boundary_shard: 2/4
-          - check_name: check-additional-boundaries-c
-            group: boundaries
-            boundary_shard: 3/4
-          - check_name: check-additional-boundaries-d
-            group: boundaries
-            boundary_shard: 4/4
+            boundary_shard: 2/4,3/4,4/4
           - check_name: check-additional-extension-channels
             group: extension-channels
           - check_name: check-additional-extension-bundled
