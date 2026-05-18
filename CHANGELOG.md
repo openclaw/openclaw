@@ -16,7 +16,9 @@ Docs: https://docs.openclaw.ai
 - Mac app: redesign Settings pages with consistent card layouts, cached navigation, cleaner permissions/voice/skills/cron/exec/debug panes, and steadier spacing around the native sidebar.
 - Skills: rename the repo-local Codex closeout review skill and helper to `autoreview` while preserving the Codex-first fallback behavior.
 - Skills: add a meme-maker skill for curated template search, local SVG/PNG rendering, Imgflip hosted rendering, and Know Your Meme provenance links.
+- Skills CLI: allow `openclaw skills install` and `openclaw skills update` to target shared managed skills with `--global`. (#74466) Thanks @Marvae.
 - Browser: surface pending and recently handled modal dialogs in snapshots, return `blockedByDialog` when an action opens a modal, and allow `browser dialog --dialog-id` to answer pending dialogs.
+- Browser CLI: add `openclaw browser evaluate --timeout-ms` so long-running page functions can extend both the evaluate action and request timeout budgets. (#83447) Thanks @eefreenyc.
 - Codex app-server: scope OpenClaw prompt guidance by runtime surface so native Codex keeps Codex-owned base/personality instructions while OpenClaw contributes only runtime context, delivery guidance, and explicitly scoped command hints. (#83454) Thanks @100yenadmin.
 - Agents/tools: shorten built-in tool descriptions and schema hints across media, messaging, sessions, cron, Gateway, web, image/PDF, TTS, nodes, and plan tools while preserving routing guardrails.
 - Skills: add node inspector debugging, fused diagram generation, and throwaway spike workflow skills.
@@ -36,19 +38,27 @@ Docs: https://docs.openclaw.ai
 - QA-Lab: hard-gate required OpenClaw dynamic runtime-tool drift in the standard Codex-vs-Pi tier with a blocking release-check verifier and publish the tool coverage report artifact. Fixes #80339; refs #80319. Thanks @100yenadmin.
 - QA-Lab: add the personal-agent approval-denial scenario so the benchmark pack verifies denied local reads stop cleanly without tool progress or fixture leaks. (#83150) Thanks @iFiras-Max1.
 - QA-Lab: extend the personal-agent benchmark pack with a local task followthrough scenario for proof-backed pending, blocked, and done status reporting. Thanks @iFiras-Max1.
+- QA-Lab: add a report-only dreaming shadow-trial scenario so candidate memory promotion can be evaluated without mutating `MEMORY.md`. Thanks @iFiras-Max1.
 - Gateway/performance: add `pnpm test:restart:gateway` benchmark tooling for repeated restart readiness, downtime, trace, and resource-slope evidence. (#83299) Thanks @samzong.
 - Android: switch Talk Mode to realtime Gateway relay voice sessions with streaming mic input, realtime audio playback, tool-result bridging, and on-screen transcripts. (#83130) Thanks @sliekens.
 - Gateway/config: expose config lookup reload metadata so tools can distinguish restart-required, hot-reloadable, and no-op fields before applying config edits. Fixes #81409. (#81612) Thanks @LLagoon3.
+- Telegram: add allowlisted native DM draft previews for transient tool progress while keeping final answers on the normal persistent delivery path. (#83622) Thanks @akrimm702.
 
 ### Fixes
 
 - Agents/subagents: keep collect-mode announce queues batching unresolved-origin items with compatible same-route messages and resume collection after a true cross-channel drain when a later compatible batch remains. Fixes #83577.
+- Browser: enforce current-tab URL allowlist checks for `/act` evaluate/batch actions and `/highlight` routes while leaving tab-management actions unblocked. (#78523)
+- CI: require real-behavior-proof verdict markers to come from the ClawSweeper GitHub App before accepting exact-head proof. (#83692)
 - Agents/image generation: allow distinct `image_generate` prompts to start separate session-backed background tasks while same-prompt retries still return the active task status. (#83614) Thanks @Elarwei001.
+- Control UI: stop the chat reading indicator from sticking after an assistant response finishes. (#83515) Thanks @njuboy11.
+- Skills: reject empty or whitespace-only skill names and descriptions during quick validation. (#27061)
 - Sessions: skip trailing custom transcript entries when checking tail assistant replies so embedded CLI gap-fill does not duplicate canonical assistant output. (#83635) Thanks @yaoyi1222.
 - Memory Wiki: keep `wiki_lint` tool output path-safe by reporting vault-internal lint reports as relative paths in tool text and details while preserving absolute report paths for CLI/file callers. (#83439) Thanks @LLagoon3.
 - Telegram: keep verbose tool progress visible without mirroring non-final progress into active session transcripts, preventing embedded provider replies from aborting mid-run. (#83631) Thanks @kurplunkin.
+- Telegram: log successful outbound text and media deliveries with account, chat, message, operation, thread, reply, silent, and chunk metadata while keeping message bodies out of logs. Fixes #83196. (#83247) Thanks @jrwrest.
 - Cron: link isolated scheduled task runs to their stable cron session so task status and cleanup can follow the backing agent run. (#83606) Thanks @jai.
 - CLI: enforce the documented Node.js 22.19 runtime floor in the source launcher.
+- Release stability: repair broad-gate regressions in requester-agent completion handoff, QA-Lab mock spawn attribution, Slack monitor test isolation, plugin uninstall peer fixtures, and Node-floor launcher contract coverage.
 - Agents/replies: persist queued follow-up user messages and assistant error stubs only once across model-fallback retries, preventing repeated provider rejections from corrupted same-role session transcripts. Fixes #83404. (#83417) Thanks @yetval.
 - Slack: persist delivered inbound message IDs and fail closed when same-channel thread replies lose their thread context, preventing delayed duplicate replies and accidental channel-root posts. Fixes #83521. Thanks @shannon0430.
 - Codex app-server: complete OpenClaw dynamic tool diagnostics at the request boundary so successful, failed, timed out, aborted, and blocked tool calls do not leave active tool state behind. Fixes #83474. Thanks @rozmiarD.
@@ -1644,6 +1654,7 @@ Docs: https://docs.openclaw.ai
 - Dependencies: bump transitive `basic-ftp` to 5.3.1 so the runtime lockfile no longer includes the vulnerable 5.3.0 build flagged by the production dependency audit. (#78637) Thanks @sallyom.
 - Hooks/cron: log returned `/hooks/agent` isolated-run errors and failed cron jobs with cron diagnostic summaries, so rejected `payload.model` values are visible instead of looking like accepted-but-missing runs. Fixes #78597. (#78655) Thanks @kevinslin.
 - Managed proxy/security: classify raw socket callsites and proxy runtime mutations in boundary checks so new direct egress or unmanaged proxy-state changes cannot land without explicit review. (#77126) Thanks @jesse-merhi.
+- Memory indexing: propagate memory directory creation failures immediately instead of reporting an unusable directory as ready. Thanks @he-yufeng.
 - Channels/iMessage: surface the silent group-allowlist drop at default log level by emitting a one-time `warn` per account at monitor startup when `channels.imessage.groupPolicy: "allowlist"` is set without a `channels.imessage.groups` block, plus a one-time `warn` per `chat_id` when the runtime gate drops a specific group, naming the exact `channels.imessage.groups[...]` key to add to allow it. Fixes #78749. (#79190) Thanks @omarshahine.
 - WhatsApp: stop Gateway-originated outbound echoes from advancing inbound activity in `openclaw channels status`, so outbound self-sends no longer look like handled inbound messages. Fixes #79056. (#79057) Thanks @ai-hpc and @bittoby.
 - Gateway/nodes: preserve the live node registry session and invoke ownership when an older same-node WebSocket closes after reconnecting. (#78351) Thanks @samzong.
@@ -5184,6 +5195,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/skills: require unique case-insensitive fallback matches in `openclaw skills info` so case-only collisions return not-found instead of showing guidance for the wrong skill. (#38713)
 - Agents/Ollama: forward the configured embedded-run timeout into the global undici stream timeout tuning so slow local Ollama runs no longer inherit the default stream cutoff instead of the operator-set run timeout. (#63175) Thanks @mindcraftreader and @vincentkoc.
 - Models/Codex: include `apiKey` in the codex provider catalog output so the Pi ModelRegistry validator no longer rejects the entry and silently drops all custom models from every provider in `models.json`. (#66180) Thanks @hoyyeva.
 - Tools/image+pdf: normalize configured provider/model refs before media-tool registry lookup so image and PDF tool runs stop rejecting valid Ollama vision models as unknown just because the tool path skipped the usual model-ref normalization step. (#59943) Thanks @yqli2420 and @vincentkoc.

@@ -7,6 +7,7 @@ import {
   PROOF_SUFFICIENT_LABEL,
   PROOF_SUPPLIED_LABEL,
   evaluateRealBehaviorProof,
+  hasClawSweeperExactHeadProof,
   labelsForRealBehaviorProof,
 } from "./real-behavior-proof-policy.mjs";
 
@@ -767,6 +768,15 @@ async function listPullRequestFiles(github, context, pullRequest) {
   });
 }
 
+async function listIssueComments(github, context, issueNumber) {
+  return github.paginate(github.rest.issues.listComments, {
+    owner: context.repo.owner,
+    repo: context.repo.repo,
+    issue_number: issueNumber,
+    per_page: 100,
+  });
+}
+
 async function addMissingLabels(github, context, core, issueNumber, labels, labelSet) {
   const missingLabels = labels.filter((label) => !labelSet.has(label));
   if (missingLabels.length === 0) {
@@ -784,7 +794,10 @@ async function addMissingLabels(github, context, core, issueNumber, labels, labe
   core.info(`Added candidate labels to #${issueNumber}: ${missingLabels.join(", ")}`);
 }
 
-function shouldRemoveProofSufficientLabel(context, proofEvaluation) {
+function shouldRemoveProofSufficientLabel(context, proofEvaluation, hasExactHeadClawSweeperProof) {
+  if (hasExactHeadClawSweeperProof) {
+    return false;
+  }
   if (proofEvaluation.status !== "passed") {
     return true;
   }
@@ -793,6 +806,12 @@ function shouldRemoveProofSufficientLabel(context, proofEvaluation) {
 
 async function applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet) {
   const files = await listPullRequestFiles(github, context, pullRequest);
+  const hasExactHeadClawSweeperProof =
+    labelSet.has(PROOF_SUFFICIENT_LABEL) &&
+    hasClawSweeperExactHeadProof({
+      pullRequest,
+      comments: await listIssueComments(github, context, pullRequest.number),
+    });
   const proofEvaluation = evaluateRealBehaviorProof({
     pullRequest: {
       ...pullRequest,
@@ -811,7 +830,7 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
   );
   if (
     labelSet.has(PROOF_SUFFICIENT_LABEL) &&
-    shouldRemoveProofSufficientLabel(context, proofEvaluation)
+    shouldRemoveProofSufficientLabel(context, proofEvaluation, hasExactHeadClawSweeperProof)
   ) {
     staleProofLabels.push(PROOF_SUFFICIENT_LABEL);
   }

@@ -916,7 +916,6 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
 }
 
 function extractToolErrorForNamedCall(params: {
-  allInputText: string;
   input: ResponsesInputItem[];
   name: string;
   toolJson: Record<string, unknown> | null;
@@ -928,8 +927,7 @@ function extractToolErrorForNamedCall(params: {
   const namedFunctionCall = params.input.some(
     (item) => item.type === "function_call" && item.name === params.name,
   );
-  const namedPromptReference = new RegExp(`\\b${params.name}\\b`, "i").test(params.allInputText);
-  if (namedFunctionCall || namedPromptReference) {
+  if (namedFunctionCall) {
     return error;
   }
   return undefined;
@@ -1015,7 +1013,6 @@ function buildAssistantText(
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
   const sessionsSpawnError = extractToolErrorForNamedCall({
-    allInputText,
     input,
     name: "sessions_spawn",
     toolJson,
@@ -1870,6 +1867,46 @@ async function buildResponsesPayload(
     }
     if (/release-handoff\.md/i.test(toolOutput)) {
       return buildAssistantEvents("RELEASE-AUDIT-COMPLETE");
+    }
+  }
+  if (/dreaming shadow trial report check/i.test(allInputText)) {
+    const shadowTrialEvidenceText = extractAllToolOutputText(input);
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(shadowTrialEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Report: dreaming-shadow-trial-report.md",
+          "Promotion action: report-only",
+          "DREAMING-SHADOW-TRIAL-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !shadowTrialEvidenceText ||
+      (!shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
+        !shadowTrialEvidenceText.includes("# Candidate evidence"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "DREAMING_SHADOW_TRIAL_BRIEF.md" });
+    }
+    if (
+      shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
+      shadowTrialEvidenceText.includes("# Candidate evidence")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "dreaming-shadow-trial-report.md",
+        content: [
+          "Candidate: The user prefers release reports that include exact verification commands and remaining risk.",
+          "Trial prompt: Prepare a release readiness reply for a local OpenClaw QA change.",
+          "Baseline outcome: mentions tests passed but omits the exact command and remaining risk.",
+          "Candidate outcome: includes the exact verification command and calls out the remaining review risk.",
+          "Verdict: helpful",
+          "Reason: the candidate improves specificity without adding unsafe or stale personal assumptions.",
+          "Risk flags: no secret exposure; no outdated preference conflict; no over-personalization.",
+          "Promotion action: report-only",
+        ].join("\n"),
+      });
+    }
+    if (shadowTrialEvidenceText.includes("# Dreaming shadow trial brief")) {
+      return buildToolCallEventsWithArgs("read", { path: "DREAMING_CANDIDATE_EVIDENCE.md" });
     }
   }
   if (/lobster invaders/i.test(prompt)) {

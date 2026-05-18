@@ -1604,7 +1604,8 @@ describe("qa mock openai server", () => {
         input: [
           {
             role: "system",
-            content: "## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
+            content:
+              "Available tools include sessions_spawn.\n## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
           },
           makeUserInput(
             "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
