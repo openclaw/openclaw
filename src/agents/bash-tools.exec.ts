@@ -1262,7 +1262,15 @@ function expandExecPathToken(token: string): string[] {
   if (assignmentIndex > 0 && assignmentIndex < trimmed.length - 1) {
     candidates.add(trimmed.slice(assignmentIndex + 1));
   }
+  for (const embedded of extractEmbeddedExecPathTokens(trimmed)) {
+    candidates.add(embedded);
+  }
   return Array.from(candidates);
+}
+
+function extractEmbeddedExecPathTokens(token: string): string[] {
+  const matches = token.match(/(?:~\/|\.{1,2}[\\/]|\/)[^\s"'`;&|<>)]*/gu) ?? [];
+  return matches.filter((match) => match !== "/" && match !== "./" && match !== "../");
 }
 
 function resolveExecPathCandidate(params: {
@@ -1296,6 +1304,16 @@ function collectExecPathCandidates(params: {
   env: NodeJS.ProcessEnv;
 }): string[] {
   const tokens: string[] = [];
+  const pushArgvTokens = (argv: string[]) => {
+    tokens.push(...argv);
+    for (const payload of buildCommandPayloadCandidates(argv)) {
+      tokens.push(payload);
+      const payloadArgv = splitShellArgs(payload.trim());
+      if (payloadArgv) {
+        tokens.push(...payloadArgv);
+      }
+    }
+  };
   const analysis = analyzeShellCommand({
     command: params.command,
     cwd: params.workdir,
@@ -1304,16 +1322,16 @@ function collectExecPathCandidates(params: {
   });
   if (analysis.ok) {
     for (const segment of analysis.segments) {
-      tokens.push(...segment.argv);
+      pushArgvTokens(segment.argv);
       const rawArgv = segment.raw ? splitShellArgs(segment.raw.trim()) : null;
       if (rawArgv) {
-        tokens.push(...rawArgv);
+        pushArgvTokens(rawArgv);
       }
     }
   } else {
     const argv = splitShellArgs(params.command);
     if (argv) {
-      tokens.push(...argv);
+      pushArgvTokens(argv);
     }
   }
 

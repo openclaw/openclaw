@@ -277,6 +277,40 @@ describe("exec host env validation", () => {
     ).rejects.toThrow(`Security Violation: exec command references denied path ${deniedFile}`);
   });
 
+  it("blocks denied paths inside shell wrapper payloads before host execution", async () => {
+    const deniedRoot = path.join(os.tmpdir(), "openclaw-denied-shell-secrets");
+    const deniedFile = path.join(deniedRoot, "provider.key");
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      deniedPaths: [path.join(deniedRoot, "**")],
+    });
+
+    await expect(
+      tool.execute("call-denied-shell-path", {
+        command: `bash -lc 'cat "${deniedFile}"'`,
+      }),
+    ).rejects.toThrow(`Security Violation: exec command references denied path ${deniedFile}`);
+  });
+
+  it("blocks denied paths inside shell command substitutions before host execution", async () => {
+    const deniedRoot = path.join(os.tmpdir(), "openclaw-denied-substitution-secrets");
+    const deniedFile = path.join(deniedRoot, "provider.key");
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      deniedPaths: [path.join(deniedRoot, "**")],
+    });
+
+    await expect(
+      tool.execute("call-denied-substitution-path", {
+        command: `bash -lc 'echo "$(cat "${deniedFile}")"'`,
+      }),
+    ).rejects.toThrow(`Security Violation: exec command references denied path ${deniedFile}`);
+  });
+
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
