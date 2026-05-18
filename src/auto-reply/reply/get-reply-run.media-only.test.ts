@@ -2275,6 +2275,26 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.suppressTyping).toBe(true);
   });
 
+  it("does not load the thinking catalog when thinking resolves off", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+    const resolveThinkingCatalog = vi.fn().mockResolvedValue([]);
+
+    await runPreparedReply(
+      baseParams({
+        resolvedThinkLevel: undefined,
+        modelState: {
+          resolveDefaultThinkingLevel,
+          resolveThinkingCatalog,
+        } as never,
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run.thinkLevel).toBe("off");
+    expect(resolveDefaultThinkingLevel).toHaveBeenCalledTimes(1);
+    expect(resolveThinkingCatalog).not.toHaveBeenCalled();
+  });
+
   it("routes queued system events into user prompt text, not system prompt context", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Model switched.");
 
