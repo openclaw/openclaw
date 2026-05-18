@@ -918,6 +918,34 @@ describe("handleFeishuMessage ACP routing", () => {
     );
     expect(dispatcherOptions.allowReasoningPreview).toBe(true);
   });
+
+  it("routes p2p final delivery to the sender open_id target", async () => {
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-p2p-target",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    const dispatcherOptions = mockCallArg<{
+      chatId?: string;
+      replyToMessageId?: string;
+      skipReplyToInMessages?: boolean;
+    }>(mockCreateFeishuReplyDispatcher, 0, 0);
+    expect(dispatcherOptions.chatId).toBe("user:ou_sender_1");
+    expect(dispatcherOptions.replyToMessageId).toBe("msg-p2p-target");
+    expect(dispatcherOptions.skipReplyToInMessages).toBe(true);
+  });
 });
 
 describe("handleFeishuMessage command authorization", () => {
@@ -3044,13 +3072,16 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    const dispatcherOptions = mockCallArg<{ replyToMessageId?: string; rootId?: string }>(
-      mockCreateFeishuReplyDispatcher,
-      0,
-      0,
-    );
+    const dispatcherOptions = mockCallArg<{
+      chatId?: string;
+      replyToMessageId?: string;
+      rootId?: string;
+      skipReplyToInMessages?: boolean;
+    }>(mockCreateFeishuReplyDispatcher, 0, 0);
+    expect(dispatcherOptions.chatId).toBe("chat:oc-group");
     expect(dispatcherOptions.replyToMessageId).toBe("om_root_topic");
     expect(dispatcherOptions.rootId).toBe("om_root_topic");
+    expect(dispatcherOptions.skipReplyToInMessages).toBe(false);
   });
 
   it("replies to triggering message in normal group even when root_id is present (#32980)", async () => {
