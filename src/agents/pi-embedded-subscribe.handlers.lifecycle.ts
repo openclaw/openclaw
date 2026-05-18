@@ -21,6 +21,10 @@ export {
   handleCompactionStart,
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 
+function isUnresolvedToolBoundaryStopReason(stopReason: string | undefined): boolean {
+  return stopReason === "tool_calls" || stopReason === "toolUse" || stopReason === "tool_use";
+}
+
 export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
   emitAgentEvent({
@@ -54,6 +58,11 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   });
   const replayInvalid =
     ctx.state.replayState.replayInvalid || incompleteTerminalAssistant ? true : undefined;
+  const unresolvedToolBoundary = isUnresolvedToolBoundaryStopReason(ctx.state.terminalStopReason);
+  const unresolvedToolBoundaryError = unresolvedToolBoundary
+    ? `Agent run ended at unresolved tool boundary (${ctx.state.terminalStopReason ?? "unknown"}).`
+    : undefined;
+  const clientToolCallsPending = ctx.state.clientToolCallsPending === true;
   // Tool-use terminal guard: when the last assistant message ended with a
   // tool-call stop reason, the turn is incomplete even when pre-tool text
   // exists — mark as abandoned so lifecycle consumers do not see a working
@@ -121,13 +130,13 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       ...(ctx.state.terminalStopReason ? { stopReason: ctx.state.terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
     };
-    if (isError) {
+    if (isError || (unresolvedToolBoundary && !clientToolCallsPending)) {
       emitAgentEvent({
         runId: ctx.params.runId,
         stream: "lifecycle",
         data: {
           phase: "error",
-          error: lifecycleErrorText ?? "LLM request failed.",
+          error: lifecycleErrorText ?? unresolvedToolBoundaryError ?? "LLM request failed.",
           ...terminalMeta,
           ...(livenessState ? { livenessState } : {}),
           ...(replayInvalid ? { replayInvalid } : {}),
@@ -138,7 +147,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
         stream: "lifecycle",
         data: {
           phase: "error",
-          error: lifecycleErrorText ?? "LLM request failed.",
+          error: lifecycleErrorText ?? unresolvedToolBoundaryError ?? "LLM request failed.",
           ...terminalMeta,
           ...(livenessState ? { livenessState } : {}),
           ...(replayInvalid ? { replayInvalid } : {}),

@@ -91,6 +91,7 @@ export type EmbeddedPiSubscribeState = {
   livenessState?: EmbeddedRunLivenessState;
   terminalStopReason?: string;
   yielded?: boolean;
+  clientToolCallsPending?: boolean;
   hadDeterministicSideEffect?: boolean;
 
   messagingToolSentTexts: string[];

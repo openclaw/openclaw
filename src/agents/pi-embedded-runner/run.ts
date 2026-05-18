@@ -3136,6 +3136,7 @@ export async function runEmbeddedPiAgent(
             livenessState,
             stopReason,
             yielded: attempt.yieldDetected === true,
+            clientToolCallsPending: attempt.clientToolCalls ? true : undefined,
           });
           return {
             payloads: terminalPayloads?.length ? terminalPayloads : undefined,
@@ -3166,6 +3167,7 @@ export async function runEmbeddedPiAgent(
                 name: call.name,
                 arguments: JSON.stringify(call.params),
               })),
+              ...(attempt.clientToolCalls ? { clientToolCallsPending: true } : {}),
               executionTrace: {
                 winnerProvider: reportedModelRef.provider,
                 winnerModel: reportedModelRef.model,

@@ -1295,20 +1295,48 @@ async function agentCommandInternal(
         }
         if (!lifecycleEnded) {
           const stopReason = result.meta.stopReason;
-          if (stopReason && stopReason !== "end_turn") {
-            console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
+          const pendingToolCalls = Array.isArray(result.meta.pendingToolCalls)
+            ? result.meta.pendingToolCalls
+            : [];
+          const clientToolCallsPending = result.meta.clientToolCallsPending === true;
+          const endedWithUnresolvedToolBoundary =
+            !clientToolCallsPending &&
+            (pendingToolCalls.length > 0 ||
+              stopReason === "tool_calls" ||
+              stopReason === "toolUse" ||
+              stopReason === "tool_use");
+          if (endedWithUnresolvedToolBoundary) {
+            const error =
+              pendingToolCalls.length > 0
+                ? `Agent run ended before ${pendingToolCalls.length} pending tool call(s) were resolved.`
+                : `Agent run ended at unresolved tool boundary (${stopReason ?? "unknown"}).`;
+            console.error(`[agent] run ${runId} ${error}`);
+            emitAgentEvent({
+              runId,
+              stream: "lifecycle",
+              data: {
+                phase: "error",
+                startedAt,
+                endedAt: Date.now(),
+                error,
+              },
+            });
+          } else {
+            if (stopReason && stopReason !== "end_turn") {
+              console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
+            }
+            emitAgentEvent({
+              runId,
+              stream: "lifecycle",
+              data: {
+                phase: "end",
+                startedAt,
+                endedAt: Date.now(),
+                aborted: result.meta.aborted ?? false,
+                stopReason,
+              },
+            });
           }
-          emitAgentEvent({
-            runId,
-            stream: "lifecycle",
-            data: {
-              phase: "end",
-              startedAt,
-              endedAt: Date.now(),
-              aborted: result.meta.aborted ?? false,
-              stopReason,
-            },
-          });
         }
         break;
       } catch (err) {

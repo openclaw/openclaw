@@ -150,5 +150,6 @@ export type EmbeddedRunAttemptResult = {
     livenessState?: EmbeddedRunLivenessState;
     stopReason?: string;
     yielded?: boolean;
+    clientToolCallsPending?: boolean;
   }) => void;
 };
