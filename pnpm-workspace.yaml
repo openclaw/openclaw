@@ -35,7 +35,6 @@ nodeLinker: hoisted
 resolutionMode: highest
 blockExoticSubdeps: false
 allowBuilds:
-  allowBuilds:
   "@google/genai": true
   "@matrix-org/matrix-sdk-crypto-nodejs": true
   "@tloncorp/tlon-skill": true
@@ -45,3 +44,4 @@ allowBuilds:
   node-llama-cpp: true
   protobufjs: true
   sharp: true
+  tree-sitter-bash: true

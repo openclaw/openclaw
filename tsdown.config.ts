@@ -117,12 +117,6 @@ const bundledPluginFile = (pluginId: string, relativePath: string) =>
   `${bundledPluginRoot(pluginId)}/${relativePath}`;
 
 function buildCoreDistEntries(): Record<string, string> {
-  const minimalCore = process.env.OPENCLAW_BUILD_CORE_MINIMAL === "1";
-  if (minimalCore) {
-    return {
-      minimal: "src/build/minimal-entry.ts",
-    };
-  }
   return {
     index: "src/index.ts",
     entry: "src/entry.ts",
@@ -149,83 +143,41 @@ function buildCoreDistEntries(): Record<string, string> {
 const coreDistEntries = buildCoreDistEntries();
 
 function buildUnifiedDistEntries(): Record<string, string> {
-  const includeBundledPluginEntries = process.env.OPENCLAW_BUILD_BUNDLED_PLUGINS !== "0";
-  const includeDockerE2eHarnessEntries = process.env.OPENCLAW_BUILD_DOCKER_E2E !== "0";
-  const coreOnlyMode = process.env.OPENCLAW_BUILD_CORE_ONLY === "1";
-
   return {
     ...coreDistEntries,
-    ...(includeDockerE2eHarnessEntries ? dockerE2eHarnessEntries : {}),
-    ...(coreOnlyMode
-      ? {}
-      : {
-          // Internal compat artifact for the root-alias.cjs lazy loader.
-          "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
-          // Private bundled Codex helper for app-server native subagent task mirroring.
-          "plugin-sdk/codex-native-task-runtime": "src/plugin-sdk/codex-native-task-runtime.ts",
-          // Private bundled Codex helper for app-server user MCP config projection.
-          "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
-          ...Object.fromEntries(
-            Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
-              `plugin-sdk/${entry}`,
-              source,
-            ]),
-          ),
-          ...(shouldBuildPrivateQaEntries
-            ? {
-                "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
-                "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
-              }
-            : {}),
-          ...(includeBundledPluginEntries
-            ? listBundledPluginEntrySources(rootBundledPluginBuildEntries)
-            : {}),
-          ...bundledHookEntries,
-        }),
+    ...dockerE2eHarnessEntries,
+    // Internal compat artifact for the root-alias.cjs lazy loader.
+    "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
+    // Private bundled Codex helper for app-server native subagent task mirroring.
+    "plugin-sdk/codex-native-task-runtime": "src/plugin-sdk/codex-native-task-runtime.ts",
+    // Private bundled Codex helper for app-server user MCP config projection.
+    "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
+    ...Object.fromEntries(
+      Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
+        `plugin-sdk/${entry}`,
+        source,
+      ]),
+    ),
+    ...(shouldBuildPrivateQaEntries
+      ? {
+          "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
+          "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
+        }
+      : {}),
+    ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
+    ...bundledHookEntries,
   };
 }
 
-const splitCoreOnly = process.env.OPENCLAW_BUILD_CORE_ONLY === "1" && process.env.OPENCLAW_BUILD_CORE_SPLIT === "1";
-const unifiedEntries = buildUnifiedDistEntries();
-function splitEntries(entries: Record<string, string>) {
-  const keys = Object.keys(entries).sort((a, b) => a.localeCompare(b));
-  const mid = Math.ceil(keys.length / 2);
-  const pick = (ks: string[]) => Object.fromEntries(ks.map((k) => [k, entries[k]!]));
-  return [pick(keys.slice(0, mid)), pick(keys.slice(mid))] as const;
-}
-const configs = splitCoreOnly
-  ? (() => {
-      const [entriesA, entriesB] = splitEntries(unifiedEntries);
-      return [
-        nodeBuildConfig({
-          clean: true,
-          entry: entriesA,
-          deps: {
-            alwaysBundle: shouldAlwaysBundleDependency,
-            neverBundle: shouldNeverBundleDependency,
-          },
-        }),
-        nodeBuildConfig({
-          clean: false,
-          entry: entriesB,
-          deps: {
-            alwaysBundle: shouldAlwaysBundleDependency,
-            neverBundle: shouldNeverBundleDependency,
-          },
-        }),
-      ];
-    })()
-  : [
-      nodeBuildConfig({
-        // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
-        // and bundled hooks in one graph so runtime singletons are emitted once.
-        clean: true,
-        entry: unifiedEntries,
-        deps: {
-          alwaysBundle: shouldAlwaysBundleDependency,
-          neverBundle: shouldNeverBundleDependency,
-        },
-      }),
-    ];
-
-export default defineConfig(configs);
+export default defineConfig([
+  nodeBuildConfig({
+    // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
+    // and bundled hooks in one graph so runtime singletons are emitted once.
+    clean: true,
+    entry: buildUnifiedDistEntries(),
+    deps: {
+      alwaysBundle: shouldAlwaysBundleDependency,
+      neverBundle: shouldNeverBundleDependency,
+    },
+  }),
+]);
