@@ -39,6 +39,7 @@ export {
 export { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 export { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 export { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./browser/paths.js";
+export { getMediaDir } from "openclaw/plugin-sdk/media-runtime";
 export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 export { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./browser/proxy-files.js";
 export {

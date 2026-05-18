@@ -199,10 +199,16 @@ vi.mock("./browser-tool.runtime.js", () => {
     persistBrowserProxyFiles: vi.fn(async () => new Map<string, string>()),
     readStringParam,
     readStringValue,
-    resolveExistingPathsWithinRoot: vi.fn(async ({ requestedPaths }) => ({
-      ok: true,
-      paths: requestedPaths,
-    })),
+    getMediaDir: vi.fn(() => "/tmp/openclaw-media"),
+    resolveExistingPathsWithinRoot: vi.fn(
+      async ({ rootDir, requestedPaths }: { rootDir: string; requestedPaths: string[] }) => {
+        const allWithin = requestedPaths.every((p) => p.startsWith(rootDir));
+        if (!allWithin) {
+          return { ok: false as const, error: `Invalid path: must stay within ${rootDir}` };
+        }
+        return { ok: true as const, paths: requestedPaths };
+      },
+    ),
     resolveNodeIdFromList: (nodes: Array<Record<string, unknown>>, requested: string) => {
       const node = nodes.find(
         (entry) => entry.nodeId === requested || entry.displayName === requested,
@@ -1377,5 +1383,52 @@ describe("browser tool act stale target recovery", () => {
     ).rejects.toThrow(/Run action=tabs profile="user"/i);
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("browser tool upload", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("accepts paths under the default uploads directory", async () => {
+    const tool = createBrowserTool();
+    const filePath = "/tmp/openclaw-browser-uploads/file.pdf";
+    await tool.execute?.("call-1", {
+      action: "upload",
+      ref: "input-1",
+      paths: [filePath],
+    });
+
+    const opts = lastMockCallArg<{ paths?: string[] }>(
+      browserActionsMocks.browserArmFileChooser,
+      1,
+    );
+    expect(opts.paths).toEqual([filePath]);
+  });
+
+  it("accepts paths under the managed inbound media directory", async () => {
+    const tool = createBrowserTool();
+    const filePath = "/tmp/openclaw-media/inbound/abc123.pdf";
+    await tool.execute?.("call-1", {
+      action: "upload",
+      ref: "input-1",
+      paths: [filePath],
+    });
+
+    const opts = lastMockCallArg<{ paths?: string[] }>(
+      browserActionsMocks.browserArmFileChooser,
+      1,
+    );
+    expect(opts.paths).toEqual([filePath]);
+  });
+
+  it("rejects paths outside both allowed roots", async () => {
+    const tool = createBrowserTool();
+    await expect(
+      tool.execute?.("call-1", {
+        action: "upload",
+        ref: "input-1",
+        paths: ["/etc/passwd"],
+      }),
+    ).rejects.toThrow(/uploads directory.*inbound media directory/);
   });
 });

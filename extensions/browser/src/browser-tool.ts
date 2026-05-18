@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import {
   executeActAction,
   executeConsoleAction,
@@ -28,6 +29,7 @@ import {
   callGatewayTool,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
+  getMediaDir,
   imageResultFromFile,
   jsonResult,
   listNodes,
@@ -823,15 +825,34 @@ export function createBrowserTool(opts?: {
           if (paths.length === 0) {
             throw new Error("paths required");
           }
-          const uploadPathsResult = await resolveExistingPathsWithinRoot({
-            rootDir: DEFAULT_UPLOAD_DIR,
-            requestedPaths: paths,
-            scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-          });
-          if (!uploadPathsResult.ok) {
-            throw new Error(uploadPathsResult.error);
+          // Accept paths from either the browser uploads dir or the managed
+          // inbound media dir (e.g. WebChat attachments saved by saveMediaBuffer).
+          // Both are OpenClaw-managed, path-safe roots.
+          const inboundMediaDir = path.join(getMediaDir(), "inbound");
+          const uploadsScope = `uploads directory (${DEFAULT_UPLOAD_DIR})`;
+          const inboundScope = `inbound media directory (${inboundMediaDir})`;
+          const normalizedPaths: string[] = [];
+          for (const requested of paths) {
+            const uploadsResult = await resolveExistingPathsWithinRoot({
+              rootDir: DEFAULT_UPLOAD_DIR,
+              requestedPaths: [requested],
+              scopeLabel: uploadsScope,
+            });
+            if (uploadsResult.ok) {
+              normalizedPaths.push(...uploadsResult.paths);
+              continue;
+            }
+            const inboundResult = await resolveExistingPathsWithinRoot({
+              rootDir: inboundMediaDir,
+              requestedPaths: [requested],
+              scopeLabel: inboundScope,
+            });
+            if (inboundResult.ok) {
+              normalizedPaths.push(...inboundResult.paths);
+              continue;
+            }
+            throw new Error(`Invalid path: must stay within ${uploadsScope} or ${inboundScope}`);
           }
-          const normalizedPaths = uploadPathsResult.paths;
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");
