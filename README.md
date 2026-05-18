@@ -1,4 +1,6 @@
 # 🦞 OpenClaw — Personal AI Assistant
+![Uploading 支付宝.jpg…]()
+![Uploading 微信.png…]()
 
 <p align="center">
     <picture>
