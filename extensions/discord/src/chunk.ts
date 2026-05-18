@@ -1,6 +1,6 @@
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 
-type ChunkDiscordTextOpts = {
+export type ChunkDiscordTextOpts = {
   /** Max characters per Discord message. Default: 2000. */
   maxChars?: number;
   /**
@@ -22,6 +22,7 @@ type OpenFence = {
 const DEFAULT_MAX_CHARS = 2000;
 const DEFAULT_MAX_LINES = 17;
 const FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+const BLOCKQUOTE_RE = /^(\s*(?:>\s*)+)/;
 const CJK_PUNCTUATION_BREAK_AFTER_RE = /[、。，．！？；：）］｝〉》」』】〕〗〙]/u;
 
 function countLines(text: string) {
@@ -44,6 +45,10 @@ function parseFenceLine(line: string): OpenFence | null {
     markerLen: marker.length,
     openLine: line,
   };
+}
+
+function getBlockquotePrefix(line: string): string | null {
+  return BLOCKQUOTE_RE.exec(line)?.[1] ?? null;
 }
 
 function closeFenceLine(openFence: OpenFence) {
@@ -88,7 +93,6 @@ function clampToCodePointBoundary(text: string, index: number) {
 function findWhitespaceBreak(window: string) {
   for (let i = window.length - 1; i >= 0; i--) {
     if (/\s/.test(window[i])) {
-      // Return the separator index so whitespace stays with the next segment.
       return i;
     }
   }
@@ -101,7 +105,6 @@ function findCjkPunctuationBreak(window: string) {
     const start = isLowSurrogate(code) && end > 1 ? end - 2 : end - 1;
     const char = window.slice(start, end);
     if (start > 0 && CJK_PUNCTUATION_BREAK_AFTER_RE.test(char)) {
-      // Return the exclusive end so CJK punctuation stays with the current segment.
       return end;
     }
     end = start;
@@ -136,7 +139,6 @@ function splitLongLine(
       breakIdx = clampToCodePointBoundary(remaining, limit);
     }
     out.push(remaining.slice(0, breakIdx));
-    // Keep the separator for the next segment so words don't get glued together.
     remaining = remaining.slice(breakIdx);
   }
   if (remaining.length) {
@@ -145,10 +147,6 @@ function splitLongLine(
   return out;
 }
 
-/**
- * Chunks outbound Discord text by both character count and (soft) line count,
- * while keeping fenced code blocks balanced across chunks.
- */
 export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
   const maxChars = Math.max(1, Math.floor(opts.maxChars ?? DEFAULT_MAX_CHARS));
   const maxLines = Math.max(1, Math.floor(opts.maxLines ?? DEFAULT_MAX_LINES));
@@ -169,8 +167,9 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
   let current = "";
   let currentLines = 0;
   let openFence: OpenFence | null = null;
+  let openBlockquote: string | null = null;
 
-  const flush = () => {
+  const flush = (options?: { preserveBlockquote?: boolean }) => {
     if (!current) {
       return;
     }
@@ -183,12 +182,18 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     if (openFence) {
       current = openFence.openLine;
       currentLines = 1;
+      return;
+    }
+    if (options?.preserveBlockquote && openBlockquote) {
+      current = openBlockquote;
+      currentLines = 1;
     }
   };
 
   for (const originalLine of lines) {
     const fenceInfo = parseFenceLine(originalLine);
     const wasInsideFence = openFence !== null;
+    const blockquotePrefix = getBlockquotePrefix(originalLine);
     let nextOpenFence: OpenFence | null = openFence;
     if (fenceInfo) {
       if (!openFence) {
@@ -201,6 +206,8 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
       }
     }
 
+    openBlockquote = blockquotePrefix;
+
     const reserveChars = nextOpenFence ? closeFenceLine(nextOpenFence).length + 1 : 0;
     const reserveLines = nextOpenFence ? 1 : 0;
     const effectiveMaxChars = maxChars - reserveChars;
@@ -208,7 +215,8 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     const charLimit = effectiveMaxChars > 0 ? effectiveMaxChars : maxChars;
     const lineLimit = effectiveMaxLines > 0 ? effectiveMaxLines : maxLines;
     const prefixLen = current.length > 0 ? current.length + 1 : 0;
-    const segmentLimit = Math.max(1, charLimit - prefixLen);
+    const continuationPrefixLen = !nextOpenFence && blockquotePrefix ? blockquotePrefix.length : 0;
+    const segmentLimit = Math.max(1, charLimit - prefixLen - continuationPrefixLen);
     const segments = splitLongLine(originalLine, segmentLimit, {
       preserveWhitespace: wasInsideFence,
     });
@@ -225,7 +233,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
       const wouldExceedLines = nextLines > lineLimit;
 
       if ((wouldExceedChars || wouldExceedLines) && current.length > 0) {
-        flush();
+        flush({ preserveBlockquote: isLineContinuation });
       }
 
       if (current.length > 0) {
@@ -240,6 +248,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     }
 
     openFence = nextOpenFence;
+    openBlockquote = blockquotePrefix;
   }
 
   if (current.length) {
@@ -277,10 +286,6 @@ export function chunkDiscordTextWithMode(
   return chunks;
 }
 
-// Keep italics intact for reasoning payloads that are wrapped once with `_…_`.
-// When Discord chunking splits the message, we close italics at the end of
-// each chunk and reopen at the start of the next so every chunk renders
-// consistently.
 function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
   if (chunks.length <= 1) {
     return chunks;
@@ -297,7 +302,6 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
     const isLast = i === adjusted.length - 1;
     const current = adjusted[i];
 
-    // Ensure current chunk closes italics so Discord renders it italicized.
     const needsClosing = !current.trimEnd().endsWith("_");
     if (needsClosing) {
       adjusted[i] = `${current}_`;
@@ -307,7 +311,6 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
       break;
     }
 
-    // Re-open italics on the next chunk if needed.
     const next = adjusted[i + 1];
     const leadingWhitespaceLen = next.length - next.trimStart().length;
     const leadingWhitespace = next.slice(0, leadingWhitespaceLen);

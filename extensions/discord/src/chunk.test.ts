@@ -154,4 +154,22 @@ describe("chunkDiscordText", () => {
     expect(second.startsWith("_")).toBe(true);
     expect(second).toContain("  11. indented line");
   });
+
+  it("preserves blockquote context across character-split chunks", () => {
+    const text = `> ${"quoted text ".repeat(40)}`.trimEnd();
+
+    const chunks = chunkDiscordText(text, { maxChars: 120, maxLines: 10 });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.startsWith("> "))).toBe(true);
+    expect(chunks.every((chunk) => chunk.length <= 120)).toBe(true);
+  });
+
+  it("does not add an empty blockquote line on line-limit splits", () => {
+    const text = ["> first quoted line", "> second quoted line", "> third quoted line"].join("\n");
+
+    const chunks = chunkDiscordText(text, { maxChars: 2000, maxLines: 2 });
+
+    expect(chunks).toEqual(["> first quoted line\n> second quoted line", "> third quoted line"]);
+  });
 });
