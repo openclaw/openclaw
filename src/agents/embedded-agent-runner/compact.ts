@@ -489,6 +489,10 @@ async function compactEmbeddedAgentSessionDirectOnce(
     workspaceDir: resolvedWorkspace,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
   });
+  const earlyAgentIds = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+  });
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     agentId: earlyAgentIds.sessionAgentId,

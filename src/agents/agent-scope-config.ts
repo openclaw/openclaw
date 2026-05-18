@@ -11,6 +11,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 export type ResolvedAgentConfig = {
   name?: string;
@@ -104,6 +105,26 @@ function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | u
   return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function deepMergeDefined(base: unknown, override: unknown): unknown {
+  if (!isPlainObject(base) || !isPlainObject(override)) {
+    return override === undefined ? base : override;
+  }
+
+  const result: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    if (BLOCKED_MERGE_KEYS.has(key) || value === undefined) {
+      continue;
+    }
+    const existing = result[key];
+    result[key] = key in result ? deepMergeDefined(existing, value) : value;
+  }
+  return result;
+}
+
 export function resolveAgentConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -124,11 +145,17 @@ export function resolveAgentConfig(
         : undefined,
     compaction:
       typeof entry.compaction === "object" && entry.compaction
-        ? { ...agentDefaults?.compaction, ...entry.compaction }
+        ? (deepMergeDefined(
+            agentDefaults?.compaction,
+            entry.compaction,
+          ) as AgentEntry["compaction"])
         : agentDefaults?.compaction,
     contextPruning:
       typeof entry.contextPruning === "object" && entry.contextPruning
-        ? { ...agentDefaults?.contextPruning, ...entry.contextPruning }
+        ? (deepMergeDefined(
+            agentDefaults?.contextPruning,
+            entry.contextPruning,
+          ) as AgentEntry["contextPruning"])
         : agentDefaults?.contextPruning,
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
