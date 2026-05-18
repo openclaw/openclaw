@@ -71,9 +71,10 @@ Docs: https://docs.openclaw.ai
 - Core/plugins: harden clawpatch-reported edge cases across gateway auth cleanup, Claude session id paths, plugin activation policy, apply-patch hunk handling, diagnostic redaction, and plugin metadata validation.
 - UI: show reasoning choices as plain labels instead of leaking internal override wording in session and chat pickers.
 - Mac app: avoid repeating the Configuration heading inside channel quick settings.
+- Mac app: keep the Settings sidebar always visible and remove the redundant titlebar hide/show control.
 - Mac app: prefer explicit private/Tailscale/LAN Gateway endpoints over SSH tunnels, preserve legacy loopback tunnel configs, persist transport choices, and show captured SSH stderr when tunneling really fails.
 - Gateway/sessions: keep ACP/acpx and runtime child sessions visible in configured-only session lists when their owner or parent session belongs to a configured agent.
-- Mac app: keep app-level menu commands and Dashboard failure states reachable when the remote Gateway is disconnected, and keep the Settings sidebar toggle in the leading titlebar area.
+- Mac app: keep app-level menu commands and Dashboard failure states reachable when the remote Gateway is disconnected.
 - Mac app: allow longer Gateway and Context errors to wrap in the menu instead of truncating the useful failure detail.
 - Mac app: tighten remote Gateway fields in Settings so the Connection pane keeps readable labels and full action button text.
 - Mac app: keep custom Settings card rows left-aligned and full-width so Discovery and status sections no longer appear centered or detached.
