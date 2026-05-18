@@ -50,6 +50,53 @@ describe("lintMemoryWikiVault", () => {
     expect(result.issues.map((issue) => issue.code)).not.toContain("broken-wikilink");
   });
 
+  it("accepts Obsidian wikilinks that target page titles or aliases", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-title-links-",
+      config: {
+        vault: { renderMode: "obsidian" },
+      },
+    });
+    await Promise.all(
+      ["sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "video-length-research-for-educational-marketing-videos.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.video-length-research",
+          title: "Video Length Research for Educational Marketing Videos",
+          aliases: ["Educational Marketing Video Length Research"],
+        },
+        body: "# Video Length Research for Educational Marketing Videos\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "super-ai-coach-video-script-skill-implementation-plan.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.super-ai-coach-video-script-skill-implementation-plan",
+          title: "Super AI Coach Video Script Skill Implementation Plan",
+        },
+        body:
+          "# Super AI Coach Video Script Skill Implementation Plan\n\n" +
+          "[[Video Length Research for Educational Marketing Videos]]\n\n" +
+          "[[Video Length Research for Educational Marketing Videos#Findings]]\n\n" +
+          "[[Educational Marketing Video Length Research]]\n\n" +
+          "[[./sources/video-length-research-for-educational-marketing-videos.md#Summary]]\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(result.issues.some((issue) => issue.code === "broken-wikilink")).toBe(false);
+  });
+
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-",
@@ -155,5 +202,50 @@ describe("lintMemoryWikiVault", () => {
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Errors");
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Contradictions");
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Open Questions");
+  });
+
+  it("flags path-based links whose case does not match the file on disk", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-path-case-",
+      config: {
+        vault: { renderMode: "native" },
+      },
+    });
+    await Promise.all(
+      ["entities", "sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha Source",
+        },
+        body: "# Alpha Source\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha",
+          title: "Alpha",
+          sourceIds: ["source.alpha"],
+        },
+        body: "# Alpha\n\n[Alpha Source](sources/Alpha.md)\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    const brokenLinks = result.issues.filter((issue) => issue.code === "broken-wikilink");
+    expect(brokenLinks.map((issue) => issue.message)).toEqual(
+      expect.arrayContaining([expect.stringContaining("sources/Alpha.md")]),
+    );
   });
 });
