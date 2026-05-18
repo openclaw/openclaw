@@ -232,10 +232,11 @@ class TalkModeManagerTest {
   }
 
   @Suppress("UNCHECKED_CAST")
-  private fun playbackGeneration(manager: TalkModeManager): AtomicLong = readPrivateField(manager, "playbackGeneration") as AtomicLong
+  private fun playbackGeneration(manager: TalkModeManager) =
+    readPrivateField(manager, "playbackGeneration") as AtomicLong
 
   @Suppress("UNCHECKED_CAST")
-  private fun realtimeToolRuns(manager: TalkModeManager): MutableMap<String, RealtimeToolRun> =
+  private fun realtimeToolRuns(manager: TalkModeManager) =
     readPrivateField(manager, "realtimeToolRuns") as MutableMap<String, RealtimeToolRun>
 
   private fun setPrivateField(
@@ -282,9 +283,7 @@ class TalkModeManagerTest {
     return frame
   }
 
-  private fun pcm16Frame(amplitude: Int): ByteArray {
-    return pcm16Frame(amplitude.toShort())
-  }
+  private fun pcm16Frame(amplitude: Int): ByteArray = pcm16Frame(amplitude.toShort())
 
   private fun chatFinalPayload(
     runId: String,
