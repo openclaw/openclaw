@@ -50,10 +50,12 @@ export function resolveFollowupQueueStatePath(stateDir: string = resolveStateDir
  * Minimal recovery descriptor for FollowupRun["run"]. Persisted fields are the
  * per-message identity, routing, and intent inputs that cannot be recovered any
  * other way after a restart. Bulky or secret-bearing runtime state (config,
- * skillsSnapshot, extraSystemPrompt[Static], authProfileId[Source],
- * inputProvenance) is intentionally excluded — the dispatcher reassigns
+ * skillsSnapshot, extraSystemPrompt[Static], inputProvenance) is intentionally
+ * excluded — the dispatcher reassigns
  * `run.config` via resolveQueuedReplyExecutionConfig on the next turn, and the
  * other fields are either rebuilt from current runtime state or left undefined.
+ * authProfileId[Source] is persisted because it is a non-secret selector needed
+ * to keep restored queued turns on the same auth profile they were queued with.
  *
  * Use Pick (allowlist), not Omit, so new fields added to FollowupRun["run"]
  * default to NOT persisted until explicitly opted in.
@@ -83,6 +85,8 @@ type PersistedRunFields = Pick<
   | "hasSessionModelOverride"
   | "modelOverrideSource"
   | "hasAutoFallbackProvenance"
+  | "authProfileId"
+  | "authProfileIdSource"
   | "thinkLevel"
   | "verboseLevel"
   | "reasoningLevel"
@@ -161,6 +165,8 @@ const PERSISTED_RUN_FIELDS = [
   "hasSessionModelOverride",
   "modelOverrideSource",
   "hasAutoFallbackProvenance",
+  "authProfileId",
+  "authProfileIdSource",
   "thinkLevel",
   "verboseLevel",
   "reasoningLevel",

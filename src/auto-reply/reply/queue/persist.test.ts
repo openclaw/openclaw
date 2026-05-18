@@ -208,7 +208,7 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(fs.statSync(statePath).mode & 0o777).toBe(0o600);
   });
 
-  it("does not persist config, skillsSnapshot, extraSystemPrompt, authProfileId, or inputProvenance", () => {
+  it("strips secret-bearing runtime fields but persists auth profile selectors", () => {
     const run = makeRun();
     run.config = {
       defaults: { agent: { provider: "anthropic-secret", model: "claude-secret" } },
@@ -233,7 +233,6 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
       "sensitive",
       "do-not-leak",
       "static-do-not-leak",
-      "profile-secret",
       '"inputProvenance"',
     ]) {
       expect(raw).not.toContain(needle);
@@ -244,12 +243,33 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(persistedRun.skillsSnapshot).toBeUndefined();
     expect(persistedRun.extraSystemPrompt).toBeUndefined();
     expect(persistedRun.extraSystemPromptStatic).toBeUndefined();
-    expect(persistedRun.authProfileId).toBeUndefined();
-    expect(persistedRun.authProfileIdSource).toBeUndefined();
+    expect(persistedRun.authProfileId).toBe("profile-secret");
+    expect(persistedRun.authProfileIdSource).toBe("user");
     expect(persistedRun.inputProvenance).toBeUndefined();
     const persistedLastRun = parsed.entries[0][1].lastRun;
     expect(persistedLastRun.config).toBeUndefined();
     expect(persistedLastRun.skillsSnapshot).toBeUndefined();
+    expect(persistedLastRun.authProfileId).toBe("profile-secret");
+    expect(persistedLastRun.authProfileIdSource).toBe("user");
+  });
+
+  it("round-trips auth profile selection through restore", () => {
+    const run = makeRun();
+    run.authProfileId = "anthropic:work";
+    run.authProfileIdSource = "user";
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push({ ...makeFollowupRun("auth-bound"), run });
+    queue.lastRun = run;
+    persistFollowupQueues();
+
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    restoreFollowupQueues();
+
+    const restored = FOLLOWUP_QUEUES.get(TEST_KEY);
+    expect(restored?.items[0].run.authProfileId).toBe("anthropic:work");
+    expect(restored?.items[0].run.authProfileIdSource).toBe("user");
+    expect(restored?.lastRun?.authProfileId).toBe("anthropic:work");
+    expect(restored?.lastRun?.authProfileIdSource).toBe("user");
   });
 
   it("rehydrates run.config from the live runtime snapshot on restore", () => {
@@ -276,7 +296,6 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     // they're actually needed.
     expect(rerun.skillsSnapshot).toBeUndefined();
     expect(rerun.extraSystemPrompt).toBeUndefined();
-    expect(rerun.authProfileId).toBeUndefined();
     expect(rerun.inputProvenance).toBeUndefined();
     // Identity / routing / paths / per-message intent survive.
     expect(rerun.agentId).toBe("main");

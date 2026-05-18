@@ -67,6 +67,13 @@ export function kickFollowupDrainIfIdle(key: string): void {
   scheduleFollowupDrain(key, cb);
 }
 
+function persistDrainAcknowledgement(): void {
+  // A successful followup run means the message has been handed to the
+  // dispatcher. Persist the shortened queue immediately so a crash before the
+  // drain finally block cannot replay an already-delivered prompt.
+  persistFollowupQueues();
+}
+
 type OriginRoutingMetadata = Pick<
   FollowupRun,
   "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
@@ -448,12 +455,14 @@ export function scheduleFollowupDrain(
                 });
               });
               clearFollowupQueueSummaryState(queue);
+              persistDrainAcknowledgement();
               continue;
             }
             summaryOnly.restore?.();
             break;
           }
           if (collectDrainResult === "drained") {
+            persistDrainAcknowledgement();
             continue;
           }
 
@@ -520,6 +529,7 @@ export function scheduleFollowupDrain(
               clearFollowupQueueSummaryState(queue);
               pendingSummary = undefined;
             }
+            persistDrainAcknowledgement();
           }
           continue;
         }
@@ -557,12 +567,14 @@ export function scheduleFollowupDrain(
             break;
           }
           clearFollowupQueueSummaryState(queue);
+          persistDrainAcknowledgement();
           continue;
         }
 
         if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup))) {
           break;
         }
+        persistDrainAcknowledgement();
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
