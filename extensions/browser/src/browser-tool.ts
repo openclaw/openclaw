@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import {
   executeActAction,
   executeConsoleAction,
@@ -46,6 +47,9 @@ import {
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
+import { CONFIG_DIR } from "./utils.js";
+
+const DEFAULT_INBOUND_MEDIA_DIR = path.join(CONFIG_DIR, "media", "inbound");
 
 const browserToolDeps = {
   browserAct,
@@ -830,10 +834,18 @@ export function createBrowserTool(opts?: {
             requestedPaths: paths,
             scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
           });
-          if (!uploadPathsResult.ok) {
-            throw new Error(uploadPathsResult.error);
+          const inboundPathsResult = uploadPathsResult.ok
+            ? undefined
+            : await resolveExistingPathsWithinRoot({
+                rootDir: DEFAULT_INBOUND_MEDIA_DIR,
+                requestedPaths: paths,
+                scopeLabel: `inbound media directory (${DEFAULT_INBOUND_MEDIA_DIR})`,
+              });
+          const resolvedResult = uploadPathsResult.ok ? uploadPathsResult : inboundPathsResult!;
+          if (!resolvedResult.ok) {
+            throw new Error(resolvedResult.error);
           }
-          const normalizedPaths = uploadPathsResult.paths;
+          const normalizedPaths = resolvedResult.paths;
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");
