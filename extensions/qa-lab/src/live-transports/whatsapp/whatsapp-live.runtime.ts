@@ -440,6 +440,13 @@ function buildWhatsAppQaConfig(
       ...baseCfg.tools,
       profile: "messaging",
       deny: mergeDeniedModelTools(baseCfg.tools?.deny),
+      web: {
+        ...baseCfg.tools?.web,
+        search: {
+          ...baseCfg.tools?.web?.search,
+          enabled: false,
+        },
+      },
     },
     plugins: {
       ...baseCfg.plugins,

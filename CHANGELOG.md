@@ -749,7 +749,7 @@ Docs: https://docs.openclaw.ai
 - Codex app-server: preserve network access for sandboxed Codex code-mode turns when the OpenClaw sandbox allows outbound egress. Fixes #83347. Thanks @YusukeIt0.
 - Codex app-server: honor writable Docker bind mounts for sandboxed workspace-write turns while disabling native Code Mode when container-path aliases or read-only bind shadows cannot be represented safely host-side. Fixes #83737. (#83849) Thanks @joshavant.
 - QA-Lab: shorten WhatsApp Convex credential leases in live CI and wait long enough for the reduced TTL so cancelled RTT probes recover the credential pool instead of blocking the next run for the default 20-minute lease.
-- QA-Lab: deny session-management and web-search tools in WhatsApp live exact-marker runs so RTT probes measure reply delivery without unused model tool payload.
+- QA-Lab: disable web search and deny session-management tools in WhatsApp live exact-marker runs so RTT probes measure reply delivery without unused model tool payload.
 - Gateway/plugins: preload provider owner plugins for configured PI agent models during gateway startup so first live replies avoid lazy provider-runtime activation.
 - QA-Lab: run WhatsApp live QA through the Pi runtime with messaging-only tools, skip agent workspace bootstrap, force thinking and reasoning off for exact-marker canaries, and emit/preserve model transport timings, per-scenario phase timings, RSS samples, complete gateway heap checkpoints, and redacted gateway traces so channel RTT artifacts isolate send, wait, startup, readiness, model, and retained-memory cost.
 - WhatsApp: skip eager participating-group metadata hydration for DM-only sessions so reconnects avoid unnecessary startup memory and RTT pressure.

@@ -149,7 +149,11 @@ describe("WhatsApp QA live runtime", () => {
           },
           list: [{ id: "qa", tools: { profile: "coding" } }],
         },
-        tools: { profile: "coding", deny: ["exec"] },
+        tools: {
+          profile: "coding",
+          deny: ["exec"],
+          web: { fetch: { enabled: true }, search: { enabled: true, maxResults: 4 } },
+        },
       },
       {
         allowFrom: ["+15550000001"],
@@ -165,6 +169,9 @@ describe("WhatsApp QA live runtime", () => {
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.params?.thinking).toBe("off");
     expect(cfg.tools?.profile).toBe("messaging");
     expect(cfg.tools?.deny).toEqual(["exec", "session_status", "sessions_*", "web_search"]);
+    expect(cfg.tools?.web?.fetch?.enabled).toBe(true);
+    expect(cfg.tools?.web?.search?.enabled).toBe(false);
+    expect(cfg.tools?.web?.search?.maxResults).toBe(4);
     expect(cfg.agents?.list?.[0]?.tools?.profile).toBe("messaging");
     expect(cfg.agents?.list?.[0]?.tools?.deny).toEqual([
       "session_status",
