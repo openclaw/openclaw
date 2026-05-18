@@ -161,7 +161,11 @@ describe("agentCommand runtime config", () => {
       expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledWith({
         config: loadedConfig,
         commandName: "agent",
-        targetIds: new Set(["models.providers.*.apiKey"]),
+        targetIds: new Set([
+          "models.providers.*.apiKey",
+          "mcp.servers.*.env.*",
+          "mcp.servers.*.headers.*",
+        ]),
         runtime,
       });
       const targetIds = requireResolveCommandConfigParams().targetIds;
