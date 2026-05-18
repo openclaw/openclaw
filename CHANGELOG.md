@@ -53,6 +53,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: preserve forum-topic origin targets in inbound, audio-preflight, and skipped-message hook contexts so follow-up delivery stays bound to the originating topic. Fixes #83302. Thanks @M00zyx.
 - Telegram: retry HTTP 421 Misdirected Request send failures on a fresh fallback transport so transient edge-node routing errors no longer drop outbound replies. Fixes #48892. (#48908) Thanks @MarsDoge.
 - Telegram: fail topic sends closed when Telegram reports `message thread not found` instead of retrying without `message_thread_id` into the base chat. Refs #83302.
+- Config/subagents: remove ignored agent-model `timeoutMs` keys, keep subagent model config to primary/fallback selection, and clean shipped stale config through doctor. Fixes #83291. Thanks @giodl73-repo.
 - Mac app: align the Sessions settings pane with the standard Settings page gutter and row spacing.
 - OpenAI/Codex: stop rejecting available `openai-codex` GPT-5.1, GPT-5.2, and GPT-5.3 model refs during config validation, while keeping removed Spark aliases suppressed. Fixes #83303.
 - Plugins/xAI: complete OAuth-backed xAI login and sidecar auth fixes, including guarded loopback callback CORS handling, video generation polling/defaults, and native-host User-Agent attribution. (#83322) Thanks @Jaaneek.
