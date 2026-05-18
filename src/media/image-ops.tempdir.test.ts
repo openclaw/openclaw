@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { getImageMetadata } from "./image-ops.js";
+import { resizeToJpeg } from "./image-ops.js";
+
+const PNG_1X1_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 describe("image-ops temp dir", () => {
   let createdTempDir = "";
@@ -26,7 +29,11 @@ describe("image-ops temp dir", () => {
     async () => {
       const secureRoot = await fs.realpath(resolvePreferredOpenClawTmpDir());
 
-      await getImageMetadata(Buffer.from("image"));
+      await resizeToJpeg({
+        buffer: Buffer.from(PNG_1X1_BASE64, "base64"),
+        maxSide: 1,
+        quality: 80,
+      });
 
       expect(fs.mkdtemp).toHaveBeenCalledTimes(1);
       const [mkdtempCall] = vi.mocked(fs.mkdtemp).mock.calls;

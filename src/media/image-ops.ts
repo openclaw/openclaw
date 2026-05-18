@@ -61,9 +61,7 @@ type ExternalImageTool =
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
 export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
 const IMAGE_PROCESS_TIMEOUT_MS = 20_000;
-const IMAGE_METADATA_TIMEOUT_MS = 10_000;
 const IMAGE_TOOL_MAX_BUFFER = 1024 * 1024;
-const IMAGE_METADATA_MAX_BUFFER = 512 * 1024;
 const MEDIA_UNDERSTANDING_CORE_PLUGIN_ID = "media-understanding-core";
 const MEDIA_UNDERSTANDING_CORE_IMAGE_OPS_ARTIFACT = "image-ops.js";
 
@@ -207,6 +205,7 @@ function isImageBackendUnavailableCause(error: unknown): boolean {
     detail.includes('cannot find package "sharp"') ||
     detail.includes("cannot find module 'sharp'") ||
     detail.includes('cannot find module "sharp"') ||
+    detail.includes("support for this compression format has not been built in") ||
     detail.includes("is not available") ||
     detail.includes("command not found") ||
     detail.includes("enoent")
@@ -223,11 +222,10 @@ async function runWithImageBackends<T>(
       return await fn(backend);
     } catch (error) {
       errors.push(error);
+      if (!isImageBackendUnavailableCause(error)) {
+        throw error;
+      }
     }
-  }
-  const processingError = errors.find((error) => !isImageBackendUnavailableCause(error));
-  if (processingError) {
-    throw processingError;
   }
   throw createImageProcessorUnavailableError(operation, errors);
 }
@@ -768,18 +766,6 @@ async function runPowerShellImageScript(
   });
 }
 
-const WINDOWS_NATIVE_METADATA_SCRIPT = `
-param([string]$InputPath)
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Drawing
-$image = [System.Drawing.Image]::FromFile($InputPath)
-try {
-  [Console]::Out.WriteLine(('{0} {1}' -f $image.Width, $image.Height))
-} finally {
-  $image.Dispose()
-}
-`;
-
 const WINDOWS_NATIVE_RESIZE_SCRIPT = `
 param(
   [string]$InputPath,
@@ -858,22 +844,6 @@ try {
 }
 `;
 
-async function windowsNativeMetadataFromBuffer(buffer: Buffer): Promise<ImageMetadata | null> {
-  return await withImageTemp(async (workspace) => {
-    const input = await workspace.write("in.img", buffer);
-    const { stdout } = await runPowerShellImageScript(
-      "metadata.ps1",
-      WINDOWS_NATIVE_METADATA_SCRIPT,
-      [input],
-    );
-    const [widthRaw, heightRaw] = stdout.trim().split(/\s+/, 2);
-    return buildImageMetadata(
-      Number.parseInt(widthRaw ?? "", 10),
-      Number.parseInt(heightRaw ?? "", 10),
-    );
-  });
-}
-
 async function windowsNativeResize(
   params: ResizeToJpegParams | ResizeToPngParams,
   format: "jpeg" | "png",
@@ -902,51 +872,6 @@ async function runConvertTool(
     timeoutMs: IMAGE_PROCESS_TIMEOUT_MS,
     maxBuffer: IMAGE_TOOL_MAX_BUFFER,
   });
-}
-
-async function metadataFromIdentifyTool(
-  tool: Extract<ExternalImageTool, { flavor: "magick" | "convert" | "gm" }>,
-  buffer: Buffer,
-): Promise<ImageMetadata | null> {
-  return await withImageTemp(async (workspace) => {
-    const input = await workspace.write("in.img", buffer);
-    const command =
-      tool.flavor === "convert"
-        ? resolveSystemBin("identify", { trust: "standard" })
-        : tool.command;
-    if (!command) {
-      return null;
-    }
-    const args = tool.flavor === "magick" ? ["identify"] : tool.flavor === "gm" ? ["identify"] : [];
-    const { stdout } = await runExec(command, [...args, "-format", "%w %h", input], {
-      timeoutMs: IMAGE_METADATA_TIMEOUT_MS,
-      maxBuffer: IMAGE_METADATA_MAX_BUFFER,
-    });
-    const [widthRaw, heightRaw] = stdout.trim().split(/\s+/, 2);
-    const width = Number.parseInt(widthRaw ?? "", 10);
-    const height = Number.parseInt(heightRaw ?? "", 10);
-    return buildImageMetadata(width, height);
-  });
-}
-
-async function externalMetadataFromBuffer(
-  backend: Exclude<ImageBackend, "sharp">,
-  buffer: Buffer,
-): Promise<ImageMetadata | null> {
-  const tool = resolveImageTool(backend);
-  if (!tool) {
-    throw new Error(`Image backend ${backend} is not available`);
-  }
-  if (tool.flavor === "sips") {
-    return await sipsMetadataFromBuffer(buffer);
-  }
-  if (tool.flavor === "powershell") {
-    return await windowsNativeMetadataFromBuffer(buffer);
-  }
-  if (tool.flavor === "ffmpeg") {
-    return null;
-  }
-  return await metadataFromIdentifyTool(tool, buffer);
 }
 
 function buildResizeGeometry(maxSide: number, withoutEnlargement?: boolean): string {
@@ -1114,34 +1039,6 @@ async function externalResizeToPng(
   });
 }
 
-async function sipsMetadataFromBuffer(buffer: Buffer): Promise<ImageMetadata | null> {
-  return await withImageTemp(async (workspace) => {
-    const input = await workspace.write("in.img", buffer);
-    const { stdout } = await runExec(
-      "/usr/bin/sips",
-      ["-g", "pixelWidth", "-g", "pixelHeight", input],
-      {
-        timeoutMs: IMAGE_METADATA_TIMEOUT_MS,
-        maxBuffer: IMAGE_METADATA_MAX_BUFFER,
-      },
-    );
-    const w = stdout.match(/pixelWidth:\s*([0-9]+)/);
-    const h = stdout.match(/pixelHeight:\s*([0-9]+)/);
-    if (!w?.[1] || !h?.[1]) {
-      return null;
-    }
-    const width = Number.parseInt(w[1], 10);
-    const height = Number.parseInt(h[1], 10);
-    if (!Number.isFinite(width) || !Number.isFinite(height)) {
-      return null;
-    }
-    if (width <= 0 || height <= 0) {
-      return null;
-    }
-    return { width, height };
-  });
-}
-
 async function sipsResizeToJpeg(params: {
   buffer: Buffer;
   maxSide: number;
@@ -1193,13 +1090,15 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
     }
   }
 
-  return await runWithImageBackends("metadata", async (backend) => {
-    const meta =
-      backend === "sharp"
-        ? await (await loadMediaAttachmentImageOps()).getImageMetadata(buffer)
-        : await externalMetadataFromBuffer(backend, buffer);
+  const preference = getImageBackendPreference();
+  if (preference !== "auto" && preference !== "sharp") {
+    return null;
+  }
+
+  return await (async () => {
+    const meta = await (await loadMediaAttachmentImageOps()).getImageMetadata(buffer);
     return meta ? validateImagePixelLimit(meta) : null;
-  }).catch(() => null);
+  })().catch(() => null);
 }
 
 /**
