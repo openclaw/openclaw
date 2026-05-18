@@ -1,9 +1,11 @@
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
+import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { collectConfiguredModelRefs } from "../config/model-refs.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
   resolveMemoryDreamingConfig,
@@ -32,6 +34,7 @@ import {
   normalizePluginsConfigWithRegistry,
 } from "./plugin-registry-contributions.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+import { resolveOwningPluginIdsForModelRefs } from "./providers.js";
 
 export type GatewayStartupPluginPlan = {
   channelPluginIds: readonly string[];
@@ -231,6 +234,83 @@ function manifestOwnsConfiguredWebSearchProvider(params: {
     const normalized = normalizeOptionalLowercaseString(providerId);
     return normalized ? params.configuredWebSearchProviderIds.has(normalized) : false;
   });
+}
+
+function resolveConfiguredModelProviderOwnerPluginIds(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  manifestRegistry: PluginManifestRegistry;
+}): ReadonlySet<string> {
+  const modelRefs = collectConfiguredModelRefs(params.config)
+    .filter((ref) => configuredModelMayUsePiTransport(params.config, ref.value))
+    .map((ref) => ref.value);
+  if (modelRefs.length === 0) {
+    return new Set();
+  }
+  return new Set(
+    resolveOwningPluginIdsForModelRefs({
+      models: modelRefs,
+      config: params.config,
+      env: params.env,
+      manifestRegistry: params.manifestRegistry,
+    }),
+  );
+}
+
+function configuredModelMayUsePiTransport(config: OpenClawConfig, modelRef: string): boolean {
+  const slashIndex = modelRef.indexOf("/");
+  if (slashIndex <= 0 || slashIndex >= modelRef.length - 1) {
+    return true;
+  }
+  const policy = resolveAgentHarnessPolicy({
+    provider: modelRef.slice(0, slashIndex),
+    modelId: modelRef.slice(slashIndex + 1),
+    config,
+  });
+  return policy.runtime === "pi";
+}
+
+function canStartConfiguredModelProviderPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  configuredModelProviderOwnerPluginIds: ReadonlySet<string>;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  platform?: NodeJS.Platform;
+}): boolean {
+  if (!params.configuredModelProviderOwnerPluginIds.has(params.plugin.pluginId)) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return (
+    activationState.enabled &&
+    (params.plugin.origin === "bundled" || activationState.explicitlyEnabled)
+  );
 }
 
 function listModelProviderRefs(value: unknown): string[] {
@@ -760,6 +840,11 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
   const configuredWebSearchProviderIds =
     collectConfiguredWebSearchProviderIds(activationSourceConfig);
+  const configuredModelProviderOwnerPluginIds = resolveConfiguredModelProviderOwnerPluginIds({
+    config: activationSourceConfig,
+    env: params.env,
+    manifestRegistry: params.manifestRegistry,
+  });
   const configuredGenerationProviderIds =
     collectConfiguredGenerationProviderIds(activationSourceConfig);
   const normalizePluginId = createPluginRegistryIdNormalizer(params.index, {
@@ -838,6 +923,18 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           pluginsConfig,
           activationSource,
           configuredWebSearchProviderIds,
+          platform: params.platform,
+        })
+      ) {
+        return true;
+      }
+      if (
+        canStartConfiguredModelProviderPlugin({
+          plugin,
+          configuredModelProviderOwnerPluginIds,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
           platform: params.platform,
         })
       ) {
