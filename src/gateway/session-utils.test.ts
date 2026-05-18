@@ -208,7 +208,7 @@ describe("gateway session utils", () => {
     const rawOnly = listSessionsFromStore({
       cfg,
       storePath: "",
-      store: { [rawKey]: store[rawKey]! },
+      store: { [rawKey]: store[rawKey] },
       opts: {},
     });
     expect(rawOnly.sessions.map((session) => session.key)).toEqual([rawKey]);
