@@ -60,7 +60,8 @@
       "serpapi_finance",
       "serpapi_yahoo",
       "serpapi_autocomplete",
-      "serpapi_weather"
+      "serpapi_weather",
+      "serpapi_walmart"
     ]
   },
   "configSchema": {
