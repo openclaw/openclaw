@@ -1730,7 +1730,14 @@ async function runConfigOperations(params: {
     explicitSetPaths.push(operation.setPath);
     if (operation.mutation === "merge" || (options.merge && operation.mutation !== "replace")) {
       mergeAtPath(next, operation.setPath, operation.value, {
-        numericObjectKeys: params.successMode === "patch",
+        // #83331: numeric-string keys must be preserved as object keys.
+        // Record-typed config paths (e.g. channels.discord.guilds.<snowflake>,
+        // channels.slack.workspaces.<team-id>) use numeric-looking string keys
+        // that previously got coerced to array indices in `set` mode, making
+        // those paths unreachable via the CLI. Use object-key semantics for
+        // both set and patch; array-index targets must use bracket syntax
+        // (`agents.list[0]`) which goes through parseBracketPathSegment.
+        numericObjectKeys: true,
       });
     } else {
       assertNonDestructiveReplacement({
@@ -1740,7 +1747,8 @@ async function runConfigOperations(params: {
         allowReplace: options.replace || operation.mutation === "replace",
       });
       setAtPath(next, operation.setPath, operation.value, {
-        numericObjectKeys: params.successMode === "patch",
+        // #83331: same as the mergeAtPath call above — object-key semantics.
+        numericObjectKeys: true,
       });
     }
   }

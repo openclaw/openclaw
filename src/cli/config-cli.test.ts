@@ -401,6 +401,36 @@ describe("config cli", () => {
       expect(written.agents).not.toHaveProperty("defaults");
     });
 
+    it("keeps numeric-string config set path keys as object keys (#83331)", async () => {
+      // channels.discord.guilds is a Record<snowflake, GuildConfig>. The set
+      // mode previously coerced the all-digit snowflake into an array index,
+      // producing `guilds: []` and tripping schema validation with
+      // "must be object". Preserve Record-typed object semantics.
+      const resolved: OpenClawConfig = {
+        channels: {
+          discord: { enabled: true },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "channels.discord.guilds.1495587801394184362.requireMention",
+        "true",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig() as {
+        channels?: { discord?: { guilds?: unknown } };
+      };
+      expect(written.channels?.discord?.guilds).toEqual({
+        "1495587801394184362": { requireMention: true },
+      });
+      // Guard against the pre-fix array shape sneaking back in.
+      expect(Array.isArray(written.channels?.discord?.guilds)).toBe(false);
+    });
+
     it("marks set paths explicit so default-equal writes persist", async () => {
       const resolved: OpenClawConfig = {
         channels: {
