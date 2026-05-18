@@ -1345,6 +1345,7 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     const effectivePayload = deduped;
+                    const telegramButtons = resolvePayloadTelegramInlineButtons(effectivePayload);
 
                     // Preview-streamed final dedup (channel-layer replacement
                     // for the previous core-layer suppression introduced by
@@ -1371,6 +1372,26 @@ export const dispatchTelegramMessage = async ({
                           answerLane.lastPartialText,
                         );
                         if (isPreviewStreamedText(effectivePayload.text, previewDedupeText)) {
+                          if (telegramButtons) {
+                            try {
+                              await (telegramDeps.editMessageTelegram ?? editMessageTelegram)(
+                                chatId,
+                                previewMessageId,
+                                effectivePayload.text ?? answerLane.lastPartialText,
+                                {
+                                  api: bot.api,
+                                  cfg,
+                                  accountId: route.accountId,
+                                  linkPreview: telegramCfg.linkPreview,
+                                  buttons: telegramButtons,
+                                },
+                              );
+                            } catch (err) {
+                              logVerbose(
+                                `telegram: preview-finalized button edit failed: ${formatErrorMessage(err)}`,
+                              );
+                            }
+                          }
                           answerLane.finalized = true;
                           deliveryState.markDelivered();
                           emitPreviewFinalizedHook({
@@ -1399,7 +1420,6 @@ export const dispatchTelegramMessage = async ({
                       queuedFinal = true;
                       return;
                     }
-                    const telegramButtons = resolvePayloadTelegramInlineButtons(effectivePayload);
                     const split = splitTextIntoLaneSegments(
                       { text: effectivePayload.text },
                       payload.isReasoning,

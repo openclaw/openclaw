@@ -565,6 +565,31 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
   });
 
+  it("attaches buttons before deduping a preview-streamed final", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    const buttons = [[{ text: "OK", callback_data: "ok" }]];
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Choose" });
+        await dispatcherOptions.deliver(
+          { text: "Choose", channelData: { telegram: { buttons } } },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Choose");
+    expect(mockCallArg(editMessageTelegram)).toBe(123);
+    expect(mockCallArg(editMessageTelegram, 0, 1)).toBe(2001);
+    expect(mockCallArg(editMessageTelegram, 0, 2)).toBe("Choose");
+    expectRecordFields(mockCallArg(editMessageTelegram, 0, 3), { buttons });
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+  });
+
   it("dedups each per-block final against a multi-block preview", async () => {
     // Preview streams "First block\n\nSecond block" once; the reply pipeline
     // then emits two separate final payloads ("First block" and "Second block")
