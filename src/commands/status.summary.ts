@@ -218,6 +218,7 @@ export async function getStatusSummary(
     : [];
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
+  const now = Date.now();
   const { tasks, taskAudit, taskAuditRetainedLost } = includeTaskSummary
     ? await (async () => {
         const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
@@ -226,7 +227,6 @@ export async function getStatusSummary(
         });
         const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
         const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings();
-        const now = Date.now();
         const taskAudit = summarizeActionableTaskAuditFindings(taskAuditFindings, { now });
         const taskAuditRetainedLost = summarizeRetainedLostTaskAuditFindings(taskAuditFindings, {
           now,
