@@ -1254,6 +1254,7 @@
                 "pages": [
                   "tools/apply-patch",
                   "tools/btw",
+                  "tools/checkpoints",
                   "tools/code-execution",
                   "tools/diffs",
                   "tools/elevated",

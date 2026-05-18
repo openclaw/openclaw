@@ -359,6 +359,21 @@ export type FsToolsConfig = {
   workspaceOnly?: boolean;
 };
 
+export type WorkspaceCheckpointsConfig = {
+  /** Enable hidden git-backed checkpoints before agent write tools run. Default: false. */
+  enabled?: boolean;
+  /** Max checkpoints retained per workspace. Default: 50. */
+  maxSnapshots?: number;
+  /** Soft cap for checkpoint storage before git gc is attempted. Default: 512MB. */
+  maxTotalBytes?: number;
+  /** Max individual file size included in a checkpoint. Default: 10MB. */
+  maxFileBytes?: number;
+  /** Max files scanned before automatic checkpointing skips the workspace. Default: 50000. */
+  maxFiles?: number;
+  /** Additional git pathspec-style excludes applied to checkpoint snapshots. */
+  exclude?: string[];
+};
+
 export type AgentToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -381,6 +396,8 @@ export type AgentToolsConfig = {
   exec?: ExecToolConfig;
   /** Filesystem tool path guards. */
   fs?: FsToolsConfig;
+  /** Hidden workspace checkpoints before agent writes. */
+  checkpoints?: WorkspaceCheckpointsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
   /** Message tool configuration for this agent. */
@@ -682,6 +699,8 @@ export type ToolsConfig = {
   exec?: ExecToolConfig;
   /** Filesystem tool path guards. */
   fs?: FsToolsConfig;
+  /** Hidden workspace checkpoints before agent writes. */
+  checkpoints?: WorkspaceCheckpointsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
   /** Compact large OpenClaw, MCP, and client tool catalogs behind search/call tools. */

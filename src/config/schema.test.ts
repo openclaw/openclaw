@@ -407,6 +407,38 @@ describe("config schema", () => {
     expect(config.agents?.list?.[0]?.tools?.exec?.commandHighlighting).toBe(false);
   });
 
+  it("accepts workspace checkpoint config in global and agent scopes", () => {
+    const tools = ToolsSchema.parse({
+      checkpoints: {
+        enabled: true,
+        maxSnapshots: 3,
+        maxTotalBytes: 1_000_000,
+        maxFileBytes: 100_000,
+        maxFiles: 100,
+        exclude: ["scratch/**"],
+      },
+    });
+    expect(tools?.checkpoints?.enabled).toBe(true);
+    expect(tools?.checkpoints?.exclude).toEqual(["scratch/**"]);
+
+    const config = OpenClawSchema.parse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              checkpoints: {
+                enabled: false,
+                maxSnapshots: 2,
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(config.agents?.list?.[0]?.tools?.checkpoints?.maxSnapshots).toBe(2);
+  });
+
   it("accepts experimental tool flags in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       experimental: {

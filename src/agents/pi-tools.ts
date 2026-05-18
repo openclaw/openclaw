@@ -98,6 +98,10 @@ import {
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
 } from "./tool-search.js";
+import {
+  resolveWorkspaceCheckpointConfig,
+  WorkspaceCheckpointManager,
+} from "./workspace-checkpoints.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
@@ -106,11 +110,41 @@ function isOpenAIProvider(provider?: string) {
 }
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
+const CHECKPOINTED_TOOL_NAMES = new Set(["write", "edit", "apply_patch", "exec"]);
 
 type GuardContainerMount = {
   containerRoot: string;
   hostRoot: string;
 };
+
+function resolveCodingCheckpointConfig(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+}): ReturnType<typeof resolveWorkspaceCheckpointConfig> {
+  const agent =
+    params.cfg && params.agentId
+      ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.checkpoints
+      : undefined;
+  return resolveWorkspaceCheckpointConfig(params.cfg, agent);
+}
+
+function wrapToolWithWorkspaceCheckpoint(params: {
+  tool: AnyAgentTool;
+  checkpointManager: WorkspaceCheckpointManager;
+  workspaceDir: string;
+}): AnyAgentTool {
+  const { tool, checkpointManager, workspaceDir } = params;
+  if (!CHECKPOINTED_TOOL_NAMES.has(tool.name)) {
+    return tool;
+  }
+  return {
+    ...tool,
+    execute: async (...args: Parameters<AnyAgentTool["execute"]>) => {
+      await checkpointManager.ensureCheckpoint(workspaceDir, `tool:${tool.name}`);
+      return await tool.execute(...args);
+    },
+  };
+}
 
 function readOnlyAgentWorkspaceMount(
   sandbox: SandboxContext | null | undefined,
@@ -632,6 +666,14 @@ export function createOpenClawCodingTools(options?: {
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
+  const checkpointRoot = sandboxRoot ?? workspaceRoot;
+  const checkpointConfig = resolveCodingCheckpointConfig({
+    cfg: options?.config,
+    agentId,
+  });
+  const checkpointManager = checkpointConfig.enabled
+    ? new WorkspaceCheckpointManager(checkpointConfig)
+    : undefined;
   const includeCoreTools = options?.includeCoreTools !== false;
   const toolConstructionPlan = options?.toolConstructionPlan ?? {
     includeBaseCodingTools: includeCoreTools,
@@ -1067,7 +1109,17 @@ export function createOpenClawCodingTools(options?: {
     }),
   );
   options?.recordToolPrepStage?.("schema-normalization");
-  const withHooks = normalized.map((tool) =>
+  const checkpointed = checkpointManager
+    ? normalized.map((tool) =>
+        wrapToolWithWorkspaceCheckpoint({
+          tool,
+          checkpointManager,
+          workspaceDir: checkpointRoot,
+        }),
+      )
+    : normalized;
+  options?.recordToolPrepStage?.("checkpoint-wrappers");
+  const withHooks = checkpointed.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
       ...(options?.config ? { config: options.config } : {}),

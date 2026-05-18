@@ -723,6 +723,20 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.loopDetection.detectors.pingPong": "Enable ping-pong loop detection (default: true).",
   "tools.loopDetection.postCompactionGuard.windowSize":
     "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
+  "tools.checkpoints":
+    "Hidden git-backed workspace snapshots before write, edit, apply_patch, and exec tool calls.",
+  "tools.checkpoints.enabled":
+    "Enable hidden workspace checkpoints before mutating agent tools run (default: false).",
+  "tools.checkpoints.maxSnapshots":
+    "Maximum checkpoints retained per workspace (default: 50). Older checkpoint refs are pruned first.",
+  "tools.checkpoints.maxTotalBytes":
+    "Soft storage cap for checkpoint data before git gc runs (default: 512MB).",
+  "tools.checkpoints.maxFileBytes":
+    "Maximum individual file size included in checkpoint snapshots (default: 10MB).",
+  "tools.checkpoints.maxFiles":
+    "Maximum workspace file count scanned before automatic checkpointing skips the workspace (default: 50000).",
+  "tools.checkpoints.exclude":
+    "Additional git pathspec-style excludes for checkpoint snapshots. Secrets and large generated folders are excluded by default.",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
   "tools.exec.notifyOnExitEmptySuccess":

@@ -70,6 +70,12 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "checkpoints",
+    description: "Create, diff, and restore workspace checkpoints",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
     name: "tui",
     description: "Open a terminal UI connected to the Gateway",
     hasSubcommands: false,

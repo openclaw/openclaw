@@ -57,6 +57,13 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "gateway.nodes.pairing.autoApproveCidrs": ["security", "access", "network", "advanced"],
   "proxy.tls.caFile": ["security", "network", "storage", "advanced"],
   "tools.exec.applyPatch.workspaceOnly": ["tools", "security", "access", "advanced"],
+  "tools.checkpoints": ["tools", "storage", "security"],
+  "tools.checkpoints.enabled": ["tools", "storage", "security"],
+  "tools.checkpoints.maxSnapshots": ["tools", "storage", "advanced"],
+  "tools.checkpoints.maxTotalBytes": ["tools", "storage", "advanced"],
+  "tools.checkpoints.maxFileBytes": ["tools", "storage", "security", "advanced"],
+  "tools.checkpoints.maxFiles": ["tools", "storage", "performance", "advanced"],
+  "tools.checkpoints.exclude": ["tools", "storage", "security", "advanced"],
 };
 
 const PREFIX_RULES: Array<{ prefix: string; tags: ConfigTag[] }> = [

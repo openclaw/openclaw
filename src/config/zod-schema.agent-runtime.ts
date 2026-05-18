@@ -517,6 +517,18 @@ const ToolFsSchema = z
   .strict()
   .optional();
 
+const WorkspaceCheckpointsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxSnapshots: z.number().int().positive().optional(),
+    maxTotalBytes: z.number().int().positive().optional(),
+    maxFileBytes: z.number().int().positive().optional(),
+    maxFiles: z.number().int().positive().optional(),
+    exclude: z.array(z.string()).optional(),
+  })
+  .strict()
+  .optional();
+
 const ToolLoopDetectionDetectorSchema = z
   .object({
     genericRepeat: z.boolean().optional(),
@@ -712,6 +724,7 @@ const AgentToolsSchema = z
       .optional(),
     exec: AgentToolExecSchema,
     fs: ToolFsSchema,
+    checkpoints: WorkspaceCheckpointsSchema,
     loopDetection: ToolLoopDetectionSchema,
     message: MessageToolConfigSchema,
     sandbox: z
@@ -1043,6 +1056,7 @@ export const ToolsSchema = z
       .optional(),
     exec: ToolExecSchema,
     fs: ToolFsSchema,
+    checkpoints: WorkspaceCheckpointsSchema,
     subagents: z
       .object({
         tools: ToolPolicySchema,
