@@ -22,7 +22,7 @@ import {
   shouldSuppressDuplicateTerminalDelivery,
   shouldUseParentReviewTaskTerminalMessage,
 } from "./task-executor-policy.js";
-import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import type { JsonValue, TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   getTaskFlowById,
   syncFlowFromTask,
@@ -888,6 +888,523 @@ function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
   };
 }
 
+function isTaskDeliveryOwnedByGovernedParentSummary(task: TaskRecord): boolean {
+  const flow = getLinkedFlowForDelivery(task);
+  return Boolean(
+    flow &&
+    isGovernedManagedFlow(flow) &&
+    hasGovernedParentSummaryDelivery(cloneGovernedFlowStateObject(flow.stateJson)),
+  );
+}
+
+const GOVERNED_TASKFLOW_CONTROLLER_ID = "governed-taskflow/v1";
+
+type GovernedFlowTerminalOutcome = {
+  status: Extract<
+    TaskFlowRecord["status"],
+    "succeeded" | "failed" | "blocked" | "cancelled" | "lost"
+  >;
+  blockedTaskId?: string;
+  blockedSummary?: string;
+};
+
+function isGovernedManagedFlow(flow: TaskFlowRecord): boolean {
+  return flow.syncMode === "managed" && flow.controllerId === GOVERNED_TASKFLOW_CONTROLLER_ID;
+}
+
+function isAutoClosableGovernedFlow(flow: TaskFlowRecord): boolean {
+  return flow.status === "queued" || flow.status === "running" || flow.status === "waiting";
+}
+
+function cloneGovernedFlowStateObject(stateJson: TaskFlowRecord["stateJson"]) {
+  if (stateJson && typeof stateJson === "object" && !Array.isArray(stateJson)) {
+    return { ...stateJson } as Record<string, JsonValue>;
+  }
+  let value: unknown = stateJson;
+  for (let depth = 0; depth < 3 && typeof value === "string" && value.trim(); depth += 1) {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return {};
+    }
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return { ...(value as Record<string, JsonValue>) };
+    }
+  }
+  return {};
+}
+
+function hasGovernedParentSummaryDelivery(state: Record<string, JsonValue>): boolean {
+  const delivery = state.parentSummaryDelivery;
+  return Boolean(
+    delivery &&
+    typeof delivery === "object" &&
+    !Array.isArray(delivery) &&
+    typeof delivery.contextKey === "string" &&
+    delivery.contextKey.trim(),
+  );
+}
+
+function summarizeGovernedFlowTask(task: TaskRecord): Record<string, JsonValue> {
+  return {
+    taskId: task.taskId,
+    status: task.status,
+    ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
+    ...(task.agentId ? { agentId: task.agentId } : {}),
+    ...(task.childSessionKey ? { childSessionKey: task.childSessionKey } : {}),
+    ...(task.runId ? { runId: task.runId } : {}),
+    ...(task.label ? { label: task.label } : {}),
+    ...(task.progressSummary ? { progressSummary: task.progressSummary } : {}),
+    ...(task.terminalSummary ? { terminalSummary: task.terminalSummary } : {}),
+    ...(task.error ? { error: task.error } : {}),
+  };
+}
+
+function resolveGovernedFlowOutcome(
+  tasksForFlow: TaskRecord[],
+): GovernedFlowTerminalOutcome | null {
+  if (tasksForFlow.length === 0) {
+    return null;
+  }
+  if (tasksForFlow.some((candidate) => isActiveTaskStatus(candidate.status))) {
+    return null;
+  }
+  const terminalTasks = tasksForFlow.filter((candidate) => isTerminalTaskStatus(candidate.status));
+  if (terminalTasks.length !== tasksForFlow.length) {
+    return null;
+  }
+  const failed = terminalTasks.find(
+    (candidate) => candidate.status === "failed" || candidate.status === "timed_out",
+  );
+  if (failed) {
+    return {
+      status: "failed",
+      blockedTaskId: failed.taskId,
+      blockedSummary:
+        normalizeOptionalString(failed.error) ??
+        normalizeOptionalString(failed.terminalSummary) ??
+        normalizeOptionalString(failed.progressSummary),
+    };
+  }
+  const lost = terminalTasks.find((candidate) => candidate.status === "lost");
+  if (lost) {
+    return {
+      status: "lost",
+      blockedTaskId: lost.taskId,
+      blockedSummary:
+        normalizeOptionalString(lost.error) ??
+        normalizeOptionalString(lost.terminalSummary) ??
+        normalizeOptionalString(lost.progressSummary) ??
+        "Governed child task was lost.",
+    };
+  }
+  const blocked = terminalTasks.find(
+    (candidate) => candidate.status === "succeeded" && candidate.terminalOutcome === "blocked",
+  );
+  if (blocked) {
+    return {
+      status: "blocked",
+      blockedTaskId: blocked.taskId,
+      blockedSummary:
+        normalizeOptionalString(blocked.terminalSummary) ??
+        normalizeOptionalString(blocked.progressSummary) ??
+        "Governed child task is blocked.",
+    };
+  }
+  if (terminalTasks.every((candidate) => candidate.status === "cancelled")) {
+    return { status: "cancelled" };
+  }
+  const cancelled = terminalTasks.find((candidate) => candidate.status === "cancelled");
+  if (cancelled) {
+    return {
+      status: "failed",
+      blockedTaskId: cancelled.taskId,
+      blockedSummary: "At least one governed child task was cancelled.",
+    };
+  }
+  return { status: "succeeded" };
+}
+
+function shortenGovernedFlowText(value: string | undefined, maxLength: number): string {
+  const text = normalizeOptionalString(value);
+  if (!text) {
+    return "";
+  }
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxLength) {
+    return compact;
+  }
+  return `${compact.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function formatGovernedFlowTaskLine(task: TaskRecord): string {
+  const label = shortenGovernedFlowText(
+    task.label ?? task.agentId ?? task.childSessionKey ?? task.taskId,
+    80,
+  );
+  const summary = shortenGovernedFlowText(
+    normalizeOptionalString(task.terminalSummary) ??
+      normalizeOptionalString(task.progressSummary) ??
+      normalizeOptionalString(task.error),
+    260,
+  );
+  const outcome = task.terminalOutcome
+    ? `/${shortenGovernedFlowText(task.terminalOutcome, 40)}`
+    : "";
+  return summary
+    ? `- ${label}: ${task.status}${outcome}. ${summary}`
+    : `- ${label}: ${task.status}${outcome}.`;
+}
+
+function formatGovernedFlowTaskLines(tasksForFlow: TaskRecord[], maxTasks = 5): string {
+  const taskLines = tasksForFlow.slice(0, maxTasks).map(formatGovernedFlowTaskLine);
+  const hiddenCount = tasksForFlow.length - maxTasks;
+  if (hiddenCount > 0) {
+    taskLines.push(`- ${hiddenCount} more task(s) recorded in TaskFlow.`);
+  }
+  return taskLines.join("\n");
+}
+
+function fitGovernedFlowParentMessage(content: string): string {
+  const limit = 1850;
+  if (content.length <= limit) {
+    return content;
+  }
+  return `${content.slice(0, limit - 3).trimEnd()}...`;
+}
+
+function readGovernedFlowPreviousStep(flow: TaskFlowRecord): string | undefined {
+  const state = cloneGovernedFlowStateObject(flow.stateJson);
+  const summary = state.terminalSummary;
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+    return flow.currentStep;
+  }
+  const previousStep = (summary as Record<string, JsonValue>).previousStep;
+  return typeof previousStep === "string" && previousStep.trim()
+    ? previousStep.trim()
+    : flow.currentStep;
+}
+
+function formatGovernedFlowParentSummaryMessage(params: {
+  flow: TaskFlowRecord;
+  outcome: GovernedFlowTerminalOutcome;
+  tasksForFlow: TaskRecord[];
+}): string {
+  const statusLine =
+    params.outcome.status === "succeeded" ? "completed successfully" : params.outcome.status;
+  const nextAction =
+    params.outcome.status === "succeeded"
+      ? "Done for this governed slice unless the plan names another accepted stage."
+      : "Needs parent/user attention before continuing.";
+  const previousStep = readGovernedFlowPreviousStep(params.flow);
+  return fitGovernedFlowParentMessage(
+    [
+      "Governed execution closeout",
+      "",
+      `Status: ${statusLine}`,
+      `Goal: ${shortenGovernedFlowText(params.flow.goal, 180)}`,
+      previousStep ? `Previous step: ${previousStep}` : null,
+      params.outcome.blockedSummary
+        ? `Blocker/failure summary: ${shortenGovernedFlowText(params.outcome.blockedSummary, 280)}`
+        : null,
+      "",
+      "Child results:",
+      formatGovernedFlowTaskLines(params.tasksForFlow) || "- none recorded",
+      "",
+      `Where we are: parent summary delivered for governed flow ${params.flow.flowId}.`,
+      `Next legal action: ${nextAction}`,
+    ]
+      .filter((line) => line != null)
+      .join("\n"),
+  );
+}
+
+function formatGovernedFlowTerminalPrompt(params: {
+  flow: TaskFlowRecord;
+  outcome: GovernedFlowTerminalOutcome;
+  tasksForFlow: TaskRecord[];
+}): string {
+  const statusLine =
+    params.outcome.status === "succeeded" ? "completed successfully" : params.outcome.status;
+  const previousStep = readGovernedFlowPreviousStep(params.flow);
+  return [
+    "Governed execution terminal update ready.",
+    "",
+    `Flow: ${params.flow.flowId}`,
+    `Status: ${statusLine}`,
+    `Goal: ${shortenGovernedFlowText(params.flow.goal, 180)}`,
+    previousStep ? `Previous step: ${previousStep}` : null,
+    params.outcome.blockedSummary
+      ? `Blocker/failure summary: ${shortenGovernedFlowText(params.outcome.blockedSummary, 280)}`
+      : null,
+    "",
+    "Child results:",
+    formatGovernedFlowTaskLines(params.tasksForFlow) || "- none recorded",
+    "",
+    'Required parent action: send exactly one visible parent-channel summary now. Include what happened, where the work stands against the plan/canon, and the next legal action or done condition. In Discord, use the message tool with action="send" for the current parent channel; do not rely on a private final reply. Do not start new governed work before delivering this closeout.',
+  ]
+    .filter((line) => line != null)
+    .join("\n");
+}
+
+function resolveGovernedFlowParentSummaryOrigin(
+  flow: TaskFlowRecord,
+): TaskDeliveryState["requesterOrigin"] {
+  const origin = normalizeDeliveryContext(flow.requesterOrigin);
+  if (!origin) {
+    return origin;
+  }
+  const ownerKey = flow.ownerKey?.trim() ?? "";
+  const match = /^agent:[^:]+:discord:channel:(.+)$/i.exec(ownerKey);
+  const ownerChannelId = match?.[1]?.trim();
+  const originChannel = origin.channel?.trim().toLowerCase();
+  if (originChannel === "discord" && ownerChannelId && origin.threadId != null) {
+    const { threadId, ...parentOrigin } = origin;
+    return {
+      ...parentOrigin,
+      to: `channel:${ownerChannelId}`,
+    };
+  }
+  if (
+    originChannel === "discord" &&
+    origin.threadId != null &&
+    /^channel:\d+$/i.test(origin.to?.trim() ?? "")
+  ) {
+    const { threadId, ...parentOrigin } = origin;
+    return parentOrigin;
+  }
+  return origin;
+}
+
+function markGovernedFlowParentSummaryDelivery(params: {
+  flowId: string;
+  contextKey: string;
+  status: "delivered" | "failed";
+  updatedAt: number;
+  error?: string;
+}): void {
+  try {
+    const current = getTaskFlowById(params.flowId);
+    if (!current) {
+      return;
+    }
+    const currentState = cloneGovernedFlowStateObject(current.stateJson);
+    const currentDelivery =
+      currentState.parentSummaryDelivery &&
+      typeof currentState.parentSummaryDelivery === "object" &&
+      !Array.isArray(currentState.parentSummaryDelivery)
+        ? (currentState.parentSummaryDelivery as Record<string, JsonValue>)
+        : {};
+    if (
+      typeof currentDelivery.contextKey === "string" &&
+      currentDelivery.contextKey.trim() &&
+      currentDelivery.contextKey !== params.contextKey
+    ) {
+      return;
+    }
+    const nextState: Record<string, JsonValue> = {
+      ...currentState,
+      parentSummaryDelivery: {
+        ...currentDelivery,
+        status: params.status,
+        contextKey: params.contextKey,
+        updatedAt: params.updatedAt,
+        ...(params.error ? { error: params.error } : {}),
+      },
+    };
+    updateFlowRecordByIdExpectedRevision({
+      flowId: params.flowId,
+      expectedRevision: current.revision,
+      patch: {
+        stateJson: nextState,
+        updatedAt: Math.max(current.updatedAt ?? 0, params.updatedAt),
+      },
+    });
+  } catch (error) {
+    log.warn("Failed to update governed flow parent summary delivery state", {
+      flowId: params.flowId,
+      error,
+    });
+  }
+}
+
+function queueGovernedFlowParentFinalizer(params: {
+  flow: TaskFlowRecord;
+  outcome: GovernedFlowTerminalOutcome;
+  tasksForFlow: TaskRecord[];
+  directDeliveryAttempted?: boolean;
+}): boolean {
+  const ownerKey = params.flow.ownerKey?.trim();
+  if (!ownerKey) {
+    return false;
+  }
+  const origin = resolveGovernedFlowParentSummaryOrigin(params.flow);
+  const channel = origin?.channel?.trim();
+  const to = origin?.to?.trim();
+  const contextKey = `governed-flow:${params.flow.flowId}:terminal-summary`;
+  if (!params.directDeliveryAttempted && channel && to && isDeliverableMessageChannel(channel)) {
+    const requesterAgentId = parseAgentSessionKey(ownerKey)?.agentId;
+    void loadTaskRegistryDeliveryRuntime()
+      .then(async ({ sendMessage }) => {
+        try {
+          await sendMessage({
+            channel,
+            to,
+            accountId: origin?.accountId,
+            threadId: origin?.threadId,
+            content: formatGovernedFlowParentSummaryMessage(params),
+            agentId: requesterAgentId,
+            idempotencyKey: contextKey,
+            mirror: {
+              sessionKey: ownerKey,
+              agentId: requesterAgentId,
+              idempotencyKey: contextKey,
+            },
+          });
+          markGovernedFlowParentSummaryDelivery({
+            flowId: params.flow.flowId,
+            contextKey,
+            status: "delivered",
+            updatedAt: Date.now(),
+          });
+        } catch (error) {
+          log.warn("Failed to directly deliver governed flow parent summary", {
+            flowId: params.flow.flowId,
+            ownerKey,
+            requesterOrigin: origin,
+            error,
+          });
+          markGovernedFlowParentSummaryDelivery({
+            flowId: params.flow.flowId,
+            contextKey,
+            status: "failed",
+            updatedAt: Date.now(),
+            error: formatErrorMessage(error),
+          });
+          queueGovernedFlowParentFinalizer({
+            ...params,
+            directDeliveryAttempted: true,
+          });
+        }
+      })
+      .catch((error) => {
+        log.warn("Failed to load governed flow parent summary delivery runtime", {
+          flowId: params.flow.flowId,
+          error,
+        });
+        markGovernedFlowParentSummaryDelivery({
+          flowId: params.flow.flowId,
+          contextKey,
+          status: "failed",
+          updatedAt: Date.now(),
+          error: formatErrorMessage(error),
+        });
+        queueGovernedFlowParentFinalizer({
+          ...params,
+          directDeliveryAttempted: true,
+        });
+      });
+    return true;
+  }
+  enqueueSystemEvent(formatGovernedFlowTerminalPrompt(params), {
+    sessionKey: ownerKey,
+    contextKey,
+    deliveryContext: origin,
+    forceSenderIsOwnerFalse: true,
+    trusted: false,
+  });
+  requestHeartbeat({
+    source: "background-task",
+    intent: "immediate",
+    reason: "governed-taskflow-finalizer",
+    sessionKey: ownerKey,
+  });
+  return true;
+}
+
+function syncManagedGovernedFlowFromTask(task: TaskRecord): void {
+  if (!isTerminalTaskStatus(task.status)) {
+    return;
+  }
+  const flowId = task.parentFlowId?.trim();
+  if (!flowId) {
+    return;
+  }
+  let flow = getTaskFlowById(flowId);
+  if (!flow || !isGovernedManagedFlow(flow) || !isAutoClosableGovernedFlow(flow)) {
+    return;
+  }
+  const existingState = cloneGovernedFlowStateObject(flow.stateJson);
+  if (
+    existingState.autoCloseOnAllChildrenTerminal === false ||
+    existingState.terminalCloseoutPolicy === "manual" ||
+    hasGovernedParentSummaryDelivery(existingState)
+  ) {
+    return;
+  }
+  const indexedTasks = listTasksForFlowId(flowId);
+  const tasksForFlow = indexedTasks.some((candidate) => candidate.taskId === task.taskId)
+    ? indexedTasks.map((candidate) => (candidate.taskId === task.taskId ? task : candidate))
+    : [...indexedTasks, task];
+  const outcome = resolveGovernedFlowOutcome(tasksForFlow);
+  if (!outcome) {
+    return;
+  }
+  const endedAt = task.endedAt ?? task.lastEventAt ?? Date.now();
+  const terminalSummary: Record<string, JsonValue> = {
+    flowId: flow.flowId,
+    status: outcome.status,
+    goal: flow.goal,
+    previousStep: flow.currentStep ?? null,
+    endedAt,
+    tasks: tasksForFlow.map(summarizeGovernedFlowTask),
+  };
+  const nextState: Record<string, JsonValue> = {
+    ...existingState,
+    lifecycleState:
+      outcome.status === "succeeded"
+        ? "terminal_success_parent_summary_queued"
+        : "terminal_attention_parent_summary_queued",
+    terminalSummary,
+    parentSummaryDelivery: {
+      status: "queued",
+      queuedAt: endedAt,
+      contextKey: `governed-flow:${flow.flowId}:terminal-summary`,
+    },
+  };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId,
+      expectedRevision: flow.revision,
+      patch: {
+        status: outcome.status,
+        currentStep: "parent_summary_queued",
+        stateJson: nextState,
+        waitJson: null,
+        blockedTaskId: outcome.blockedTaskId ?? null,
+        blockedSummary: outcome.blockedSummary ?? null,
+        updatedAt: endedAt,
+        endedAt,
+      },
+    });
+    if (result.applied) {
+      queueGovernedFlowParentFinalizer({
+        flow: result.flow,
+        outcome,
+        tasksForFlow,
+      });
+      return;
+    }
+    if (result.reason === "not_found") {
+      return;
+    }
+    flow = result.current;
+    if (!flow || !isGovernedManagedFlow(flow) || !isAutoClosableGovernedFlow(flow)) {
+      return;
+    }
+  }
+}
+
 function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
   const flowId = task.parentFlowId?.trim();
   if (!flowId) {
@@ -1017,6 +1534,15 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     });
   }
   try {
+    syncManagedGovernedFlowFromTask(next);
+  } catch (error) {
+    log.warn("Failed to finalize governed managed flow from task update", {
+      taskId,
+      flowId: next.parentFlowId,
+      error,
+    });
+  }
+  try {
     syncManagedFlowCancellationFromTask(next);
   } catch (error) {
     log.warn("Failed to finalize managed flow cancellation from task update", {
@@ -1134,6 +1660,12 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     const latest = tasks.get(taskId);
     if (!latest || !shouldAutoDeliverTaskTerminalUpdate(latest)) {
       return latest ? cloneTaskRecord(latest) : null;
+    }
+    if (isTaskDeliveryOwnedByGovernedParentSummary(latest)) {
+      return updateTask(taskId, {
+        deliveryStatus: "not_applicable",
+        lastEventAt: Date.now(),
+      });
     }
     const preferred = latest.runId
       ? pickPreferredRunIdTask(getPeerTasksForDelivery(latest))
@@ -1617,6 +2149,15 @@ export function createTaskRecord(params: {
     syncFlowFromTask(record);
   } catch (error) {
     log.warn("Failed to sync parent flow from task create", {
+      taskId: record.taskId,
+      flowId: record.parentFlowId,
+      error,
+    });
+  }
+  try {
+    syncManagedGovernedFlowFromTask(record);
+  } catch (error) {
+    log.warn("Failed to finalize governed managed flow from task create", {
       taskId: record.taskId,
       flowId: record.parentFlowId,
       error,

@@ -15,7 +15,11 @@ import type { SessionBindingRecord } from "../infra/outbound/session-binding-ser
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
+import {
+  createManagedTaskFlow,
+  getTaskFlowById,
+  resetTaskFlowRegistryForTests,
+} from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
@@ -862,6 +866,293 @@ describe("task-registry", () => {
           task: "Should be denied",
         }),
       ).toThrow("Parent flow is already cancelled.");
+    });
+  });
+
+  it("terminal child completion closes governed managed flows and delivers one parent summary", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryMemoryForTest();
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForLinkValidationTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "guildchat",
+        to: "guildchat:channel:123",
+        via: "direct",
+      });
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:guildchat:channel:123",
+        requesterOrigin: {
+          channel: "guildchat",
+          to: "guildchat:channel:123",
+        },
+        controllerId: "governed-taskflow/v1",
+        status: "running",
+        goal: "Run governed slice",
+        currentStep: "wait_worker",
+        waitJson: {
+          kind: "child_task",
+          runtime: "subagent",
+          runId: "run-governed-child",
+        },
+      });
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:guildchat:channel:123",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "guildchat",
+          to: "guildchat:channel:123",
+        },
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:worker:subagent:child",
+        runId: "run-governed-child",
+        label: "Worker",
+        task: "Do governed work",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 100,
+      });
+
+      markTaskTerminalByRunId({
+        runId: "run-governed-child",
+        status: "succeeded",
+        endedAt: 250,
+        terminalSummary: "Worker finished.",
+      });
+
+      await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1));
+      await waitForAssertion(() => {
+        const closed = getTaskFlowById(flow.flowId);
+        expect(closed).toMatchObject({
+          status: "succeeded",
+          currentStep: "parent_summary_queued",
+          endedAt: 250,
+        });
+        expect(closed?.stateJson).toMatchObject({
+          lifecycleState: "terminal_success_parent_summary_queued",
+          terminalSummary: {
+            flowId: flow.flowId,
+            status: "succeeded",
+            goal: "Run governed slice",
+          },
+          parentSummaryDelivery: {
+            status: "delivered",
+            contextKey: `governed-flow:${flow.flowId}:terminal-summary`,
+          },
+        });
+      });
+      const message = sentMessageCall();
+      expectRecordFields(message, {
+        channel: "guildchat",
+        to: "guildchat:channel:123",
+        idempotencyKey: `governed-flow:${flow.flowId}:terminal-summary`,
+      });
+      expect(String(message.content)).toContain("Governed execution closeout");
+      expect(String(message.content)).toContain("Status: completed successfully");
+      expect(String(message.content)).toContain("Worker: succeeded. Worker finished.");
+      expectRecordFields(message.mirror, {
+        sessionKey: "agent:main:guildchat:channel:123",
+        idempotencyKey: `governed-flow:${flow.flowId}:terminal-summary`,
+      });
+      expect(peekSystemEvents("agent:main:guildchat:channel:123")).toStrictEqual([]);
+    });
+  });
+
+  it("does not terminalize governed managed flows while any linked child is still active", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryMemoryForTest();
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForLinkValidationTests();
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "governed-taskflow/v1",
+        status: "running",
+        goal: "Two child governed slice",
+        currentStep: "wait_workers",
+      });
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        runId: "run-governed-child-a",
+        task: "Child A",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        runId: "run-governed-child-b",
+        task: "Child B",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      markTaskTerminalByRunId({
+        runId: "run-governed-child-a",
+        status: "succeeded",
+        endedAt: 250,
+        terminalSummary: "A finished.",
+      });
+
+      await flushAsyncWork();
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        status: "running",
+        currentStep: "wait_workers",
+      });
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
+    });
+  });
+
+  it.each([
+    {
+      name: "manual closeout policy",
+      stateJson: { terminalCloseoutPolicy: "manual" },
+    },
+    {
+      name: "auto-close disabled",
+      stateJson: { autoCloseOnAllChildrenTerminal: false },
+    },
+  ] satisfies Array<{ name: string; stateJson: Record<string, string | boolean> }>)(
+    "preserves child terminal delivery for governed flows with $name",
+    async ({ stateJson }) => {
+      await withTaskRegistryTempDir(async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        resetTaskRegistryMemoryForTest();
+        resetTaskFlowRegistryForTests({ persist: false });
+        configureInMemoryTaskStoresForLinkValidationTests();
+
+        const flow = createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          requesterOrigin: {
+            channel: "notifychat",
+            to: "notifychat:123",
+          },
+          controllerId: "governed-taskflow/v1",
+          status: "running",
+          goal: "Manual governed slice",
+          currentStep: "wait_worker",
+          stateJson: stateJson as unknown as Record<string, string | boolean>,
+        });
+
+        const task = createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          requesterOrigin: {
+            channel: "notifychat",
+            to: "notifychat:123",
+          },
+          parentFlowId: flow.flowId,
+          childSessionKey: "agent:worker:subagent:manual-child",
+          runId: "run-governed-manual-child",
+          label: "Manual worker",
+          task: "Do manually closed governed work",
+          status: "running",
+          deliveryStatus: "pending",
+        });
+
+        markTaskTerminalByRunId({
+          runId: "run-governed-manual-child",
+          status: "succeeded",
+          endedAt: 250,
+          terminalSummary: "Manual worker finished.",
+        });
+
+        await waitForAssertion(() =>
+          expect(peekSystemEvents("agent:main:main")).toEqual([
+            expect.stringContaining("Background task ready for review"),
+          ]),
+        );
+        const retainedFlow = getTaskFlowById(flow.flowId);
+        expect(retainedFlow).toMatchObject({
+          status: "running",
+          currentStep: "wait_worker",
+        });
+        expect(
+          (retainedFlow?.stateJson as Record<string, unknown>)?.parentSummaryDelivery,
+        ).toBeUndefined();
+        expectRecordFields(requireTaskById(task.taskId), {
+          deliveryStatus: "pending",
+        });
+        expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("queues governed parent fallback when delivery runtime loading fails", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryMemoryForTest();
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForLinkValidationTests();
+      const deliveryRuntimeLoadFailure = Promise.reject(new Error("delivery runtime unavailable"));
+      deliveryRuntimeLoadFailure.catch(() => {});
+      (globalThis as typeof globalThis & Record<symbol, unknown>)[
+        Symbol.for("openclaw.taskRegistry.deliveryRuntimeOverride")
+      ] = deliveryRuntimeLoadFailure;
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        controllerId: "governed-taskflow/v1",
+        status: "running",
+        goal: "Fallback governed slice",
+        currentStep: "wait_worker",
+      });
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:worker:subagent:fallback-child",
+        runId: "run-governed-fallback-child",
+        label: "Fallback worker",
+        task: "Do fallback governed work",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      markTaskTerminalByRunId({
+        runId: "run-governed-fallback-child",
+        status: "succeeded",
+        endedAt: 250,
+        terminalSummary: "Fallback worker finished.",
+      });
+
+      await waitForAssertion(() =>
+        expect(peekSystemEvents("agent:main:main")).toEqual([
+          expect.stringContaining("Governed execution terminal update ready."),
+        ]),
+      );
+      await waitForAssertion(() => {
+        expect(getTaskFlowById(flow.flowId)?.stateJson).toMatchObject({
+          parentSummaryDelivery: {
+            status: "failed",
+            contextKey: `governed-flow:${flow.flowId}:terminal-summary`,
+            error: "delivery runtime unavailable",
+          },
+        });
+      });
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
   });
 
