@@ -1415,6 +1415,19 @@ export const agentHandlers: GatewayRequestHandlers = {
         resolvedSessionKey = canonicalSessionKey;
         const agentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
         const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
+        // Legacy stores may lack sessionStartedAt entirely. Pre-compute a
+        // JSONL-transcript-derived candidate outside the store lock; the
+        // updater below only writes it when the freshly-loaded store still
+        // lacks the field, so a concurrent writer that sets it cannot be
+        // clobbered (the #5369 stale-writeback class).
+        const recoveredSessionStartedAt: number | undefined =
+          !isNewSession && entry !== undefined && entry.sessionStartedAt === undefined
+            ? resolveSessionLifecycleTimestamps({
+                entry,
+                storePath,
+                agentId,
+              }).sessionStartedAt
+            : undefined;
         if (storePath) {
           const requestedStoreKey = requestedSessionKey;
           const persisted = await updateSessionStore(storePath, (store) => {
@@ -1423,7 +1436,12 @@ export const agentHandlers: GatewayRequestHandlers = {
               key: requestedStoreKey,
               store,
             });
-            const merged = mergeSessionEntry(store[primaryKey], nextEntryPatch);
+            const effectivePatch =
+              recoveredSessionStartedAt !== undefined &&
+              store[primaryKey]?.sessionStartedAt === undefined
+                ? { ...nextEntryPatch, sessionStartedAt: recoveredSessionStartedAt }
+                : nextEntryPatch;
+            const merged = mergeSessionEntry(store[primaryKey], effectivePatch);
             store[primaryKey] = merged;
             return merged;
           });

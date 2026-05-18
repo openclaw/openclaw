@@ -41,6 +41,12 @@ const mocks = vi.hoisted(() => ({
   loadVoiceWakeRoutingConfig: vi.fn(),
   resolveVoiceWakeRouteByTrigger: vi.fn(),
   resolveSendPolicy: vi.fn(() => "allow"),
+  resolveSessionLifecycleTimestamps: vi.fn(
+    ({ entry }: { entry?: { sessionStartedAt?: number; lastInteractionAt?: number } }) => ({
+      sessionStartedAt: entry?.sessionStartedAt,
+      lastInteractionAt: entry?.lastInteractionAt,
+    }),
+  ),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -59,6 +65,7 @@ vi.mock("../../config/sessions.js", async () => {
   return {
     ...actual,
     updateSessionStore: mocks.updateSessionStore,
+    resolveSessionLifecycleTimestamps: mocks.resolveSessionLifecycleTimestamps,
     resolveAgentIdFromSessionKey: (sessionKey: string) => {
       const m = /^agent:([^:]+):/.exec(sessionKey.trim());
       return m?.[1] ?? "main";
@@ -497,6 +504,14 @@ describe("gateway agent handler", () => {
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
     mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");
+    mocks.resolveSessionLifecycleTimestamps
+      .mockReset()
+      .mockImplementation(
+        ({ entry }: { entry?: { sessionStartedAt?: number; lastInteractionAt?: number } }) => ({
+          sessionStartedAt: entry?.sessionStartedAt,
+          lastInteractionAt: entry?.lastInteractionAt,
+        }),
+      );
     dateOnlyFakeClockActive = false;
     vi.useRealTimers();
     resetExecApprovalFollowupRuntimeHandoffsForTests();
@@ -1128,6 +1143,105 @@ describe("gateway agent handler", () => {
     for (const [field, expected] of Object.entries(freshFields)) {
       expect(capturedEntry?.[field]).toEqual(expected);
     }
+  });
+  // Upgrade-path self-heal: a legacy session entry may lack sessionStartedAt
+  // because the field was added after the entry was first persisted. The
+  // handler recovers it from the transcript JSONL header and writes it back,
+  // but only when the fresh store still lacks the field — so a concurrent
+  // writer that sets it cannot be clobbered (the #5369 stale-writeback class).
+  it("self-heals missing sessionStartedAt from JSONL when fresh store also lacks it", async () => {
+    // Use a value distinct from `now` but recent enough that
+    // evaluateSessionFreshness — which also calls the mocked
+    // resolveSessionLifecycleTimestamps — keeps this session fresh.
+    const recoveredStartedAt = Date.now() - 5_000;
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "legacy-session-id",
+        updatedAt: Date.now() - 1000,
+        // sessionStartedAt absent — legacy schema
+      },
+      canonicalKey: "agent:main:subagent:legacy",
+    });
+    mocks.resolveSessionLifecycleTimestamps.mockReturnValue({
+      sessionStartedAt: recoveredStartedAt,
+    });
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const freshStore: Record<string, Record<string, unknown>> = {
+        "agent:main:subagent:legacy": {
+          sessionId: "legacy-session-id",
+          updatedAt: Date.now(),
+          // sessionStartedAt absent on disk too — self-heal should fire
+        },
+      };
+      const result = await updater(freshStore);
+      capturedEntry = freshStore["agent:main:subagent:legacy"];
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:legacy",
+        idempotencyKey: "test-selfheal-write",
+      },
+      { reqId: "selfheal-1" },
+    );
+    expect(capturedEntry?.sessionStartedAt).toBe(recoveredStartedAt);
+  });
+  it("does not clobber fresh sessionStartedAt with the recovered candidate", async () => {
+    // See note in the prior test: keep both values recent so freshness
+    // evaluation (which also reads the lifecycle mock) doesn't trip the
+    // idle-reset path and turn this into an isNewSession path.
+    const recoveredStartedAt = Date.now() - 5_000;
+    const freshStartedAt = Date.now() - 2_500;
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "legacy-session-id",
+        updatedAt: Date.now() - 1000,
+        // sessionStartedAt absent in cached entry — would trigger recovery
+      },
+      canonicalKey: "agent:main:subagent:concurrent",
+    });
+    mocks.resolveSessionLifecycleTimestamps.mockReturnValue({
+      sessionStartedAt: recoveredStartedAt,
+    });
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const freshStore: Record<string, Record<string, unknown>> = {
+        "agent:main:subagent:concurrent": {
+          sessionId: "legacy-session-id",
+          updatedAt: Date.now(),
+          // Concurrent writer set sessionStartedAt between cache load and lock
+          sessionStartedAt: freshStartedAt,
+        },
+      };
+      const result = await updater(freshStore);
+      capturedEntry = freshStore["agent:main:subagent:concurrent"];
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:concurrent",
+        idempotencyKey: "test-selfheal-noclobber",
+      },
+      { reqId: "selfheal-2" },
+    );
+    expect(capturedEntry?.sessionStartedAt).toBe(freshStartedAt);
   });
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
