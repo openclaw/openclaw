@@ -30,6 +30,7 @@ import {
   createSerpApiYahooTool,
   createSerpApiWeatherTool,
   createSerpApiWalmartTool,
+  createSerpApiWalmartProductTool,
 } from "./src/tools/index.js";
 
 export default definePluginEntry({
@@ -68,5 +69,6 @@ export default definePluginEntry({
     api.registerTool((ctx) => createSerpApiAutocompleteTool(api, ctx), { name: "serpapi_autocomplete" });
     api.registerTool((ctx) => createSerpApiWeatherTool(api, ctx), { name: "serpapi_weather" });
     api.registerTool((ctx) => createSerpApiWalmartTool(api, ctx), { name: "serpapi_walmart" });
+    api.registerTool((ctx) => createSerpApiWalmartProductTool(api, ctx), { name: "serpapi_walmart_product" });
   },
 });

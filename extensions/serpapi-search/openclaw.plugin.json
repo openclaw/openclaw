@@ -61,7 +61,8 @@
       "serpapi_yahoo",
       "serpapi_autocomplete",
       "serpapi_weather",
-      "serpapi_walmart"
+      "serpapi_walmart",
+      "serpapi_walmart_product"
     ]
   },
   "configSchema": {
