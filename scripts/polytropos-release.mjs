@@ -326,15 +326,15 @@ function usage() {
   console.log(`polytropos-release.mjs
 
 Usage:
-  node scripts/polytropos-release.mjs release [--log <path>]
+  node scripts/polytropos-release.mjs release --tgz <path> [--log <path>]
 
 Behavior:
   - Requires clean git working tree
   - Uses the nearest reachable release tag (v<ver> or v<ver>+poly.<N>) to derive the base upstream version (v<ver>)
   - Computes next global poly build number N = max(existing poly) + 1
   - Creates tag v<ver>+poly.<N> at HEAD
-  - If --tgz is provided, uses that pre-built tarball (e.g. from GitHub Actions) instead of building locally
-  - Produces tarball via npm pack: ~/polytropos/releases/v<ver>+poly.<N>.tgz
+  - Requires --tgz: promotes a CI-built tarball (GitHub Actions) instead of building locally
+  - Stages tarball into: ~/polytropos/releases/v<ver>+poly.<N>.tgz
   - Updates ~/polytropos/releases/previous.tgz -> old current.tgz (if present)
   - Updates ~/polytropos/releases/current.tgz -> new tarball
   - Installs current.tgz globally into /home/ec2-user/.npm-global
@@ -373,22 +373,8 @@ banner(logStream, `Next release tag: ${polyTag}`);
 banner(logStream, `git tag -a ${polyTag}`);
 await shTee(logStream, "git", ["tag", "-a", polyTag, "-m", `Polytropos release ${polyTag}`]);
 
-let distBuilt = false;
 if (!tgzPath) {
-  // Build dist locally
-  banner(logStream, "Building dist/");
-  ensureHooksDisabled(repoRoot, logStream, "before pnpm install");
-  await shTee(logStream, "pnpm", ["install"], { cwd: repoRoot });
-  // `pnpm install` runs the repo `prepare` script, which sets core.hooksPath to `git-hooks`.
-  // Re-disable hooks explicitly so the release flow never leaves hooks enabled on the host.
-  ensureHooksDisabled(repoRoot, logStream, "after pnpm install (prepare may reset core.hooksPath)");
-  await shTee(logStream, "pnpm", ["ui:build"], { cwd: repoRoot });
-  await shTee(logStream, "pnpm", ["build"], { cwd: repoRoot });
-  ensureDistExists(repoRoot);
-  distBuilt = true;
-} else {
-if (!tgzPath) {
-  }
+  fail("release requires --tgz <path to CI-built tarball>; local builds on the gateway host are disabled");
 }
 
 // Produce tarball into releases
