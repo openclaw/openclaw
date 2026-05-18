@@ -232,10 +232,13 @@ describe("WhatsApp QA live runtime", () => {
           OPENCLAW_DEBUG_SSE: "summary",
           NODE_OPTIONS: "--max-old-space-size=4096",
         },
+        timelinePath: "/tmp/openclaw-whatsapp-timeline.jsonl",
         tracePath: "/tmp/openclaw-whatsapp-trace.jsonl",
       }),
     ).toEqual({
       NODE_OPTIONS: "--max-old-space-size=4096 --heapsnapshot-signal=SIGUSR2",
+      OPENCLAW_DIAGNOSTICS: "timeline",
+      OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: "/tmp/openclaw-whatsapp-timeline.jsonl",
       OPENCLAW_DEBUG_MODEL_PAYLOAD: "detail",
       OPENCLAW_DEBUG_MODEL_TRANSPORT: "1",
       OPENCLAW_DEBUG_SSE: "summary",

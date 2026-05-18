@@ -32,6 +32,8 @@ import {
 } from "../shared/live-transport-scenarios.js";
 
 const execFileAsync = promisify(execFile);
+const DIAGNOSTICS_ENV = "OPENCLAW_DIAGNOSTICS";
+const DIAGNOSTICS_TIMELINE_PATH_ENV = "OPENCLAW_DIAGNOSTICS_TIMELINE_PATH";
 const MODEL_PAYLOAD_DEBUG_ENV = "OPENCLAW_DEBUG_MODEL_PAYLOAD";
 const MODEL_SSE_DEBUG_ENV = "OPENCLAW_DEBUG_SSE";
 const MODEL_TRANSPORT_DEBUG_ENV = "OPENCLAW_DEBUG_MODEL_TRANSPORT";
@@ -128,6 +130,11 @@ type WhatsAppQaGatewayTraceArtifact = {
   path: string;
 };
 
+type WhatsAppQaGatewayTimelineArtifact = {
+  bytes: number;
+  path: string;
+};
+
 type WhatsAppQaScenarioResult = {
   details: string;
   id: string;
@@ -173,6 +180,7 @@ type WhatsAppQaSummary = {
   metrics?: {
     gatewayHeapSnapshots?: WhatsAppQaGatewayHeapSnapshot[];
     gatewayProcessRssSamples?: WhatsAppQaGatewayRssSample[];
+    gatewayTimeline?: WhatsAppQaGatewayTimelineArtifact;
     gatewayTrace?: WhatsAppQaGatewayTraceArtifact;
   };
   scenarios: WhatsAppQaScenarioResult[];
@@ -278,6 +286,7 @@ function appendNodeOption(raw: string | undefined, option: string) {
 
 function buildWhatsAppGatewayRuntimeEnvPatch(params: {
   env?: NodeJS.ProcessEnv;
+  timelinePath?: string;
   tracePath?: string;
 } = {}): NodeJS.ProcessEnv | undefined {
   const env = params.env ?? process.env;
@@ -288,6 +297,10 @@ function buildWhatsAppGatewayRuntimeEnvPatch(params: {
   if (isTruthyOptIn(env[WHATSAPP_QA_TRACE_ENV]) && params.tracePath) {
     patch[WHATSAPP_QA_TRACE_ENV] = "1";
     patch[WHATSAPP_QA_TRACE_PATH_ENV] = params.tracePath;
+    if (params.timelinePath) {
+      patch[DIAGNOSTICS_ENV] = env[DIAGNOSTICS_ENV]?.trim() || "timeline";
+      patch[DIAGNOSTICS_TIMELINE_PATH_ENV] = params.timelinePath;
+    }
   }
   if (isTruthyOptIn(env[WHATSAPP_QA_MODEL_TRANSPORT_DEBUG_ENV])) {
     patch[MODEL_TRANSPORT_DEBUG_ENV] = "1";
@@ -777,6 +790,7 @@ async function runWhatsAppScenario(params: {
   driverPhoneE164: string;
   gatewayDebugDirPath: string;
   gatewayTracePath?: string;
+  gatewayTimelinePath?: string;
   observedMessages: WhatsAppObservedMessage[];
   providerMode: ReturnType<typeof normalizeQaProviderMode>;
   preserveGatewayDebugArtifacts?: boolean;
@@ -818,6 +832,7 @@ async function runWhatsAppScenario(params: {
     fastMode: params.fastMode,
     controlUiEnabled: false,
     runtimeEnvPatch: buildWhatsAppGatewayRuntimeEnvPatch({
+      timelinePath: params.gatewayTimelinePath,
       tracePath: params.gatewayTracePath,
     }),
     mutateConfig: (cfg) =>
@@ -1114,6 +1129,12 @@ export async function runWhatsAppQaLive(params: {
     "whatsapp-gateway-trace.jsonl",
   );
   const gatewayTracePath = path.join(outputDir, gatewayTraceRelativePath);
+  const gatewayTimelineRelativePath = path.join(
+    "artifacts",
+    "gateway-trace",
+    "whatsapp-gateway-timeline.jsonl",
+  );
+  const gatewayTimelinePath = path.join(outputDir, gatewayTimelineRelativePath);
   const gatewayDebugDirPath = path.join(outputDir, "gateway-debug");
   let preservedGatewayDebugArtifacts = false;
   const preserveSuccessfulGatewayDebugArtifacts = shouldPreserveWhatsAppGatewayDebugArtifacts();
@@ -1199,6 +1220,7 @@ export async function runWhatsAppQaLive(params: {
             driverPhoneE164: runtimeEnv.driverPhoneE164,
             gatewayDebugDirPath,
             gatewayTracePath,
+            gatewayTimelinePath,
             observedMessages,
             providerMode,
             preserveGatewayDebugArtifacts: preserveSuccessfulGatewayDebugArtifacts,
@@ -1326,6 +1348,19 @@ export async function runWhatsAppQaLive(params: {
           bytes: gatewayTraceStats.size,
         }
       : undefined;
+  const gatewayTimelineStats = await fs.stat(gatewayTimelinePath).catch(() => null);
+  const gatewayTimeline =
+    gatewayTimelineStats && gatewayTimelineStats.size > 0
+      ? {
+          path: gatewayTimelineRelativePath,
+          bytes: gatewayTimelineStats.size,
+        }
+      : undefined;
+  const hasGatewayMetrics =
+    gatewayProcessRssSamples.length > 0 ||
+    gatewayHeapSnapshots.length > 0 ||
+    Boolean(gatewayTimeline) ||
+    Boolean(gatewayTrace);
   const summary: WhatsAppQaSummary = {
     credentials: credentialLease
       ? {
@@ -1347,11 +1382,12 @@ export async function runWhatsAppQaLive(params: {
     startedAt,
     finishedAt,
     cleanupIssues,
-    ...(gatewayProcessRssSamples.length > 0 || gatewayHeapSnapshots.length > 0 || gatewayTrace
+    ...(hasGatewayMetrics
       ? {
           metrics: {
             ...(gatewayProcessRssSamples.length > 0 ? { gatewayProcessRssSamples } : {}),
             ...(gatewayHeapSnapshots.length > 0 ? { gatewayHeapSnapshots } : {}),
+            ...(gatewayTimeline ? { gatewayTimeline } : {}),
             ...(gatewayTrace ? { gatewayTrace } : {}),
           },
         }
