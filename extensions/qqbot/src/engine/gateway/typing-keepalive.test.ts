@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TypingKeepAlive, TYPING_INPUT_SECOND } from "./typing-keepalive.js";
+import { TypingKeepAlive, TYPING_INPUT_SECOND, TYPING_RENEWAL_LIMIT } from "./typing-keepalive.js";
 
 describe("TypingKeepAlive", () => {
   afterEach(() => {
@@ -31,5 +31,26 @@ describe("TypingKeepAlive", () => {
     keepAlive.stop();
     await vi.advanceTimersByTimeAsync(5_000);
     expect(sendInputNotify).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps renewals so long C2C replies keep a final passive reply slot", async () => {
+    vi.useFakeTimers();
+    const sendInputNotify = vi.fn(async () => undefined);
+    const keepAlive = new TypingKeepAlive(
+      async () => "token-1",
+      vi.fn(),
+      sendInputNotify,
+      "openid-1",
+      "msg-1",
+    );
+
+    keepAlive.start();
+
+    await vi.advanceTimersByTimeAsync(5_000 * TYPING_RENEWAL_LIMIT);
+    expect(TYPING_RENEWAL_LIMIT).toBe(3);
+    expect(sendInputNotify).toHaveBeenCalledTimes(TYPING_RENEWAL_LIMIT);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sendInputNotify).toHaveBeenCalledTimes(TYPING_RENEWAL_LIMIT);
   });
 });
