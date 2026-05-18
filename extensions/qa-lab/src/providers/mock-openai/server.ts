@@ -1909,6 +1909,43 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("read", { path: "DREAMING_CANDIDATE_EVIDENCE.md" });
     }
   }
+  if (/personal share-safe diagnostics check/i.test(allInputText)) {
+    const diagnosticsEvidenceText = extractAllToolOutputText(input);
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(diagnosticsEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Artifact: personal-diagnostics-summary.txt",
+          "Status: share-safe diagnostics summary ready",
+          "PERSONAL-DIAGNOSTICS-SAFE-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !diagnosticsEvidenceText ||
+      (!diagnosticsEvidenceText.includes("# Personal diagnostics request") &&
+        !diagnosticsEvidenceText.includes("# Raw personal diagnostics fixture"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "DIAGNOSTICS_REQUEST.md" });
+    }
+    if (
+      diagnosticsEvidenceText.includes("# Personal diagnostics request") &&
+      diagnosticsEvidenceText.includes("# Raw personal diagnostics fixture")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "personal-diagnostics-summary.txt",
+        content: [
+          "Status: blocked waiting for explicit publish approval",
+          "Affected surface: telegram direct message",
+          "Omitted content: raw chat text, raw tool output, account id, message id, and fake secret",
+          "Redaction confirmed: yes",
+          "Next step: ask maintainer whether manually landed commits can count for contributor credit",
+        ].join("\n"),
+      });
+    }
+    if (diagnosticsEvidenceText.includes("# Personal diagnostics request")) {
+      return buildToolCallEventsWithArgs("read", { path: "PERSONAL_DIAGNOSTICS_RAW.md" });
+    }
+  }
   if (/lobster invaders/i.test(prompt)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
