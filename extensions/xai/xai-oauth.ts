@@ -338,7 +338,10 @@ export async function loginXaiOAuth(ctx: ProviderAuthContext): Promise<ProviderA
         ...(tokens.idToken ? { idToken: tokens.idToken } : {}),
         ...(identity.accountId ? { accountId: identity.accountId } : {}),
       },
-      notes: ["xAI OAuth uses your SuperGrok subscription; xAI API keys still work."],
+      notes: [
+        "xAI OAuth uses your xAI account entitlement; xAI API keys still work.",
+        "xAI may label the consent app as Grok Build because OpenClaw uses xAI's shared OAuth client.",
+      ],
     });
   } catch (err) {
     progress.stop("xAI OAuth failed");
@@ -387,16 +390,16 @@ export async function refreshXaiOAuthCredential(
 export function createXaiOAuthAuthMethod(): ProviderAuthMethod {
   return {
     id: XAI_OAUTH_METHOD_ID,
-    label: "xAI Grok OAuth",
-    hint: "SuperGrok subscription",
+    label: "xAI OAuth",
+    hint: "Browser sign-in for eligible xAI accounts",
     kind: "oauth",
     wizard: {
       choiceId: XAI_OAUTH_CHOICE_ID,
-      choiceLabel: "xAI Grok OAuth",
-      choiceHint: "SuperGrok subscription",
+      choiceLabel: "xAI OAuth",
+      choiceHint: "Browser sign-in for eligible xAI accounts",
       groupId: PROVIDER_ID,
       groupLabel: "xAI (Grok)",
-      groupHint: "API key or SuperGrok OAuth",
+      groupHint: "API key or browser OAuth",
       methodId: XAI_OAUTH_METHOD_ID,
     },
     run: async (ctx) => loginXaiOAuth(ctx),
