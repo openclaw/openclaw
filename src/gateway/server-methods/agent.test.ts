@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   emitAgentEvent: vi.fn(),
   performGatewaySessionReset: vi.fn(),
   emitGatewaySessionStartPluginHook: vi.fn(),
+  emitGatewaySessionEndPluginHook: vi.fn(),
   getLatestSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
   resolveExplicitAgentSessionKey: vi.fn(),
@@ -128,6 +129,8 @@ vi.mock("../session-reset-service.js", () => ({
     (mocks.performGatewaySessionReset as (...args: unknown[]) => unknown)(...args),
   emitGatewaySessionStartPluginHook: (...args: unknown[]) =>
     (mocks.emitGatewaySessionStartPluginHook as (...args: unknown[]) => unknown)(...args),
+  emitGatewaySessionEndPluginHook: (...args: unknown[]) =>
+    (mocks.emitGatewaySessionEndPluginHook as (...args: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../../infra/voicewake-routing.js", () => ({
@@ -695,7 +698,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("emits session_start when agent.send rotates to a caller-supplied session id", async () => {
+  it("emits session_end + session_start lifecycle pair when agent.send rotates to a caller-supplied session id", async () => {
     const cfg = { session: { mainKey: "main" } };
     const existingEntry = {
       sessionId: "old-session-id",
@@ -704,6 +707,7 @@ describe("gateway agent handler", () => {
     };
     mockMainSessionEntry(existingEntry, cfg);
     mocks.emitGatewaySessionStartPluginHook.mockClear();
+    mocks.emitGatewaySessionEndPluginHook.mockClear();
 
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
       const store: Record<string, unknown> = {
@@ -727,17 +731,41 @@ describe("gateway agent handler", () => {
       { reqId: "test-session-start-hook-auto-rotation" },
     );
 
+    // #83507 follow-up: end-hook fires for the OLD session id with resumedFrom
+    // metadata for the rotation, matching sessions.reset's lifecycle pairing.
+    expect(mocks.emitGatewaySessionEndPluginHook).toHaveBeenCalledTimes(1);
+    expect(mocks.emitGatewaySessionEndPluginHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        sessionKey: "agent:main:main",
+        sessionId: "old-session-id",
+        sessionFile: "/tmp/openclaw/agents/main/sessions/old-session-id.jsonl",
+        storePath: "/tmp/sessions.json",
+        agentId: "main",
+        reason: "daily",
+        nextSessionId: "new-session-id",
+        nextSessionKey: "agent:main:main",
+      }),
+    );
+
     expect(mocks.emitGatewaySessionStartPluginHook).toHaveBeenCalledTimes(1);
     expect(mocks.emitGatewaySessionStartPluginHook).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg,
         sessionKey: "agent:main:main",
         sessionId: "new-session-id",
+        resumedFrom: "old-session-id",
         storePath: "/tmp/sessions.json",
         sessionFile: undefined,
         agentId: "main",
       }),
     );
+
+    // End must be called BEFORE start (lifecycle pair order matches
+    // session-reset-service.ts:835-844).
+    const endCallOrder = mocks.emitGatewaySessionEndPluginHook.mock.invocationCallOrder[0];
+    const startCallOrder = mocks.emitGatewaySessionStartPluginHook.mock.invocationCallOrder[0];
+    expect(endCallOrder).toBeLessThan(startCallOrder);
   });
 
   it("keeps stored group metadata when a trusted group session receives caller-supplied selectors", async () => {
