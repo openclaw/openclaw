@@ -1746,7 +1746,20 @@ function summarizeServiceCommand(command: string, args: readonly string[]): Comm
 }
 
 function summarizeRemoteCommand(args: readonly string[], targetText: string): CommandActionSummary {
-  const remoteCommand = hasRemoteShellCommand(args);
+  const sshOptionNames = getSshOptionNames(args);
+  const localCommandOption = sshOptionNames.find((name) =>
+    SSH_LOCAL_COMMAND_OPTION_NAMES.has(name),
+  );
+  const remoteCommand = hasRemoteShellCommand(args) || sshOptionNames.includes("remotecommand");
+  if (localCommandOption) {
+    return {
+      text: `connect to another machine using local SSH command options${targetText}`,
+      risk: "high",
+      kind: "remote",
+      reason: "SSH options such as ProxyCommand or LocalCommand can execute local shell commands.",
+      showCommandPreview: true,
+    };
+  }
   return {
     text: remoteCommand
       ? `connect to another machine and run a remote command${targetText}`
@@ -2409,6 +2422,40 @@ function getSedInPlaceTargets(args: readonly string[]): string[] {
     targets.push(arg);
   }
   return targets;
+}
+
+const SSH_LOCAL_COMMAND_OPTION_NAMES = new Set([
+  "localcommand",
+  "permitlocalcommand",
+  "proxycommand",
+]);
+
+function getSshOptionNames(args: readonly string[]): string[] {
+  const names: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    let optionValue: string | undefined;
+    if (arg === "-o" && args[index + 1]) {
+      optionValue = args[index + 1];
+      index += 1;
+    } else if (arg.startsWith("-o") && arg.length > 2) {
+      optionValue = arg.slice(2).replace(/^=/, "");
+    }
+    const name = getSshOptionName(optionValue);
+    if (name) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+function getSshOptionName(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const option = stripShellWordQuotes(value).trim();
+  const match = /^([A-Za-z][A-Za-z0-9]*)\b/.exec(option);
+  return match?.[1]?.toLowerCase() ?? null;
 }
 
 function hasRemoteShellCommand(args: readonly string[]): boolean {

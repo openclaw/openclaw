@@ -2294,6 +2294,48 @@ describe("plugin-sdk/approval-renderers", () => {
     );
   });
 
+  it.each([
+    {
+      command: String.raw`ssh -o ProxyCommand='sh -c "rm -rf /tmp/x"' host`,
+      id: "plugin-command-ssh-proxy-command",
+      action: "- connect to another machine using local SSH command options",
+      reason: "SSH options such as ProxyCommand or LocalCommand can execute local shell commands.",
+    },
+    {
+      command: String.raw`ssh -o PermitLocalCommand=yes -o LocalCommand='rm -rf /tmp/x' host`,
+      id: "plugin-command-ssh-local-command",
+      action: "- connect to another machine using local SSH command options",
+      reason: "SSH options such as ProxyCommand or LocalCommand can execute local shell commands.",
+    },
+    {
+      command: String.raw`ssh -o RemoteCommand='rm -rf /tmp/x' host`,
+      id: "plugin-command-ssh-remote-command-option",
+      action: "- connect to another machine and run a remote command",
+      reason: "SSH can run commands on another host, including destructive commands.",
+    },
+  ])("fails closed on SSH command options: $command", ({ command, id, action, reason }) => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id,
+        request: {
+          title: "Codex app-server command approval",
+          description: `Command: ${command}`,
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain(action);
+    expect(payload.text).toContain(`Command preview\n${command}`);
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain(reason);
+    expect(payload.text).not.toContain("Risk: Medium");
+  });
+
   it("shows wget upload file operands before hiding technical details", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
