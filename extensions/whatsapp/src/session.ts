@@ -134,6 +134,8 @@ export async function createWaSocket(
   opts: {
     authDir?: string;
     onQr?: (qr: string) => void;
+    phoneNumber?: string;
+    onPairingCode?: (code: string) => void;
   } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
@@ -184,11 +186,35 @@ export async function createWaSocket(
     fetchAgent: fetchAgent as Agent | undefined,
   });
 
+  let pairingCodeRequested = false;
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
   sock.ev.on("connection.update", async (update: Partial<import("baileys").ConnectionState>) => {
     try {
       const { connection, lastDisconnect, qr } = update;
-      if (qr) {
+      if (qr && opts.phoneNumber && !pairingCodeRequested && !state.creds.registered) {
+        // Use pairing code instead of QR when phone number is provided
+        pairingCodeRequested = true;
+        try {
+          const code = await sock.requestPairingCode(opts.phoneNumber);
+          sessionLogger.info({ phoneNumber: opts.phoneNumber }, `Pairing code generated: ${code}`);
+          opts.onPairingCode?.(code);
+          if (printQr) {
+            console.log(
+              `Enter this pairing code in WhatsApp > Linked Devices > Link with phone number:\n\n  ${code}\n`,
+            );
+          }
+        } catch (err) {
+          sessionLogger.error({ error: String(err) }, "Failed to request pairing code, falling back to QR");
+          // Fall back to QR
+          opts.onQr?.(qr);
+          if (printQr) {
+            console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
+            void printTerminalQr(qr).catch((qrErr) => {
+              sessionLogger.warn({ error: String(qrErr) }, "failed rendering WhatsApp QR");
+            });
+          }
+        }
+      } else if (qr) {
         opts.onQr?.(qr);
         if (printQr) {
           console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");

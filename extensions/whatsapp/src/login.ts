@@ -15,6 +15,7 @@ export async function loginWeb(
   waitForConnection?: typeof waitForWaConnection,
   runtime: RuntimeEnv = defaultRuntime,
   accountId?: string,
+  phoneNumber?: string,
 ) {
   const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId });
@@ -30,10 +31,19 @@ export async function loginWeb(
         runtime.error(`failed rendering WhatsApp QR: ${String(err)}`);
       });
   };
+  const onPairingCode = (code: string) => {
+    runtime.log(
+      `Enter this pairing code in WhatsApp > Linked Devices > Link with phone number:\n\n  ${code}\n`,
+    );
+  };
+  // Normalize phone number: remove + prefix and non-digit characters
+  const normalizedPhone = phoneNumber?.replace(/[^0-9]/g, "") || undefined;
   let sock = await createWaSocket(false, verbose, {
     authDir: account.authDir,
     ...socketTiming,
     onQr,
+    phoneNumber: normalizedPhone,
+    onPairingCode,
   });
   logInfo("Waiting for WhatsApp connection...", runtime);
   try {

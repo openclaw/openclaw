@@ -23,6 +23,7 @@ type ChannelAuthOptions = {
   channel?: string;
   account?: string;
   verbose?: boolean;
+  phoneNumber?: string;
 };
 
 type ChannelPlugin = NonNullable<ReturnType<typeof getChannelPlugin>>;
@@ -249,6 +250,7 @@ export async function runChannelLogin(
     runtime,
     verbose: Boolean(opts.verbose),
     channelInput,
+    phoneNumber: opts.phoneNumber,
   });
   await reconcileGatewayRuntimeAfterLocalLogin({
     cfg,

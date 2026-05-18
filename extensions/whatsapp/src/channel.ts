@@ -167,14 +167,14 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       },
       approvalCapability: whatsappApprovalAuth,
       auth: {
-        login: async ({ cfg, accountId, runtime, verbose }) => {
+        login: async ({ cfg, accountId, runtime, verbose, phoneNumber }) => {
           const resolvedAccountId =
             accountId?.trim() ||
             whatsappPlugin.config.defaultAccountId?.(cfg) ||
             DEFAULT_ACCOUNT_ID;
           await (
             await loadWhatsAppChannelRuntime()
-          ).loginWeb(Boolean(verbose), undefined, runtime, resolvedAccountId);
+          ).loginWeb(Boolean(verbose), undefined, runtime, resolvedAccountId, phoneNumber);
         },
       },
       lifecycle: {
