@@ -121,6 +121,7 @@ import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import {
   createReplyOperation,
@@ -2066,7 +2067,10 @@ export async function dispatchReplyFromConfig(
                   await sendPayloadAsync(normalizedPayload, context?.abortSignal, false);
                 } else {
                   markInboundDedupeReplayUnsafe();
-                  dispatcher.sendBlockReply(normalizedPayload);
+                  const delivered = dispatcher.sendBlockReply(normalizedPayload);
+                  if (delivered) {
+                    await waitForReplyDispatcherIdle(dispatcher, context?.abortSignal);
+                  }
                 }
               };
               return run();

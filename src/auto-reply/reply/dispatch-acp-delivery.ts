@@ -13,6 +13,7 @@ import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 
@@ -457,6 +458,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       state.settledDirectVisibleText = false;
     } else if (!delivered && tracksVisibleText) {
       state.failedVisibleTextDelivery = true;
+    }
+    if (kind === "block" && delivered) {
+      await waitForReplyDispatcherIdle(params.dispatcher);
     }
     return delivered;
   };
