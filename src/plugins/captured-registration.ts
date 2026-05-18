@@ -1,5 +1,15 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
+  AgentStreamingLlmMiddleware,
+  AgentStreamingLlmMiddlewareOptions,
+} from "./agent-streaming-llm-middleware-types.js";
+import { normalizeAgentStreamingLlmMiddlewareRuntimes } from "./agent-streaming-llm-middleware.js";
+import type {
+  AgentToolCallMiddleware,
+  AgentToolCallMiddlewareOptions,
+} from "./agent-tool-call-middleware-types.js";
+import { normalizeAgentToolCallMiddlewareRuntimes } from "./agent-tool-call-middleware.js";
+import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
@@ -17,7 +27,11 @@ import type {
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
-import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
+import type {
+  PluginAgentStreamingLlmMiddlewareRegistration,
+  PluginAgentToolCallMiddlewareRegistration,
+  PluginAgentToolResultMiddlewareRegistration,
+} from "./registry-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   AnyAgentTool,
@@ -57,6 +71,8 @@ export type CapturedPluginRegistration = {
   textTransforms: PluginTextTransformRegistration[];
   codexAppServerExtensionFactories: CodexAppServerExtensionFactory[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
+  agentStreamingLlmMiddlewares: PluginAgentStreamingLlmMiddlewareRegistration[];
+  agentToolCallMiddlewares: PluginAgentToolCallMiddlewareRegistration[];
   speechProviders: SpeechProviderPlugin[];
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
@@ -94,6 +110,8 @@ export function createCapturedPluginRegistration(params?: {
   const textTransforms: PluginTextTransformRegistration[] = [];
   const codexAppServerExtensionFactories: CodexAppServerExtensionFactory[] = [];
   const agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[] = [];
+  const agentStreamingLlmMiddlewares: PluginAgentStreamingLlmMiddlewareRegistration[] = [];
+  const agentToolCallMiddlewares: PluginAgentToolCallMiddlewareRegistration[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
@@ -134,6 +152,8 @@ export function createCapturedPluginRegistration(params?: {
     textTransforms,
     codexAppServerExtensionFactories,
     agentToolResultMiddlewares,
+    agentStreamingLlmMiddlewares,
+    agentToolCallMiddlewares,
     speechProviders,
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
@@ -215,6 +235,36 @@ export function createCapturedPluginRegistration(params?: {
             rawHandler: handler,
             handler,
             runtimes,
+            source: pluginSource,
+          });
+        },
+        registerAgentStreamingLlmMiddleware(
+          handler: AgentStreamingLlmMiddleware,
+          options?: AgentStreamingLlmMiddlewareOptions,
+        ) {
+          const runtimes = normalizeAgentStreamingLlmMiddlewareRuntimes(options);
+          agentStreamingLlmMiddlewares.push({
+            pluginId,
+            pluginName,
+            rawHandler: handler,
+            handler,
+            runtimes,
+            priority: options?.priority,
+            source: pluginSource,
+          });
+        },
+        registerAgentToolCallMiddleware(
+          handler: AgentToolCallMiddleware,
+          options?: AgentToolCallMiddlewareOptions,
+        ) {
+          const runtimes = normalizeAgentToolCallMiddlewareRuntimes(options);
+          agentToolCallMiddlewares.push({
+            pluginId,
+            pluginName,
+            rawHandler: handler,
+            handler,
+            runtimes,
+            priority: options?.priority,
             source: pluginSource,
           });
         },

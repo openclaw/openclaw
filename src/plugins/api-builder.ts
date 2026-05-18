@@ -56,6 +56,8 @@ export type BuildPluginApiParams = {
       | "registerAgentHarness"
       | "registerCodexAppServerExtensionFactory"
       | "registerAgentToolResultMiddleware"
+      | "registerAgentStreamingLlmMiddleware"
+      | "registerAgentToolCallMiddleware"
       | "registerSessionExtension"
       | "enqueueNextTurnInjection"
       | "registerTrustedToolPolicy"
@@ -133,6 +135,10 @@ const noopRegisterAgentHarness: OpenClawPluginApi["registerAgentHarness"] = () =
 const noopRegisterCodexAppServerExtensionFactory: OpenClawPluginApi["registerCodexAppServerExtensionFactory"] =
   () => {};
 const noopRegisterAgentToolResultMiddleware: OpenClawPluginApi["registerAgentToolResultMiddleware"] =
+  () => {};
+const noopRegisterAgentStreamingLlmMiddleware: OpenClawPluginApi["registerAgentStreamingLlmMiddleware"] =
+  () => {};
+const noopRegisterAgentToolCallMiddleware: OpenClawPluginApi["registerAgentToolCallMiddleware"] =
   () => {};
 const noopRegisterSessionExtension: OpenClawPluginApi["registerSessionExtension"] = () => {};
 const noopEnqueueNextTurnInjection: OpenClawPluginApi["enqueueNextTurnInjection"] = async (
@@ -246,6 +252,10 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerCodexAppServerExtensionFactory ?? noopRegisterCodexAppServerExtensionFactory,
     registerAgentToolResultMiddleware:
       handlers.registerAgentToolResultMiddleware ?? noopRegisterAgentToolResultMiddleware,
+    registerAgentStreamingLlmMiddleware:
+      handlers.registerAgentStreamingLlmMiddleware ?? noopRegisterAgentStreamingLlmMiddleware,
+    registerAgentToolCallMiddleware:
+      handlers.registerAgentToolCallMiddleware ?? noopRegisterAgentToolCallMiddleware,
     registerSessionExtension: handlers.registerSessionExtension ?? noopRegisterSessionExtension,
     enqueueNextTurnInjection: handlers.enqueueNextTurnInjection ?? noopEnqueueNextTurnInjection,
     registerTrustedToolPolicy: handlers.registerTrustedToolPolicy ?? noopRegisterTrustedToolPolicy,

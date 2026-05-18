@@ -43,6 +43,16 @@ import {
 } from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
 import { emitPluginAgentEvent } from "./agent-event-emission.js";
+import type { AgentStreamingLlmMiddleware } from "./agent-streaming-llm-middleware-types.js";
+import {
+  normalizeAgentStreamingLlmMiddlewareRuntimeIds,
+  normalizeAgentStreamingLlmMiddlewareRuntimes,
+} from "./agent-streaming-llm-middleware.js";
+import type { AgentToolCallMiddleware } from "./agent-tool-call-middleware-types.js";
+import {
+  normalizeAgentToolCallMiddlewareRuntimeIds,
+  normalizeAgentToolCallMiddlewareRuntimes,
+} from "./agent-tool-call-middleware.js";
 import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
 import {
   normalizeAgentToolResultMiddlewareRuntimeIds,
@@ -216,6 +226,8 @@ export type {
   PluginConversationBindingResolvedHandlerRegistration,
   PluginHookRegistration,
   PluginAgentHarnessRegistration,
+  PluginAgentStreamingLlmMiddlewareRegistration,
+  PluginAgentToolCallMiddlewareRegistration,
   PluginMemoryEmbeddingProviderRegistration,
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
@@ -536,6 +548,156 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       rawHandler: handler,
       handler: safeHandler,
       runtimes,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerAgentStreamingLlmMiddleware = (
+    record: PluginRecord,
+    handler: Parameters<OpenClawPluginApi["registerAgentStreamingLlmMiddleware"]>[0],
+    options: Parameters<OpenClawPluginApi["registerAgentStreamingLlmMiddleware"]>[1],
+  ) => {
+    if (record.origin !== "bundled") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "only bundled plugins can register agent streaming LLM middleware",
+      });
+      return;
+    }
+    if (typeof (handler as unknown) !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "agent streaming LLM middleware must be a function",
+      });
+      return;
+    }
+    const runtimes = normalizeAgentStreamingLlmMiddlewareRuntimes(options);
+    if (runtimes.length === 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "agent streaming LLM middleware must target at least one supported runtime",
+      });
+      return;
+    }
+    const declared = normalizeAgentStreamingLlmMiddlewareRuntimeIds(
+      record.contracts?.agentStreamingLlmMiddleware,
+    );
+    const missing = runtimes.filter((runtime) => !declared.includes(runtime));
+    if (missing.length > 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.agentStreamingLlmMiddleware for: ${missing.join(", ")}`,
+      });
+      return;
+    }
+    const existing = registry.agentStreamingLlmMiddlewares.find(
+      (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
+    );
+    if (existing) {
+      existing.runtimes = [...new Set([...existing.runtimes, ...runtimes])];
+      existing.priority = options?.priority ?? existing.priority;
+      return;
+    }
+    const safeHandler: AgentStreamingLlmMiddleware = (ctx) => {
+      try {
+        return handler(ctx);
+      } catch (error) {
+        registryParams.logger.warn(
+          `[plugins] agent streaming LLM middleware failed for ${record.id}`,
+        );
+        throw error;
+      }
+    };
+    registry.agentStreamingLlmMiddlewares.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      rawHandler: handler,
+      handler: safeHandler,
+      runtimes,
+      priority: options?.priority,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerAgentToolCallMiddleware = (
+    record: PluginRecord,
+    handler: Parameters<OpenClawPluginApi["registerAgentToolCallMiddleware"]>[0],
+    options: Parameters<OpenClawPluginApi["registerAgentToolCallMiddleware"]>[1],
+  ) => {
+    if (record.origin !== "bundled") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "only bundled plugins can register agent tool-call middleware",
+      });
+      return;
+    }
+    if (typeof (handler as unknown) !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "agent tool-call middleware must be a function",
+      });
+      return;
+    }
+    const runtimes = normalizeAgentToolCallMiddlewareRuntimes(options);
+    if (runtimes.length === 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "agent tool-call middleware must target at least one supported runtime",
+      });
+      return;
+    }
+    const declared = normalizeAgentToolCallMiddlewareRuntimeIds(
+      record.contracts?.agentToolCallMiddleware,
+    );
+    const missing = runtimes.filter((runtime) => !declared.includes(runtime));
+    if (missing.length > 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.agentToolCallMiddleware for: ${missing.join(", ")}`,
+      });
+      return;
+    }
+    const existing = registry.agentToolCallMiddlewares.find(
+      (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
+    );
+    if (existing) {
+      existing.runtimes = [...new Set([...existing.runtimes, ...runtimes])];
+      existing.priority = options?.priority ?? existing.priority;
+      return;
+    }
+    const safeHandler: AgentToolCallMiddleware = async (ctx) => {
+      try {
+        return await handler(ctx);
+      } catch (error) {
+        registryParams.logger.warn(`[plugins] agent tool-call middleware failed for ${record.id}`);
+        throw error;
+      }
+    };
+    registry.agentToolCallMiddlewares.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      rawHandler: handler,
+      handler: safeHandler,
+      runtimes,
+      priority: options?.priority,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -2679,6 +2841,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerAgentToolResultMiddleware: (handler, options) => {
                 registerAgentToolResultMiddleware(record, handler, options);
               },
+              registerAgentStreamingLlmMiddleware: (handler, options) => {
+                registerAgentStreamingLlmMiddleware(record, handler, options);
+              },
+              registerAgentToolCallMiddleware: (handler, options) => {
+                registerAgentToolCallMiddleware(record, handler, options);
+              },
               registerSessionExtension: (extension) => registerSessionExtension(record, extension),
               enqueueNextTurnInjection: (injection) => {
                 if (params.hookPolicy?.allowPromptInjection === false) {
@@ -3014,6 +3182,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerNodeHostCommand,
     registerSecurityAuditCollector,
     registerService,
+    registerAgentStreamingLlmMiddleware,
+    registerAgentToolCallMiddleware,
     registerCommand,
     registerSessionExtension,
     registerTrustedToolPolicy,

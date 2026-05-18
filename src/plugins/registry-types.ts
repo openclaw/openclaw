@@ -5,6 +5,14 @@ import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js"
 import type { HookEntry } from "../hooks/types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type {
+  AgentStreamingLlmMiddleware,
+  AgentStreamingLlmMiddlewareRuntime,
+} from "./agent-streaming-llm-middleware-types.js";
+import type {
+  AgentToolCallMiddleware,
+  AgentToolCallMiddlewareRuntime,
+} from "./agent-tool-call-middleware-types.js";
+import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareRuntime,
 } from "./agent-tool-result-middleware-types.js";
@@ -207,6 +215,26 @@ export type PluginAgentToolResultMiddlewareRegistration = {
   rawHandler: AgentToolResultMiddleware;
   handler: AgentToolResultMiddleware;
   runtimes: AgentToolResultMiddlewareRuntime[];
+  source: string;
+  rootDir?: string;
+};
+export type PluginAgentStreamingLlmMiddlewareRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  rawHandler: AgentStreamingLlmMiddleware;
+  handler: AgentStreamingLlmMiddleware;
+  runtimes: AgentStreamingLlmMiddlewareRuntime[];
+  priority?: number;
+  source: string;
+  rootDir?: string;
+};
+export type PluginAgentToolCallMiddlewareRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  rawHandler: AgentToolCallMiddleware;
+  handler: AgentToolCallMiddleware;
+  runtimes: AgentToolCallMiddlewareRuntime[];
+  priority?: number;
   source: string;
   rootDir?: string;
 };
@@ -441,6 +469,8 @@ export type PluginRegistry = {
   migrationProviders: PluginMigrationProviderRegistration[];
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
+  agentStreamingLlmMiddlewares: PluginAgentStreamingLlmMiddlewareRegistration[];
+  agentToolCallMiddlewares: PluginAgentToolCallMiddlewareRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;

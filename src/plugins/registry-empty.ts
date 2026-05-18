@@ -24,6 +24,8 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     migrationProviders: [],
     codexAppServerExtensionFactories: [],
     agentToolResultMiddlewares: [],
+    agentStreamingLlmMiddlewares: [],
+    agentToolCallMiddlewares: [],
     memoryEmbeddingProviders: [],
     agentHarnesses: [],
     gatewayHandlers: {},

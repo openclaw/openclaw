@@ -101,6 +101,8 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   memoryEmbeddingProviders: [],
   codexAppServerExtensionFactories: [],
   agentToolResultMiddlewares: [],
+  agentStreamingLlmMiddlewares: [],
+  agentToolCallMiddlewares: [],
   textTransforms: [],
   agentHarnesses: [],
   gatewayHandlers: {},
