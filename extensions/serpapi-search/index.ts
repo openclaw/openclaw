@@ -21,13 +21,14 @@ import {
   createSerpApiTrendsTool,
   createSerpApiYouTubeTool,
   createSerpApiYouTubeTranscriptTool,
+  createSerpApiYouTubeVideoTool,
 } from "./src/tools/index.js";
 
 export default definePluginEntry({
   id: "serpapi-search",
-  name: "SerpApi Search Plugin",
+  name: "SerpApi Search",
   description:
-    "Universal search plugin covering web, news, flights, hotels, maps, shopping, YouTube, scholar, finance, events and 100+ engines via SerpApi",
+    "1 universal search tool covering web, news, flights, hotels, maps, shopping, YouTube, scholar, finance, events and 100+ engines via SerpApi",
   register(api) {
     api.registerWebSearchProvider(createSerpApiWebSearchProvider());
     api.registerTool((ctx) => createSerpApiNewsTool(api, ctx), { name: "serpapi_news" });
@@ -44,6 +45,7 @@ export default definePluginEntry({
     api.registerTool((ctx) => createSerpApiLensTool(api, ctx), { name: "serpapi_lens" });
     api.registerTool((ctx) => createSerpApiYouTubeTool(api, ctx), { name: "serpapi_youtube" });
     api.registerTool((ctx) => createSerpApiYouTubeTranscriptTool(api, ctx), { name: "serpapi_youtube_transcript" });
+    api.registerTool((ctx) => createSerpApiYouTubeVideoTool(api, ctx), { name: "serpapi_youtube_video" });
     api.registerTool((ctx) => createSerpApiTrendsTool(api, ctx), { name: "serpapi_trends" });
     api.registerTool((ctx) => createSerpApiFlightsTool(api, ctx), { name: "serpapi_flights" });
     api.registerTool((ctx) => createSerpApiHotelsTool(api, ctx), { name: "serpapi_hotels" });

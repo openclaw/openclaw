@@ -1,7 +1,7 @@
 {
   "id": "serpapi-search",
   "name": "SerpApi Search",
-  "description": "Universal search plugin covering web, news, flights, hotels, maps, shopping, YouTube, scholar, finance, events and 100+ engines via SerpApi",
+  "description": "1 universal search tool covering web, news, flights, hotels, maps, shopping, YouTube, scholar, finance, events and 100+ engines via SerpApi",
   "activation": {
     "onStartup": false
   },
@@ -38,6 +38,7 @@
       "serpapi_lens",
       "serpapi_youtube",
       "serpapi_youtube_transcript",
+      "serpapi_youtube_video",
       "serpapi_trends",
       "serpapi_flights",
       "serpapi_hotels",
