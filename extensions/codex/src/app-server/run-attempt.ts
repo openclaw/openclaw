@@ -1097,8 +1097,12 @@ export async function runCodexAppServerAttempt(
       ctx: hookContext,
     });
   let promptBuild = await buildPromptFromCurrentInputs();
-  const buildCodexTurnPromptText = () =>
-    prependCodexOpenClawPromptContext(promptBuild.prompt, openClawPromptContext);
+  const decorateCodexTurnPromptText = (prompt: string) =>
+    prependCodexOpenClawPromptContext(prompt, openClawPromptContext);
+  let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+  const refreshCodexTurnPromptText = () => {
+    codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+  };
   const systemPromptReport = buildCodexSystemPromptReport({
     attempt: params,
     sessionKey: sandboxSessionKey,
@@ -1112,7 +1116,7 @@ export async function runCodexAppServerAttempt(
     attempt: params,
     cwd: effectiveWorkspace,
     developerInstructions: promptBuild.developerInstructions,
-    prompt: promptBuild.prompt,
+    prompt: codexTurnPromptText,
     tools: toolBridge.specs,
   });
   let client: CodexAppServerClient;
@@ -1323,7 +1327,7 @@ export async function runCodexAppServerAttempt(
     attempt: params,
     cwd: effectiveWorkspace,
     developerInstructions: promptBuild.developerInstructions,
-    prompt: promptBuild.prompt,
+    prompt: codexTurnPromptText,
     tools: toolBridge.specs,
   });
 
@@ -1783,7 +1787,7 @@ export async function runCodexAppServerAttempt(
     return (
       notification.method === "turn/completed" ||
       isCodexTurnAbortMarkerNotification(notification, {
-        currentPromptTexts: [promptBuild.prompt, buildCodexTurnPromptText()],
+        currentPromptTexts: [codexTurnPromptText],
       })
     );
   };
@@ -1894,7 +1898,7 @@ export async function runCodexAppServerAttempt(
     const isTurnAbortMarker =
       isCurrentTurnNotification &&
       isCodexTurnAbortMarkerNotification(notification, {
-        currentPromptTexts: [promptBuild.prompt, buildCodexTurnPromptText()],
+        currentPromptTexts: [codexTurnPromptText],
       });
     const isTurnTerminal = isTerminalTurnNotificationForTurn(notification, turnId);
     if (isTurnTerminal) {
@@ -2191,6 +2195,7 @@ export async function runCodexAppServerAttempt(
       );
     }
     promptBuild = await buildPromptFromCurrentInputs();
+    refreshCodexTurnPromptText();
   };
   const buildLlmInputEvent = () => ({
     runId: params.runId,
@@ -2198,13 +2203,13 @@ export async function runCodexAppServerAttempt(
     provider: params.provider,
     model: params.modelId,
     systemPrompt: promptBuild.developerInstructions,
-    prompt: promptBuild.prompt,
+    prompt: codexTurnPromptText,
     historyMessages,
     imagesCount: params.images?.length ?? 0,
   });
   const buildTurnStartFailureMessages = () => [
     ...historyMessages,
-    buildCodexUserPromptMessage({ ...params, prompt: promptBuild.prompt }),
+    buildCodexUserPromptMessage({ ...params, prompt: codexTurnPromptText }),
   ];
 
   let turn: CodexTurnStartResponse | undefined;
@@ -2216,7 +2221,7 @@ export async function runCodexAppServerAttempt(
           threadId: thread.threadId,
           cwd: effectiveWorkspace,
           appServer: pluginAppServer,
-          promptText: buildCodexTurnPromptText(),
+          promptText: codexTurnPromptText,
           sandboxPolicy: codexSandboxPolicy,
         }),
         { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
@@ -2366,7 +2371,7 @@ export async function runCodexAppServerAttempt(
   trajectoryRecorder?.recordEvent("prompt.submitted", {
     threadId: thread.threadId,
     turnId: activeTurnId,
-    prompt: promptBuild.prompt,
+    prompt: codexTurnPromptText,
     imagesCount: params.images?.length ?? 0,
   });
   projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId, {

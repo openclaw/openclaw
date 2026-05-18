@@ -1042,6 +1042,12 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("keeps OpenClaw skills out of Codex developer instructions", async () => {
+    const llmInput = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "llm_input", handler: llmInput }]),
+    );
+    vi.stubEnv("OPENCLAW_TRAJECTORY", "1");
+    vi.stubEnv("OPENCLAW_TRAJECTORY_DIR", path.join(tempDir, "trajectory"));
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
@@ -1069,6 +1075,20 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("## OpenClaw Skills");
     expect(inputText).toContain("<available_skills>");
     expect(inputText).toContain("Current user request:\nhello");
+    const [llmInputPayload] = mockCall(llmInput, "llm_input") as [{ prompt?: string }, unknown];
+    expect(llmInputPayload.prompt).toBe(inputText);
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempDir, "trajectory", "session-1.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { data?: { prompt?: string }; type?: string });
+    expect(trajectoryEvents.find((event) => event.type === "context.compiled")?.data?.prompt).toBe(
+      inputText,
+    );
+    expect(trajectoryEvents.find((event) => event.type === "prompt.submitted")?.data?.prompt).toBe(
+      inputText,
+    );
     expect(result.systemPromptReport?.skills.promptChars).toBe(params.skillsSnapshot.prompt.length);
     expect(result.systemPromptReport?.skills.entries).toEqual([
       { name: "demo", blockChars: "<skill><name>demo</name></skill>".length },
