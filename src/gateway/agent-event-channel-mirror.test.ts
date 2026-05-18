@@ -124,6 +124,34 @@ describe("agent event channel mirror", () => {
     expect(editedTexts).toContain("checking blockers");
   });
 
+  it("shares one progress preview across multiple sessions bound to the same Telegram topic", async () => {
+    const { mirror, sendProgressPreview, editProgressPreview } = createHarness();
+
+    await mirror(
+      event({
+        sessionKey: "agent:main:subagent:parent",
+        data: { text: "parent progress", delta: "parent progress" },
+      }),
+    );
+    await mirror(
+      event({
+        seq: 2,
+        runId: "child-run",
+        sessionKey: "agent:security:subagent:child",
+        data: { text: "child progress", delta: "child progress" },
+      }),
+    );
+
+    expect(sendProgressPreview).toHaveBeenCalledTimes(1);
+    expect(editProgressPreview).toHaveBeenCalledTimes(1);
+    expect(editProgressPreview.mock.calls[0]?.[0]).toMatchObject({
+      messageId: "preview-1",
+      to: "-100",
+      threadId: "1189",
+      text: expect.stringContaining("child progress"),
+    });
+  });
+
   it("skips final-answer assistant text because normal agent delivery already sends it", async () => {
     const { mirror, sendProgressPreview } = createHarness();
 

@@ -60,6 +60,7 @@ type ProgressPreviewLine = string | ChannelProgressDraftLine;
 
 type ProgressPreviewState = {
   lines: ProgressPreviewLine[];
+  activeSessionKeys: Set<string>;
   messageId?: string;
   lastText?: string;
 };
@@ -68,7 +69,7 @@ type MirrorState = {
   assistantTextByRun: Map<string, string>;
   thinkingTextByRun: Map<string, string>;
   queuesBySession: Map<string, Promise<void>>;
-  previewsBySession: Map<string, ProgressPreviewState>;
+  previewsByRoute: Map<string, ProgressPreviewState>;
   seenEvents: Set<string>;
 };
 
@@ -108,6 +109,10 @@ function rememberSeenEvent(state: MirrorState, key: string): boolean {
 
 function hasSessionKey(sessionKey: string | undefined): sessionKey is string {
   return Boolean(sessionKey);
+}
+
+function routeKey(route: DeliveryRoute): string {
+  return `telegram:${route.accountId ?? "default"}:${route.to}:topic:${String(route.threadId)}`;
 }
 
 function resolveTelegramThreadRoute(loaded: LoadedSessionEntry | undefined): DeliveryRoute | null {
@@ -451,7 +456,7 @@ export function createAgentEventChannelMirror(deps: AgentEventChannelMirrorDeps 
     assistantTextByRun: new Map(),
     thinkingTextByRun: new Map(),
     queuesBySession: new Map(),
-    previewsBySession: new Map(),
+    previewsByRoute: new Map(),
     seenEvents: new Set(),
   };
   const loadSessionEntry = deps.loadSessionEntry ?? defaultLoadSessionEntry;
@@ -480,13 +485,19 @@ export function createAgentEventChannelMirror(deps: AgentEventChannelMirrorDeps 
       return;
     }
 
+    const previewKey = routeKey(route);
+
     if (isTerminalMirrorEvent(evt)) {
-      const preview = state.previewsBySession.get(sessionKey);
+      const preview = state.previewsByRoute.get(previewKey);
       if (!preview) {
         return;
       }
-      await enqueueSessionSend(state, sessionKey, delayMs, async () => {
-        state.previewsBySession.delete(sessionKey);
+      preview.activeSessionKeys.delete(sessionKey);
+      if (preview.activeSessionKeys.size > 0) {
+        return;
+      }
+      await enqueueSessionSend(state, previewKey, delayMs, async () => {
+        state.previewsByRoute.delete(previewKey);
         const messageId = preview.messageId;
         preview.messageId = undefined;
         preview.lines = [];
@@ -516,11 +527,12 @@ export function createAgentEventChannelMirror(deps: AgentEventChannelMirrorDeps 
       return;
     }
 
-    let preview = state.previewsBySession.get(sessionKey);
+    let preview = state.previewsByRoute.get(previewKey);
     if (!preview) {
-      preview = { lines: [] };
-      state.previewsBySession.set(sessionKey, preview);
+      preview = { activeSessionKeys: new Set(), lines: [] };
+      state.previewsByRoute.set(previewKey, preview);
     }
+    preview.activeSessionKeys.add(sessionKey);
     const maxLines = resolveChannelProgressDraftMaxLines(entry, 8);
     preview.lines = mergeChannelProgressDraftLine(preview.lines, line, { maxLines });
     const text = formatChannelProgressDraftText({
@@ -532,7 +544,7 @@ export function createAgentEventChannelMirror(deps: AgentEventChannelMirrorDeps 
       return;
     }
 
-    await enqueueSessionSend(state, sessionKey, delayMs, async () => {
+    await enqueueSessionSend(state, previewKey, delayMs, async () => {
       const params = {
         cfg: loaded.cfg,
         to: route.to,
