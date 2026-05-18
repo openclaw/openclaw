@@ -288,12 +288,36 @@ describe("infra runtime", () => {
 
         expect(first.coalesced).toBe(false);
         expect(second.coalesced).toBe(true);
+        expect(second.emitHooksQueued).toBe(true);
 
         await vi.advanceTimersByTimeAsync(1_000);
 
         expect(firstBeforeEmit).not.toHaveBeenCalled();
         expect(latestBeforeEmit).toHaveBeenCalledTimes(1);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("reports hooks as not queued when restart already emitted", () => {
+      const beforeEmit = vi.fn(async () => {});
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        expect(emitGatewayRestart("already-emitted")).toBe(true);
+
+        const second = scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "second",
+          emitHooks: { beforeEmit },
+        });
+
+        expect(second.coalesced).toBe(true);
+        expect(second.emitHooksQueued).toBe(false);
+        expect(beforeEmit).not.toHaveBeenCalled();
+        expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(1);
       } finally {
         process.removeListener("SIGUSR1", handler);
       }

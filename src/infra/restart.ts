@@ -693,6 +693,7 @@ export type ScheduledRestart = {
   mode: "emit" | "signal" | "supervisor";
   coalesced: boolean;
   cooldownMsApplied: number;
+  emitHooksQueued: boolean;
 };
 
 export function scheduleGatewaySigusr1Restart(opts?: {
@@ -738,6 +739,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       mode,
       coalesced: true,
       cooldownMsApplied,
+      emitHooksQueued: false,
     };
   }
 
@@ -760,6 +762,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         mode,
         coalesced: false,
         cooldownMsApplied,
+        emitHooksQueued: opts?.emitHooks !== undefined,
       };
     }
     const shouldUpgradeToSkipDeferral = skipDeferral && !pendingRestartSkipDeferral;
@@ -789,6 +792,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         mode,
         coalesced: true,
         cooldownMsApplied,
+        emitHooksQueued: opts?.emitHooks !== undefined,
       };
     }
   }
@@ -829,6 +833,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     mode,
     coalesced: false,
     cooldownMsApplied,
+    emitHooksQueued: opts?.emitHooks !== undefined,
   };
 }
 
