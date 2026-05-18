@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
 import {
+  normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
@@ -248,7 +249,9 @@ function normalizePluginExtensionSlotKeys(entry: SessionEntry): SessionEntry {
 }
 
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
+  const entryRoute = normalizeDeliveryChannelRoute(entry.route);
   const normalized = normalizeSessionDeliveryFields({
+    route: entryRoute,
     channel: entry.channel,
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
@@ -263,6 +266,7 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
     (entry.deliveryContext?.accountId ?? undefined) === nextDelivery?.accountId &&
     (entry.deliveryContext?.threadId ?? undefined) === nextDelivery?.threadId;
   const sameLast =
+    JSON.stringify(entryRoute) === JSON.stringify(normalized.route) &&
     entry.lastChannel === normalized.lastChannel &&
     entry.lastTo === normalized.lastTo &&
     entry.lastAccountId === normalized.lastAccountId &&
@@ -272,6 +276,7 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   }
   return {
     ...entry,
+    route: normalized.route,
     deliveryContext: nextDelivery,
     lastChannel: normalized.lastChannel,
     lastTo: normalized.lastTo,

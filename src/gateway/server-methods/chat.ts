@@ -53,6 +53,7 @@ import { normalizeInputProvenance, type InputProvenance } from "../../sessions/i
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   sanitizeReplyDirectiveId,
@@ -648,19 +649,18 @@ function resolveChatSendOriginatingRoute(params: {
     };
   }
 
+  const sessionDeliveryContext = deliveryContextFromSession(params.entry);
   const routeChannelCandidate = normalizeMessageChannel(
-    params.entry?.deliveryContext?.channel ??
-      params.entry?.lastChannel ??
-      params.entry?.origin?.provider,
+    sessionDeliveryContext?.channel ?? params.entry?.lastChannel ?? params.entry?.origin?.provider,
   );
-  const routeToCandidate = params.entry?.deliveryContext?.to ?? params.entry?.lastTo;
+  const routeToCandidate = sessionDeliveryContext?.to ?? params.entry?.lastTo;
   const routeAccountIdCandidate =
-    params.entry?.deliveryContext?.accountId ??
+    sessionDeliveryContext?.accountId ??
     params.entry?.lastAccountId ??
     params.entry?.origin?.accountId ??
     undefined;
   const routeThreadIdCandidate =
-    params.entry?.deliveryContext?.threadId ??
+    sessionDeliveryContext?.threadId ??
     params.entry?.lastThreadId ??
     params.entry?.origin?.threadId;
   if (params.sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {

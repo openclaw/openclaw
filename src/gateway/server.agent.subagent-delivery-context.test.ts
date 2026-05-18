@@ -68,6 +68,12 @@ afterAll(async () => {
 });
 
 type StoredEntry = {
+  route?: {
+    channel?: string;
+    accountId?: string;
+    target?: { to?: string };
+    thread?: { id?: string | number };
+  };
   deliveryContext?: { channel?: string; to?: string; threadId?: string; accountId?: string };
   lastChannel?: string;
   lastTo?: string;
@@ -118,6 +124,12 @@ describe("subagent session deliveryContext from spawn request params", () => {
     expect(deliveryContext.to).toBe("channel:C0AF8TW48UQ");
     expect(deliveryContext.threadId).toBe("1774374945.091819");
     expect(deliveryContext.accountId).toBe("default");
+    expect(entry.route).toEqual({
+      channel: "slack",
+      accountId: "default",
+      target: { to: "channel:C0AF8TW48UQ" },
+      thread: { id: "1774374945.091819" },
+    });
     expect(entry.lastChannel).toBe("slack");
     expect(entry.lastTo).toBe("channel:C0AF8TW48UQ");
   });
@@ -207,6 +219,12 @@ describe("subagent session deliveryContext from spawn request params", () => {
     expect(deliveryContext.to).toBe("user:U07FDR83W6N");
     expect(deliveryContext.threadId).toBe("1775577152.364109");
     expect(deliveryContext.accountId).toBe("default");
+    expect(entry.route).toEqual({
+      channel: "slack",
+      accountId: "default",
+      target: { to: "user:U07FDR83W6N" },
+      thread: { id: "1775577152.364109" },
+    });
     expect(entry.lastThreadId).toBe("1775577152.364109");
   });
 
