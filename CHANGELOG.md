@@ -45,6 +45,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/config: keep config writes from failing on unrelated unresolved auth-profile SecretRefs while preserving live auth-profile runtime snapshots.
 - Discord/OpenAI: keep realtime Discord voice sessions hearing follow-up turns with OpenAI realtime and prebuffer assistant playback to avoid choppy starts. (#80505) Thanks @Solvely-Colin.
 - Discord/subagents: route the initial reply from thread-bound delegated sessions into the bound Discord thread instead of the parent channel. Fixes #83170. (#83172) Thanks @100menotu001.
+- Gateway/sessions: rotate failed agent sessions when their transcript file is missing instead of wedging per-channel lanes. Fixes #83488. (#83553) Thanks @LLagoon3.
 - Media: prevent image metadata probing from invoking external decoder delegates on unrecognized image bytes, and stop fallback chaining after real processing errors.
 - Media: install Sharp with the root package and fall back to sips, Windows native imaging, ImageMagick, GraphicsMagick, or ffmpeg for image resizing/conversion when Sharp is unavailable. Fixes #83401. Thanks @scotthuang.
 - Telegram: deliver generated media completions back into forum topics by preserving topic IDs across requester-agent handoff. (#83556) Thanks @fuller-stack-dev.
@@ -58,6 +59,8 @@ Docs: https://docs.openclaw.ai
 - Codex app-server: keep native code mode available without forcing code-mode-only so OpenClaw dynamic tool turns complete through the app-server tool bridge. Fixes #83109. Thanks @daswass.
 - Release stability: recover stale session diagnostics and Codex OAuth fallback state so stuck runs and reused refresh tokens clear without blocking follow-up work. (#83503) Thanks @100yenadmin.
 - Messages/TTS: apply TTS directives before message-tool sends reach core, gateway, or plugin delivery so opt-in message-tool rooms and proactive sends attach voice notes instead of leaking raw tags. Fixes #81598. Thanks @CG-Intelligence-Agent-Jack and @CoronovirusG10.
+- Messages/Codex: keep Codex direct/source chats on message-tool visible delivery by default while documenting and testing `messages.visibleReplies: "automatic"` as the old-mode opt-out; channel wildcard model overrides now apply to direct chats before harness delivery defaults.
+- Memory/QMD: keep archived session transcript hits visible after QMD export while preserving normal `.md` session ids that only resemble archive names. (#83518; fixes #83506) Thanks @tanshanshan.
 - Codex app-server: preserve network access for sandboxed Codex code-mode turns when the OpenClaw sandbox allows outbound egress. Fixes #83347. Thanks @YusukeIt0.
 - QA-Lab: keep the OTLP smoke decoder independent of removed OpenTelemetry generated-root internals.
 - Messages: default group/channel visible replies to automatic final delivery again, keeping `message_tool` opt-in for ambient/shared rooms and tool-reliable models.
@@ -214,6 +217,8 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK: bundle `openclaw/plugin-sdk/zod` into the published package artifact and verify the packed zod subpath stays self-contained, so pnpm global installs can register plugins without a package-local `zod` symlink. Fixes #78398. (#78515) Thanks @ggzeng.
 - Providers/Google: drop compaction-truncated Gemini thought signatures before replay so malformed Base64 no longer aborts the next assistant turn. (#82995) Thanks @wAngByg.
 - Gateway/mobile: allow paired iOS and Android clients to refresh same-family OS metadata on authenticated reconnect instead of requiring a new approval. (#83490) Thanks @ngutman.
+- WhatsApp: treat `upload-file` as a supported media send intent by lowering path/URL uploads through the channel's normal send-media transport. (#81883) Thanks @ngutman.
+- iOS: end Live Activities when OpenClaw is connected, idle, or disconnected, and show compact attention states for approval-required reconnects. (#83597) Thanks @ngutman.
 
 ## 2026.5.17
 
