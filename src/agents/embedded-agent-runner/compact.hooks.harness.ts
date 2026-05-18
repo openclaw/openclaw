@@ -416,32 +416,29 @@ export async function loadCompactHooksHarness(): Promise<{
   resetCompactHooksHarnessMocks();
   vi.resetModules();
 
-  vi.doMock("../../plugins/hook-runner-global.js", () => ({
-    getGlobalHookRunner: () => hookRunner,
-    getGlobalPluginRegistry: vi.fn(() => null),
-    hasGlobalHooks: vi.fn(() => false),
-    initializeGlobalHookRunner: vi.fn(),
-    resetGlobalHookRunner: vi.fn(),
-    runGlobalGatewayStopSafely: vi.fn(async () => undefined),
-  }));
+  vi.doMock("../../plugins/hook-runner-global.js", async () => {
+    const actual = await vi.importActual<typeof import("../../plugins/hook-runner-global.js")>(
+      "../../plugins/hook-runner-global.js",
+    );
+    return {
+      ...actual,
+      getGlobalHookRunner: () => hookRunner,
+    };
+  });
 
   vi.doMock("../runtime-plugins.js", () => ({
     ensureRuntimePluginsLoaded,
   }));
 
-  vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
-    captureCurrentPluginMetadataSnapshotState: vi.fn(() => ({
-      snapshot: undefined,
-      configFingerprint: undefined,
-      compatiblePolicyHashes: undefined,
-      compatibleConfigFingerprints: undefined,
-    })),
-    clearCurrentPluginMetadataSnapshot: vi.fn(),
-    getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
-    resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
-    restoreCurrentPluginMetadataSnapshotState: vi.fn(),
-    setCurrentPluginMetadataSnapshot: vi.fn(),
-  }));
+  vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", async () => {
+    const actual = await vi.importActual<
+      typeof import("../../plugins/current-plugin-metadata-snapshot.js")
+    >("../../plugins/current-plugin-metadata-snapshot.js");
+    return {
+      ...actual,
+      getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+    };
+  });
 
   vi.doMock("../../plugins/command-registry-state.js", () => {
     const pluginCommands = new Map<string, unknown>();

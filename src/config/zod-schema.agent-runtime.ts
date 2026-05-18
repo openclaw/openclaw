@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { uniqueStrings } from "../shared/string-normalization.js";
+import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
@@ -1016,12 +1017,7 @@ const AgentRuntimeSchema = z
 
 const NonNegativeByteSizeSchema = z.union([
   z.number().int().nonnegative(),
-  z
-    .string()
-    .refine(
-      (value) => /^\d+(?:b|kb|mb|gb|tb)?$/i.test(value.trim()),
-      "Expected byte size string like 2mb",
-    ),
+  z.string().refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
 ]);
 
 export const AgentContextPruningSchema = z

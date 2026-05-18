@@ -41,6 +41,7 @@ import {
   setCompactionSafeguardCancelReason,
 } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
 import {
   resolveAgentDir,
   resolveRunModelFallbacksOverride,
@@ -354,8 +355,22 @@ function containsRealConversationMessages(messages: AgentMessage[]): boolean {
   );
 }
 
-function hasExplicitCompactionModel(params: CompactEmbeddedAgentSessionParams): boolean {
-  return Boolean(params.config?.agents?.defaults?.compaction?.model?.trim());
+function resolveCompactionAgentId(params: CompactEmbeddedAgentSessionParams): string | undefined {
+  return resolveSessionAgentIds({
+    sessionKey: params.sandboxSessionKey ?? params.sessionKey,
+    config: params.config,
+  }).sessionAgentId;
+}
+
+function hasExplicitCompactionModel(
+  params: CompactEmbeddedAgentSessionParams,
+  agentId?: string,
+): boolean {
+  const scopedModel =
+    params.config && agentId
+      ? resolveAgentConfig(params.config, agentId)?.compaction?.model
+      : undefined;
+  return Boolean(scopedModel ?? params.config?.agents?.defaults?.compaction?.model);
 }
 
 function resolveCompactionFallbacksOverride(
@@ -412,13 +427,13 @@ function fallbackFailureToCompactionResult(err: unknown): EmbeddedAgentCompactRe
 export async function compactEmbeddedAgentSessionDirect(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
+  const fallbackAgentId = resolveCompactionAgentId(params);
+  if (
+    hasExplicitCompactionModel(params, fallbackAgentId) ||
+    !hasCompactionModelFallbackCandidates(params)
+  ) {
     return await compactEmbeddedAgentSessionDirectOnce(params);
   }
-  const fallbackAgentId = resolveSessionAgentIds({
-    sessionKey: params.sandboxSessionKey ?? params.sessionKey,
-    config: params.config,
-  }).sessionAgentId;
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     agentId: fallbackAgentId,
