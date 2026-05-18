@@ -24,7 +24,7 @@ Options:
   --no-yolo                  Run nested Codex review with normal sandbox/approval prompts.
   --output FILE              Also save output to file.
   --parallel-tests CMD       Run review and test command concurrently.
-                              Default: PNPM_CONFIG_OFFLINE=true pnpm run check when available.
+                              Default: PNPM_CONFIG_PM_ON_FAIL=ignore PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false PNPM_CONFIG_OFFLINE=true pnpm run check when available.
   --dry-run                  Print selected commands, do not run.
   -h, --help                 Show help.
 
@@ -236,7 +236,7 @@ if [[ -z "$parallel_tests" && "$openclaw_maintainer_validation" != 1 ]] &&
   if [[ -f "$repo_root/package.json" && -f "$repo_root/pnpm-lock.yaml" && -d "$repo_root/node_modules" ]] &&
     command -v pnpm >/dev/null 2>&1 &&
     has_package_check_script; then
-    parallel_tests="cd $quoted_repo_root && PNPM_CONFIG_OFFLINE=true pnpm run check"
+    parallel_tests="cd $quoted_repo_root && PNPM_CONFIG_PM_ON_FAIL=ignore PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false PNPM_CONFIG_OFFLINE=true pnpm run check"
     parallel_tests_auto=true
   fi
 fi
