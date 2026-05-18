@@ -193,6 +193,28 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 
 ---
 
+## Agent reaction tool
+
+`feishu_reaction` exposes Feishu-native message reactions to agents:
+
+| Action   | Description                                      |
+| -------- | ------------------------------------------------ |
+| `add`    | Add a reaction to a message                      |
+| `remove` | Remove a reaction by `reaction_id` or emoji type |
+| `list`   | List reactions on a message                      |
+
+The tool accepts Feishu emoji type strings such as `THUMBSUP`, `HEART`, `SMILE`,
+`CLAP`, and `OK`. It also normalizes common aliases such as `👍`, `heart`, and
+`clap`.
+
+Configure with `channels.feishu.tools.reactions: true`; the native tool is
+opt-in because the generic `message` action already supports Feishu `react` and
+`reactions`. The tool also honors the existing
+`channels.feishu.actions.reactions` gate, so setting `actions.reactions: false`
+disables both generic and native reaction operations.
+
+---
+
 ## Troubleshooting
 
 ### Bot does not respond in group chats

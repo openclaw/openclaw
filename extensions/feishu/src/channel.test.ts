@@ -7,6 +7,8 @@ const probeFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const addReactionFeishuMock = vi.hoisted(() => vi.fn());
 const listReactionsFeishuMock = vi.hoisted(() => vi.fn());
+const removeOwnReactionFeishuMock = vi.hoisted(() => vi.fn());
+const removeOwnReactionsFeishuMock = vi.hoisted(() => vi.fn());
 const removeReactionFeishuMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
@@ -43,6 +45,8 @@ vi.mock("./channel.runtime.js", () => ({
     listFeishuDirectoryPeersLive: listFeishuDirectoryPeersLiveMock,
     listPinsFeishu: listPinsFeishuMock,
     listReactionsFeishu: listReactionsFeishuMock,
+    removeOwnReactionFeishu: removeOwnReactionFeishuMock,
+    removeOwnReactionsFeishu: removeOwnReactionsFeishuMock,
     probeFeishu: probeFeishuMock,
     removePinFeishu: removePinFeishuMock,
     removeReactionFeishu: removeReactionFeishuMock,
@@ -980,11 +984,35 @@ describe("feishuPlugin actions", () => {
     );
   });
 
+  it("removes the current app reaction by emoji", async () => {
+    removeOwnReactionFeishuMock.mockResolvedValueOnce({
+      reactionId: "r1",
+      emojiType: "OK",
+      operatorType: "app",
+      operatorId: "cli_main",
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "react",
+      params: { messageId: "om_msg1", emoji: "OK", remove: true },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    expect(removeOwnReactionFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      messageId: "om_msg1",
+      emojiType: "OK",
+      accountId: undefined,
+      appId: "cli_main",
+    });
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.removed).toBe("OK");
+  });
+
   it("allows explicit clearAll=true when removing all bot reactions", async () => {
-    listReactionsFeishuMock.mockResolvedValueOnce([
-      { reactionId: "r1", operatorType: "app" },
-      { reactionId: "r2", operatorType: "app" },
-    ]);
+    removeOwnReactionsFeishuMock.mockResolvedValueOnce(2);
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "react",
@@ -993,12 +1021,12 @@ describe("feishuPlugin actions", () => {
       accountId: undefined,
     } as never);
 
-    expect(listReactionsFeishuMock).toHaveBeenCalledWith({
+    expect(removeOwnReactionsFeishuMock).toHaveBeenCalledWith({
       cfg,
       messageId: "om_msg1",
       accountId: undefined,
+      appId: "cli_main",
     });
-    expect(removeReactionFeishuMock).toHaveBeenCalledTimes(2);
     const details = resultDetails(result);
     expect(details.ok).toBe(true);
     expect(details.removed).toBe(2);

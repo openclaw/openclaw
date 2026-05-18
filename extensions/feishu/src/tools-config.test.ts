@@ -8,14 +8,21 @@ describe("feishu tools config", () => {
     expect(resolved.chat).toBe(true);
   });
 
+  it("keeps native reaction tools opt-in by default", () => {
+    const resolved = resolveToolsConfig(undefined);
+    expect(resolved.reactions).toBe(false);
+  });
+
   it("accepts tools.chat in config schema", () => {
     const parsed = FeishuConfigSchema.parse({
       enabled: true,
       tools: {
         chat: false,
+        reactions: false,
       },
     });
 
     expect(parsed.tools?.chat).toBe(false);
+    expect(parsed.tools?.reactions).toBe(false);
   });
 });

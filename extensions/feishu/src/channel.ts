@@ -1131,24 +1131,17 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               if (!emoji) {
                 throw new Error("Emoji is required to remove a Feishu reaction.");
               }
-              const { listReactionsFeishu, removeReactionFeishu } =
-                await loadFeishuChannelRuntime();
-              const matches = await listReactionsFeishu({
+              const { removeOwnReactionFeishu } = await loadFeishuChannelRuntime();
+              const ownReaction = await removeOwnReactionFeishu({
                 cfg: ctx.cfg,
                 messageId,
                 emojiType: emoji,
                 accountId: ctx.accountId ?? undefined,
+                appId: account.appId,
               });
-              const ownReaction = matches.find((entry) => entry.operatorType === "app");
               if (!ownReaction) {
                 return jsonActionResult({ ok: true, removed: null });
               }
-              await removeReactionFeishu({
-                cfg: ctx.cfg,
-                messageId,
-                reactionId: ownReaction.reactionId,
-                accountId: ctx.accountId ?? undefined,
-              });
               return jsonActionResult({ ok: true, removed: emoji });
             }
             if (!emoji) {
@@ -1157,23 +1150,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                   "Emoji is required to add a Feishu reaction. Set clearAll=true to remove all bot reactions.",
                 );
               }
-              const { listReactionsFeishu, removeReactionFeishu } =
-                await loadFeishuChannelRuntime();
-              const reactions = await listReactionsFeishu({
+              const { removeOwnReactionsFeishu } = await loadFeishuChannelRuntime();
+              const removed = await removeOwnReactionsFeishu({
                 cfg: ctx.cfg,
                 messageId,
                 accountId: ctx.accountId ?? undefined,
+                appId: account.appId,
               });
-              let removed = 0;
-              for (const reaction of reactions.filter((entry) => entry.operatorType === "app")) {
-                await removeReactionFeishu({
-                  cfg: ctx.cfg,
-                  messageId,
-                  reactionId: reaction.reactionId,
-                  accountId: ctx.accountId ?? undefined,
-                });
-                removed += 1;
-              }
               return jsonActionResult({ ok: true, removed });
             }
             const { addReactionFeishu } = await loadFeishuChannelRuntime();

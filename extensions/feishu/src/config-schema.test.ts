@@ -298,6 +298,26 @@ describe("FeishuConfigSchema actions", () => {
   });
 });
 
+describe("FeishuConfigSchema tools", () => {
+  it("accepts top-level reactions tool gate", () => {
+    const result = FeishuConfigSchema.parse({
+      tools: { reactions: false },
+    });
+    expect(result.tools?.reactions).toBe(false);
+  });
+
+  it("accepts account-level reactions tool gate", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: {
+          tools: { reactions: false },
+        },
+      },
+    });
+    expect(result.accounts?.main?.tools?.reactions).toBe(false);
+  });
+});
+
 describe("FeishuConfigSchema defaultAccount", () => {
   it("accepts defaultAccount when it matches an account key", () => {
     const result = FeishuConfigSchema.safeParse({

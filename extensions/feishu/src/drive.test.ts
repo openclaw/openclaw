@@ -132,6 +132,7 @@ describe("registerFeishuDriveTools", () => {
       drive: true,
       perm: false,
       scopes: false,
+      reactions: false,
     });
     createFeishuToolClientMock.mockReturnValue({
       request: requestMock,

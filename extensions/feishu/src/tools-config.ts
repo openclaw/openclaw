@@ -4,6 +4,7 @@ import type { FeishuToolsConfig } from "./types.js";
  * Default tool configuration.
  * - doc, chat, wiki, drive, scopes: enabled by default
  * - perm: disabled by default (sensitive operation)
+ * - reactions: disabled by default; generic message reaction actions remain available via actions.reactions
  */
 const DEFAULT_TOOLS_CONFIG: Required<FeishuToolsConfig> = {
   doc: true,
@@ -12,6 +13,7 @@ const DEFAULT_TOOLS_CONFIG: Required<FeishuToolsConfig> = {
   drive: true,
   perm: false,
   scopes: true,
+  reactions: false,
 };
 
 /**
