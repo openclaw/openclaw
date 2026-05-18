@@ -8,6 +8,7 @@ struct SettingsRootView: View {
     @State private var monitoringPermissions = false
     @State private var selectedTab: SettingsTab = .general
     @State private var cachedTabs: Set<SettingsTab>
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var snapshotPaths: (configPath: String?, stateDir: String?) = (nil, nil)
     let updater: UpdaterProviding?
     private let isPreview = ProcessInfo.processInfo.isPreview
@@ -22,7 +23,7 @@ struct SettingsRootView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: self.$columnVisibility) {
             List(selection: self.$selectedTab) {
                 ForEach(self.visibleGroups) { group in
                     Section(group.title) {
@@ -46,19 +47,9 @@ struct SettingsRootView: View {
             .padding(.horizontal, 22)
             .padding(.vertical, 18)
         }
+        .navigationSplitViewStyle(.balanced)
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .toolbar(removing: .sidebarToggle)
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
-                } label: {
-                    Image(systemName: "sidebar.left")
-                }
-                .help("Show or hide sidebar")
-            }
-        }
         .background(SettingsWindowChromeConfigurator())
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
