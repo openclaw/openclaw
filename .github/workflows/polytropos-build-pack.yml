@@ -8,6 +8,10 @@ on:
         required: true
         default: upgrade/upstream-v2026.5.12
         type: string
+      releaseTag:
+        description: Release tag to name artifacts (v<ver>+poly.<N>)
+        required: true
+        type: string
   push:
     branches:
       - upgrade/upstream-v2026.5.12
@@ -21,6 +25,7 @@ env:
   OPENCLAW_TSDOWN_NODE_OPTIONS: "--max-old-space-size=6144"
   NODE_VERSION: "24.15.0"
   PNPM_VERSION: "11.0.8"
+  RELEASE_TAG: ${{ inputs.releaseTag || "" }}
 
 jobs:
   build_pack:
@@ -73,19 +78,21 @@ jobs:
           ls -la "$tgz"
       - name: Write build metadata
         run: |
-          node -e "const fs=require(\"fs\"); const pkg=require(\"./package.json\"); fs.writeFileSync(\"build-metadata.json\", JSON.stringify({name:pkg.name, version:pkg.version, sha:process.env.GITHUB_SHA, node:process.version, node_options:process.env.NODE_OPTIONS, pnpm:process.env.PNPM_VERSION}, null, 2));"
+          node -e "const fs=require(\"fs\"); const pkg=require(\"./package.json\"); fs.writeFileSync(\"build-metadata.json\", JSON.stringify({name:pkg.name, version:pkg.version, sha:process.env.GITHUB_SHA, node:process.version, node_options:process.env.NODE_OPTIONS, pnpm:process.env.PNPM_VERSION, releaseTag: process.env.RELEASE_TAG || null}, null, 2));"
       - name: Upload package artifact
+        if: github.event_name == "workflow_dispatch"
         uses: actions/upload-artifact@v4
         with:
-          name: openclaw-tgz-${{ steps.pack.outputs.version }}-${{ github.sha }}
+          name: openclaw-tgz-${{ inputs.releaseTag }}
           path: ${{ steps.pack.outputs.tgz }}
           if-no-files-found: error
           retention-days: 14
 
       - name: Upload dist/ (debug)
+        if: github.event_name == "workflow_dispatch"
         uses: actions/upload-artifact@v4
         with:
-          name: openclaw-dist-${{ steps.pack.outputs.version }}-${{ github.sha }}
+          name: openclaw-dist-${{ inputs.releaseTag }}
           path: |
             dist
             ui/dist
