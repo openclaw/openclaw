@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { MIN_PROMPT_BUDGET_RATIO, MIN_PROMPT_BUDGET_TOKENS } from "./agent-compaction-constants.js";
 import {
   applyAgentAutoCompactionGuard,
@@ -352,7 +353,7 @@ describe("resolveCompactionReserveTokensFloor", () => {
   });
 
   it("uses per-agent reserveTokensFloor when an agent id is provided", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           compaction: {
@@ -368,7 +369,7 @@ describe("resolveCompactionReserveTokensFloor", () => {
           },
         ],
       },
-    } as const;
+    };
 
     expect(resolveCompactionReserveTokensFloor(cfg, "worker")).toBe(24_000);
     expect(resolveCompactionReserveTokensFloor(cfg, "other")).toBe(20_000);
@@ -409,7 +410,7 @@ describe("resolveEffectiveCompactionMode", () => {
   });
 
   it("prefers per-agent compaction mode and provider overrides", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           compaction: {
@@ -426,7 +427,7 @@ describe("resolveEffectiveCompactionMode", () => {
           },
         ],
       },
-    } as const;
+    };
 
     expect(resolveEffectiveCompactionMode(cfg, "worker")).toBe("safeguard");
     expect(resolveEffectiveCompactionMode(cfg, "other")).toBe("default");
