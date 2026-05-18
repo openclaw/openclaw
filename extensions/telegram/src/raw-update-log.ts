@@ -2,50 +2,46 @@ const MAX_RAW_UPDATE_STRING = 500;
 const MAX_RAW_UPDATE_ARRAY = 20;
 const REDACTED_TELEGRAM_FIELD = "[redacted]";
 const TELEGRAM_RAW_UPDATE_ALWAYS_REDACT_KEYS = new Set([
+  "added_to_attachment_menu",
   "author_signature",
   "caption",
   "chat_instance",
   "data",
   "email",
+  "bio",
+  "description",
+  "explanation",
   "file_id",
   "file_unique_id",
   "first_name",
   "invite_link",
+  "is_premium",
+  "language_code",
+  "latitude",
   "last_name",
+  "longitude",
+  "name",
   "phone_number",
+  "question",
   "query",
   "text",
   "title",
   "url",
   "username",
+  "vcard",
 ]);
+const TELEGRAM_RAW_UPDATE_ALLOWED_ID_KEYS = new Set(["message_id", "update_id"]);
 const TELEGRAM_RAW_UPDATE_ID_REDACT_KEYS = new Set([
   "chat_id",
   "custom_emoji_id",
+  "inline_message_id",
   "migrate_from_chat_id",
   "migrate_to_chat_id",
+  "option_ids",
+  "poll_id",
   "sender_chat_id",
   "user_id",
-]);
-const TELEGRAM_RAW_UPDATE_ID_REDACT_PARENTS = new Set([
-  "chat",
-  "from",
-  "sender_chat",
-  "sender_user",
-  "user",
-  "via_bot",
-]);
-const TELEGRAM_RAW_UPDATE_USER_OBJECT_KEYS = new Set([
-  "administrator",
-  "bot",
-  "creator",
-  "forward_from",
-  "forward_from_chat",
-  "left_chat_member",
-  "new_chat_member",
-  "new_chat_members",
-  "old_chat_member",
-  "reply_to_message",
+  "user_chat_id",
 ]);
 
 function shouldRedactTelegramRawUpdateValue(key: string, parentKey: string | undefined): boolean {
@@ -55,27 +51,23 @@ function shouldRedactTelegramRawUpdateValue(key: string, parentKey: string | und
   if (TELEGRAM_RAW_UPDATE_ALWAYS_REDACT_KEYS.has(key)) {
     return true;
   }
+  if (TELEGRAM_RAW_UPDATE_ALLOWED_ID_KEYS.has(key)) {
+    return false;
+  }
   if (TELEGRAM_RAW_UPDATE_ID_REDACT_KEYS.has(key)) {
     return true;
   }
-  if (key === "id") {
-    return parentKey !== undefined && TELEGRAM_RAW_UPDATE_ID_REDACT_PARENTS.has(parentKey);
+  if (key === "id" || key.endsWith("_id") || key.endsWith("_ids")) {
+    return parentKey !== undefined;
   }
   return false;
 }
 
-function shouldTreatTelegramRawUpdateObjectAsPrivate(
-  key: string,
-  value: Record<string, unknown>,
-): boolean {
-  if (!TELEGRAM_RAW_UPDATE_USER_OBJECT_KEYS.has(key)) {
-    return false;
-  }
+function isTelegramUserObject(value: Record<string, unknown>): boolean {
   return (
-    typeof value.id === "number" ||
-    typeof value.username === "string" ||
-    typeof value.first_name === "string" ||
-    typeof value.last_name === "string"
+    typeof value.id === "number" &&
+    typeof value.is_bot === "boolean" &&
+    typeof value.first_name === "string"
   );
 }
 
@@ -103,7 +95,7 @@ export function stringifyTelegramRawUpdateForLog(update: unknown): string {
       }
       seen.add(value);
       const record = value as Record<string, unknown>;
-      if (shouldTreatTelegramRawUpdateObjectAsPrivate(key, record)) {
+      if (isTelegramUserObject(record)) {
         return REDACTED_TELEGRAM_FIELD;
       }
       const redacted: Record<string, unknown> = {};
