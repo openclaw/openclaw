@@ -1,0 +1,33 @@
+name: Sync from upstream
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/openclaw/openclaw.git
+
+      - name: Fetch upstream
+        run: git fetch upstream main
+
+      - name: Rebase local commits on top of upstream
+        run: |
+          git rebase upstream/main || (git rebase --abort && echo "Rebase conflict — manual intervention required" && exit 1)
+
+      - name: Push to private repo
+        run: git push origin main --force-with-lease
