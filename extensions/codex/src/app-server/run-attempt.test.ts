@@ -619,7 +619,7 @@ function extractRelayIdFromThreadRequest(params: unknown): string {
 }
 
 function expectedNativeHookRelayId(params: EmbeddedRunAttemptParams): string {
-  return __testing.buildCodexNativeHookRelayId({
+  return testing.buildCodexNativeHookRelayId({
     agentId: params.agentId ?? "main",
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -1262,7 +1262,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("keeps owner-only dynamic tool schemas stable for non-owner Codex thread starts", async () => {
     const factoryOptions: unknown[] = [];
-    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
       factoryOptions.push(options);
       const toolOptions = options as {
         retainUnauthorizedOwnerOnlyTools?: boolean;
@@ -1300,7 +1300,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("resumes one Codex thread when owner-only tool availability flips", async () => {
-    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
       const toolOptions = options as {
         retainUnauthorizedOwnerOnlyTools?: boolean;
         senderIsOwner?: boolean;
