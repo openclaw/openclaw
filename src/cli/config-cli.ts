@@ -459,7 +459,47 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
   return { found: true, value: current };
 }
 
-type SetAtPathOptions = { numericObjectKeys?: boolean };
+type PathPattern = readonly string[];
+
+const CONFIG_SET_NUMERIC_OBJECT_KEY_PARENT_PATHS: readonly PathPattern[] = [
+  ["channels", "discord", "dms"],
+  ["channels", "discord", "guilds"],
+  ["channels", "discord", "guilds", "*", "channels"],
+  ["channels", "discord", "guilds", "*", "toolsBySender"],
+  ["channels", "discord", "guilds", "*", "channels", "*", "toolsBySender"],
+];
+
+type SetAtPathOptions = {
+  numericObjectKeys?: boolean;
+  numericObjectKeyParentPaths?: readonly PathPattern[];
+};
+
+function pathMatchesPattern(path: readonly PathSegment[], pattern: PathPattern): boolean {
+  return (
+    path.length === pattern.length &&
+    path.every((segment, index) => pattern[index] === "*" || pattern[index] === segment)
+  );
+}
+
+function shouldCreateArrayForMissingPathSegment(params: {
+  path: readonly PathSegment[];
+  segmentIndex: number;
+  next?: PathSegment;
+  options?: SetAtPathOptions;
+}): boolean {
+  if (!params.next || params.options?.numericObjectKeys || !isIndexSegment(params.next)) {
+    return false;
+  }
+  const parentPath = params.path.slice(0, params.segmentIndex + 1);
+  if (
+    params.options?.numericObjectKeyParentPaths?.some((pattern) =>
+      pathMatchesPattern(parentPath, pattern),
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
 
 function setAtPath(
   root: Record<string, unknown>,
@@ -471,7 +511,12 @@ function setAtPath(
   for (let i = 0; i < path.length - 1; i += 1) {
     const segment = path[i];
     const next = path[i + 1];
-    const nextIsIndex = !options?.numericObjectKeys && Boolean(next && isIndexSegment(next));
+    const nextIsIndex = shouldCreateArrayForMissingPathSegment({
+      path,
+      segmentIndex: i,
+      next,
+      options,
+    });
     if (Array.isArray(current)) {
       if (!isIndexSegment(segment)) {
         throw new Error(`Expected numeric index for array segment "${segment}"`);
@@ -1425,7 +1470,11 @@ function collectDryRunRefs(params: {
     if (!ref) {
       continue;
     }
-    if (includeAllDiscoveredRefs || targetPaths.has(target.path) || providerAliases.has(ref.provider)) {
+    if (
+      includeAllDiscoveredRefs ||
+      targetPaths.has(target.path) ||
+      providerAliases.has(ref.provider)
+    ) {
       refsByKey.set(secretRefKey(ref), ref);
     }
   }
@@ -1731,6 +1780,7 @@ async function runConfigOperations(params: {
     if (operation.mutation === "merge" || (options.merge && operation.mutation !== "replace")) {
       mergeAtPath(next, operation.setPath, operation.value, {
         numericObjectKeys: params.successMode === "patch",
+        numericObjectKeyParentPaths: CONFIG_SET_NUMERIC_OBJECT_KEY_PARENT_PATHS,
       });
     } else {
       assertNonDestructiveReplacement({
@@ -1741,6 +1791,7 @@ async function runConfigOperations(params: {
       });
       setAtPath(next, operation.setPath, operation.value, {
         numericObjectKeys: params.successMode === "patch",
+        numericObjectKeyParentPaths: CONFIG_SET_NUMERIC_OBJECT_KEY_PARENT_PATHS,
       });
     }
   }
