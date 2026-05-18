@@ -40,11 +40,7 @@ import {
   hasBotMention,
   resolveTelegramPrimaryMedia,
 } from "./bot/body-helpers.js";
-import {
-  buildTelegramGroupPeerId,
-  buildTelegramRoutingTarget,
-  type TelegramThreadSpec,
-} from "./bot/helpers.js";
+import { buildTelegramGroupPeerId, buildTelegramInboundOriginTarget } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
@@ -146,7 +142,7 @@ export async function resolveTelegramInboundBody(params: {
   sessionKey?: string;
   resolvedThreadId?: number;
   replyThreadId?: number;
-  forumOriginThreadSpec?: TelegramThreadSpec;
+  originatingTo?: string;
   routeAgentId?: string;
   effectiveGroupAllow: NormalizedAllowFrom;
   effectiveDmAllow: NormalizedAllowFrom;
@@ -171,7 +167,7 @@ export async function resolveTelegramInboundBody(params: {
     sessionKey,
     resolvedThreadId,
     replyThreadId,
-    forumOriginThreadSpec,
+    originatingTo: providedOriginatingTo,
     routeAgentId,
     effectiveGroupAllow,
     effectiveDmAllow,
@@ -210,9 +206,7 @@ export async function resolveTelegramInboundBody(params: {
   });
   const commandAuthorized = commandGate.authorized;
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
-  const originatingTo = forumOriginThreadSpec
-    ? buildTelegramRoutingTarget(chatId, forumOriginThreadSpec)
-    : `telegram:${chatId}`;
+  const originatingTo = providedOriginatingTo ?? buildTelegramInboundOriginTarget(chatId);
 
   const primaryMedia = resolveTelegramPrimaryMedia(msg);
   let placeholder = primaryMedia?.placeholder ?? "";

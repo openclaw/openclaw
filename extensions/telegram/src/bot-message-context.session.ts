@@ -35,7 +35,7 @@ import {
   buildSenderLabel,
   buildSenderName,
   buildTelegramGroupFrom,
-  buildTelegramRoutingTarget,
+  buildTelegramInboundOriginTarget,
   describeReplyTarget,
   normalizeForwardedContext,
   type TelegramReplyTarget,
@@ -414,10 +414,7 @@ export async function buildTelegramInboundContextPayload(params: {
   const telegramFrom = isGroup
     ? buildTelegramGroupFrom(chatId, resolvedThreadId)
     : `telegram:${chatId}`;
-  const telegramTo =
-    threadSpec.scope === "forum"
-      ? buildTelegramRoutingTarget(chatId, threadSpec)
-      : `telegram:${chatId}`;
+  const telegramTo = buildTelegramInboundOriginTarget(chatId, threadSpec);
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
   const commandSource = options?.commandSource;
   const unmentionedGroupPolicy = resolveUnmentionedGroupInboundPolicy({

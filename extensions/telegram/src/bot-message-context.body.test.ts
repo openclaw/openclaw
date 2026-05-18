@@ -378,7 +378,7 @@ describe("resolveTelegramInboundBody", () => {
       requireMention: true,
       resolvedThreadId: 99,
       replyThreadId: 99,
-      forumOriginThreadSpec: { id: 99, scope: "forum" },
+      originatingTo: "telegram:-1001234567890:topic:99",
     });
 
     const ctx = transcribeCallContext();
@@ -414,7 +414,7 @@ describe("resolveTelegramInboundBody", () => {
       requireMention: true,
       resolvedThreadId: 99,
       replyThreadId: 99,
-      forumOriginThreadSpec: { id: 99, scope: "forum" },
+      originatingTo: "telegram:-1001234567890:topic:99",
     });
 
     expect(result).toBeNull();
