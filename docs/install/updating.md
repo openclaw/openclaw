@@ -124,7 +124,8 @@ Then verify the service:
 openclaw --version
 curl -fsS http://127.0.0.1:18789/readyz
 openclaw plugins list --json
-openclaw doctor --deep --lint --json
+openclaw gateway status --deep --json
+openclaw doctor --lint --json
 ```
 
 When `openclaw update` manages a global npm install, it installs the target into
