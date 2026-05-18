@@ -208,6 +208,8 @@ function textFromData(
   return text;
 }
 
+const CURRENT_TOOL_PROGRESS_LINE_ID = "current-tool";
+
 function lineWithId<TLine extends ChannelProgressDraftLine | undefined>(
   line: TLine,
   id: string | undefined,
@@ -241,22 +243,23 @@ function formatAgentEventForChannelMirrorLine(
     if (data.suppressChannelProgress === true) {
       return undefined;
     }
-    return buildChannelProgressDraftLineForEntry(entry, {
-      event: "item",
-      itemId: normalizeOptionalString(data.itemId),
-      itemKind: normalizeOptionalString(data.kind),
-      title: normalizeOptionalString(data.title),
-      name: normalizeOptionalString(data.name),
-      phase: normalizeOptionalString(data.phase),
-      status: normalizeOptionalString(data.status),
-      summary: normalizeOptionalString(data.summary),
-      progressText: normalizeOptionalString(data.progressText),
-      meta: normalizeOptionalString(data.meta),
-    });
+    return lineWithId(
+      buildChannelProgressDraftLineForEntry(entry, {
+        event: "item",
+        itemKind: normalizeOptionalString(data.kind),
+        title: normalizeOptionalString(data.title),
+        name: normalizeOptionalString(data.name),
+        phase: normalizeOptionalString(data.phase),
+        status: normalizeOptionalString(data.status),
+        summary: normalizeOptionalString(data.summary),
+        progressText: normalizeOptionalString(data.progressText),
+        meta: normalizeOptionalString(data.meta),
+      }),
+      CURRENT_TOOL_PROGRESS_LINE_ID,
+    );
   }
 
   if (evt.stream === "command_output") {
-    const id = normalizeOptionalString(data.itemId) ?? normalizeOptionalString(data.toolCallId);
     return lineWithId(
       buildChannelProgressDraftLineForEntry(entry, {
         event: "command-output",
@@ -266,12 +269,11 @@ function formatAgentEventForChannelMirrorLine(
         status: normalizeOptionalString(data.status),
         exitCode: typeof data.exitCode === "number" ? data.exitCode : null,
       }),
-      id,
+      CURRENT_TOOL_PROGRESS_LINE_ID,
     );
   }
 
   if (evt.stream === "approval") {
-    const id = normalizeOptionalString(data.approvalId) ?? normalizeOptionalString(data.toolCallId);
     return lineWithId(
       buildChannelProgressDraftLineForEntry(entry, {
         event: "approval",
@@ -281,7 +283,7 @@ function formatAgentEventForChannelMirrorLine(
         reason: normalizeOptionalString(data.reason),
         message: normalizeOptionalString(data.message),
       }),
-      id,
+      CURRENT_TOOL_PROGRESS_LINE_ID,
     );
   }
 
@@ -298,7 +300,6 @@ function formatAgentEventForChannelMirrorLine(
   }
 
   if (evt.stream === "patch") {
-    const id = normalizeOptionalString(data.itemId) ?? normalizeOptionalString(data.toolCallId);
     const stringArray = (value: unknown): string[] | undefined =>
       Array.isArray(value)
         ? value.filter((entry): entry is string => typeof entry === "string")
@@ -314,7 +315,7 @@ function formatAgentEventForChannelMirrorLine(
         deleted: stringArray(data.deleted),
         summary: normalizeOptionalString(data.summary),
       }),
-      id,
+      CURRENT_TOOL_PROGRESS_LINE_ID,
     );
   }
 

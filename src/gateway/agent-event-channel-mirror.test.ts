@@ -208,6 +208,59 @@ describe("agent event channel mirror", () => {
     });
   });
 
+  it("replaces repeated tool progress lines with the latest current tool", async () => {
+    const { mirror, editProgressPreview } = createHarness({
+      telegramConfig: { streaming: { mode: "progress", progress: { label: false, maxLines: 8 } } },
+    });
+
+    await mirror(
+      event({
+        stream: "item",
+        data: {
+          itemId: "read-1",
+          phase: "end",
+          kind: "tool",
+          name: "read",
+          title: "Read",
+          progressText: "first 120 lines of memory/gotchas.md",
+        },
+      }),
+    );
+    await mirror(
+      event({
+        seq: 2,
+        stream: "item",
+        data: {
+          itemId: "read-2",
+          phase: "end",
+          kind: "tool",
+          name: "read",
+          title: "Read",
+          progressText: "first 120 lines of memory/designs.md",
+        },
+      }),
+    );
+    await mirror(
+      event({
+        seq: 3,
+        stream: "item",
+        data: {
+          itemId: "read-3",
+          phase: "end",
+          kind: "tool",
+          name: "read",
+          title: "Read",
+          progressText: "first 120 lines of memory/anti-patterns.md",
+        },
+      }),
+    );
+
+    const latestPreviewText = editProgressPreview.mock.calls.at(-1)?.[0].text;
+    expect(latestPreviewText).not.toContain("gotchas");
+    expect(latestPreviewText).not.toContain("designs");
+    expect(latestPreviewText).toContain("anti-patterns");
+  });
+
   it("bounds progress preview lines and deletes the preview when the run ends", async () => {
     const { mirror, sendProgressPreview, editProgressPreview, deleteProgressPreview } =
       createHarness({
