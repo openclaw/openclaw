@@ -71,7 +71,7 @@ export type CodexPluginThreadConfigProvider = {
 
 export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
-  "features.code_mode_only": true,
+  "features.code_mode_only": false,
 };
 
 export const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
@@ -627,14 +627,22 @@ export function buildCodexRuntimeThreadConfig(
   config: JsonObject | undefined,
   options: { nativeCodeModeEnabled?: boolean } = {},
 ): JsonObject {
-  const codeModeConfig =
-    options.nativeCodeModeEnabled === false
-      ? CODEX_CODE_MODE_DISABLED_THREAD_CONFIG
-      : CODEX_CODE_MODE_THREAD_CONFIG;
-  const runtimeConfig = mergeCodexThreadConfigs(config, codeModeConfig) ?? {
-    ...codeModeConfig,
-  };
-  return runtimeConfig;
+  if (options.nativeCodeModeEnabled === false) {
+    return (
+      mergeCodexThreadConfigs(
+        CODEX_CODE_MODE_THREAD_CONFIG,
+        config,
+        CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+      ) ?? {
+        ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+      }
+    );
+  }
+  return (
+    mergeCodexThreadConfigs(CODEX_CODE_MODE_THREAD_CONFIG, config) ?? {
+      ...CODEX_CODE_MODE_THREAD_CONFIG,
+    }
+  );
 }
 
 function buildCodexRuntimeThreadConfigForRun(
