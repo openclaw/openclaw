@@ -542,7 +542,29 @@ else
   [[ -n "$SELINUX_MOUNT_OPTS" ]] && SELINUX_MOUNT_OPTS=",$SELINUX_MOUNT_OPTS"
 fi
 
+CLAUDE_MOUNT_ARGS=()
+
 if [[ "$RUN_SETUP" == true ]]; then
+  CLAUDE_HOST_DIR="${OPENCLAW_HOST_CLAUDE_DIR:-$EFFECTIVE_HOME/.claude}"
+  if [[ -f "$CLAUDE_HOST_DIR/.credentials.json" ]]; then
+    if claude_check_err="$(
+      (
+        validate_mount_source_path "claude credentials directory" "$CLAUDE_HOST_DIR" \
+          && ensure_private_existing_dir_owned_by_user "claude credentials directory" "$CLAUDE_HOST_DIR" \
+          && ensure_private_existing_regular_file_owned_by_user "claude credentials file" "$CLAUDE_HOST_DIR/.credentials.json"
+      ) 2>&1
+    )"; then
+      CLAUDE_SELINUX_OPT=""
+      if [[ -n "$SELINUX_MOUNT_OPTS" ]]; then
+        CLAUDE_SELINUX_OPT=",z"
+      fi
+      CLAUDE_MOUNT_ARGS=(-v "$CLAUDE_HOST_DIR:/home/node/.claude:ro${CLAUDE_SELINUX_OPT}")
+    else
+      printf "warning: skipping host Claude credentials mount; setup will continue without it.\n" >&2
+      printf "         %s\n" "$claude_check_err" >&2
+      printf "         Non-Claude providers will still onboard; for Anthropic Claude CLI, fix permissions/ownership of %s and re-run setup.\n" "$CLAUDE_HOST_DIR" >&2
+    fi
+  fi
   TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
   podman run --pull="$PODMAN_PULL" --rm -it \
     --init \
@@ -553,6 +575,7 @@ if [[ "$RUN_SETUP" == true ]]; then
     --env-file "$TOKEN_ENV_FILE" \
     -v "$CONFIG_DIR:/home/node/.openclaw:rw${SELINUX_MOUNT_OPTS}" \
     -v "$WORKSPACE_DIR:/home/node/.openclaw/workspace:rw${SELINUX_MOUNT_OPTS}" \
+    "${CLAUDE_MOUNT_ARGS[@]}" \
     "$OPENCLAW_IMAGE" \
     node dist/index.js onboard "$@"
   exit 0
