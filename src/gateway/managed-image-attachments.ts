@@ -1002,7 +1002,11 @@ export async function handleManagedOutgoingImageHttpRequest(
     return true;
   }
   const bearerToken = getBearerToken(req);
+  const requesterSessionKey = req.headers["x-openclaw-requester-session-key"];
+  const isRequesterSessionMatch =
+    typeof requesterSessionKey === "string" && requesterSessionKey === sessionKey;
   const isControlUiDeviceRead =
+    isRequesterSessionMatch &&
     bearerToken && opts.authorizeControlUiDeviceReadToken
       ? await opts.authorizeControlUiDeviceReadToken(bearerToken)
       : false;

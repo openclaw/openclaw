@@ -155,6 +155,7 @@ async function requestManagedImage(params: {
   thumbnailMaxSide?: number;
   transcriptMessages?: Record<string, unknown>[];
   sessionEntry?: { sessionId: string; sessionFile?: string };
+  authorizeControlUiDeviceReadToken?: (token: string) => Promise<boolean>;
 }) {
   authorizeGatewayHttpRequestOrReplyMock.mockImplementation(async ({ res }) => {
     if (params.denyAuth) {
@@ -174,6 +175,9 @@ async function requestManagedImage(params: {
       (params.scopes ?? ["operator.read"]).includes("operator.admin")
     );
   });
+  getBearerTokenMock.mockReturnValue(
+    params.headers?.authorization?.replace(/^Bearer\s+/i, "") ?? null,
+  );
   loadSessionEntryMock.mockReturnValue({
     storePath: path.join(params.stateDir, "gateway-sessions.json"),
     entry: params.sessionEntry ?? { sessionId: "sess-1", sessionFile: "session.jsonl" },
@@ -202,6 +206,7 @@ async function requestManagedImage(params: {
       allowRealIpFallback: false,
       stateDir: params.stateDir,
       thumbnailMaxSide: params.thumbnailMaxSide,
+      authorizeControlUiDeviceReadToken: params.authorizeControlUiDeviceReadToken,
     });
     if (!handled) {
       res.statusCode = 404;
@@ -375,6 +380,47 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     });
 
     expect(result.statusCode).toBe(403);
+  });
+
+  it("requires requester-session binding before accepting Control UI read tokens", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const authorizeControlUiDeviceReadToken = vi.fn(async () => true);
+
+    const unbound = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      authResponse: { authMethod: "device-token" },
+      headers: { authorization: "Bearer paired-read-token" },
+      authorizeControlUiDeviceReadToken,
+    });
+    expect(unbound.result.statusCode).toBe(403);
+    expect(authorizeControlUiDeviceReadToken).not.toHaveBeenCalled();
+
+    const wrongSession = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      authResponse: { authMethod: "device-token" },
+      headers: {
+        authorization: "Bearer paired-read-token",
+        "x-openclaw-requester-session-key": "agent:other:main",
+      },
+      authorizeControlUiDeviceReadToken,
+    });
+    expect(wrongSession.result.statusCode).toBe(403);
+    expect(authorizeControlUiDeviceReadToken).not.toHaveBeenCalled();
+
+    const bound = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      headers: {
+        authorization: "Bearer paired-read-token",
+        "x-openclaw-requester-session-key": sessionKey,
+      },
+      authorizeControlUiDeviceReadToken,
+    });
+    expect(bound.result.statusCode).toBe(200);
+    expect(authorizeControlUiDeviceReadToken).toHaveBeenCalledTimes(1);
+    expect(bound.result.body.toString("utf-8")).toBe("original-image");
   });
 
   it("serves owner trusted-proxy requests with admin scope", async () => {
