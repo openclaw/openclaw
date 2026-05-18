@@ -8,6 +8,7 @@ import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import { PROTOCOL_VERSION } from "../protocol/index.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
+import { getPluginRegistryGatewayContext } from "../server-plugins.js";
 import { resolvePluginRouteRuntimeOperatorScopes } from "./plugin-route-runtime-scopes.js";
 import {
   resolvePluginRoutePathContext,
@@ -81,6 +82,7 @@ export function createGatewayPluginRequestHandler(params: {
   const { log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
     const registry = resolveActivePluginHttpRouteRegistry(params.registry);
+    const registryGatewayContext = getPluginRegistryGatewayContext(registry);
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {
       return false;
@@ -145,6 +147,7 @@ export function createGatewayPluginRequestHandler(params: {
       try {
         const handled = await withPluginRuntimeGatewayRequestScope(
           {
+            ...(registryGatewayContext ? { context: registryGatewayContext } : {}),
             client: runtimeClient,
             isWebchatConnect: () => false,
             ...(route.pluginId ? { pluginId: route.pluginId } : {}),
@@ -179,6 +182,7 @@ export function createGatewayPluginUpgradeHandler(params: {
   const { log } = params;
   return async (req, socket, head, providedPathContext, dispatchContext) => {
     const registry = resolveActivePluginHttpRouteRegistry(params.registry);
+    const registryGatewayContext = getPluginRegistryGatewayContext(registry);
     const routes = registry.httpRoutes ?? [];
     if (routes.length === 0) {
       return false;
@@ -246,6 +250,7 @@ export function createGatewayPluginUpgradeHandler(params: {
       try {
         const handled = await withPluginRuntimeGatewayRequestScope(
           {
+            ...(registryGatewayContext ? { context: registryGatewayContext } : {}),
             client: runtimeClient,
             isWebchatConnect: () => false,
             ...(route.pluginId ? { pluginId: route.pluginId } : {}),

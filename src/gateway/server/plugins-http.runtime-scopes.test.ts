@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
+  pinActivePluginHttpRouteRegistry,
   releasePinnedPluginHttpRouteRegistry,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
@@ -11,6 +12,8 @@ import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "../method-scopes.js";
 import { isApprovalRecordVisibleToClient } from "../server-methods/approval-shared.js";
+import type { GatewayRequestContext } from "../server-methods/types.js";
+import { setPluginRegistryGatewayContext } from "../server-plugins.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./plugins-http.js";
@@ -187,6 +190,46 @@ describe("plugin HTTP route runtime scopes", () => {
       pluginSource: "route",
       gatewayMethodDispatchAllowed: true,
     });
+  });
+
+  it("uses the active registry gateway context for plugin runtime scope", async () => {
+    const staleRegistry = createTestRegistry();
+    const activeContext = { label: "active-gateway" } as unknown as GatewayRequestContext;
+    const staleContext = { label: "stale-gateway" } as unknown as GatewayRequestContext;
+    let observedContext: GatewayRequestContext | undefined;
+    const activeRegistry = createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: "/secure-hook",
+          auth: "gateway",
+          handler: async () => {
+            observedContext = getPluginRuntimeGatewayRequestScope()?.context;
+            return true;
+          },
+        }),
+      ],
+    });
+
+    setPluginRegistryGatewayContext(staleRegistry, staleContext);
+    setPluginRegistryGatewayContext(activeRegistry, activeContext);
+    setActivePluginRegistry(activeRegistry);
+    pinActivePluginHttpRouteRegistry(activeRegistry);
+
+    const handler = createGatewayPluginRequestHandler({
+      registry: staleRegistry,
+      log: createMockLogger(),
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/secure-hook" } as IncomingMessage, res, undefined, {
+      gatewayAuthSatisfied: true,
+      gatewayRequestOperatorScopes: ["operator.write"],
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(observedContext).toBe(activeContext);
+    expect(observedContext).not.toBe(staleContext);
   });
 
   it("does not give approval-scoped gateway-auth routes global approval visibility", async () => {

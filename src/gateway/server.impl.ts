@@ -88,8 +88,8 @@ import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
-import type { GatewayRequestHandlers } from "./server-methods/types.js";
-import { setFallbackGatewayContextResolver } from "./server-plugins.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
+import { setFallbackGatewayContextResolver, setPluginRegistryGatewayContext } from "./server-plugins.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import {
@@ -1124,6 +1124,7 @@ export async function startGatewayServer(
       ...pluginRegistry.gatewayHandlers,
       ...extraHandlers,
     };
+    let currentPluginRegistryGatewayContext: GatewayRequestContext | undefined;
     let attachedPluginGatewayHandlerKeys = new Set(Object.keys(pluginRegistry.gatewayHandlers));
     const buildAttachedGatewayMethodRegistry = (
       nextPluginRegistry: typeof pluginRegistry,
@@ -1163,6 +1164,9 @@ export async function startGatewayServer(
       gatewayMethods: string[];
     }) => {
       pluginRegistry = loaded.pluginRegistry;
+      if (currentPluginRegistryGatewayContext) {
+        setPluginRegistryGatewayContext(pluginRegistry, currentPluginRegistryGatewayContext);
+      }
       baseGatewayMethods = loaded.gatewayMethods;
       for (const key of attachedPluginGatewayHandlerKeys) {
         delete attachedGatewayExtraHandlers[key];
@@ -1388,6 +1392,8 @@ export async function startGatewayServer(
       unavailableGatewayMethods,
       broadcastVoiceWakeRoutingChanged,
     });
+    currentPluginRegistryGatewayContext = gatewayRequestContext;
+    setPluginRegistryGatewayContext(pluginRegistry, gatewayRequestContext);
 
     const fallbackGatewayContextCleanup: unknown = setFallbackGatewayContextResolver(
       () => gatewayRequestContext,
