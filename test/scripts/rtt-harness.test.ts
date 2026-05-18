@@ -176,7 +176,7 @@ describe("RTT harness", () => {
     ]);
 
     const config = JSON.parse(await fs.readFile(configPath, "utf8"));
-    expect(config.channels.telegram.streaming).toBe(false);
+    expect(config.channels.telegram.streaming).toEqual({ mode: "off" });
     expect(config.messages.groupChat.visibleReplies).toBe("automatic");
   });
 

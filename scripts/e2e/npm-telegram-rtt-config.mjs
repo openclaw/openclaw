@@ -89,7 +89,7 @@ config.channels.telegram = {
     provider: "default",
     id: "TELEGRAM_BOT_TOKEN",
   },
-  streaming: false,
+  streaming: { mode: "off" },
   dmPolicy: "allowlist",
   allowFrom: [driverId],
   defaultTo: driverId,
