@@ -1,5 +1,7 @@
 import { isRestartEnabled } from "../../config/commands.flags.js";
+import { writeConfigFile } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import {
@@ -10,8 +12,17 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
-import { normalizeUpdateChannel } from "../../infra/update-channels.js";
-import { resolveUpdateInstallSurface, runGatewayUpdate } from "../../infra/update-runner.js";
+import { type UpdateChannel, normalizeUpdateChannel } from "../../infra/update-channels.js";
+import {
+  resolveUpdateInstallSurface,
+  runGatewayUpdate,
+  type UpdateRunResult,
+} from "../../infra/update-runner.js";
+import {
+  syncPluginsForUpdateChannel,
+  updateNpmInstalledPlugins,
+  type PluginUpdateIntegrityDriftParams,
+} from "../../plugins/update.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import { validateUpdateRunParams, validateUpdateStatusParams } from "../protocol/index.js";
 import {
@@ -21,6 +32,64 @@ import {
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+type PostUpdatePlugins = NonNullable<NonNullable<UpdateRunResult["postUpdate"]>["plugins"]>;
+
+async function runPostCorePluginSync(params: {
+  config: OpenClawConfig;
+  channel: UpdateChannel;
+  workspaceDir: string;
+}): Promise<PostUpdatePlugins> {
+  const integrityDrifts: PostUpdatePlugins["integrityDrifts"] = [];
+
+  const syncResult = await syncPluginsForUpdateChannel({
+    config: params.config,
+    channel: params.channel,
+    workspaceDir: params.workspaceDir,
+  });
+
+  const npmResult = await updateNpmInstalledPlugins({
+    config: syncResult.config,
+    updateChannel: params.channel,
+    syncOfficialPluginInstalls: true,
+    onIntegrityDrift: (drift: PluginUpdateIntegrityDriftParams) => {
+      integrityDrifts.push({
+        pluginId: drift.pluginId,
+        spec: drift.spec,
+        expectedIntegrity: drift.expectedIntegrity,
+        actualIntegrity: drift.actualIntegrity,
+        resolvedSpec: drift.resolvedSpec,
+        resolvedVersion: drift.resolvedVersion,
+        action: "aborted",
+      });
+      return false;
+    },
+  });
+
+  if (syncResult.changed || npmResult.changed) {
+    await writeConfigFile(npmResult.config, { skipPluginValidation: true });
+  }
+
+  const hasErrors =
+    syncResult.summary.errors.length > 0 || npmResult.outcomes.some((o) => o.status === "error");
+
+  return {
+    status: hasErrors ? "error" : "ok",
+    changed: syncResult.changed || npmResult.changed,
+    sync: {
+      changed: syncResult.changed,
+      switchedToBundled: syncResult.summary.switchedToBundled,
+      switchedToNpm: syncResult.summary.switchedToNpm,
+      warnings: syncResult.summary.warnings,
+      errors: syncResult.summary.errors,
+    },
+    npm: {
+      changed: npmResult.changed,
+      outcomes: npmResult.outcomes,
+    },
+    integrityDrifts,
+  };
+}
 
 export const updateHandlers: GatewayRequestHandlers = {
   "update.status": async ({ params, respond }) => {
@@ -90,6 +159,21 @@ export const updateHandlers: GatewayRequestHandlers = {
           argv1: process.argv[1],
           channel: configChannel ?? undefined,
         });
+        if (result.status === "ok" && result.mode !== "git") {
+          const pluginSync = await runPostCorePluginSync({
+            config,
+            channel: configChannel ?? "stable",
+            workspaceDir: result.root ?? root,
+          }).catch((err: unknown) => {
+            context?.logGateway?.warn(
+              `update.run: plugin sync failed after core update: ${String(err)}`,
+            );
+            return null;
+          });
+          if (pluginSync) {
+            result = { ...result, postUpdate: { plugins: pluginSync } };
+          }
+        }
       }
     } catch {
       result = {

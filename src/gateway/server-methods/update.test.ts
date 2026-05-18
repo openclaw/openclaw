@@ -91,6 +91,33 @@ vi.mock("../../infra/update-runner.js", () => ({
   runGatewayUpdate: runGatewayUpdateMock,
 }));
 
+const syncPluginsForUpdateChannelMock = vi.fn(async () => ({
+  config: {},
+  changed: false,
+  summary: {
+    switchedToBundled: [],
+    switchedToClawHub: [],
+    switchedToNpm: [],
+    warnings: [],
+    errors: [],
+  },
+}));
+const updateNpmInstalledPluginsMock = vi.fn(async () => ({
+  config: {},
+  changed: false,
+  outcomes: [],
+}));
+const writeConfigFileMock = vi.fn(async () => {});
+
+vi.mock("../../plugins/update.js", () => ({
+  syncPluginsForUpdateChannel: syncPluginsForUpdateChannelMock,
+  updateNpmInstalledPlugins: updateNpmInstalledPluginsMock,
+}));
+
+vi.mock("../../config/config.js", () => ({
+  writeConfigFile: writeConfigFileMock,
+}));
+
 vi.mock("../protocol/index.js", () => ({
   validateUpdateStatusParams: () => true,
   validateUpdateRunParams: () => true,
@@ -140,6 +167,25 @@ beforeEach(() => {
   getLatestUpdateRestartSentinelMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true });
+  syncPluginsForUpdateChannelMock.mockClear();
+  syncPluginsForUpdateChannelMock.mockResolvedValue({
+    config: {},
+    changed: false,
+    summary: {
+      switchedToBundled: [],
+      switchedToClawHub: [],
+      switchedToNpm: [],
+      warnings: [],
+      errors: [],
+    },
+  });
+  updateNpmInstalledPluginsMock.mockClear();
+  updateNpmInstalledPluginsMock.mockResolvedValue({
+    config: {},
+    changed: false,
+    outcomes: [],
+  });
+  writeConfigFileMock.mockClear();
 });
 
 async function invokeUpdateRun(
@@ -391,5 +437,92 @@ describe("update.status", () => {
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(response?.sentinel?.kind).toBe("update");
     expect(response?.sentinel?.status).toBe("ok");
+  });
+});
+
+describe("update.run post-core plugin sync", () => {
+  it("runs plugin sync after a successful global npm install", async () => {
+    await invokeUpdateRun({});
+
+    expect(syncPluginsForUpdateChannelMock).toHaveBeenCalledTimes(1);
+    expect(updateNpmInstalledPluginsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips plugin sync for git-mode updates", async () => {
+    runGatewayUpdateMock.mockResolvedValueOnce({
+      status: "ok",
+      mode: "git",
+      after: { version: "2.0.0" },
+      steps: [],
+      durationMs: 100,
+    });
+
+    await invokeUpdateRun({});
+
+    expect(syncPluginsForUpdateChannelMock).not.toHaveBeenCalled();
+    expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("skips plugin sync when core update fails", async () => {
+    runGatewayUpdateMock.mockResolvedValueOnce({
+      status: "error",
+      mode: "npm",
+      steps: [],
+      durationMs: 100,
+    });
+
+    await invokeUpdateRun({});
+
+    expect(syncPluginsForUpdateChannelMock).not.toHaveBeenCalled();
+    expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("includes postUpdate.plugins in the response when plugin sync runs", async () => {
+    updateNpmInstalledPluginsMock.mockResolvedValueOnce({
+      config: {},
+      changed: true,
+      outcomes: [
+        { pluginId: "codex", status: "updated", message: "updated", nextVersion: "2026.5.12" },
+      ],
+    });
+
+    let response: { result?: { postUpdate?: { plugins?: { changed?: boolean } } } } | undefined;
+    await invokeUpdateRun({}, (_ok, res) => {
+      response = res as typeof response;
+    });
+
+    expect(response?.result?.postUpdate?.plugins?.changed).toBe(true);
+  });
+
+  it("writes config when plugin sync produces changes", async () => {
+    syncPluginsForUpdateChannelMock.mockResolvedValueOnce({
+      config: { agents: {} },
+      changed: true,
+      summary: {
+        switchedToBundled: [],
+        switchedToClawHub: [],
+        switchedToNpm: ["codex"],
+        warnings: [],
+        errors: [],
+      },
+    });
+
+    await invokeUpdateRun({});
+
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not write config when nothing changed", async () => {
+    await invokeUpdateRun({});
+
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("proceeds with restart even when plugin sync throws", async () => {
+    syncPluginsForUpdateChannelMock.mockRejectedValueOnce(new Error("npm failure"));
+
+    await invokeUpdateRun({});
+
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
   });
 });
