@@ -223,6 +223,76 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 
+  it("flags polling startups that hang before first transport activity", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        // Patch-merged from previous lifecycle: a polling restart cleared the
+        // transport timestamps but `notePollingStart` deliberately omits
+        // `connected`, so the prior `connected:true` is inherited.
+        connected: true,
+        enabled: true,
+        configured: true,
+        mode: "polling",
+        lastStartAt: 0,
+        lastConnectedAt: null,
+        lastEventAt: null,
+        lastTransportActivityAt: null,
+      },
+      {
+        channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+  });
+
+  it("keeps polling channels healthy during the connect grace even with null transport", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        mode: "polling",
+        lastStartAt: 95_000,
+        lastConnectedAt: null,
+        lastTransportActivityAt: null,
+      },
+      {
+        channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "startup-connect-grace" });
+  });
+
+  it("does not flag stale-startup when the polling channel has a prior successful connect", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        mode: "polling",
+        lastStartAt: 0,
+        lastConnectedAt: 50_000,
+        lastTransportActivityAt: null,
+      },
+      {
+        channelId: "telegram",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
   it("keeps quiet telegram webhooks healthy when they do not publish transport tracking", () => {
     const evaluation = evaluateChannelHealth(
       {

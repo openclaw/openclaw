@@ -103,7 +103,7 @@ describe("collectTelegramStatusIssues", () => {
         running: true,
         mode: "polling",
         connected: false,
-        lastStartAt: Date.now() - 121_000,
+        lastStartAt: Date.now() - 301_000,
         lastError: "network timeout",
       } as ChannelAccountSnapshot,
     ]);
@@ -128,7 +128,7 @@ describe("collectTelegramStatusIssues", () => {
         running: true,
         mode: "polling",
         connected: false,
-        lastStartAt: Date.now() - 121_000,
+        lastStartAt: Date.now() - 301_000,
         lastError:
           "Telegram isolated polling spool backlog stalled behind update 42 on lane telegram:123 for 1500100ms; marking polling unhealthy until the backlog drains.",
       } as ChannelAccountSnapshot,

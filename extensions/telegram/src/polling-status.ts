@@ -14,7 +14,9 @@ export function createTelegramPollingStatusPublisher(setStatus?: TelegramPolling
       // fire "disconnected" after the channel connect-grace window on busy bots whose
       // startup handshake (deleteWebhook + confirmPersistedOffset + first long-poll)
       // races past the grace. Leave connected untouched; notePollingStop is the only
-      // place that should mark the channel disconnected.
+      // place that should mark the channel disconnected. A startup that never reaches
+      // its first getUpdates is caught instead by the post-grace null-transport branch
+      // in evaluateChannelHealth.
       setStatus?.({
         mode: "polling",
         lastConnectedAt: null,
