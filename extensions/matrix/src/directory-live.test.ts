@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { matrixAuthedHttpClientCtorMock, requestJsonMock } = vi.hoisted(() => ({
   matrixAuthedHttpClientCtorMock: vi.fn(),
@@ -28,11 +28,13 @@ let resolveMatrixAuth: typeof import("./matrix/client.js").resolveMatrixAuth;
 describe("matrix directory live", () => {
   const cfg = { channels: { matrix: {} } };
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } =
       await import("./directory-live.js"));
     ({ resolveMatrixAuth } = await import("./matrix/client.js"));
+  });
+
+  beforeEach(() => {
     vi.mocked(resolveMatrixAuth).mockReset();
     vi.mocked(resolveMatrixAuth).mockResolvedValue({
       accountId: "assistant",
@@ -102,7 +104,7 @@ describe("matrix directory live", () => {
       query: "   ",
     });
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(resolveMatrixAuth).not.toHaveBeenCalled();
     expect(requestJsonMock).not.toHaveBeenCalled();
   });
@@ -113,7 +115,7 @@ describe("matrix directory live", () => {
       query: "",
     });
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(resolveMatrixAuth).not.toHaveBeenCalled();
     expect(requestJsonMock).not.toHaveBeenCalled();
   });
@@ -125,17 +127,15 @@ describe("matrix directory live", () => {
       limit: 3,
     });
 
-    expect(requestJsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "POST",
-        endpoint: "/_matrix/client/v3/user_directory/search",
-        timeoutMs: 10_000,
-        body: {
-          search_term: "Alice",
-          limit: 3,
-        },
-      }),
-    );
+    expect(requestJsonMock).toHaveBeenCalledWith({
+      method: "POST",
+      endpoint: "/_matrix/client/v3/user_directory/search",
+      timeoutMs: 10_000,
+      body: {
+        search_term: "Alice",
+        limit: 3,
+      },
+    });
   });
 
   it("accepts prefixed fully qualified user ids without hitting Matrix", async () => {
@@ -171,13 +171,12 @@ describe("matrix directory live", () => {
         handle: "#Team:Example.org",
       },
     ]);
-    expect(requestJsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "GET",
-        endpoint: "/_matrix/client/v3/directory/room/%23Team%3AExample.org",
-        timeoutMs: 10_000,
-      }),
-    );
+    expect(requestJsonMock).toHaveBeenCalledWith({
+      method: "GET",
+      endpoint: "/_matrix/client/v3/directory/room/%23Team%3AExample.org",
+      timeoutMs: 10_000,
+      body: undefined,
+    });
   });
 
   it("accepts prefixed room ids without additional Matrix lookups", async () => {

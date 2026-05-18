@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const hoisted = vi.hoisted(() => {
@@ -10,20 +10,23 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../config/sessions.js", () => ({
+vi.mock("../../config/sessions/store-load.js", () => ({
   loadSessionStore: (storePath: string) => hoisted.loadSessionStoreMock(storePath),
+}));
+
+vi.mock("../../config/sessions/targets.js", () => ({
   resolveAllAgentSessionStoreTargets: (cfg: OpenClawConfig, opts: unknown) =>
     hoisted.resolveAllAgentSessionStoreTargetsMock(cfg, opts),
-  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-  updateSessionStore: vi.fn(),
 }));
 let listAcpSessionEntries: typeof import("./session-meta.js").listAcpSessionEntries;
 
 describe("listAcpSessionEntries", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
+  beforeAll(async () => {
     ({ listAcpSessionEntries } = await import("./session-meta.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("reads ACP sessions from resolved configured store targets", async () => {
@@ -38,16 +41,17 @@ describe("listAcpSessionEntries", () => {
         storePath: "/custom/sessions/ops.json",
       },
     ]);
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:ops:acp:s1": {
-        updatedAt: 123,
-        acp: {
-          backend: "acpx",
-          agent: "ops",
-          mode: "persistent",
-          state: "idle",
-        },
+    const storedEntry = {
+      updatedAt: 123,
+      acp: {
+        backend: "acpx",
+        agent: "ops",
+        mode: "persistent",
+        state: "idle",
       },
+    };
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:ops:acp:s1": storedEntry,
     });
 
     const entries = await listAcpSessionEntries({ cfg });
@@ -55,12 +59,14 @@ describe("listAcpSessionEntries", () => {
     expect(hoisted.resolveAllAgentSessionStoreTargetsMock).toHaveBeenCalledWith(cfg, undefined);
     expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/custom/sessions/ops.json");
     expect(entries).toEqual([
-      expect.objectContaining({
+      {
+        acp: storedEntry.acp,
         cfg,
+        entry: storedEntry,
         storePath: "/custom/sessions/ops.json",
         sessionKey: "agent:ops:acp:s1",
         storeSessionKey: "agent:ops:acp:s1",
-      }),
+      },
     ]);
   });
 });

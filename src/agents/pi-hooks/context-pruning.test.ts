@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ToolResultMessage } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   computeEffectiveSettings,
@@ -149,7 +149,7 @@ function createContextHandler(): ContextHandler {
         handler = fn as ContextHandler;
       }
     },
-    appendEntry: (_type: string, _data?: unknown) => {},
+    appendEntry: (_type: string, dataValue?: unknown) => {},
   } as unknown as ExtensionAPI;
 
   contextPruningExtension(api);
@@ -310,13 +310,14 @@ describe("context-pruning", () => {
     expect(toolText(findToolResult(next, "t1"))).toBe("[cleared]");
   });
 
-  it("reads per-session settings from registry", async () => {
+  it("reads per-session settings from registry", () => {
     const sessionManager = {};
 
     setContextPruningRuntime(sessionManager, {
       settings: makeAggressiveSettings(),
       contextWindowTokens: 1000,
       isToolPrunable: () => true,
+      dropThinkingBlocks: false,
       lastCacheTouchAt: Date.now() - DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs - 1000,
     });
 
@@ -339,6 +340,7 @@ describe("context-pruning", () => {
       settings: makeAggressiveSettings(),
       contextWindowTokens: 1000,
       isToolPrunable: () => true,
+      dropThinkingBlocks: false,
       lastCacheTouchAt: lastTouch,
     });
 
@@ -403,7 +405,7 @@ describe("context-pruning", () => {
     });
 
     const tool = findToolResult(next, "t1");
-    expect(tool.content.some((b) => b.type === "image")).toBe(false);
+    expect(tool.content.some((block) => block.type === "image")).toBe(false);
     expect(toolText(tool)).toContain("[image removed during context pruning]");
     expect(toolText(tool)).toContain("visible tool text");
   });

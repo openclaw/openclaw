@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
 import { getFreePort } from "./test-port.js";
-
-export { getFreePort } from "./test-port.js";
 
 type HarnessState = {
   testPort: number;
@@ -11,6 +11,7 @@ type HarnessState = {
   reachable: boolean;
   cfgAttachOnly: boolean;
   cfgEvaluateEnabled: boolean;
+  cfgSsrfPolicy: SsrFPolicy | undefined;
   cfgDefaultProfile: string;
   cfgProfiles: Record<
     string,
@@ -22,7 +23,7 @@ type HarnessState = {
       attachOnly?: boolean;
     }
   >;
-  createTargetId: string | null;
+  tabUrl: string;
   prevGatewayPort: string | undefined;
   prevGatewayToken: string | undefined;
   prevGatewayPassword: string | undefined;
@@ -34,9 +35,10 @@ const state: HarnessState = {
   reachable: false,
   cfgAttachOnly: false,
   cfgEvaluateEnabled: true,
+  cfgSsrfPolicy: undefined,
   cfgDefaultProfile: "openclaw",
   cfgProfiles: {},
-  createTargetId: null,
+  tabUrl: "https://example.com",
   prevGatewayPort: undefined,
   prevGatewayToken: undefined,
   prevGatewayPassword: undefined,
@@ -50,7 +52,7 @@ export function getBrowserControlServerBaseUrl(): string {
   return `http://127.0.0.1:${state.testPort}`;
 }
 
-export function restoreGatewayPortEnv(prevGatewayPort: string | undefined): void {
+function restoreGatewayPortEnv(prevGatewayPort: string | undefined): void {
   if (prevGatewayPort === undefined) {
     delete process.env.OPENCLAW_GATEWAY_PORT;
     return;
@@ -58,20 +60,20 @@ export function restoreGatewayPortEnv(prevGatewayPort: string | undefined): void
   process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
 }
 
-export function setBrowserControlServerCreateTargetId(targetId: string | null): void {
-  state.createTargetId = targetId;
-}
-
-export function setBrowserControlServerAttachOnly(attachOnly: boolean): void {
-  state.cfgAttachOnly = attachOnly;
-}
-
 export function setBrowserControlServerEvaluateEnabled(enabled: boolean): void {
   state.cfgEvaluateEnabled = enabled;
 }
 
+export function setBrowserControlServerSsrFPolicy(policy: SsrFPolicy | undefined): void {
+  state.cfgSsrfPolicy = policy;
+}
+
 export function setBrowserControlServerReachable(reachable: boolean): void {
   state.reachable = reachable;
+}
+
+export function setBrowserControlServerTabUrl(url: string): void {
+  state.tabUrl = url;
 }
 
 export function setBrowserControlServerProfiles(
@@ -89,61 +91,254 @@ const cdpMocks = vi.hoisted(() => ({
   snapshotAria: vi.fn(async () => ({
     nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
   })),
+  snapshotRoleViaCdp: vi.fn(async () => ({
+    snapshot: '- button "Fallback" [ref=e1]',
+    refs: { e1: { role: "button", name: "Fallback" } },
+    stats: { lines: 1, chars: 29, refs: 1, interactive: 1 },
+  })),
 }));
 
-export function getCdpMocks(): { createTargetViaCdp: MockFn; snapshotAria: MockFn } {
-  return cdpMocks as unknown as { createTargetViaCdp: MockFn; snapshotAria: MockFn };
+export function getCdpMocks(): {
+  createTargetViaCdp: MockFn;
+  snapshotAria: MockFn;
+  snapshotRoleViaCdp: MockFn;
+} {
+  return cdpMocks as unknown as {
+    createTargetViaCdp: MockFn;
+    snapshotAria: MockFn;
+    snapshotRoleViaCdp: MockFn;
+  };
+}
+
+type ExecuteActMockAction = { kind: string } & Record<string, unknown>;
+type ExecuteActMockOptions = {
+  cdpUrl: string;
+  action: ExecuteActMockAction;
+  targetId?: string;
+  ssrfPolicy?: unknown;
+  evaluateEnabled?: boolean;
+  signal?: AbortSignal;
+};
+
+type PassThroughActDispatch = {
+  mock: (opts?: unknown) => Promise<unknown>;
+  fields: readonly string[];
+  includeSsrf?: boolean;
+  includeSignal?: boolean;
+};
+
+function pickActionFields(
+  action: ExecuteActMockAction,
+  fields: readonly string[],
+): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const field of fields) {
+    picked[field] = action[field];
+  }
+  return picked;
+}
+
+function buildActPayload(params: {
+  cdpUrl: string;
+  targetId?: string;
+  action: ExecuteActMockAction;
+  fields: readonly string[];
+  ssrfPolicy?: unknown;
+  signal?: AbortSignal;
+  includeSsrf?: boolean;
+  includeSignal?: boolean;
+}): Record<string, unknown> {
+  return {
+    cdpUrl: params.cdpUrl,
+    targetId: params.targetId,
+    ...pickActionFields(params.action, params.fields),
+    ...(params.includeSsrf ? { ssrfPolicy: params.ssrfPolicy } : {}),
+    ...(params.includeSignal ? { signal: params.signal } : {}),
+  };
 }
 
 const pwMocks = vi.hoisted(() => ({
   armDialogViaPlaywright: vi.fn(async () => {}),
   armFileUploadViaPlaywright: vi.fn(async () => {}),
-  batchViaPlaywright: vi.fn(async () => ({ results: [] })),
-  clickViaPlaywright: vi.fn(async () => {}),
-  closePageViaPlaywright: vi.fn(async () => {}),
+  batchViaPlaywright: vi.fn(async (_opts?: unknown) => ({ results: [] })),
+  clickCoordsViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+  clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+  closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
+  cookiesGetViaPlaywright: vi.fn(async () => ({ cookies: [] })),
   downloadViaPlaywright: vi.fn(async () => ({
     url: "https://example.com/report.pdf",
     suggestedFilename: "report.pdf",
     path: "/tmp/report.pdf",
   })),
-  dragViaPlaywright: vi.fn(async () => {}),
-  evaluateViaPlaywright: vi.fn(async () => "ok"),
-  fillFormViaPlaywright: vi.fn(async () => {}),
+  dragViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+  evaluateViaPlaywright: vi.fn(async (_opts?: unknown) => "ok"),
+  fillFormViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   getConsoleMessagesViaPlaywright: vi.fn(async () => []),
-  hoverViaPlaywright: vi.fn(async () => {}),
-  scrollIntoViewViaPlaywright: vi.fn(async () => {}),
+  getNetworkRequestsViaPlaywright: vi.fn(async () => ({ requests: [] })),
+  getObservedBrowserStateViaPlaywright: vi.fn(async () => ({
+    dialogs: { pending: [], recent: [] },
+  })),
+  getPageErrorsViaPlaywright: vi.fn(async () => ({ errors: [] })),
+  highlightViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+  hoverViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+  scrollIntoViewViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
   pdfViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("pdf") })),
-  pressKeyViaPlaywright: vi.fn(async () => {}),
+  pressKeyViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   responseBodyViaPlaywright: vi.fn(async () => ({
     url: "https://example.com/api/data",
     status: 200,
     headers: { "content-type": "application/json" },
     body: '{"ok":true}',
   })),
-  resizeViewportViaPlaywright: vi.fn(async () => {}),
-  selectOptionViaPlaywright: vi.fn(async () => {}),
+  resizeViewportViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+  selectOptionViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   setInputFilesViaPlaywright: vi.fn(async () => {}),
   snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
+  snapshotRoleViaPlaywright: vi.fn(async () => ({
+    snapshot: '- button "Role" [ref=e1]',
+    refs: { e1: { role: "button", name: "Role" } },
+    stats: { lines: 1, chars: 24, refs: 1, interactive: 1 },
+  })),
+  storageGetViaPlaywright: vi.fn(async () => ({ values: {} })),
+  storeAriaSnapshotRefsViaPlaywright: vi.fn(async () => {}),
+  traceStartViaPlaywright: vi.fn(async () => {}),
   traceStopViaPlaywright: vi.fn(async () => {}),
   takeScreenshotViaPlaywright: vi.fn(async () => ({
     buffer: Buffer.from("png"),
   })),
-  typeViaPlaywright: vi.fn(async () => {}),
+  typeViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   waitForDownloadViaPlaywright: vi.fn(async () => ({
     url: "https://example.com/report.pdf",
     suggestedFilename: "report.pdf",
     path: "/tmp/report.pdf",
   })),
-  waitForViaPlaywright: vi.fn(async () => {}),
+  waitForViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+  executeActViaPlaywright: vi.fn(async (_opts?: ExecuteActMockOptions) => ({})),
 }));
+
+const passThroughActDispatch: Record<string, PassThroughActDispatch> = {
+  click: {
+    mock: pwMocks.clickViaPlaywright,
+    fields: ["ref", "selector", "doubleClick", "button", "modifiers", "delayMs", "timeoutMs"],
+    includeSsrf: true,
+  },
+  clickCoords: {
+    mock: pwMocks.clickCoordsViaPlaywright,
+    fields: ["x", "y", "doubleClick", "button", "delayMs", "timeoutMs"],
+    includeSsrf: true,
+  },
+  type: {
+    mock: pwMocks.typeViaPlaywright,
+    fields: ["ref", "selector", "text", "submit", "slowly", "timeoutMs"],
+    includeSsrf: true,
+  },
+  press: {
+    mock: pwMocks.pressKeyViaPlaywright,
+    fields: ["key", "delayMs"],
+    includeSsrf: true,
+  },
+  hover: {
+    mock: pwMocks.hoverViaPlaywright,
+    fields: ["ref", "selector", "timeoutMs"],
+  },
+  scrollIntoView: {
+    mock: pwMocks.scrollIntoViewViaPlaywright,
+    fields: ["ref", "selector", "timeoutMs"],
+  },
+  drag: {
+    mock: pwMocks.dragViaPlaywright,
+    fields: ["startRef", "startSelector", "endRef", "endSelector", "timeoutMs"],
+  },
+  select: {
+    mock: pwMocks.selectOptionViaPlaywright,
+    fields: ["ref", "selector", "values", "timeoutMs"],
+    includeSsrf: true,
+  },
+  fill: {
+    mock: pwMocks.fillFormViaPlaywright,
+    fields: ["fields", "timeoutMs"],
+    includeSsrf: true,
+  },
+  resize: {
+    mock: pwMocks.resizeViewportViaPlaywright,
+    fields: ["width", "height"],
+  },
+  wait: {
+    mock: pwMocks.waitForViaPlaywright,
+    fields: ["timeMs", "text", "textGone", "selector", "url", "loadState", "fn", "timeoutMs"],
+    includeSignal: true,
+  },
+  close: {
+    mock: pwMocks.closePageViaPlaywright,
+    fields: [],
+  },
+};
+
+pwMocks.executeActViaPlaywright.mockImplementation(
+  async (opts: ExecuteActMockOptions | undefined) => {
+    if (!opts) {
+      return {};
+    }
+    const { cdpUrl, action, targetId, ssrfPolicy, evaluateEnabled, signal } = opts;
+    const spec = passThroughActDispatch[action.kind];
+    if (spec) {
+      await spec.mock(
+        buildActPayload({
+          cdpUrl,
+          targetId,
+          action,
+          fields: spec.fields,
+          ssrfPolicy,
+          signal,
+          includeSsrf: spec.includeSsrf,
+          includeSignal: spec.includeSignal,
+        }),
+      );
+      return {};
+    }
+
+    switch (action.kind) {
+      case "evaluate": {
+        if (!evaluateEnabled) {
+          throw new Error("act:evaluate is disabled by config (browser.evaluateEnabled=false)");
+        }
+        const result = await pwMocks.evaluateViaPlaywright({
+          cdpUrl,
+          targetId,
+          ssrfPolicy,
+          fn: action.fn,
+          ref: action.ref,
+          timeoutMs: action.timeoutMs,
+          signal,
+        });
+        return { result };
+      }
+      case "batch": {
+        const result = await pwMocks.batchViaPlaywright({
+          cdpUrl,
+          targetId,
+          actions: action.actions,
+          stopOnError: action.stopOnError,
+          evaluateEnabled,
+          ssrfPolicy,
+          signal,
+        });
+        return { results: result.results };
+      }
+      default:
+        return {};
+    }
+  },
+);
 
 export function getPwMocks(): Record<string, MockFn> {
   return pwMocks as unknown as Record<string, MockFn>;
 }
 
 const chromeMcpMocks = vi.hoisted(() => ({
+  clickChromeMcpCoords: vi.fn(async () => {}),
   clickChromeMcpElement: vi.fn(async () => {}),
   closeChromeMcpSession: vi.fn(async () => true),
   closeChromeMcpTab: vi.fn(async () => {}),
@@ -177,24 +372,8 @@ const chromeMcpMocks = vi.hoisted(() => ({
   uploadChromeMcpFile: vi.fn(async () => {}),
 }));
 
-export function getChromeMcpMocks(): Record<string, MockFn> {
-  return chromeMcpMocks as unknown as Record<string, MockFn>;
-}
-
 const chromeUserDataDir = vi.hoisted(() => ({ dir: "/tmp/openclaw" }));
 installChromeUserDataDirHooks(chromeUserDataDir);
-
-type BrowserServerModule = typeof import("./server.js");
-let browserServerModule: BrowserServerModule | null = null;
-
-async function loadBrowserServerModule(): Promise<BrowserServerModule> {
-  if (browserServerModule) {
-    return browserServerModule;
-  }
-  vi.resetModules();
-  browserServerModule = await import("./server.js");
-  return browserServerModule;
-}
 
 function makeProc(pid = 123) {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
@@ -219,14 +398,18 @@ function makeProc(pid = 123) {
 
 const proc = makeProc();
 
+function defaultBrowserCdpPortForState(testPort: number): number {
+  return deriveDefaultBrowserCdpPortRange(testPort).start;
+}
+
 function defaultProfilesForState(testPort: number): HarnessState["cfgProfiles"] {
   return {
-    openclaw: { cdpPort: testPort + 9, color: "#FF4500" },
+    openclaw: { cdpPort: defaultBrowserCdpPortForState(testPort), color: "#FF4500" },
   };
 }
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   const loadConfig = () => {
     return {
       browser: {
@@ -234,6 +417,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
         evaluateEnabled: state.cfgEvaluateEnabled,
         color: "#FF4500",
         attachOnly: state.cfgAttachOnly,
+        ssrfPolicy: state.cfgSsrfPolicy ?? { dangerouslyAllowPrivateNetwork: true },
         headless: true,
         defaultProfile: state.cfgDefaultProfile,
         profiles:
@@ -243,24 +427,45 @@ vi.mock("../config/config.js", async (importOriginal) => {
       },
     };
   };
-  const writeConfigFile = vi.fn(async () => {});
+  const writeConfigFile = vi.fn(async (_cfg?: ReturnType<typeof loadConfig>) => {});
+  const mutateConfigFile = vi.fn(
+    async (params: {
+      mutate: (
+        draft: ReturnType<typeof loadConfig>,
+        context: { snapshot: { path: string } },
+      ) => unknown;
+    }) => {
+      const draft = structuredClone(loadConfig());
+      const result = await params.mutate(draft, { snapshot: { path: "/tmp/openclaw.json" } });
+      await writeConfigFile(draft);
+      return {
+        path: "/tmp/openclaw.json",
+        previousHash: "test-hash",
+        persistedHash: "test-hash",
+        snapshot: { path: "/tmp/openclaw.json" },
+        nextConfig: draft,
+        result,
+        attempts: 1,
+        afterWrite: { mode: "auto" },
+        followUp: { action: "none" },
+      };
+    },
+  );
   return {
     ...actual,
     createConfigIO: vi.fn(() => ({
       loadConfig,
       writeConfigFile,
     })),
+    getRuntimeConfig: loadConfig,
     getRuntimeConfigSnapshot: vi.fn(() => null),
     loadConfig,
     writeConfigFile,
+    mutateConfigFile,
   };
 });
 
 const launchCalls = vi.hoisted(() => [] as Array<{ port: number }>);
-
-export function getLaunchCalls() {
-  return launchCalls;
-}
 
 vi.mock("./chrome.js", () => ({
   isChromeCdpReady: vi.fn(async () => state.reachable),
@@ -287,6 +492,7 @@ vi.mock("./cdp.js", () => ({
   createTargetViaCdp: cdpMocks.createTargetViaCdp,
   normalizeCdpWsUrl: vi.fn((wsUrl: string) => wsUrl),
   snapshotAria: cdpMocks.snapshotAria,
+  snapshotRoleViaCdp: cdpMocks.snapshotRoleViaCdp,
   getHeadersWithAuth: vi.fn(() => ({})),
   appendCdpPath: vi.fn((cdpUrl: string, cdpPath: string) => {
     const base = cdpUrl.replace(/\/$/, "");
@@ -315,18 +521,19 @@ vi.mock("./screenshot.js", () => ({
   })),
 }));
 
-export async function startBrowserControlServerFromConfig() {
-  const server = await loadBrowserServerModule();
-  return await server.startBrowserControlServerFromConfig();
+let browserServerModulePromise: Promise<typeof import("../server.js")> | undefined;
+
+async function loadBrowserServerModule() {
+  browserServerModulePromise ??= import("../server.js");
+  return await browserServerModulePromise;
 }
 
-export async function stopBrowserControlServer(): Promise<void> {
-  const server = browserServerModule;
-  browserServerModule = null;
-  if (!server) {
-    return;
-  }
-  await server.stopBrowserControlServer();
+export async function startBrowserControlServerFromConfig() {
+  return await (await loadBrowserServerModule()).startBrowserControlServerFromConfig();
+}
+
+async function stopBrowserControlServer(): Promise<void> {
+  await (await loadBrowserServerModule()).stopBrowserControlServer();
 }
 
 export function makeResponse(
@@ -354,16 +561,17 @@ export async function resetBrowserControlServerTestContext(): Promise<void> {
   state.reachable = false;
   state.cfgAttachOnly = false;
   state.cfgEvaluateEnabled = true;
+  state.cfgSsrfPolicy = undefined;
   state.cfgDefaultProfile = "openclaw";
   state.cfgProfiles = defaultProfilesForState(state.testPort);
-  state.createTargetId = null;
+  state.tabUrl = "https://example.com";
 
   mockClearAll(pwMocks);
   mockClearAll(cdpMocks);
   mockClearAll(chromeMcpMocks);
 
   state.testPort = await getFreePort();
-  state.cdpBaseUrl = `http://127.0.0.1:${state.testPort + 9}`;
+  state.cdpBaseUrl = `http://127.0.0.1:${defaultBrowserCdpPortForState(state.testPort)}`;
   state.cfgProfiles = defaultProfilesForState(state.testPort);
   state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
   process.env.OPENCLAW_GATEWAY_PORT = String(state.testPort - 2);
@@ -375,7 +583,7 @@ export async function resetBrowserControlServerTestContext(): Promise<void> {
   delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 }
 
-export function restoreGatewayAuthEnv(
+function restoreGatewayAuthEnv(
   prevGatewayToken: string | undefined,
   prevGatewayPassword: string | undefined,
 ): void {
@@ -400,24 +608,20 @@ export async function cleanupBrowserControlServerTestContext(): Promise<void> {
 }
 
 export function installBrowserControlServerHooks() {
+  const hookTimeoutMs = process.platform === "win32" ? 300_000 : 240_000;
   beforeEach(async () => {
     vi.useRealTimers();
     cdpMocks.createTargetViaCdp.mockImplementation(async () => {
-      if (state.createTargetId) {
-        return { targetId: state.createTargetId };
-      }
       throw new Error("cdp disabled");
     });
 
     await resetBrowserControlServerTestContext();
-    await loadBrowserServerModule();
-
     // Minimal CDP JSON endpoints used by the server.
     let putNewCalls = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
-        const u = String(url);
+        const u = url;
         if (u.includes("/json/list")) {
           if (!state.reachable) {
             return makeResponse([]);
@@ -426,7 +630,7 @@ export function installBrowserControlServerHooks() {
             {
               id: "abcd1234",
               title: "Tab",
-              url: "https://example.com",
+              url: state.tabUrl,
               webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/abcd1234",
               type: "page",
             },
@@ -463,7 +667,7 @@ export function installBrowserControlServerHooks() {
         return makeResponse({}, { ok: false, status: 500, text: "unexpected" });
       }),
     );
-  });
+  }, hookTimeoutMs);
 
   afterEach(async () => {
     await cleanupBrowserControlServerTestContext();

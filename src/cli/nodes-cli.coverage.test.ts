@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import { registerNodesCli } from "./nodes-cli.js";
 
 type NodeInvokeCall = {
   method?: string;
@@ -46,21 +46,36 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
 
 const randomIdempotencyKey = vi.fn(() => "rk_test");
 
-const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const mocks = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  return createCliRuntimeMock(vi);
+});
+
+const { runtimeErrors, defaultRuntime } = mocks;
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
   randomIdempotencyKey: () => randomIdempotencyKey(),
 }));
 
-vi.mock("../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../runtime.js")>()),
-  defaultRuntime,
+vi.mock("../runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../runtime.js")>("../runtime.js")),
+  defaultRuntime: mocks.defaultRuntime,
 }));
 
 describe("nodes-cli coverage", () => {
-  let registerNodesCli: (program: Command) => void;
-  let sharedProgram: Command;
+  let sharedProgram: Command = new Command();
+
+  const withSuppressedStderr = async <T>(run: () => Promise<T>) => {
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((() => true) as typeof process.stderr.write);
+    try {
+      return await run();
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  };
 
   const getNodeInvokeCall = () => {
     const last = lastNodeInvokeCall;
@@ -76,24 +91,34 @@ describe("nodes-cli coverage", () => {
   };
 
   beforeAll(async () => {
-    ({ registerNodesCli } = await import("./nodes-cli.js"));
-    sharedProgram = new Command();
+    if (sharedProgram.commands.length > 0) {
+      return;
+    }
     sharedProgram.exitOverride();
-    registerNodesCli(sharedProgram);
+    await registerNodesCli(sharedProgram);
   });
 
   beforeEach(() => {
-    resetRuntimeCapture();
+    runtimeErrors.length = 0;
     callGateway.mockClear();
     randomIdempotencyKey.mockClear();
+    defaultRuntime.log.mockClear();
+    defaultRuntime.error.mockClear();
+    defaultRuntime.writeStdout.mockClear();
+    defaultRuntime.writeJson.mockClear();
+    defaultRuntime.exit.mockClear();
     lastNodeInvokeCall = null;
   });
 
   it("does not register the removed run wrapper", async () => {
-    await expect(
-      sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" }),
-    ).rejects.toMatchObject({
-      code: "commander.unknownCommand",
+    await withSuppressedStderr(async () => {
+      let error: { code?: unknown } | undefined;
+      try {
+        await sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" });
+      } catch (err) {
+        error = err as { code?: unknown };
+      }
+      expect(error?.code).toBe("commander.unknownCommand");
     });
   });
 
@@ -120,9 +145,11 @@ describe("nodes-cli coverage", () => {
       "overlay",
     ]);
 
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.command).toBe("system.notify");
-    expect(invoke?.params?.params).toEqual({
+    if (!invoke) {
+      throw new Error("expected system.notify invocation");
+    }
+    expect(invoke.params?.command).toBe("system.notify");
+    expect(invoke.params?.params).toEqual({
       title: "Ping",
       body: "Gateway ready",
       sound: undefined,
@@ -148,13 +175,15 @@ describe("nodes-cli coverage", () => {
       "6000",
     ]);
 
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.command).toBe("location.get");
-    expect(invoke?.params?.params).toEqual({
+    if (!invoke) {
+      throw new Error("expected location.get invocation");
+    }
+    expect(invoke.params?.command).toBe("location.get");
+    expect(invoke.params?.params).toEqual({
       maxAgeMs: 1000,
       desiredAccuracy: "precise",
       timeoutMs: 5000,
     });
-    expect(invoke?.params?.timeoutMs).toBe(6000);
+    expect(invoke.params?.timeoutMs).toBe(6000);
   });
 });

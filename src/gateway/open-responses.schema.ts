@@ -91,14 +91,26 @@ export type ContentPart = z.infer<typeof ContentPartSchema>;
 export const MessageItemRoleSchema = z.enum(["system", "developer", "user", "assistant"]);
 
 export type MessageItemRole = z.infer<typeof MessageItemRoleSchema>;
+export const AssistantPhaseSchema = z.enum(["commentary", "final_answer"]);
+export type AssistantPhase = z.infer<typeof AssistantPhaseSchema>;
 
 export const MessageItemSchema = z
   .object({
     type: z.literal("message"),
     role: MessageItemRoleSchema,
     content: z.union([z.string(), z.array(ContentPartSchema)]),
+    phase: AssistantPhaseSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.phase !== undefined && value.role !== "assistant") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["phase"],
+        message: "`phase` is only valid on assistant messages.",
+      });
+    }
+  });
 
 export const FunctionCallItemSchema = z
   .object({
@@ -189,9 +201,10 @@ export const CreateResponseBodySchema = z
     max_output_tokens: z.number().int().positive().optional(),
     max_tool_calls: z.number().int().positive().optional(),
     user: z.string().optional(),
-    // Phase 1: ignore but accept these fields
-    temperature: z.number().optional(),
-    top_p: z.number().optional(),
+    // Sampling overrides forwarded to provider (best-effort; some backends like
+    // ChatGPT Codex Responses strip these — see openai-transport-stream.ts).
+    temperature: z.number().min(0).max(2).optional(),
+    top_p: z.number().min(0).max(1).optional(),
     metadata: z.record(z.string(), z.string()).optional(),
     store: z.boolean().optional(),
     previous_response_id: z.string().optional(),
@@ -228,6 +241,7 @@ export const OutputItemSchema = z.discriminatedUnion("type", [
       id: z.string(),
       role: z.literal("assistant"),
       content: z.array(OutputTextContentPartSchema),
+      phase: AssistantPhaseSchema.optional(),
       status: z.enum(["in_progress", "completed"]).optional(),
     })
     .strict(),

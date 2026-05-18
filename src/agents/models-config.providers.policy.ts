@@ -1,9 +1,8 @@
 import {
-  applyProviderNativeStreamingUsageCompatWithPlugin,
-  normalizeProviderConfigWithPlugin,
-  resolveProviderConfigApiKeyWithPlugin,
-  resolveProviderRuntimePlugin,
-} from "../plugins/provider-runtime.js";
+  applyProviderNativeStreamingUsagePolicy,
+  normalizeProviderConfigPolicy,
+  resolveProviderConfigApiKeyPolicy,
+} from "./models-config.providers.policy.runtime.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 export function applyNativeStreamingUsageCompat(
@@ -13,14 +12,7 @@ export function applyNativeStreamingUsageCompat(
   const nextProviders: Record<string, ProviderConfig> = {};
 
   for (const [providerKey, provider] of Object.entries(providers)) {
-    const nextProvider =
-      applyProviderNativeStreamingUsageCompatWithPlugin({
-        provider: providerKey,
-        context: {
-          provider: providerKey,
-          providerConfig: provider,
-        },
-      }) ?? provider;
+    const nextProvider = applyProviderNativeStreamingUsagePolicy(providerKey, provider);
     nextProviders[providerKey] = nextProvider;
     changed ||= nextProvider !== provider;
   }
@@ -32,32 +24,16 @@ export function normalizeProviderSpecificConfig(
   providerKey: string,
   provider: ProviderConfig,
 ): ProviderConfig {
-  return (
-    normalizeProviderConfigWithPlugin({
-      provider: providerKey,
-      context: {
-        provider: providerKey,
-        providerConfig: provider,
-      },
-    }) ?? provider
-  );
+  const normalized = normalizeProviderConfigPolicy(providerKey, provider);
+  if (normalized && normalized !== provider) {
+    return normalized;
+  }
+  return provider;
 }
 
 export function resolveProviderConfigApiKeyResolver(
   providerKey: string,
+  provider?: ProviderConfig,
 ): ((env: NodeJS.ProcessEnv) => string | undefined) | undefined {
-  if (!resolveProviderRuntimePlugin({ provider: providerKey })?.resolveConfigApiKey) {
-    return undefined;
-  }
-  return (env) => {
-    const resolved = resolveProviderConfigApiKeyWithPlugin({
-      provider: providerKey,
-      env,
-      context: {
-        provider: providerKey,
-        env,
-      },
-    });
-    return resolved?.trim() || undefined;
-  };
+  return resolveProviderConfigApiKeyPolicy(providerKey, provider);
 }

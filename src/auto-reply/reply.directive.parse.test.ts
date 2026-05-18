@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
 import {
   extractElevatedDirective,
-  extractExecDirective,
-  extractQueueDirective,
   extractReasoningDirective,
-  extractReplyToTag,
+  extractTraceDirective,
   extractThinkDirective,
   extractVerboseDirective,
-} from "./reply.js";
+} from "./reply/directives.js";
 import { extractFastDirective, extractStatusDirective } from "./reply/directives.js";
+import { extractExecDirective } from "./reply/exec/directive.js";
+import { extractQueueDirective } from "./reply/queue/directive.js";
+import { extractReplyToTag } from "./reply/reply-tags.js";
 
 describe("directive parsing", () => {
   it("ignores verbose directive inside URL", () => {
@@ -37,6 +39,18 @@ describe("directive parsing", () => {
     expect(res.verboseLevel).toBe("on");
   });
 
+  it("matches trace with leading space", () => {
+    const res = extractTraceDirective(" please /trace on now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.traceLevel).toBe("on");
+  });
+
+  it("matches raw trace directive", () => {
+    const res = extractTraceDirective(" please /trace raw now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.traceLevel).toBe("raw");
+  });
+
   it("matches reasoning directive", () => {
     const res = extractReasoningDirective("/reasoning on please");
     expect(res.hasDirective).toBe(true);
@@ -53,6 +67,20 @@ describe("directive parsing", () => {
     const res = extractFastDirective("/fast on please");
     expect(res.hasDirective).toBe(true);
     expect(res.fastMode).toBe(true);
+  });
+
+  it("parses default thinking and fast directives as override clears", () => {
+    const think = parseInlineDirectives("/think default");
+    expect(think.hasThinkDirective).toBe(true);
+    expect(think.thinkLevel).toBeUndefined();
+    expect(think.rawThinkLevel).toBe("default");
+    expect(think.clearThinkLevel).toBe(true);
+
+    const fast = parseInlineDirectives("/fast inherit");
+    expect(fast.hasFastDirective).toBe(true);
+    expect(fast.fastMode).toBeUndefined();
+    expect(fast.rawFastMode).toBe("inherit");
+    expect(fast.clearFastMode).toBe(true);
   });
 
   it("matches elevated with leading space", () => {
@@ -164,6 +192,26 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
+  it("matches steer queue directive", () => {
+    const res = extractQueueDirective("please /queue steer now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.queueMode).toBe("steer");
+    expect(res.rawMode).toBe("steer");
+    expect(res.cleaned).toBe("please now");
+  });
+
+  it("strips inline /model and /think directives while keeping user text", () => {
+    const model = parseInlineDirectives("please sync /model openai/gpt-4.1-mini now");
+    expect(model.cleaned).toBe("please sync now");
+    expect(model.hasModelDirective).toBe(true);
+    expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
+
+    const think = parseInlineDirectives("please sync /think:high now");
+    expect(think.cleaned).toBe("please sync now");
+    expect(think.hasThinkDirective).toBe(true);
+    expect(think.thinkLevel).toBe("high");
+  });
+
   it("preserves spacing when stripping think directives before paths", () => {
     const res = extractThinkDirective("thats not /think high/tmp/hello");
     expect(res.hasDirective).toBe(true);
@@ -195,11 +243,9 @@ describe("directive parsing", () => {
   });
 
   it("parses queue options and modes", () => {
-    const res = extractQueueDirective(
-      "please /queue steer+backlog debounce:2s cap:5 drop:summarize now",
-    );
+    const res = extractQueueDirective("please /queue collect debounce:2s cap:5 drop:summarize now");
     expect(res.hasDirective).toBe(true);
-    expect(res.queueMode).toBe("steer-backlog");
+    expect(res.queueMode).toBe("collect");
     expect(res.debounceMs).toBe(2000);
     expect(res.cap).toBe(5);
     expect(res.dropPolicy).toBe("summarize");

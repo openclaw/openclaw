@@ -126,13 +126,17 @@ export function formatThreadContext(
 ): string {
   const lines: string[] = [];
   for (const msg of messages) {
-    if (msg.id && msg.id === currentMessageId) continue; // Skip the triggering message.
+    if (msg.id && msg.id === currentMessageId) {
+      continue;
+    } // Skip the triggering message.
     const sender = msg.from?.user?.displayName ?? msg.from?.application?.displayName ?? "unknown";
     const contentType = msg.body?.contentType ?? "text";
     const rawContent = msg.body?.content ?? "";
     const content =
       contentType === "html" ? stripHtmlFromTeamsMessage(rawContent) : rawContent.trim();
-    if (!content) continue;
+    if (!content) {
+      continue;
+    }
     lines.push(`${sender}: ${content}`);
   }
   return lines.join("\n");

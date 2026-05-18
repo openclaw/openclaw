@@ -1,4 +1,4 @@
-import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { pruneContextMessages } from "./pruner.js";
 import { getContextPruningRuntime } from "./runtime.js";
 
@@ -26,6 +26,7 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
       ctx,
       isToolPrunable: runtime.isToolPrunable,
       contextWindowTokensOverride: runtime.contextWindowTokens ?? undefined,
+      dropThinkingBlocksForEstimate: runtime.dropThinkingBlocks,
     });
 
     if (next === event.messages) {

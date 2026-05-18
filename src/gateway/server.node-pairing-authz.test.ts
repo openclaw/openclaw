@@ -1,12 +1,17 @@
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
-import { approveNodePairing, getPairedNode, requestNodePairing } from "../infra/node-pairing.js";
+import {
+  approveNodePairing,
+  getPairedNode,
+  listNodePairing,
+  requestNodePairing,
+} from "../infra/node-pairing.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
-  issueOperatorToken,
   loadDeviceIdentity,
   openTrackedWs,
+  pairDeviceIdentity,
 } from "./device-authz.test-helpers.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import {
@@ -18,253 +23,246 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-async function connectNodeClientWithPairing(params: {
+const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pair-authz-" });
+
+async function makeNodePairingStateDir(): Promise<string> {
+  return await tempDirs.make("case");
+}
+
+function requireApprovedPairing(
+  result: Awaited<ReturnType<typeof approveNodePairing>>,
+): Exclude<typeof result, null | { status: "forbidden"; missingScope: string }> {
+  if (!result || "status" in result) {
+    throw new Error(`Expected approved node pairing, got ${JSON.stringify(result)}`);
+  }
+  return result;
+}
+
+async function connectNodeClient(params: {
   port: number;
   deviceIdentity: ReturnType<typeof loadDeviceIdentity>["identity"];
   commands: string[];
 }) {
-  const connect = async () =>
-    await connectGatewayClient({
-      url: `ws://127.0.0.1:${params.port}`,
-      token: "secret",
-      role: "node",
-      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-      clientDisplayName: "node-command-pin",
-      clientVersion: "1.0.0",
-      platform: "darwin",
-      mode: GATEWAY_CLIENT_MODES.NODE,
-      commands: params.commands,
-      deviceIdentity: params.deviceIdentity,
-      timeoutMessage: "timeout waiting for paired node to connect",
+  return await connectGatewayClient({
+    url: `ws://127.0.0.1:${params.port}`,
+    token: "secret",
+    role: "node",
+    clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+    clientDisplayName: "node-command-pin",
+    clientVersion: "1.0.0",
+    platform: "macos",
+    deviceFamily: "Mac",
+    mode: GATEWAY_CLIENT_MODES.NODE,
+    scopes: [],
+    commands: params.commands,
+    deviceIdentity: params.deviceIdentity,
+    timeoutMessage: "timeout waiting for paired node to connect",
+  });
+}
+
+async function expectRePairingRequest(params: {
+  started: Awaited<ReturnType<typeof startServerWithClient>>;
+  pairedName: string;
+  initialCommands?: string[];
+  reconnectCommands: string[];
+  approvalScopes: string[];
+  expectedVisibleCommands: string[];
+}) {
+  const pairedNode = await pairDeviceIdentity({
+    name: params.pairedName,
+    role: "node",
+    scopes: [],
+    clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+    clientMode: GATEWAY_CLIENT_MODES.NODE,
+  });
+
+  let controlWs: WebSocket | undefined;
+  let firstClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+  let nodeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+  try {
+    controlWs = await openTrackedWs(params.started.port);
+    await connectOk(controlWs, { token: "secret" });
+
+    if (params.initialCommands) {
+      firstClient = await connectNodeClient({
+        port: params.started.port,
+        deviceIdentity: pairedNode.identity,
+        commands: params.initialCommands,
+      });
+      await firstClient.stopAndWait();
+    }
+
+    const request = await requestNodePairing({
+      nodeId: pairedNode.identity.deviceId,
+      platform: "macos",
+      deviceFamily: "Mac",
+      ...(params.initialCommands ? { commands: params.initialCommands } : {}),
+    });
+    await approveNodePairing(request.request.requestId, {
+      callerScopes: params.approvalScopes,
     });
 
-  try {
-    return await connect();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.includes("pairing required")) {
-      throw error;
-    }
-    const pairing = await listDevicePairing();
-    for (const pending of pairing.pending) {
-      await approveDevicePairing(pending.requestId);
-    }
-    return await connect();
+    nodeClient = await connectNodeClient({
+      port: params.started.port,
+      deviceIdentity: pairedNode.identity,
+      commands: params.reconnectCommands,
+    });
+    const connectedControlWs = controlWs;
+
+    let lastNodes: Array<{ nodeId: string; connected?: boolean; commands?: string[] }> = [];
+    await vi.waitFor(async () => {
+      const list = await rpcReq<{
+        nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
+      }>(connectedControlWs, "node.list", {});
+      lastNodes = list.payload?.nodes ?? [];
+      const node = lastNodes.find(
+        (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
+      );
+      if (
+        JSON.stringify(node?.commands?.toSorted() ?? []) ===
+        JSON.stringify(params.expectedVisibleCommands)
+      ) {
+        return;
+      }
+      throw new Error(`node commands not visible yet: ${JSON.stringify(lastNodes)}`);
+    });
+
+    expect(
+      lastNodes
+        .find((entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected)
+        ?.commands?.toSorted(),
+      JSON.stringify(lastNodes),
+    ).toEqual(params.expectedVisibleCommands);
+
+    const pairing = await listNodePairing();
+    const pending = pairing.pending?.find((entry) => entry.nodeId === pairedNode.identity.deviceId);
+    expect(pending?.nodeId).toBe(pairedNode.identity.deviceId);
+    expect(pending?.commands).toEqual(params.reconnectCommands);
+  } finally {
+    controlWs?.close();
+    await firstClient?.stopAndWait();
+    await nodeClient?.stopAndWait();
   }
 }
 
 describe("gateway node pairing authorization", () => {
-  test("requires operator.write before node pairing approvals", async () => {
-    const started = await startServerWithClient("secret");
-    const approver = await issueOperatorToken({
-      name: "node-pair-approve-pairing-only",
-      approvedScopes: ["operator.admin"],
-      tokenScopes: ["operator.pairing"],
-      clientId: GATEWAY_CLIENT_NAMES.TEST,
-      clientMode: GATEWAY_CLIENT_MODES.TEST,
+  beforeAll(async () => {
+    await tempDirs.setup();
+  });
+
+  afterAll(async () => {
+    await tempDirs.cleanup();
+  });
+
+  describe("approval scopes", () => {
+    test("rejects node pairing approval without admin scope", async () => {
+      const baseDir = await makeNodePairingStateDir();
+      const request = await requestNodePairing(
+        {
+          nodeId: "node-approve-reject-admin",
+          platform: "macos",
+          deviceFamily: "Mac",
+          commands: ["system.run"],
+        },
+        baseDir,
+      );
+
+      await expect(
+        approveNodePairing(
+          request.request.requestId,
+          { callerScopes: ["operator.pairing"] },
+          baseDir,
+        ),
+      ).resolves.toEqual({
+        status: "forbidden",
+        missingScope: "operator.admin",
+      });
+      await expect(getPairedNode("node-approve-reject-admin", baseDir)).resolves.toBeNull();
     });
 
-    let pairingWs: WebSocket | undefined;
-    try {
-      const request = await requestNodePairing({
-        nodeId: "node-approve-target",
-        platform: "darwin",
-        commands: ["system.run"],
+    test("rejects node pairing approval without pairing scope", async () => {
+      const baseDir = await makeNodePairingStateDir();
+      const request = await requestNodePairing(
+        {
+          nodeId: "node-approve-reject-pairing",
+          platform: "macos",
+          deviceFamily: "Mac",
+          commands: ["system.run"],
+        },
+        baseDir,
+      );
+
+      await expect(
+        approveNodePairing(
+          request.request.requestId,
+          { callerScopes: ["operator.write"] },
+          baseDir,
+        ),
+      ).resolves.toEqual({
+        status: "forbidden",
+        missingScope: "operator.pairing",
       });
-
-      pairingWs = await openTrackedWs(started.port);
-      await connectOk(pairingWs, {
-        skipDefaultAuth: true,
-        deviceToken: approver.token,
-        deviceIdentityPath: approver.identityPath,
-        scopes: ["operator.pairing"],
-      });
-
-      const approve = await rpcReq(pairingWs, "node.pair.approve", {
-        requestId: request.request.requestId,
-      });
-      expect(approve.ok).toBe(false);
-      expect(approve.error?.message).toBe("missing scope: operator.write");
-
-      await expect(getPairedNode("node-approve-target")).resolves.toBeNull();
-    } finally {
-      pairingWs?.close();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
-    }
-  });
-
-  test("rejects approving exec-capable node commands above the caller session scopes", async () => {
-    const started = await startServerWithClient("secret");
-    const approver = await issueOperatorToken({
-      name: "node-pair-approve-attacker",
-      approvedScopes: ["operator.admin"],
-      tokenScopes: ["operator.write"],
-      clientId: GATEWAY_CLIENT_NAMES.TEST,
-      clientMode: GATEWAY_CLIENT_MODES.TEST,
+      await expect(getPairedNode("node-approve-reject-pairing", baseDir)).resolves.toBeNull();
     });
 
-    let pairingWs: WebSocket | undefined;
-    try {
-      const request = await requestNodePairing({
-        nodeId: "node-approve-target",
-        platform: "darwin",
-        commands: ["system.run"],
-      });
+    test("approves commandless node pairing with pairing scope", async () => {
+      const baseDir = await makeNodePairingStateDir();
+      const request = await requestNodePairing(
+        {
+          nodeId: "node-approve-target",
+          platform: "macos",
+          deviceFamily: "Mac",
+        },
+        baseDir,
+      );
 
-      pairingWs = await openTrackedWs(started.port);
-      await connectOk(pairingWs, {
-        skipDefaultAuth: true,
-        deviceToken: approver.token,
-        deviceIdentityPath: approver.identityPath,
-        scopes: ["operator.write"],
-      });
+      const approved = requireApprovedPairing(
+        await approveNodePairing(
+          request.request.requestId,
+          { callerScopes: ["operator.pairing"] },
+          baseDir,
+        ),
+      );
+      expect(approved.requestId).toBe(request.request.requestId);
+      expect(approved.node.nodeId).toBe("node-approve-target");
 
-      const approve = await rpcReq(pairingWs, "node.pair.approve", {
-        requestId: request.request.requestId,
-      });
-      expect(approve.ok).toBe(false);
-      expect(approve.error?.message).toBe("missing scope: operator.admin");
-
-      await expect(getPairedNode("node-approve-target")).resolves.toBeNull();
-    } finally {
-      pairingWs?.close();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
-    }
+      const pairedNode = await getPairedNode("node-approve-target", baseDir);
+      expect(pairedNode?.nodeId).toBe("node-approve-target");
+    });
   });
 
-  test("pins connected node commands to the approved pairing record", async () => {
-    const started = await startServerWithClient("secret");
-    const pairedNode = loadDeviceIdentity("node-command-pin");
+  describe("paired node reconnects", () => {
+    let started: Awaited<ReturnType<typeof startServerWithClient>>;
 
-    let controlWs: WebSocket | undefined;
-    let firstClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-    let nodeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-    try {
-      controlWs = await openTrackedWs(started.port);
-      await connectOk(controlWs, { token: "secret" });
+    beforeAll(async () => {
+      started = await startServerWithClient("secret");
+    });
 
-      firstClient = await connectNodeClientWithPairing({
-        port: started.port,
-        deviceIdentity: pairedNode.identity,
-        commands: ["canvas.snapshot"],
-      });
-      await firstClient.stopAndWait();
-
-      const request = await requestNodePairing({
-        nodeId: pairedNode.identity.deviceId,
-        platform: "darwin",
-        commands: ["canvas.snapshot"],
-      });
-      await approveNodePairing(request.request.requestId);
-
-      nodeClient = await connectNodeClientWithPairing({
-        port: started.port,
-        deviceIdentity: pairedNode.identity,
-        commands: ["canvas.snapshot", "system.run"],
-      });
-
-      const deadline = Date.now() + 2_000;
-      let lastNodes: Array<{ nodeId: string; connected?: boolean; commands?: string[] }> = [];
-      while (Date.now() < deadline) {
-        const list = await rpcReq<{
-          nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
-        }>(controlWs, "node.list", {});
-        lastNodes = list.payload?.nodes ?? [];
-        const node = lastNodes.find(
-          (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
-        );
-        if (
-          JSON.stringify(node?.commands?.toSorted() ?? []) === JSON.stringify(["canvas.snapshot"])
-        ) {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      const connectedNode = lastNodes.find(
-        (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
-      );
-      expect(connectedNode?.commands?.toSorted(), JSON.stringify(lastNodes)).toEqual([
-        "canvas.snapshot",
-      ]);
-
-      const invoke = await rpcReq(controlWs, "node.invoke", {
-        nodeId: pairedNode.identity.deviceId,
-        command: "system.run",
-        params: { command: "echo blocked" },
-        idempotencyKey: "node-command-pin",
-      });
-      expect(invoke.ok).toBe(false);
-      expect(invoke.error?.message ?? "").toContain("node command not allowed");
-    } finally {
-      controlWs?.close();
-      await firstClient?.stopAndWait();
-      await nodeClient?.stopAndWait();
+    afterAll(async () => {
       started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();
-    }
-  });
+    });
 
-  test("treats paired nodes without stored commands as having no approved commands", async () => {
-    const started = await startServerWithClient("secret");
-    const pairedNode = loadDeviceIdentity("node-command-empty");
-
-    let controlWs: WebSocket | undefined;
-    let firstClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-    let nodeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-    try {
-      controlWs = await openTrackedWs(started.port);
-      await connectOk(controlWs, { token: "secret" });
-
-      firstClient = await connectNodeClientWithPairing({
-        port: started.port,
-        deviceIdentity: pairedNode.identity,
-        commands: ["canvas.snapshot"],
+    test("requests re-pairing when a paired node reconnects with upgraded commands", async () => {
+      await expectRePairingRequest({
+        started,
+        pairedName: "node-command-pin",
+        initialCommands: ["screen.snapshot"],
+        reconnectCommands: ["screen.snapshot", "system.run"],
+        approvalScopes: ["operator.pairing", "operator.write"],
+        expectedVisibleCommands: ["screen.snapshot"],
       });
-      await firstClient.stopAndWait();
+    });
 
-      const request = await requestNodePairing({
-        nodeId: pairedNode.identity.deviceId,
-        platform: "darwin",
+    test("requests re-pairing when a commandless paired node reconnects with system.run", async () => {
+      await expectRePairingRequest({
+        started,
+        pairedName: "node-command-empty",
+        reconnectCommands: ["screen.snapshot", "system.run"],
+        approvalScopes: ["operator.pairing"],
+        expectedVisibleCommands: [],
       });
-      await approveNodePairing(request.request.requestId);
-
-      nodeClient = await connectNodeClientWithPairing({
-        port: started.port,
-        deviceIdentity: pairedNode.identity,
-        commands: ["canvas.snapshot", "system.run"],
-      });
-
-      const deadline = Date.now() + 2_000;
-      let lastNodes: Array<{ nodeId: string; connected?: boolean; commands?: string[] }> = [];
-      while (Date.now() < deadline) {
-        const list = await rpcReq<{
-          nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
-        }>(controlWs, "node.list", {});
-        lastNodes = list.payload?.nodes ?? [];
-        const node = lastNodes.find(
-          (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
-        );
-        if ((node?.commands?.length ?? 0) === 0) {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      const connectedNode = lastNodes.find(
-        (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
-      );
-      expect(connectedNode?.commands ?? [], JSON.stringify(lastNodes)).toEqual([]);
-    } finally {
-      controlWs?.close();
-      await firstClient?.stopAndWait();
-      await nodeClient?.stopAndWait();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
-    }
+    });
   });
 });

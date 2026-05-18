@@ -1,21 +1,74 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TeamsHttpStream } from "./streaming-message.js";
 
+async function flushStreamTimer(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(1);
+}
+
+function requireMessageActivity(sent: unknown[]): Record<string, unknown> {
+  const activity = sent.find((entry) => (entry as Record<string, unknown>).type === "message") as
+    | Record<string, unknown>
+    | undefined;
+  if (!activity) {
+    throw new Error("expected final Teams message activity");
+  }
+  return activity;
+}
+
+function requireEntities(activity: Record<string, unknown>): Array<Record<string, unknown>> {
+  const entities = activity.entities;
+  if (!Array.isArray(entities)) {
+    throw new Error("expected Teams activity entities");
+  }
+  return entities as Array<Record<string, unknown>>;
+}
+
+function requireEntity(
+  activity: Record<string, unknown>,
+  predicate: (entity: Record<string, unknown>) => boolean,
+  label: string,
+): Record<string, unknown> {
+  const entity = requireEntities(activity).find(predicate);
+  if (!entity) {
+    throw new Error(`expected ${label} entity`);
+  }
+  return entity;
+}
+
+function requireSendActivity(
+  sendActivity: ReturnType<typeof vi.fn>,
+  predicate: (activity: Record<string, unknown>) => boolean,
+  label: string,
+): Record<string, unknown> {
+  const activity = sendActivity.mock.calls
+    .map(([sent]) => sent as Record<string, unknown>)
+    .find(predicate);
+  if (!activity) {
+    throw new Error(`expected ${label} sendActivity call`);
+  }
+  return activity;
+}
+
 describe("TeamsHttpStream", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("sends first chunk as typing activity with streaminfo", async () => {
+    vi.useFakeTimers();
+
     const sent: unknown[] = [];
     const stream = new TeamsHttpStream({
       sendActivity: vi.fn(async (activity) => {
         sent.push(activity);
         return { id: "stream-1" };
       }),
+      throttleMs: 1,
     });
 
     // Enough text to pass MIN_INITIAL_CHARS threshold
     stream.update("Hello, this is a test response that is long enough.");
-
-    // Wait for throttle to flush
-    await new Promise((r) => setTimeout(r, 700));
+    await flushStreamTimer();
 
     expect(sent.length).toBeGreaterThanOrEqual(1);
     const firstActivity = sent[0] as Record<string, unknown>;
@@ -23,60 +76,65 @@ describe("TeamsHttpStream", () => {
     expect(typeof firstActivity.text).toBe("string");
     expect(firstActivity.text as string).toContain("Hello");
     // Should have streaminfo entity
-    const entities = firstActivity.entities as Array<Record<string, unknown>>;
-    expect(entities).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "streaminfo", streamType: "streaming" }),
-      ]),
+    const streamInfo = requireEntity(
+      firstActivity,
+      (entity) => entity.type === "streaminfo",
+      "streaminfo",
     );
+    expect(streamInfo.streamType).toBe("streaming");
   });
 
   it("sends final message activity on finalize", async () => {
+    vi.useFakeTimers();
+
     const sent: unknown[] = [];
     const stream = new TeamsHttpStream({
       sendActivity: vi.fn(async (activity) => {
         sent.push(activity);
         return { id: "stream-1" };
       }),
+      throttleMs: 1,
     });
 
     stream.update("Hello, this is a complete response for finalization testing.");
-    await new Promise((r) => setTimeout(r, 700));
+    await flushStreamTimer();
 
     await stream.finalize();
 
     // Find the final message activity
-    const finalActivity = sent.find((a) => (a as Record<string, unknown>).type === "message") as
-      | Record<string, unknown>
-      | undefined;
+    const finalActivity = requireMessageActivity(sent);
 
-    expect(finalActivity).toBeDefined();
-    expect(finalActivity!.text).toBe(
-      "Hello, this is a complete response for finalization testing.",
-    );
+    expect(finalActivity.text).toBe("Hello, this is a complete response for finalization testing.");
     // No cursor in final
-    expect(finalActivity!.text as string).not.toContain("\u258D");
+    expect(finalActivity.text as string).not.toContain("\u258D");
 
     // Should have AI-generated entity
-    const entities = finalActivity!.entities as Array<Record<string, unknown>>;
-    expect(entities).toEqual(
-      expect.arrayContaining([expect.objectContaining({ additionalType: ["AIGeneratedContent"] })]),
+    const aiGenerated = requireEntity(
+      finalActivity,
+      (entity) =>
+        Array.isArray(entity.additionalType) &&
+        entity.additionalType.includes("AIGeneratedContent"),
+      "AI-generated content",
     );
+    expect(aiGenerated.additionalType).toEqual(["AIGeneratedContent"]);
 
     // Should have streaminfo with final type
-    expect(entities).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "streaminfo", streamType: "final" }),
-      ]),
+    const streamInfo = requireEntity(
+      finalActivity,
+      (entity) => entity.type === "streaminfo",
+      "streaminfo",
     );
+    expect(streamInfo.streamType).toBe("final");
   });
 
   it("does not send below MIN_INITIAL_CHARS", async () => {
+    vi.useFakeTimers();
+
     const sendActivity = vi.fn(async () => ({ id: "x" }));
-    const stream = new TeamsHttpStream({ sendActivity });
+    const stream = new TeamsHttpStream({ sendActivity, throttleMs: 1 });
 
     stream.update("Hi");
-    await new Promise((r) => setTimeout(r, 700));
+    await flushStreamTimer();
 
     expect(sendActivity).not.toHaveBeenCalled();
   });
@@ -110,6 +168,8 @@ describe("TeamsHttpStream", () => {
   });
 
   it("sets feedbackLoopEnabled on final message", async () => {
+    vi.useFakeTimers();
+
     const sent: unknown[] = [];
     const stream = new TeamsHttpStream({
       sendActivity: vi.fn(async (activity) => {
@@ -117,10 +177,11 @@ describe("TeamsHttpStream", () => {
         return { id: "stream-1" };
       }),
       feedbackLoopEnabled: true,
+      throttleMs: 1,
     });
 
     stream.update("A response long enough to pass the minimum character threshold for streaming.");
-    await new Promise((r) => setTimeout(r, 700));
+    await flushStreamTimer();
     await stream.finalize();
 
     const finalActivity = sent.find(
@@ -146,39 +207,62 @@ describe("TeamsHttpStream", () => {
     const activity = sent[0] as Record<string, unknown>;
     expect(activity.type).toBe("typing");
     expect(activity.text).toBe("Thinking...");
-    const entities = activity.entities as Array<Record<string, unknown>>;
-    expect(entities).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "streaminfo",
-          streamType: "informative",
-          streamSequence: 1,
-        }),
-      ]),
+    const streamInfo = requireEntity(
+      activity,
+      (entity) => entity.type === "streaminfo",
+      "streaminfo",
     );
+    expect(streamInfo.streamType).toBe("informative");
+    expect(streamInfo.streamSequence).toBe(1);
   });
 
   it("informative update establishes streamId for subsequent chunks", async () => {
+    vi.useFakeTimers();
+
     const sent: unknown[] = [];
     const stream = new TeamsHttpStream({
       sendActivity: vi.fn(async (activity) => {
         sent.push(activity);
         return { id: "stream-1" };
       }),
+      throttleMs: 1,
     });
 
     await stream.sendInformativeUpdate("Working...");
     stream.update("Hello, this is a long enough response for streaming to begin.");
-    await new Promise((r) => setTimeout(r, 1600));
+    await flushStreamTimer();
 
     // Second activity (streaming chunk) should have the streamId from the informative update
     expect(sent.length).toBeGreaterThanOrEqual(2);
     const chunk = sent[1] as Record<string, unknown>;
-    const entities = chunk.entities as Array<Record<string, unknown>>;
-    expect(entities).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "streaminfo", streamId: "stream-1" }),
-      ]),
+    const streamInfo = requireEntity(chunk, (entity) => entity.type === "streaminfo", "streaminfo");
+    expect(streamInfo.streamId).toBe("stream-1");
+  });
+
+  it("reports failure when replacing informative progress with final text fails", async () => {
+    const sendActivity = vi.fn(async (activity: Record<string, unknown>) => {
+      if (activity.type === "message") {
+        throw new Error("final send rejected");
+      }
+      return { id: "stream-1" };
+    });
+    const stream = new TeamsHttpStream({ sendActivity, throttleMs: 1 });
+
+    await stream.sendInformativeUpdate("Thinking");
+    const carried = await stream.replaceInformativeWithFinal(
+      "Final response long enough to stream before the final message send fails.",
+    );
+
+    expect(carried).toBe(false);
+    expect(stream.isFailed).toBe(true);
+    const finalSend = requireSendActivity(
+      sendActivity,
+      (activity) => activity.type === "message",
+      "final message",
+    );
+    expect(finalSend.type).toBe("message");
+    expect(finalSend.text).toBe(
+      "Final response long enough to stream before the final message send fails.",
     );
   });
 
@@ -202,5 +286,38 @@ describe("TeamsHttpStream", () => {
 
     await stream.finalize();
     expect(sendActivity.mock.calls.length).toBe(callCount);
+  });
+
+  it("stops streaming before stream age timeout and finalizes with last good text", async () => {
+    vi.useFakeTimers();
+
+    const sent: unknown[] = [];
+    const sendActivity = vi.fn(async (activity) => {
+      sent.push(activity);
+      return { id: "stream-1" };
+    });
+    const stream = new TeamsHttpStream({ sendActivity, throttleMs: 1 });
+
+    stream.update("Hello, this is a long enough response for streaming to begin.");
+    await vi.advanceTimersByTimeAsync(1);
+
+    stream.update(
+      "Hello, this is a long enough response for streaming to begin. More text before timeout.",
+    );
+    await vi.advanceTimersByTimeAsync(1);
+
+    vi.setSystemTime(new Date(Date.now() + 45_001));
+    stream.update(
+      "Hello, this is a long enough response for streaming to begin. More text before timeout. Even more text after timeout.",
+    );
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(stream.isFailed).toBe(true);
+
+    const finalActivity = requireMessageActivity(sent);
+
+    expect(finalActivity.text).toBe(
+      "Hello, this is a long enough response for streaming to begin. More text before timeout.",
+    );
   });
 });

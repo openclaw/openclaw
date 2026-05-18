@@ -1,9 +1,49 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { saveAuthProfileStore } from "./auth-profiles.js";
-import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
+import { describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "./auth-profiles.js";
+import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
+import {
+  addEnvBackedPiCredentials,
+  scrubLegacyStaticAuthJsonEntriesForDiscovery,
+} from "./pi-auth-discovery-core.js";
+import { discoverAuthStorage } from "./pi-model-discovery.js";
+
+vi.mock("./model-auth-env-vars.js", () => ({
+  listProviderEnvAuthLookupKeys: () => ["mistral", "workspace-cloud"],
+  resolveProviderEnvApiKeyCandidates: () => ({
+    mistral: ["MISTRAL_API_KEY"],
+  }),
+  resolveProviderEnvAuthEvidence: () => ({
+    "workspace-cloud": [
+      {
+        type: "local-file-with-env",
+        credentialMarker: "workspace-cloud-local-credentials",
+        source: "workspace cloud credentials",
+      },
+    ],
+  }),
+}));
+
+vi.mock("./model-auth-env.js", () => ({
+  resolveEnvApiKey: (
+    provider: string,
+    env: NodeJS.ProcessEnv,
+    options?: { workspaceDir?: string },
+  ) => {
+    if (provider === "mistral" && env.MISTRAL_API_KEY?.trim()) {
+      return { apiKey: env.MISTRAL_API_KEY, source: "env: MISTRAL_API_KEY" };
+    }
+    if (provider === "workspace-cloud" && options?.workspaceDir === "/tmp/workspace") {
+      return {
+        apiKey: "workspace-cloud-local-credentials",
+        source: "workspace cloud credentials",
+      };
+    }
+    return null;
+  },
+}));
 
 async function createAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-auth-storage-"));
@@ -18,36 +58,15 @@ async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<v
   }
 }
 
-async function pathExists(pathname: string): Promise<boolean> {
-  try {
-    await fs.stat(pathname);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function writeRuntimeOpenRouterProfile(agentDir: string): void {
-  saveAuthProfileStore(
-    {
-      version: 1,
-      profiles: {
-        "openrouter:default": {
-          type: "api_key",
-          provider: "openrouter",
-          key: "sk-or-v1-runtime",
-        },
-      },
-    },
-    agentDir,
-  );
-}
-
 async function writeLegacyAuthJson(
   agentDir: string,
   authEntries: Record<string, unknown>,
 ): Promise<void> {
   await fs.writeFile(path.join(agentDir, "auth.json"), JSON.stringify(authEntries, null, 2));
+}
+
+async function writeAuthProfilesJson(agentDir: string, store: AuthProfileStore): Promise<void> {
+  await fs.writeFile(path.join(agentDir, "auth-profiles.json"), JSON.stringify(store, null, 2));
 }
 
 async function readLegacyAuthJson(agentDir: string): Promise<Record<string, unknown>> {
@@ -57,58 +76,131 @@ async function readLegacyAuthJson(agentDir: string): Promise<Record<string, unkn
   >;
 }
 
-async function writeModelsJson(agentDir: string, payload: unknown): Promise<void> {
-  await fs.writeFile(path.join(agentDir, "models.json"), `${JSON.stringify(payload, null, 2)}\n`);
-}
-
 describe("discoverAuthStorage", () => {
-  it("loads runtime credentials from auth-profiles without writing auth.json", async () => {
-    await withAgentDir(async (agentDir) => {
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "openrouter:default": {
-              type: "api_key",
-              provider: "openrouter",
-              key: "sk-or-v1-runtime",
-            },
-            "anthropic:default": {
-              type: "token",
-              provider: "anthropic",
-              token: "sk-ant-runtime",
-            },
-            "openai-codex:default": {
-              type: "oauth",
-              provider: "openai-codex",
-              access: "oauth-access",
-              refresh: "oauth-refresh",
-              expires: Date.now() + 60_000,
-            },
+  it("converts runtime auth profiles into pi discovery credentials", () => {
+    const credentials = resolvePiCredentialMapFromStore({
+      version: 1,
+      profiles: {
+        "openrouter:default": {
+          type: "api_key",
+          provider: "openrouter",
+          key: "sk-or-v1-runtime",
+        },
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "sk-ant-runtime",
+        },
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    });
+
+    expect(credentials.openrouter).toEqual({
+      type: "api_key",
+      key: "sk-or-v1-runtime",
+    });
+    expect(credentials.anthropic).toEqual({
+      type: "api_key",
+      key: "sk-ant-runtime",
+    });
+    const codexCredential = credentials["openai-codex"] as
+      | { type?: string; access?: string; refresh?: string }
+      | undefined;
+    expect(codexCredential?.type).toBe("oauth");
+    expect(codexCredential?.access).toBe("oauth-access");
+    expect(codexCredential?.refresh).toBe("oauth-refresh");
+  });
+
+  it("keeps keyRef and tokenRef profiles visible only for read-only pi discovery", () => {
+    const credentials = resolvePiCredentialMapFromStore({
+      version: 1,
+      profiles: {
+        "openrouter:default": {
+          type: "api_key",
+          provider: "openrouter",
+          keyRef: { source: "exec", provider: "keychain", id: "OPENROUTER_API_KEY" },
+        },
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_AUTH_TOKEN" },
+        },
+        "expired:default": {
+          type: "token",
+          provider: "expired",
+          tokenRef: { source: "env", provider: "default", id: "EXPIRED_AUTH_TOKEN" },
+          expires: Date.now() - 1_000,
+        },
+      },
+    });
+    const discoveryCredentials = resolvePiCredentialMapFromStore(
+      {
+        version: 1,
+        profiles: {
+          "openrouter:default": {
+            type: "api_key",
+            provider: "openrouter",
+            keyRef: { source: "exec", provider: "keychain", id: "OPENROUTER_API_KEY" },
+          },
+          "anthropic:default": {
+            type: "token",
+            provider: "anthropic",
+            tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_AUTH_TOKEN" },
+          },
+          "expired:default": {
+            type: "token",
+            provider: "expired",
+            tokenRef: { source: "env", provider: "default", id: "EXPIRED_AUTH_TOKEN" },
+            expires: Date.now() - 1_000,
           },
         },
-        agentDir,
-      );
+      },
+      { includeSecretRefPlaceholders: true },
+    );
 
-      const authStorage = discoverAuthStorage(agentDir);
+    expect(credentials.openrouter).toBeUndefined();
+    expect(credentials.anthropic).toBeUndefined();
+    expect(discoveryCredentials.openrouter?.type).toBe("api_key");
+    expect(discoveryCredentials.anthropic?.type).toBe("api_key");
+    expect(discoveryCredentials.expired).toBeUndefined();
+  });
 
-      expect(authStorage.hasAuth("openrouter")).toBe(true);
-      expect(authStorage.hasAuth("anthropic")).toBe(true);
-      expect(authStorage.hasAuth("openai-codex")).toBe(true);
-      await expect(authStorage.getApiKey("openrouter")).resolves.toBe("sk-or-v1-runtime");
-      await expect(authStorage.getApiKey("anthropic")).resolves.toBe("sk-ant-runtime");
-      expect(authStorage.get("openai-codex")).toMatchObject({
-        type: "oauth",
-        access: "oauth-access",
+  it("marks keyRef-only auth profiles configured for read-only model discovery", async () => {
+    await withAgentDir(async (agentDir) => {
+      await writeAuthProfilesJson(agentDir, {
+        version: 1,
+        profiles: {
+          "fixture-ref-provider:default": {
+            type: "api_key",
+            provider: "fixture-ref-provider",
+            keyRef: { source: "exec", provider: "keychain", id: "FIXTURE_API_KEY" },
+          },
+        },
       });
 
-      expect(await pathExists(path.join(agentDir, "auth.json"))).toBe(false);
+      const readOnlyStorage = discoverAuthStorage(agentDir, {
+        readOnly: true,
+        skipExternalAuthProfiles: true,
+        env: {},
+      });
+      const runtimeStorage = discoverAuthStorage(agentDir, {
+        skipExternalAuthProfiles: true,
+        env: {},
+      });
+
+      expect(readOnlyStorage.hasAuth("fixture-ref-provider")).toBe(true);
+      expect(runtimeStorage.hasAuth("fixture-ref-provider")).toBe(false);
     });
   });
 
   it("scrubs static api_key entries from legacy auth.json and keeps oauth entries", async () => {
     await withAgentDir(async (agentDir) => {
-      writeRuntimeOpenRouterProfile(agentDir);
       await writeLegacyAuthJson(agentDir, {
         openrouter: { type: "api_key", key: "legacy-static-key" },
         "openai-codex": {
@@ -119,14 +211,13 @@ describe("discoverAuthStorage", () => {
         },
       });
 
-      discoverAuthStorage(agentDir);
+      scrubLegacyStaticAuthJsonEntriesForDiscovery(path.join(agentDir, "auth.json"));
 
       const parsed = await readLegacyAuthJson(agentDir);
       expect(parsed.openrouter).toBeUndefined();
-      expect(parsed["openai-codex"]).toMatchObject({
-        type: "oauth",
-        access: "oauth-access",
-      });
+      const codexEntry = parsed["openai-codex"] as { type?: string; access?: string } | undefined;
+      expect(codexEntry?.type).toBe("oauth");
+      expect(codexEntry?.access).toBe("oauth-access");
     });
   });
 
@@ -135,15 +226,16 @@ describe("discoverAuthStorage", () => {
       const previous = process.env.OPENCLAW_AUTH_STORE_READONLY;
       process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
       try {
-        writeRuntimeOpenRouterProfile(agentDir);
         await writeLegacyAuthJson(agentDir, {
           openrouter: { type: "api_key", key: "legacy-static-key" },
         });
 
-        discoverAuthStorage(agentDir);
+        scrubLegacyStaticAuthJsonEntriesForDiscovery(path.join(agentDir, "auth.json"));
 
         const parsed = await readLegacyAuthJson(agentDir);
-        expect(parsed.openrouter).toMatchObject({ type: "api_key", key: "legacy-static-key" });
+        const openrouterEntry = parsed.openrouter as { type?: string; key?: string } | undefined;
+        expect(openrouterEntry?.type).toBe("api_key");
+        expect(openrouterEntry?.key).toBe("legacy-static-key");
       } finally {
         if (previous === undefined) {
           delete process.env.OPENCLAW_AUTH_STORE_READONLY;
@@ -154,327 +246,51 @@ describe("discoverAuthStorage", () => {
     });
   });
 
-  it("includes env-backed provider auth when no auth profile exists", async () => {
-    await withAgentDir(async (agentDir) => {
-      const previous = process.env.MISTRAL_API_KEY;
-      process.env.MISTRAL_API_KEY = "mistral-env-test-key";
-      try {
-        saveAuthProfileStore(
-          {
-            version: 1,
-            profiles: {},
-          },
-          agentDir,
-        );
+  it("includes env-backed provider auth when no auth profile exists", () => {
+    const previousMistral = process.env.MISTRAL_API_KEY;
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+    process.env.MISTRAL_API_KEY = "mistral-env-test-key";
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+    try {
+      const credentials = addEnvBackedPiCredentials({}, { env: process.env });
 
-        const authStorage = discoverAuthStorage(agentDir);
-
-        expect(authStorage.hasAuth("mistral")).toBe(true);
-        await expect(authStorage.getApiKey("mistral")).resolves.toBe("mistral-env-test-key");
-      } finally {
-        if (previous === undefined) {
-          delete process.env.MISTRAL_API_KEY;
-        } else {
-          process.env.MISTRAL_API_KEY = previous;
-        }
+      expect(credentials.mistral).toEqual({
+        type: "api_key",
+        key: "mistral-env-test-key",
+      });
+    } finally {
+      if (previousMistral === undefined) {
+        delete process.env.MISTRAL_API_KEY;
+      } else {
+        process.env.MISTRAL_API_KEY = previousMistral;
       }
-    });
-  });
-
-  it("normalizes discovered Mistral compat flags for direct callers", async () => {
-    await withAgentDir(async (agentDir) => {
-      const previous = process.env.MISTRAL_API_KEY;
-      process.env.MISTRAL_API_KEY = "mistral-env-test-key";
-      try {
-        saveAuthProfileStore(
-          {
-            version: 1,
-            profiles: {},
-          },
-          agentDir,
-        );
-        await writeModelsJson(agentDir, {
-          providers: {
-            mistral: {
-              api: "openai-completions",
-              baseUrl: "https://api.mistral.ai/v1",
-              apiKey: "MISTRAL_API_KEY",
-              models: [
-                {
-                  id: "mistral-large-latest",
-                  name: "Mistral Large",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 262144,
-                  maxTokens: 16384,
-                },
-              ],
-            },
-          },
-        });
-
-        const authStorage = discoverAuthStorage(agentDir);
-        const modelRegistry = discoverModels(authStorage, agentDir);
-        expect(modelRegistry.getError?.()).toBeUndefined();
-        const model = modelRegistry.find("mistral", "mistral-large-latest") as {
-          api?: string;
-          compat?: {
-            supportsStore?: boolean;
-            supportsReasoningEffort?: boolean;
-            maxTokensField?: string;
-          };
-        } | null;
-        const all = modelRegistry.getAll() as Array<{
-          provider?: string;
-          id?: string;
-          api?: string;
-          compat?: {
-            supportsStore?: boolean;
-            supportsReasoningEffort?: boolean;
-            maxTokensField?: string;
-          };
-        }>;
-        const available = modelRegistry.getAvailable() as Array<{
-          provider?: string;
-          id?: string;
-          api?: string;
-          compat?: {
-            supportsStore?: boolean;
-            supportsReasoningEffort?: boolean;
-            maxTokensField?: string;
-          };
-        }>;
-        const fromAll = all.find(
-          (entry) => entry.provider === "mistral" && entry.id === "mistral-large-latest",
-        );
-        const fromAvailable = available.find(
-          (entry) => entry.provider === "mistral" && entry.id === "mistral-large-latest",
-        );
-
-        expect(model?.api).toBe("openai-completions");
-        expect(fromAll?.api).toBe("openai-completions");
-        expect(fromAvailable?.api).toBe("openai-completions");
-        expect(model?.compat?.supportsStore).toBe(false);
-        expect(model?.compat?.supportsReasoningEffort).toBe(false);
-        expect(model?.compat?.maxTokensField).toBe("max_tokens");
-        expect(fromAll?.compat?.supportsStore).toBe(false);
-        expect(fromAll?.compat?.supportsReasoningEffort).toBe(false);
-        expect(fromAll?.compat?.maxTokensField).toBe("max_tokens");
-        expect(fromAvailable?.compat?.supportsStore).toBe(false);
-        expect(fromAvailable?.compat?.supportsReasoningEffort).toBe(false);
-        expect(fromAvailable?.compat?.maxTokensField).toBe("max_tokens");
-      } finally {
-        if (previous === undefined) {
-          delete process.env.MISTRAL_API_KEY;
-        } else {
-          process.env.MISTRAL_API_KEY = previous;
-        }
+      if (previousBundledPluginsDir === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
       }
-    });
+      if (previousDisableBundledPlugins === undefined) {
+        delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+      } else {
+        process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
+      }
+    }
   });
 
-  it("normalizes discovered Mistral compat flags for custom Mistral-hosted providers", async () => {
-    await withAgentDir(async (agentDir) => {
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "custom-api-mistral-ai:default": {
-              type: "api_key",
-              provider: "custom-api-mistral-ai",
-              key: "mistral-custom-key",
-            },
-          },
-        },
-        agentDir,
-      );
-      await writeModelsJson(agentDir, {
-        providers: {
-          "custom-api-mistral-ai": {
-            api: "openai-completions",
-            baseUrl: "https://api.mistral.ai/v1",
-            apiKey: "custom-api-mistral-ai",
-            models: [
-              {
-                id: "mistral-small-latest",
-                name: "Mistral Small",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 262144,
-                maxTokens: 16384,
-              },
-            ],
-          },
-        },
-      });
+  it("includes workspace-scoped auth evidence in pi discovery credentials", () => {
+    const credentials = addEnvBackedPiCredentials(
+      {},
+      {
+        env: {},
+        workspaceDir: "/tmp/workspace",
+      },
+    );
 
-      const authStorage = discoverAuthStorage(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir);
-      const model = modelRegistry.find("custom-api-mistral-ai", "mistral-small-latest") as {
-        compat?: {
-          supportsStore?: boolean;
-          supportsReasoningEffort?: boolean;
-          maxTokensField?: string;
-        };
-      } | null;
-
-      expect(model?.compat?.supportsStore).toBe(false);
-      expect(model?.compat?.supportsReasoningEffort).toBe(false);
-      expect(model?.compat?.maxTokensField).toBe("max_tokens");
-    });
-  });
-
-  it("normalizes discovered Mistral compat flags for OpenRouter Mistral model ids", async () => {
-    await withAgentDir(async (agentDir) => {
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "openrouter:default": {
-              type: "api_key",
-              provider: "openrouter",
-              key: "sk-or-v1-runtime",
-            },
-          },
-        },
-        agentDir,
-      );
-      await writeModelsJson(agentDir, {
-        providers: {
-          openrouter: {
-            api: "openai-completions",
-            baseUrl: "https://openrouter.ai/api/v1",
-            apiKey: "OPENROUTER_API_KEY",
-            models: [
-              {
-                id: "mistralai/mistral-small-3.2-24b-instruct",
-                name: "Mistral Small via OpenRouter",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 262144,
-                maxTokens: 16384,
-              },
-            ],
-          },
-        },
-      });
-
-      const authStorage = discoverAuthStorage(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir);
-      const model = modelRegistry.find(
-        "openrouter",
-        "mistralai/mistral-small-3.2-24b-instruct",
-      ) as {
-        compat?: {
-          supportsStore?: boolean;
-          supportsReasoningEffort?: boolean;
-          maxTokensField?: string;
-        };
-      } | null;
-
-      expect(model?.compat?.supportsStore).toBe(false);
-      expect(model?.compat?.supportsReasoningEffort).toBe(false);
-      expect(model?.compat?.maxTokensField).toBe("max_tokens");
-    });
-  });
-
-  it("normalizes discovered xAI compat flags for OpenRouter x-ai model ids", async () => {
-    await withAgentDir(async (agentDir) => {
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            "openrouter:default": {
-              type: "api_key",
-              provider: "openrouter",
-              key: "sk-or-v1-runtime",
-            },
-          },
-        },
-        agentDir,
-      );
-      await writeModelsJson(agentDir, {
-        providers: {
-          openrouter: {
-            api: "openai-completions",
-            baseUrl: "https://openrouter.ai/api/v1",
-            apiKey: "OPENROUTER_API_KEY",
-            models: [
-              {
-                id: "x-ai/grok-4.1-fast",
-                name: "Grok via OpenRouter",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 256000,
-                maxTokens: 8192,
-              },
-            ],
-          },
-        },
-      });
-
-      const authStorage = discoverAuthStorage(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir);
-      const model = modelRegistry.find("openrouter", "x-ai/grok-4.1-fast") as {
-        compat?: {
-          toolSchemaProfile?: string;
-          nativeWebSearchTool?: boolean;
-          toolCallArgumentsEncoding?: string;
-        };
-      } | null;
-
-      expect(model?.compat?.toolSchemaProfile).toBe("xai");
-      expect(model?.compat?.nativeWebSearchTool).toBe(true);
-      expect(model?.compat?.toolCallArgumentsEncoding).toBe("html-entities");
-    });
-  });
-
-  it("normalizes discovered custom xAI-compatible providers by host", async () => {
-    await withAgentDir(async (agentDir) => {
-      await writeModelsJson(agentDir, {
-        providers: {
-          "custom-xai": {
-            api: "openai-completions",
-            baseUrl: "https://api.x.ai/v1",
-            apiKey: "XAI_API_KEY",
-            models: [
-              {
-                id: "grok-4.1-fast",
-                name: "Custom Grok",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 256000,
-                maxTokens: 8192,
-              },
-            ],
-          },
-        },
-      });
-
-      const authStorage = discoverAuthStorage(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir);
-      const model = modelRegistry
-        .getAll()
-        .find((entry) => entry.provider === "custom-xai" && entry.id === "grok-4.1-fast") as
-        | {
-            api?: string;
-            compat?: {
-              toolSchemaProfile?: string;
-              nativeWebSearchTool?: boolean;
-              toolCallArgumentsEncoding?: string;
-            };
-          }
-        | undefined;
-
-      expect(model?.api).toBe("openai-responses");
-      expect(model?.compat?.toolSchemaProfile).toBe("xai");
-      expect(model?.compat?.nativeWebSearchTool).toBe(true);
-      expect(model?.compat?.toolCallArgumentsEncoding).toBe("html-entities");
+    expect(credentials["workspace-cloud"]).toEqual({
+      type: "api_key",
+      key: "workspace-cloud-local-credentials",
     });
   });
 });

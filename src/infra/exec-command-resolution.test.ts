@@ -9,8 +9,12 @@ import {
   parseExecArgvToken,
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
+  resolveAllowlistCandidatePath,
+  resolveApprovalAuditTrustPath,
   resolveExecutionTargetCandidatePath,
+  resolveExecutionTargetTrustPath,
   resolvePolicyTargetCandidatePath,
+  resolvePolicyTargetTrustPath,
 } from "./exec-approvals.js";
 
 function buildNestedEnvShellCommand(params: {
@@ -204,6 +208,35 @@ describe("exec-command-resolution", () => {
     expect(resolution?.execution.executableName.toLowerCase()).toContain("sh");
   });
 
+  it("exposes canonical trust paths separately from display candidate paths", () => {
+    const resolution = {
+      execution: {
+        rawExecutable: "rg",
+        resolvedPath: "/opt/homebrew/bin/rg",
+        resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+        executableName: "rg",
+      },
+      policy: {
+        rawExecutable: "rg",
+        resolvedPath: "/opt/homebrew/bin/rg",
+        resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+        executableName: "rg",
+      },
+    };
+
+    expect(resolveExecutionTargetCandidatePath(resolution)).toBe("/opt/homebrew/bin/rg");
+    expect(resolveExecutionTargetTrustPath(resolution)).toBe(
+      "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+    );
+    expect(resolvePolicyTargetCandidatePath(resolution)).toBe("/opt/homebrew/bin/rg");
+    expect(resolvePolicyTargetTrustPath(resolution)).toBe(
+      "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+    );
+    expect(resolveApprovalAuditTrustPath(resolution)).toBe(
+      "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+    );
+  });
+
   it("does not satisfy inner-shell allowlists when invoked through busybox wrappers", () => {
     if (process.platform === "win32") {
       return;
@@ -214,7 +247,7 @@ describe("exec-command-resolution", () => {
     fs.chmodSync(busybox, 0o755);
 
     const shellResolution = resolveCommandResolutionFromArgv(["sh", "-lc", "echo hi"]);
-    expect(shellResolution?.execution.resolvedPath).toBeTruthy();
+    expect(shellResolution?.execution.resolvedPath).toMatch(/sh$/);
 
     const wrappedResolution = resolveCommandResolutionFromArgv([busybox, "sh", "-lc", "echo hi"]);
     const evalResult = evaluateExecAllowlist({
@@ -428,5 +461,30 @@ describe("exec-command-resolution", () => {
       expect(long.flag).toBe("--output");
       expect(long.inlineValue).toBe("blocked.txt");
     }
+  });
+
+  it("does not synthesize cwd-joined allowlist candidates from drive-less windows roots", () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    expect(
+      resolveAllowlistCandidatePath(
+        {
+          rawExecutable: String.raw`:\Users\demo\AI\system\openclaw`,
+          executableName: "openclaw",
+        },
+        String.raw`C:\Users\demo\AI\system\openclaw`,
+      ),
+    ).toBeUndefined();
+    expect(
+      resolveAllowlistCandidatePath(
+        {
+          rawExecutable: String.raw`:/Users/demo/AI/system/openclaw`,
+          executableName: "openclaw",
+        },
+        String.raw`C:\Users\demo\AI\system\openclaw`,
+      ),
+    ).toBeUndefined();
   });
 });

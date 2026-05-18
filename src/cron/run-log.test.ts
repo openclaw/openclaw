@@ -8,6 +8,8 @@ import {
   DEFAULT_CRON_RUN_LOG_MAX_BYTES,
   getPendingCronRunLogWriteCountForTests,
   readCronRunLogEntries,
+  readCronRunLogEntriesPage,
+  readCronRunLogEntriesSync,
   resolveCronRunLogPruneOptions,
   resolveCronRunLogPath,
 } from "./run-log.js";
@@ -85,13 +87,44 @@ describe("cron run log", () => {
       }
 
       const raw = await fs.readFile(logPath, "utf-8");
-      const lines = raw
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean);
+      const lines: string[] = [];
+      for (const rawLine of raw.split("\n")) {
+        const line = rawLine.trim();
+        if (line) {
+          lines.push(line);
+        }
+      }
       expect(lines.length).toBe(3);
       const last = JSON.parse(lines[2] ?? "{}") as { ts?: number };
       expect(last.ts).toBe(1009);
+    });
+  });
+
+  it("reads run-log entries synchronously for task reconciliation", async () => {
+    await withRunLogDir("openclaw-cron-log-sync-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      await appendCronRunLog(logPath, {
+        ts: 1000,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        runAtMs: 900,
+        durationMs: 100,
+      });
+      await appendCronRunLog(logPath, {
+        ts: 2000,
+        jobId: "job-2",
+        action: "finished",
+        status: "error",
+      });
+
+      const jobEntries = readCronRunLogEntriesSync(logPath, { jobId: "job-1" });
+      expect(jobEntries).toHaveLength(1);
+      expect(jobEntries[0]?.jobId).toBe("job-1");
+      expect(jobEntries[0]?.status).toBe("ok");
+      expect(jobEntries[0]?.runAtMs).toBe(900);
+      expect(jobEntries[0]?.durationMs).toBe(100);
+      expect(readCronRunLogEntriesSync(path.join(dir, "runs", "missing.jsonl"))).toStrictEqual([]);
     });
   });
 
@@ -188,7 +221,37 @@ describe("cron run log", () => {
         limit: 10,
         jobId: "b",
       });
-      expect(wrongFilter).toEqual([]);
+      expect(wrongFilter).toStrictEqual([]);
+    });
+  });
+
+  it("filters run-log pages by runId", async () => {
+    await withRunLogDir("openclaw-cron-log-runid-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+
+      await appendCronRunLog(logPath, {
+        ts: 1,
+        jobId: "job-1",
+        action: "finished",
+        status: "error",
+        runId: "manual:job-1:1:0",
+      });
+      await appendCronRunLog(logPath, {
+        ts: 2,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        runId: "manual:job-1:2:0",
+      });
+
+      const page = await readCronRunLogEntriesPage(logPath, {
+        runId: "manual:job-1:2:0",
+        limit: 10,
+      });
+
+      expect(page.entries).toHaveLength(1);
+      expect(page.entries[0]?.runId).toBe("manual:job-1:2:0");
+      expect(page.entries[0]?.status).toBe("ok");
     });
   });
 
@@ -209,6 +272,17 @@ describe("cron run log", () => {
             delivered: true,
             deliveryStatus: "not-delivered",
             deliveryError: "announce failed",
+            failureNotificationDelivery: {
+              delivered: true,
+              status: "delivered",
+            },
+            delivery: {
+              intended: { channel: "last", to: null, source: "last" },
+              resolved: { ok: true, channel: "telegram", to: "-100", source: "last" },
+              messageToolSentTo: [{ channel: "telegram", to: "-100" }],
+              fallbackUsed: false,
+              delivered: true,
+            },
           }),
         ].join("\n") + "\n",
         "utf-8",
@@ -220,6 +294,101 @@ describe("cron run log", () => {
       expect(entries[0]?.delivered).toBe(true);
       expect(entries[0]?.deliveryStatus).toBe("not-delivered");
       expect(entries[0]?.deliveryError).toBe("announce failed");
+      expect(entries[0]?.failureNotificationDelivery).toEqual({
+        delivered: true,
+        status: "delivered",
+      });
+      expect(entries[0]?.delivery).toEqual({
+        intended: { channel: "last", to: null, source: "last" },
+        resolved: { ok: true, channel: "telegram", to: "-100", source: "last" },
+        messageToolSentTo: [{ channel: "telegram", to: "-100" }],
+        fallbackUsed: false,
+        delivered: true,
+      });
+    });
+  });
+
+  it("does not include raw delivery targets in run-log search", async () => {
+    await withRunLogDir("openclaw-cron-log-target-query-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+      await fs.writeFile(
+        logPath,
+        JSON.stringify({
+          ts: 2,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+          summary: "done",
+          delivery: {
+            intended: { channel: "last", to: null, source: "last" },
+            resolved: { ok: true, channel: "telegram", to: "-100", source: "last" },
+            messageToolSentTo: [{ channel: "telegram", to: "-100" }],
+          },
+        }) + "\n",
+        "utf-8",
+      );
+
+      expect(
+        (
+          await readCronRunLogEntriesPage(logPath, {
+            limit: 10,
+            jobId: "job-1",
+            query: "telegram",
+          })
+        ).entries,
+      ).toHaveLength(1);
+      expect(
+        (
+          await readCronRunLogEntriesPage(logPath, {
+            limit: 10,
+            jobId: "job-1",
+            query: "-100",
+          })
+        ).entries,
+      ).toStrictEqual([]);
+    });
+  });
+
+  it("reads and searches run diagnostics", async () => {
+    await withRunLogDir("openclaw-cron-log-diagnostics-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+
+      await appendCronRunLog(logPath, {
+        ts: 1,
+        jobId: "job-1",
+        action: "finished",
+        status: "error",
+        diagnostics: {
+          summary: "exec stderr tail",
+          entries: [
+            {
+              ts: 1,
+              source: "exec",
+              severity: "error",
+              message: "exec stderr tail",
+              exitCode: 2,
+            },
+          ],
+        },
+      });
+
+      const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-1" });
+      expect(entries[0]?.diagnostics?.summary).toBe("exec stderr tail");
+      expect(entries[0]?.diagnostics?.entries).toHaveLength(1);
+      expect(entries[0]?.diagnostics?.entries[0]?.source).toBe("exec");
+      expect(entries[0]?.diagnostics?.entries[0]?.severity).toBe("error");
+      expect(entries[0]?.diagnostics?.entries[0]?.message).toBe("exec stderr tail");
+      expect(entries[0]?.diagnostics?.entries[0]?.exitCode).toBe(2);
+      expect(
+        (
+          await readCronRunLogEntriesPage(logPath, {
+            limit: 10,
+            jobId: "job-1",
+            query: "stderr tail",
+          })
+        ).entries,
+      ).toHaveLength(1);
     });
   });
 
@@ -232,7 +401,7 @@ describe("cron run log", () => {
         jobId: "job-1",
         action: "finished",
         status: "ok",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         provider: "openai",
         usage: {
           input_tokens: 10,
@@ -258,7 +427,7 @@ describe("cron run log", () => {
       );
 
       const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-1" });
-      expect(entries[0]?.model).toBe("gpt-5.2");
+      expect(entries[0]?.model).toBe("gpt-5.4");
       expect(entries[0]?.provider).toBe("openai");
       expect(entries[0]?.usage).toEqual({
         input_tokens: 10,

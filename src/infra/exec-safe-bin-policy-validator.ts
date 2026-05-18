@@ -1,4 +1,4 @@
-import { parseExecArgvToken } from "./exec-approvals-analysis.js";
+import { parseExecArgvToken } from "./exec-command-resolution.js";
 import {
   buildLongFlagPrefixMap,
   collectKnownLongFlags,
@@ -29,13 +29,17 @@ function hasGlobToken(value: string): boolean {
   return /[*?[\]]/.test(value);
 }
 
+function hasShellExpansionToken(value: string): boolean {
+  return /\$(?:[A-Za-z0-9_@*?!$#-]|\{|\(|\[)/.test(value);
+}
+
 const NO_FLAGS: ReadonlySet<string> = new Set();
 
 function isSafeLiteralToken(value: string): boolean {
   if (!value || value === "-") {
     return true;
   }
-  return !hasGlobToken(value) && !isPathLikeToken(value);
+  return !hasGlobToken(value) && !hasShellExpansionToken(value) && !isPathLikeToken(value);
 }
 
 function isInvalidValueToken(value: string | undefined): boolean {

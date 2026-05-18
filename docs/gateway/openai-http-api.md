@@ -2,19 +2,17 @@
 summary: "Expose an OpenAI-compatible /v1/chat/completions HTTP endpoint from the Gateway"
 read_when:
   - Integrating tools that expect OpenAI Chat Completions
-title: "OpenAI Chat Completions"
+title: "OpenAI chat completions"
 ---
 
-# OpenAI Chat Completions (HTTP)
-
-OpenClaw’s Gateway can serve a small OpenAI-compatible Chat Completions endpoint.
+OpenClaw's Gateway can serve a small OpenAI-compatible Chat Completions endpoint.
 
 This endpoint is **disabled by default**. Enable it in config first.
 
 - `POST /v1/chat/completions`
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/chat/completions`
 
-When the Gateway’s OpenAI-compatible HTTP surface is enabled, it also serves:
+When the Gateway's OpenAI-compatible HTTP surface is enabled, it also serves:
 
 - `GET /v1/models`
 - `GET /v1/models/{id}`
@@ -25,14 +23,29 @@ Under the hood, requests are executed as a normal Gateway agent run (same codepa
 
 ## Authentication
 
-Uses the Gateway auth configuration. Send a bearer token:
+Uses the Gateway auth configuration.
 
-- `Authorization: Bearer <token>`
+Common HTTP auth paths:
+
+- shared-secret auth (`gateway.auth.mode="token"` or `"password"`):
+  `Authorization: Bearer <token-or-password>`
+- trusted identity-bearing HTTP auth (`gateway.auth.mode="trusted-proxy"`):
+  route through the configured identity-aware proxy and let it inject the
+  required identity headers
+- private-ingress open auth (`gateway.auth.mode="none"`):
+  no auth header required
 
 Notes:
 
 - When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
 - When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
+- When `gateway.auth.mode="trusted-proxy"`, the HTTP request must come from a
+  configured trusted proxy source; same-host loopback proxies require explicit
+  `gateway.auth.trustedProxy.allowLoopback = true`.
+- Internal same-host callers that bypass the proxy can use
+  `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` as a local direct
+  fallback. Any `Forwarded`, `X-Forwarded-*`, or `X-Real-IP` header evidence
+  keeps the request on the trusted-proxy path instead.
 - If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
 
 ## Security boundary (important)
@@ -43,8 +56,25 @@ Treat this endpoint as a **full operator-access** surface for the gateway instan
 - A valid Gateway token/password for this endpoint should be treated like an owner/operator credential.
 - Requests run through the same control-plane agent path as trusted operator actions.
 - There is no separate non-owner/per-user tool boundary on this endpoint; once a caller passes Gateway auth here, OpenClaw treats that caller as a trusted operator for this gateway.
+- For shared-secret auth modes (`token` and `password`), the endpoint restores the normal full operator defaults even if the caller sends a narrower `x-openclaw-scopes` header.
+- Trusted identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"`) honor `x-openclaw-scopes` when present and otherwise fall back to the normal operator default scope set.
 - If the target agent policy allows sensitive tools, this endpoint can use them.
 - Keep this endpoint on loopback/tailnet/private ingress only; do not expose it directly to the public internet.
+
+Auth matrix:
+
+- `gateway.auth.mode="token"` or `"password"` + `Authorization: Bearer ...`
+  - proves possession of the shared gateway operator secret
+  - ignores narrower `x-openclaw-scopes`
+  - restores the full default operator scope set:
+    `operator.admin`, `operator.approvals`, `operator.pairing`,
+    `operator.read`, `operator.talk.secrets`, `operator.write`
+  - treats chat turns on this endpoint as owner-sender turns
+- trusted identity-bearing HTTP modes (for example trusted proxy auth, or `gateway.auth.mode="none"` on private ingress)
+  - authenticate some outer trusted identity or deployment boundary
+  - honor `x-openclaw-scopes` when the header is present
+  - fall back to the normal operator default scope set when the header is absent
+  - only lose owner semantics when the caller explicitly narrows scopes and omits `operator.admin`
 
 See [Security](/gateway/security) and [Remote access](/gateway/remote).
 
@@ -142,7 +172,7 @@ This is the highest-leverage compatibility set for self-hosted frontends and too
 
     Examples:
     `x-openclaw-model: openai/gpt-5.4`
-    `x-openclaw-model: gpt-5.4`
+    `x-openclaw-model: gpt-5.5`
 
     If you omit it, the selected agent runs with its normal configured model choice.
 
@@ -164,6 +194,69 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 - `Content-Type: text/event-stream`
 - Each event line is `data: <json>`
 - Stream ends with `data: [DONE]`
+
+## Chat tool contract
+
+`/v1/chat/completions` supports a function-tool subset compatible with common OpenAI Chat clients.
+
+### Supported request fields
+
+- `tools`: array of `{ "type": "function", "function": { ... } }`
+- `tool_choice`: `"auto"`, `"none"`
+- `messages[*].role: "tool"` follow-up turns
+- `messages[*].tool_call_id` for binding tool results back to a prior tool call
+- `max_completion_tokens`: number; per-call cap for total completion tokens (reasoning tokens included). Current OpenAI Chat Completions field name; preferred when both `max_completion_tokens` and `max_tokens` are sent.
+- `max_tokens`: number; legacy alias accepted for backwards compatibility. Ignored when `max_completion_tokens` is also present.
+- `temperature`: number; best-effort sampling temperature forwarded to the upstream provider via the agent stream-param channel.
+- `top_p`: number; best-effort nucleus sampling forwarded to the upstream provider via the agent stream-param channel.
+
+When either token-cap field is set, the value is forwarded to the upstream provider via the agent stream-param channel. The actual wire field name sent to the upstream provider is chosen by the provider transport: `max_completion_tokens` for OpenAI-family endpoints, and `max_tokens` for providers that only accept the legacy name (such as Mistral and Chutes). Sampling fields (`temperature`, `top_p`) follow the same stream-param channel; the ChatGPT-based Codex Responses backend strips them server-side since it uses fixed sampling.
+
+### Unsupported variants
+
+The endpoint returns `400 invalid_request_error` for unsupported tool variants, including:
+
+- non-array `tools`
+- non-function tool entries
+- missing `tool.function.name`
+- `tool_choice` variants such as `allowed_tools` and `custom`
+- `tool_choice: "required"` (not yet enforced at runtime; will be supported once hard enforcement is implemented)
+- `tool_choice: { "type": "function", "function": { "name": "..." } }` (same rationale as `required`)
+- `tool_choice.function.name` values that do not match provided `tools`
+
+### Non-streaming tool response shape
+
+When the agent decides to call tools, the response uses:
+
+- `choices[0].finish_reason = "tool_calls"`
+- `choices[0].message.tool_calls[]` entries with:
+  - `id`
+  - `type: "function"`
+  - `function.name`
+  - `function.arguments` (JSON string)
+
+Assistant commentary before the tool call is returned in `choices[0].message.content` (possibly empty).
+
+### Streaming tool response shape
+
+When `stream: true`, tool calls are emitted as incremental SSE chunks:
+
+- initial assistant role delta
+- optional assistant commentary deltas
+- one or more `delta.tool_calls` chunks carrying tool identity and argument fragments
+- final chunk with `finish_reason: "tool_calls"`
+- `data: [DONE]`
+
+If `stream_options.include_usage=true`, a trailing usage chunk is emitted before `[DONE]`.
+
+### Tool follow-up loop
+
+After receiving `tool_calls`, the client should execute the requested function(s) and send a follow-up request that includes:
+
+- prior assistant tool-call message
+- one or more `role: "tool"` messages with matching `tool_call_id`
+
+This allows the gateway agent run to continue the same reasoning loop and produce the final assistant answer.
 
 ## Open WebUI quick setup
 
@@ -250,3 +343,8 @@ Notes:
 - `openclaw/default` is always present so one stable id works across environments.
 - Backend provider/model overrides belong in `x-openclaw-model`, not the OpenAI `model` field.
 - `/v1/embeddings` supports `input` as a string or array of strings.
+
+## Related
+
+- [Configuration reference](/gateway/configuration-reference)
+- [OpenAI](/providers/openai)

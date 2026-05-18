@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readFileUtf8AndCleanup,
   stubFetchResponse,
@@ -34,10 +34,18 @@ async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T
   return await withTempDir("openclaw-test-", run);
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected missing path: ${targetPath}`);
+}
+
 describe("nodes camera helpers", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
+  beforeAll(async () => {
     ({
       cameraTempPath,
       parseCameraClipPayload,
@@ -47,6 +55,10 @@ describe("nodes camera helpers", () => {
       writeUrlToFile,
     } = await import("./nodes-camera.js"));
     ({ parseScreenRecordPayload, screenRecordTempPath } = await import("./nodes-screen.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("parses camera.snap payload", () => {
@@ -238,7 +250,7 @@ describe("nodes camera helpers", () => {
       await expect(
         writeUrlToFile(out, "https://198.51.100.42/broken.bin", { expectedHost: "198.51.100.42" }),
       ).rejects.toThrow(/stream exploded/i);
-      await expect(fs.stat(out)).rejects.toThrow();
+      await expectPathMissing(out);
     });
   });
 });

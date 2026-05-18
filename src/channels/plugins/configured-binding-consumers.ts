@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   CompiledConfiguredBinding,
   ConfiguredBindingRecordResolution,
@@ -62,8 +62,4 @@ export function registerConfiguredBindingConsumer(consumer: ConfiguredBindingCon
     ...consumer,
     id,
   });
-}
-
-export function unregisterConfiguredBindingConsumer(id: string): void {
-  registeredConfiguredBindingConsumers.delete(id.trim());
 }

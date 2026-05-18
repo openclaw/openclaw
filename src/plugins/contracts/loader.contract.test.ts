@@ -1,29 +1,21 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.js";
 import { withBundledPluginAllowlistCompat } from "../bundled-compat.js";
-import { resolveBundledWebSearchPluginIds } from "../bundled-web-search.js";
-import { loadPluginManifestRegistry } from "../manifest-registry.js";
-import { __testing as providerTesting } from "../providers.js";
-import { resolveBundledPluginWebSearchProviders } from "../web-search-providers.js";
+import { resolveManifestContractPluginIds } from "../plugin-registry.js";
+import { testing as providerTesting } from "../providers.js";
+import { resolveBundledContractSnapshotPluginIds } from "./inventory/bundled-capability-metadata.js";
 import { providerContractCompatPluginIds } from "./registry.js";
-import { uniqueSortedStrings } from "./testkit.js";
 
 function resolveBundledManifestProviderPluginIds() {
-  return uniqueSortedStrings(
-    loadPluginManifestRegistry({})
-      .plugins.filter((plugin) => plugin.origin === "bundled" && plugin.providers.length > 0)
-      .map((plugin) => plugin.id),
-  );
+  return uniqueSortedStrings(resolveBundledContractSnapshotPluginIds("providerIds"));
 }
 
-function expectPluginAllowlistContains(
+function expectPluginAllowlistEquals(
   allow: string[] | undefined,
   pluginIds: string[],
   expectedExtraEntry?: string,
 ) {
-  expect(allow).toEqual(expect.arrayContaining(pluginIds));
-  if (expectedExtraEntry) {
-    expect(allow).toContain(expectedExtraEntry);
-  }
+  expect(allow).toEqual(expectedExtraEntry ? [expectedExtraEntry, ...pluginIds] : pluginIds);
 }
 
 function createAllowlistCompatConfig(pluginIds: string[]) {
@@ -31,6 +23,7 @@ function createAllowlistCompatConfig(pluginIds: string[]) {
     config: {
       plugins: {
         allow: [demoAllowEntry],
+        bundledDiscovery: "compat",
       },
     },
     pluginIds,
@@ -56,6 +49,7 @@ describe("plugin loader contract", () => {
       config: {
         plugins: {
           allow: [demoAllowEntry],
+          bundledDiscovery: "compat",
         },
       },
     });
@@ -66,9 +60,14 @@ describe("plugin loader contract", () => {
       env: { VITEST: "1" } as NodeJS.ProcessEnv,
     });
     webSearchPluginIds = uniqueSortedStrings(
-      resolveBundledPluginWebSearchProviders({}).map((entry) => entry.pluginId),
+      resolveBundledContractSnapshotPluginIds("webSearchProviderIds"),
     );
-    bundledWebSearchPluginIds = uniqueSortedStrings(resolveBundledWebSearchPluginIds({}));
+    bundledWebSearchPluginIds = uniqueSortedStrings(
+      resolveManifestContractPluginIds({
+        contract: "webSearchProviders",
+        origin: "bundled",
+      }),
+    );
     webSearchAllowlistCompatConfig = createAllowlistCompatConfig(webSearchPluginIds);
   });
 
@@ -80,14 +79,13 @@ describe("plugin loader contract", () => {
     expect(providerPluginIds).toEqual(manifestProviderPluginIds);
     const sortedCompatPluginIds = uniqueSortedStrings(compatPluginIds);
     expect(sortedCompatPluginIds).toEqual(manifestProviderPluginIds);
-    expect(sortedCompatPluginIds).toEqual(expect.arrayContaining(providerPluginIds));
-    expectPluginAllowlistContains(compatConfig?.plugins?.allow, providerPluginIds, demoAllowEntry);
+    expectPluginAllowlistEquals(compatConfig?.plugins?.allow, providerPluginIds, demoAllowEntry);
   });
 
   it("keeps vitest bundled provider enablement wired to the provider registry", () => {
     expect(providerPluginIds).toEqual(manifestProviderPluginIds);
     expect(vitestCompatConfig?.plugins?.enabled).toBe(true);
-    expectPluginAllowlistContains(vitestCompatConfig?.plugins?.allow, providerPluginIds);
+    expectPluginAllowlistEquals(vitestCompatConfig?.plugins?.allow, providerPluginIds);
   });
 
   it("keeps bundled web search loading scoped to the web search registry", () => {
@@ -95,7 +93,7 @@ describe("plugin loader contract", () => {
   });
 
   it("keeps bundled web search allowlist compatibility wired to the web search registry", () => {
-    expectPluginAllowlistContains(
+    expectPluginAllowlistEquals(
       webSearchAllowlistCompatConfig?.plugins?.allow,
       webSearchPluginIds,
       demoAllowEntry,

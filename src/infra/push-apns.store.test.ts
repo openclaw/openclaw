@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearApnsRegistration,
   clearApnsRegistrationIfCurrent,
@@ -10,21 +10,14 @@ import {
   registerApnsToken,
 } from "./push-apns.js";
 
-const tempDirs: string[] = [];
+const tempDirs = createTrackedTempDirs();
 
 async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-push-apns-store-test-"));
-  tempDirs.push(dir);
-  return dir;
+  return await tempDirs.make("openclaw-push-apns-store-test-");
 }
 
 afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
-  }
+  await tempDirs.cleanup();
 });
 
 describe("push APNs registration store", () => {
@@ -39,16 +32,7 @@ describe("push APNs registration store", () => {
     });
 
     const loaded = await loadApnsRegistration("ios-node-1", baseDir);
-    expect(loaded).toMatchObject({
-      nodeId: "ios-node-1",
-      transport: "direct",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      updatedAtMs: saved.updatedAtMs,
-    });
-    expect(loaded && loaded.transport === "direct" ? loaded.token : null).toBe(
-      "abcd1234abcd1234abcd1234abcd1234",
-    );
+    expect(loaded).toEqual(saved);
   });
 
   it("stores relay-backed registrations without a raw token", async () => {
@@ -68,17 +52,7 @@ describe("push APNs registration store", () => {
 
     const loaded = await loadApnsRegistration("ios-node-relay", baseDir);
     expect(saved.transport).toBe("relay");
-    expect(loaded).toMatchObject({
-      nodeId: "ios-node-relay",
-      transport: "relay",
-      relayHandle: "relay-handle-123",
-      sendGrant: "send-grant-123",
-      installationId: "install-123",
-      topic: "ai.openclaw.ios",
-      environment: "production",
-      distribution: "official",
-      tokenDebugSuffix: "abcd1234",
-    });
+    expect(loaded).toEqual(saved);
     expect(loaded && "token" in loaded).toBe(false);
   });
 
@@ -123,7 +97,7 @@ describe("push APNs registration store", () => {
       "utf8",
     );
 
-    await expect(loadApnsRegistration("ios-node-legacy", baseDir)).resolves.toMatchObject({
+    await expect(loadApnsRegistration("ios-node-legacy", baseDir)).resolves.toEqual({
       nodeId: "ios-node-legacy",
       transport: "direct",
       token: "abcd1234abcd1234abcd1234abcd1234",
@@ -131,9 +105,10 @@ describe("push APNs registration store", () => {
       environment: "production",
       updatedAtMs: 3,
     });
-    await expect(loadApnsRegistration("ios-node-fallback", baseDir)).resolves.toMatchObject({
+    await expect(loadApnsRegistration("ios-node-fallback", baseDir)).resolves.toEqual({
       nodeId: "ios-node-fallback",
       transport: "direct",
+      token: "abcd1234abcd1234abcd1234abcd1234",
       topic: "ai.openclaw.ios",
       environment: "sandbox",
       updatedAtMs: 2,

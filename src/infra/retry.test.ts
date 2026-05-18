@@ -1,6 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveRetryConfig, retryAsync } from "./retry.js";
 
+const randomMocks = vi.hoisted(() => ({
+  generateSecureFraction: vi.fn(),
+}));
+
+vi.mock("./secure-random.js", () => ({
+  generateSecureFraction: randomMocks.generateSecureFraction,
+}));
+
+function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected mock call");
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error("expected mock call argument to be an object");
+  }
+  return arg as Record<string, unknown>;
+}
+
 type NumberRetryCase = {
   name: string;
   fn: ReturnType<typeof vi.fn>;
@@ -71,6 +91,7 @@ afterEach(() => {
 beforeEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+  randomMocks.generateSecureFraction.mockReset();
 });
 
 describe("retryAsync", () => {
@@ -143,14 +164,25 @@ describe("retryAsync", () => {
       vi.useRealTimers();
     }
     expect(res).toBe("ok");
-    expect(onRetry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        attempt: 1,
-        maxAttempts: 2,
-        err,
-        label: "telegram",
+    expect(onRetry).toHaveBeenCalledOnce();
+    const retryEvent = firstMockArg(onRetry);
+    expect(retryEvent.attempt).toBe(1);
+    expect(retryEvent.maxAttempts).toBe(2);
+    expect(retryEvent.err).toBe(err);
+    expect(retryEvent.label).toBe("telegram");
+  });
+
+  it("retries immediately when the resolved delay is zero", async () => {
+    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    await expect(
+      retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 0,
+        maxDelayMs: 0,
+        jitter: 0,
       }),
-    );
+    ).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
   });
 
   it("clamps attempts to at least 1", async () => {
@@ -180,6 +212,30 @@ describe("retryAsync", () => {
   ])("$name", async ({ params, expectedDelay }) => {
     const delays = await runRetryAfterCase(params);
     expect(delays[0]).toBe(expectedDelay);
+  });
+
+  it("uses secure jitter when configured", async () => {
+    vi.useFakeTimers();
+    randomMocks.generateSecureFraction.mockReturnValue(1);
+    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    const delays: number[] = [];
+
+    try {
+      const promise = retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 100,
+        maxDelayMs: 200,
+        jitter: 0.5,
+        onRetry: (info) => delays.push(info.delayMs),
+      });
+      await vi.runAllTimersAsync();
+      await expect(promise).resolves.toBe("ok");
+      expect(delays).toEqual([150]);
+      expect(randomMocks.generateSecureFraction).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });
 

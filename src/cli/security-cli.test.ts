@@ -1,42 +1,56 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import { registerSecurityCli } from "./security-cli.js";
 
-const loadConfig = vi.fn();
-const runSecurityAudit = vi.fn();
-const fixSecurityFootguns = vi.fn();
-const resolveCommandSecretRefsViaGateway = vi.fn();
-const getSecurityAuditCommandSecretTargetIds = vi.fn(
-  () => new Set(["gateway.auth.token", "gateway.auth.password"]),
-);
+const mocks = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  const runtime = createCliRuntimeMock(vi);
+  return {
+    loadConfig: vi.fn(),
+    runSecurityAudit: vi.fn(),
+    fixSecurityFootguns: vi.fn(),
+    resolveCommandSecretRefsViaGateway: vi.fn(),
+    getSecurityAuditCommandSecretTargetIds: vi.fn(
+      () => new Set(["gateway.auth.token", "gateway.auth.password"]),
+    ),
+    ...runtime,
+  };
+});
 
-const { defaultRuntime, runtimeLogs, resetRuntimeCapture } = createCliRuntimeCapture();
+const {
+  loadConfig,
+  runSecurityAudit,
+  fixSecurityFootguns,
+  resolveCommandSecretRefsViaGateway,
+  getSecurityAuditCommandSecretTargetIds,
+  runtimeLogs,
+} = mocks;
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => loadConfig(),
+  getRuntimeConfig: () => mocks.loadConfig(),
+  loadConfig: () => mocks.loadConfig(),
 }));
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime,
+  defaultRuntime: mocks.defaultRuntime,
 }));
 
 vi.mock("../security/audit.js", () => ({
-  runSecurityAudit: (opts: unknown) => runSecurityAudit(opts),
+  runSecurityAudit: (opts: unknown) => mocks.runSecurityAudit(opts),
 }));
 
 vi.mock("../security/fix.js", () => ({
-  fixSecurityFootguns: () => fixSecurityFootguns(),
+  fixSecurityFootguns: () => mocks.fixSecurityFootguns(),
 }));
 
 vi.mock("./command-secret-gateway.js", () => ({
-  resolveCommandSecretRefsViaGateway: (opts: unknown) => resolveCommandSecretRefsViaGateway(opts),
+  resolveCommandSecretRefsViaGateway: (opts: unknown) =>
+    mocks.resolveCommandSecretRefsViaGateway(opts),
 }));
 
 vi.mock("./command-secret-targets.js", () => ({
-  getSecurityAuditCommandSecretTargetIds: () => getSecurityAuditCommandSecretTargetIds(),
+  getSecurityAuditCommandSecretTargetIds: () => mocks.getSecurityAuditCommandSecretTargetIds(),
 }));
-
-const { registerSecurityCli } = await import("./security-cli.js");
 
 function createProgram() {
   const program = new Command();
@@ -61,9 +75,19 @@ function primeDeepAuditConfig(sourceConfig = { gateway: { mode: "local" } }) {
   return sourceConfig;
 }
 
+function lastSecretResolverOptions(): Record<string, unknown> | undefined {
+  const calls = resolveCommandSecretRefsViaGateway.mock.calls;
+  return calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined;
+}
+
+function lastSecurityAuditOptions(): Record<string, unknown> | undefined {
+  const calls = runSecurityAudit.mock.calls;
+  return calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined;
+}
+
 describe("security CLI", () => {
   beforeEach(() => {
-    resetRuntimeCapture();
+    runtimeLogs.length = 0;
     loadConfig.mockReset();
     runSecurityAudit.mockReset();
     fixSecurityFootguns.mockReset();
@@ -124,23 +148,17 @@ describe("security CLI", () => {
 
     await createProgram().parseAsync(["security", "audit", "--json"], { from: "user" });
 
-    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: sourceConfig,
-        commandName: "security audit",
-        mode: "read_only_status",
-        targetIds: expect.any(Set),
-      }),
-    );
-    expect(runSecurityAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: resolvedConfig,
-        sourceConfig,
-        deep: false,
-        includeFilesystem: true,
-        includeChannelSecurity: true,
-      }),
-    );
+    const resolverOptions = lastSecretResolverOptions();
+    expect(resolverOptions?.config).toBe(sourceConfig);
+    expect(resolverOptions?.commandName).toBe("security audit");
+    expect(resolverOptions?.mode).toBe("read_only_status");
+    expect(resolverOptions?.targetIds).toBeInstanceOf(Set);
+    const auditOptions = lastSecurityAuditOptions();
+    expect(auditOptions?.config).toBe(resolvedConfig);
+    expect(auditOptions?.sourceConfig).toBe(sourceConfig);
+    expect(auditOptions?.deep).toBe(false);
+    expect(auditOptions?.includeFilesystem).toBe(true);
+    expect(auditOptions?.includeChannelSecurity).toBe(true);
     const payload = JSON.parse(String(runtimeLogs.at(-1)));
     expect(payload.secretDiagnostics).toEqual([
       "security audit: gateway secrets.resolve unavailable (gateway closed); resolved command secrets locally.",
@@ -173,16 +191,8 @@ describe("security CLI", () => {
       from: "user",
     });
 
-    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "read_only_status",
-      }),
-    );
-    expect(runSecurityAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deep: true,
-        deepProbeAuth,
-      }),
-    );
+    expect(lastSecretResolverOptions()?.mode).toBe("read_only_status");
+    expect(lastSecurityAuditOptions()?.deep).toBe(true);
+    expect(lastSecurityAuditOptions()?.deepProbeAuth).toEqual(deepProbeAuth);
   });
 });

@@ -4,13 +4,13 @@ import {
   hasNonzeroUsage,
   type NormalizedUsage,
 } from "../../agents/usage.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import {
   type SessionSystemPromptReport,
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
@@ -85,9 +85,11 @@ export async function persistSessionUsageUpdate(params: {
   contextTokensUsed?: number;
   promptTokens?: number;
   usageIsContextSnapshot?: boolean;
+  isHeartbeat?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
   cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
+  preserveFreshTotalTokensOnStaleUsage?: boolean;
   logLabel?: string;
 }): Promise<void> {
   const { storePath, sessionKey } = params;
@@ -96,7 +98,7 @@ export async function persistSessionUsageUpdate(params: {
   }
 
   const label = params.logLabel ? `${params.logLabel} ` : "";
-  const cfg = params.cfg ?? loadConfig();
+  const cfg = params.cfg ?? getRuntimeConfig();
   const hasUsage = hasNonzeroUsage(params.usage);
   const hasPromptTokens =
     typeof params.promptTokens === "number" &&
@@ -132,10 +134,12 @@ export async function persistSessionUsageUpdate(params: {
             providerUsed: params.providerUsed ?? entry.modelProvider,
             modelUsed: params.modelUsed ?? entry.model,
           });
-          const existingEstimatedCostUsd = resolveNonNegativeNumber(entry.estimatedCostUsd) ?? 0;
           const patch: Partial<SessionEntry> = {
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
+            modelProvider:
+              params.isHeartbeat === true
+                ? entry.modelProvider
+                : (params.providerUsed ?? entry.modelProvider),
+            model: params.isHeartbeat === true ? entry.model : (params.modelUsed ?? entry.model),
             contextTokens: resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
@@ -149,15 +153,21 @@ export async function persistSessionUsageUpdate(params: {
             patch.cacheRead = cacheUsage?.cacheRead ?? 0;
             patch.cacheWrite = cacheUsage?.cacheWrite ?? 0;
           }
+          // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
+          // cumulative run usage, so assign directly instead of accumulating).
+          // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
           if (runEstimatedCostUsd !== undefined) {
-            patch.estimatedCostUsd = existingEstimatedCostUsd + runEstimatedCostUsd;
-          } else if (entry.estimatedCostUsd !== undefined) {
-            patch.estimatedCostUsd = entry.estimatedCostUsd;
+            patch.estimatedCostUsd = runEstimatedCostUsd;
           }
-          // Missing a last-call snapshot (and promptTokens fallback) means
-          // context utilization is stale/unknown.
-          patch.totalTokens = totalTokens;
-          patch.totalTokensFresh = typeof totalTokens === "number";
+          if (hasFreshContextSnapshot) {
+            patch.totalTokens = totalTokens;
+            patch.totalTokensFresh = true;
+          } else if (
+            params.preserveFreshTotalTokensOnStaleUsage !== true ||
+            entry.totalTokensFresh !== true
+          ) {
+            patch.totalTokensFresh = false;
+          }
           return applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
@@ -174,8 +184,11 @@ export async function persistSessionUsageUpdate(params: {
         sessionKey,
         update: async (entry) => {
           const patch: Partial<SessionEntry> = {
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
+            modelProvider:
+              params.isHeartbeat === true
+                ? entry.modelProvider
+                : (params.providerUsed ?? entry.modelProvider),
+            model: params.isHeartbeat === true ? entry.model : (params.modelUsed ?? entry.model),
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),

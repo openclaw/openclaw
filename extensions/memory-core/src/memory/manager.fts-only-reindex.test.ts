@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexManager } from "./manager.js";
 import "./test-runtime-mocks.js";
 
@@ -16,24 +17,18 @@ vi.mock("./embeddings.js", () => ({
   resolveEmbeddingProviderFallbackModel: () => "fts-only",
 }));
 
-type MemoryIndexModule = typeof import("./index.js");
-
 describe("memory manager FTS-only reindex", () => {
   let fixtureRoot = "";
   let caseId = 0;
   let workspaceDir = "";
   let indexPath = "";
   let manager: MemoryIndexManager | null = null;
-  let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
-  let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fts-only-"));
   });
 
   beforeEach(async () => {
-    vi.resetModules();
-    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
@@ -49,10 +44,10 @@ describe("memory manager FTS-only reindex", () => {
   });
 
   afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
+    await closeAllMemorySearchManagers();
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   async function createManager(): Promise<MemoryIndexManager> {

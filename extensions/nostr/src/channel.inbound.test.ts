@@ -1,7 +1,7 @@
+import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { PluginRuntime } from "../runtime-api.js";
-import { nostrPlugin } from "./channel.js";
+import { startNostrGatewayAccount } from "./gateway.js";
 import { setNostrRuntime } from "./runtime.js";
 import { buildResolvedNostrAccount } from "./test-fixtures.js";
 
@@ -17,9 +17,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./nostr-bus.js", () => ({
   DEFAULT_RELAYS: ["wss://relay.example.com"],
+  startNostrBus: mocks.startNostrBus,
+}));
+
+vi.mock("./nostr-key-utils.js", () => ({
   getPublicKeyFromPrivate: vi.fn(() => "bot-pubkey"),
   normalizePubkey: mocks.normalizePubkey,
-  startNostrBus: mocks.startNostrBus,
 }));
 
 function createMockBus() {
@@ -88,7 +91,7 @@ async function startGatewayHarness(params: {
   setNostrRuntime(harness.runtime);
   mocks.startNostrBus.mockResolvedValueOnce(bus as never);
 
-  const cleanup = (await nostrPlugin.gateway!.startAccount!(
+  const cleanup = (await startNostrGatewayAccount(
     createStartAccountContext({
       account: params.account,
       cfg: params.cfg,
@@ -96,6 +99,14 @@ async function startGatewayHarness(params: {
   )) as { stop: () => void };
 
   return { harness, bus, cleanup };
+}
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
 }
 
 describe("nostr inbound gateway path", () => {
@@ -111,7 +122,7 @@ describe("nostr inbound gateway path", () => {
       }),
     });
 
-    const options = mocks.startNostrBus.mock.calls[0]?.[0] as {
+    const options = mockCallArg(mocks.startNostrBus) as {
       authorizeSender: (params: {
         senderPubkey: string;
         reply: (text: string) => Promise<void>;
@@ -126,7 +137,7 @@ describe("nostr inbound gateway path", () => {
       }),
     ).resolves.toBe("pairing");
     expect(sendPairingReply).toHaveBeenCalledTimes(1);
-    expect(sendPairingReply.mock.calls[0]?.[0]).toContain("Pairing code:");
+    expect(mockCallArg(sendPairingReply)).toContain("Pairing code:");
 
     cleanup.stop();
   });
@@ -143,7 +154,7 @@ describe("nostr inbound gateway path", () => {
       } as never,
     });
 
-    const options = mocks.startNostrBus.mock.calls[0]?.[0] as {
+    const options = mockCallArg(mocks.startNostrBus) as {
       onMessage: (
         senderPubkey: string,
         text: string,
@@ -160,12 +171,15 @@ describe("nostr inbound gateway path", () => {
 
     expect(harness.recordInboundSession).toHaveBeenCalledTimes(1);
     expect(harness.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    expect(harness.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0]?.ctx).toMatchObject({
-      BodyForAgent: "hello from nostr",
-      SenderId: "sender-pubkey",
-      MessageSid: "event-123",
-      CommandAuthorized: true,
-    });
+    const ctx = (
+      mockCallArg(harness.dispatchReplyWithBufferedBlockDispatcher) as {
+        ctx?: Record<string, unknown>;
+      }
+    ).ctx;
+    expect(ctx?.BodyForAgent).toBe("hello from nostr");
+    expect(ctx?.SenderId).toBe("sender-pubkey");
+    expect(ctx?.MessageSid).toBe("event-123");
+    expect(ctx?.CommandAuthorized).toBe(true);
     expect(sendReply).toHaveBeenCalledWith("converted:|a|b|");
 
     cleanup.stop();

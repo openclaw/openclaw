@@ -1,20 +1,14 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
-import {
-  BUNDLED_IMAGE_GENERATION_PLUGIN_IDS,
-  BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS,
-  BUNDLED_SPEECH_PLUGIN_IDS,
-} from "../bundled-capability-metadata.js";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
-import { loadPluginManifestRegistry } from "../manifest-registry.js";
-import { buildPluginLoaderAliasMap, buildPluginLoaderJitiOptions } from "../sdk-alias.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  MusicGenerationProviderPlugin,
+  RealtimeTranscriptionProviderPlugin,
+  RealtimeVoiceProviderPlugin,
   SpeechProviderPlugin,
+  VideoGenerationProviderPlugin,
 } from "../types.js";
+import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
 
 export type SpeechProviderContractEntry = {
   pluginId: string;
@@ -26,211 +20,278 @@ export type MediaUnderstandingProviderContractEntry = {
   provider: MediaUnderstandingProviderPlugin;
 };
 
+export type RealtimeVoiceProviderContractEntry = {
+  pluginId: string;
+  provider: RealtimeVoiceProviderPlugin;
+};
+
+export type RealtimeTranscriptionProviderContractEntry = {
+  pluginId: string;
+  provider: RealtimeTranscriptionProviderPlugin;
+};
+
 export type ImageGenerationProviderContractEntry = {
   pluginId: string;
   provider: ImageGenerationProviderPlugin;
 };
 
-function buildVitestCapabilityAliasMap(modulePath: string): Record<string, string> {
-  const { ["openclaw/plugin-sdk"]: _ignoredRootAlias, ...scopedAliasMap } =
-    buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url, "dist");
-  return {
-    ...scopedAliasMap,
-    "openclaw/plugin-sdk/llm-task": fileURLToPath(
-      new URL("../capability-runtime-vitest-shims/llm-task.ts", import.meta.url),
-    ),
-    "openclaw/plugin-sdk/media-runtime": fileURLToPath(
-      new URL("../capability-runtime-vitest-shims/media-runtime.ts", import.meta.url),
-    ),
-    "openclaw/plugin-sdk/provider-onboard": fileURLToPath(
-      new URL("../../plugin-sdk/provider-onboard.ts", import.meta.url),
-    ),
-    "openclaw/plugin-sdk/speech-core": fileURLToPath(
-      new URL("../capability-runtime-vitest-shims/speech-core.ts", import.meta.url),
-    ),
-  };
-}
+export type VideoGenerationProviderContractEntry = {
+  pluginId: string;
+  provider: VideoGenerationProviderPlugin;
+};
 
-function resolveNamedBuilder<T>(moduleExport: unknown, pattern: RegExp): (() => T) | undefined {
-  if (!moduleExport || typeof moduleExport !== "object") {
-    return undefined;
-  }
-  for (const [key, value] of Object.entries(moduleExport as Record<string, unknown>)) {
-    if (pattern.test(key) && typeof value === "function") {
-      return value as () => T;
-    }
-  }
-  return undefined;
-}
+export type MusicGenerationProviderContractEntry = {
+  pluginId: string;
+  provider: MusicGenerationProviderPlugin;
+};
 
-function resolveNamedValues<T>(
-  moduleExport: unknown,
-  pattern: RegExp,
-  isMatch: (value: unknown) => value is T,
-): T[] {
-  if (!moduleExport || typeof moduleExport !== "object") {
-    return [];
-  }
-  const matches: T[] = [];
-  for (const [key, value] of Object.entries(moduleExport as Record<string, unknown>)) {
-    if (pattern.test(key) && isMatch(value)) {
-      matches.push(value);
-    }
-  }
-  return matches;
-}
+type ManifestContractKey =
+  | "imageGenerationProviders"
+  | "speechProviders"
+  | "mediaUnderstandingProviders"
+  | "realtimeVoiceProviders"
+  | "realtimeTranscriptionProviders"
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
 
-function resolveTestApiModuleRecords(pluginIds: readonly string[]) {
-  const unresolvedPluginIds = new Set(pluginIds);
-  const manifests = loadPluginManifestRegistry({}).plugins.filter(
-    (plugin) => plugin.origin === "bundled" && unresolvedPluginIds.has(plugin.id),
-  );
-  return { manifests, unresolvedPluginIds };
-}
+const VITEST_CONTRACT_PLUGIN_IDS = {
+  imageGenerationProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.imageGenerationProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+  speechProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.speechProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+  mediaUnderstandingProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.mediaUnderstandingProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+  realtimeVoiceProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.realtimeVoiceProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+  realtimeTranscriptionProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.realtimeTranscriptionProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+  videoGenerationProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.videoGenerationProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+  musicGenerationProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.musicGenerationProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+} satisfies Record<ManifestContractKey, string[]>;
 
-function createVitestCapabilityLoader(modulePath: string) {
-  return createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(buildVitestCapabilityAliasMap(modulePath)),
-    tryNative: false,
+function loadVitestVideoGenerationFallbackEntries(
+  pluginIds: readonly string[],
+): VideoGenerationProviderContractEntry[] {
+  return loadVitestCapabilityContractEntries({
+    contract: "videoGenerationProviders",
+    pluginSdkResolution: "src",
+    pluginIds,
+    pickEntries: (registry) =>
+      registry.videoGenerationProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      })),
   });
 }
 
-function isMediaUnderstandingProvider(value: unknown): value is MediaUnderstandingProviderPlugin {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { id?: unknown }).id === "string" &&
-    typeof (value as { describeImage?: unknown }).describeImage === "function"
+function loadVitestMusicGenerationFallbackEntries(
+  pluginIds: readonly string[],
+): MusicGenerationProviderContractEntry[] {
+  return loadVitestCapabilityContractEntries({
+    contract: "musicGenerationProviders",
+    pluginSdkResolution: "src",
+    pluginIds,
+    pickEntries: (registry) =>
+      registry.musicGenerationProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      })),
+  });
+}
+
+function loadVitestSpeechFallbackEntries(
+  pluginIds: readonly string[],
+): SpeechProviderContractEntry[] {
+  return loadVitestCapabilityContractEntries({
+    contract: "speechProviders",
+    pluginSdkResolution: "src",
+    pluginIds,
+    pickEntries: (registry) =>
+      registry.speechProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      })),
+  });
+}
+
+function hasExplicitVideoGenerationModes(provider: VideoGenerationProviderPlugin): boolean {
+  return Boolean(
+    provider.capabilities.generate &&
+    provider.capabilities.imageToVideo &&
+    provider.capabilities.videoToVideo,
+  );
+}
+
+function hasExplicitMusicGenerationModes(provider: MusicGenerationProviderPlugin): boolean {
+  return Boolean(provider.capabilities.generate && provider.capabilities.edit);
+}
+
+function loadVitestCapabilityContractEntries<T>(params: {
+  contract: ManifestContractKey;
+  pluginIds?: readonly string[];
+  pluginSdkResolution?: "dist" | "src";
+  pickEntries: (registry: ReturnType<typeof loadBundledCapabilityRuntimeRegistry>) => Array<{
+    pluginId: string;
+    provider: T;
+  }>;
+}): Array<{ pluginId: string; provider: T }> {
+  const pluginIds = [...(params.pluginIds ?? VITEST_CONTRACT_PLUGIN_IDS[params.contract])];
+  if (pluginIds.length === 0) {
+    return [];
+  }
+  const bulkEntries = params.pickEntries(
+    loadBundledCapabilityRuntimeRegistry({
+      pluginIds,
+      pluginSdkResolution: params.pluginSdkResolution ?? "dist",
+    }),
+  );
+  const coveredPluginIds = new Set(bulkEntries.map((entry) => entry.pluginId));
+  if (coveredPluginIds.size === pluginIds.length) {
+    return bulkEntries;
+  }
+  return pluginIds.flatMap((pluginId) =>
+    params
+      .pickEntries(
+        loadBundledCapabilityRuntimeRegistry({
+          pluginIds: [pluginId],
+          pluginSdkResolution: params.pluginSdkResolution ?? "dist",
+        }),
+      )
+      .filter((entry) => entry.pluginId === pluginId),
   );
 }
 
 export function loadVitestSpeechProviderContractRegistry(): SpeechProviderContractEntry[] {
-  const registrations: SpeechProviderContractEntry[] = [];
-  const { manifests, unresolvedPluginIds } = resolveTestApiModuleRecords(BUNDLED_SPEECH_PLUGIN_IDS);
-
-  for (const plugin of manifests) {
-    if (!plugin.rootDir) {
-      continue;
-    }
-    const testApiPath = path.join(plugin.rootDir, "test-api.ts");
-    if (!fs.existsSync(testApiPath)) {
-      continue;
-    }
-    const builder = resolveNamedBuilder<SpeechProviderPlugin>(
-      createVitestCapabilityLoader(testApiPath)(testApiPath),
-      /^build.+SpeechProvider$/u,
-    );
-    if (!builder) {
-      continue;
-    }
-    registrations.push({
-      pluginId: plugin.id,
-      provider: builder(),
-    });
-    unresolvedPluginIds.delete(plugin.id);
-  }
-
-  if (unresolvedPluginIds.size === 0) {
-    return registrations;
-  }
-
-  const runtimeRegistry = loadBundledCapabilityRuntimeRegistry({
-    pluginIds: [...unresolvedPluginIds],
-    pluginSdkResolution: "dist",
+  const entries = loadVitestCapabilityContractEntries({
+    contract: "speechProviders",
+    pickEntries: (registry) =>
+      registry.speechProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      })),
   });
-  registrations.push(
-    ...runtimeRegistry.speechProviders.map((entry) => ({
-      pluginId: entry.pluginId,
-      provider: entry.provider,
-    })),
+  const coveredPluginIds = new Set(entries.map((entry) => entry.pluginId));
+  const missingPluginIds = VITEST_CONTRACT_PLUGIN_IDS.speechProviders.filter(
+    (pluginId) => !coveredPluginIds.has(pluginId),
   );
-  return registrations;
+  if (missingPluginIds.length === 0) {
+    return entries;
+  }
+  const replacementEntries = loadVitestSpeechFallbackEntries(missingPluginIds);
+  const replacedPluginIds = new Set(replacementEntries.map((entry) => entry.pluginId));
+  return [
+    ...entries.filter((entry) => !replacedPluginIds.has(entry.pluginId)),
+    ...replacementEntries,
+  ];
 }
 
 export function loadVitestMediaUnderstandingProviderContractRegistry(): MediaUnderstandingProviderContractEntry[] {
-  const registrations: MediaUnderstandingProviderContractEntry[] = [];
-  const { manifests, unresolvedPluginIds } = resolveTestApiModuleRecords(
-    BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS,
-  );
-
-  for (const plugin of manifests) {
-    if (!plugin.rootDir) {
-      continue;
-    }
-    const testApiPath = path.join(plugin.rootDir, "test-api.ts");
-    if (!fs.existsSync(testApiPath)) {
-      continue;
-    }
-    const providers = resolveNamedValues<MediaUnderstandingProviderPlugin>(
-      createVitestCapabilityLoader(testApiPath)(testApiPath),
-      /MediaUnderstandingProvider$/u,
-      isMediaUnderstandingProvider,
-    );
-    if (providers.length === 0) {
-      continue;
-    }
-    registrations.push(...providers.map((provider) => ({ pluginId: plugin.id, provider })));
-    unresolvedPluginIds.delete(plugin.id);
-  }
-
-  if (unresolvedPluginIds.size === 0) {
-    return registrations;
-  }
-
-  const runtimeRegistry = loadBundledCapabilityRuntimeRegistry({
-    pluginIds: [...unresolvedPluginIds],
-    pluginSdkResolution: "dist",
+  return loadVitestCapabilityContractEntries({
+    contract: "mediaUnderstandingProviders",
+    pickEntries: (registry) =>
+      registry.mediaUnderstandingProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      })),
   });
-  registrations.push(
-    ...runtimeRegistry.mediaUnderstandingProviders.map((entry) => ({
-      pluginId: entry.pluginId,
-      provider: entry.provider,
-    })),
-  );
-  return registrations;
+}
+
+export function loadVitestRealtimeVoiceProviderContractRegistry(): RealtimeVoiceProviderContractEntry[] {
+  return loadVitestCapabilityContractEntries({
+    contract: "realtimeVoiceProviders",
+    pickEntries: (registry) =>
+      registry.realtimeVoiceProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      })),
+  });
+}
+
+export function loadVitestRealtimeTranscriptionProviderContractRegistry(): RealtimeTranscriptionProviderContractEntry[] {
+  return loadVitestCapabilityContractEntries({
+    contract: "realtimeTranscriptionProviders",
+    pickEntries: (registry) =>
+      registry.realtimeTranscriptionProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      })),
+  });
 }
 
 export function loadVitestImageGenerationProviderContractRegistry(): ImageGenerationProviderContractEntry[] {
-  const registrations: ImageGenerationProviderContractEntry[] = [];
-  const { manifests, unresolvedPluginIds } = resolveTestApiModuleRecords(
-    BUNDLED_IMAGE_GENERATION_PLUGIN_IDS,
-  );
-
-  for (const plugin of manifests) {
-    if (!plugin.rootDir) {
-      continue;
-    }
-    const testApiPath = path.join(plugin.rootDir, "test-api.ts");
-    if (!fs.existsSync(testApiPath)) {
-      continue;
-    }
-    const builder = resolveNamedBuilder<ImageGenerationProviderPlugin>(
-      createVitestCapabilityLoader(testApiPath)(testApiPath),
-      /^build.+ImageGenerationProvider$/u,
-    );
-    if (!builder) {
-      continue;
-    }
-    registrations.push({
-      pluginId: plugin.id,
-      provider: builder(),
-    });
-    unresolvedPluginIds.delete(plugin.id);
-  }
-
-  if (unresolvedPluginIds.size === 0) {
-    return registrations;
-  }
-
-  const runtimeRegistry = loadBundledCapabilityRuntimeRegistry({
-    pluginIds: [...unresolvedPluginIds],
-    pluginSdkResolution: "dist",
+  return loadVitestCapabilityContractEntries({
+    contract: "imageGenerationProviders",
+    pickEntries: (registry) =>
+      registry.imageGenerationProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      })),
   });
-  registrations.push(
-    ...runtimeRegistry.imageGenerationProviders.map((entry) => ({
-      pluginId: entry.pluginId,
-      provider: entry.provider,
-    })),
+}
+
+export function loadVitestVideoGenerationProviderContractRegistry(): VideoGenerationProviderContractEntry[] {
+  const entries = loadVitestCapabilityContractEntries({
+    contract: "videoGenerationProviders",
+    pickEntries: (registry) =>
+      registry.videoGenerationProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      })),
+  });
+  const coveredPluginIds = new Set(entries.map((entry) => entry.pluginId));
+  const stalePluginIds = new Set(
+    entries
+      .filter((entry) => !hasExplicitVideoGenerationModes(entry.provider))
+      .map((entry) => entry.pluginId),
   );
-  return registrations;
+  const missingPluginIds = VITEST_CONTRACT_PLUGIN_IDS.videoGenerationProviders.filter(
+    (pluginId) => !coveredPluginIds.has(pluginId) || stalePluginIds.has(pluginId),
+  );
+  if (missingPluginIds.length === 0) {
+    return entries;
+  }
+  const replacementEntries = loadVitestVideoGenerationFallbackEntries(missingPluginIds);
+  const replacedPluginIds = new Set(replacementEntries.map((entry) => entry.pluginId));
+  return [
+    ...entries.filter((entry) => !replacedPluginIds.has(entry.pluginId)),
+    ...replacementEntries,
+  ];
+}
+
+export function loadVitestMusicGenerationProviderContractRegistry(): MusicGenerationProviderContractEntry[] {
+  const entries = loadVitestCapabilityContractEntries({
+    contract: "musicGenerationProviders",
+    pickEntries: (registry) =>
+      registry.musicGenerationProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      })),
+  });
+  const coveredPluginIds = new Set(entries.map((entry) => entry.pluginId));
+  const stalePluginIds = new Set(
+    entries
+      .filter((entry) => !hasExplicitMusicGenerationModes(entry.provider))
+      .map((entry) => entry.pluginId),
+  );
+  const missingPluginIds = VITEST_CONTRACT_PLUGIN_IDS.musicGenerationProviders.filter(
+    (pluginId) => !coveredPluginIds.has(pluginId) || stalePluginIds.has(pluginId),
+  );
+  if (missingPluginIds.length === 0) {
+    return entries;
+  }
+  const replacementEntries = loadVitestMusicGenerationFallbackEntries(missingPluginIds);
+  const replacedPluginIds = new Set(replacementEntries.map((entry) => entry.pluginId));
+  return [
+    ...entries.filter((entry) => !replacedPluginIds.has(entry.pluginId)),
+    ...replacementEntries,
+  ];
 }

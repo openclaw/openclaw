@@ -7,6 +7,7 @@ import {
   shouldAutoDeliverTaskStateChange,
   shouldAutoDeliverTaskTerminalUpdate,
   shouldSuppressDuplicateTerminalDelivery,
+  shouldUseParentReviewTaskTerminalMessage,
 } from "./task-executor-policy.js";
 import type { TaskEventRecord, TaskRecord } from "./task-registry.types.js";
 
@@ -14,7 +15,9 @@ function createTask(partial: Partial<TaskRecord>): TaskRecord {
   return {
     taskId: partial.taskId ?? "task-1",
     runtime: partial.runtime ?? "acp",
-    requesterSessionKey: partial.requesterSessionKey ?? "agent:main:main",
+    requesterSessionKey: partial.requesterSessionKey ?? partial.ownerKey ?? "agent:main:main",
+    ownerKey: partial.ownerKey ?? partial.requesterSessionKey ?? "agent:main:main",
+    scopeKind: partial.scopeKind ?? "session",
     task: partial.task ?? "Investigate issue",
     status: partial.status ?? "running",
     deliveryStatus: partial.deliveryStatus ?? "pending",
@@ -36,6 +39,12 @@ describe("task-executor-policy", () => {
   });
 
   it("formats terminal, followup, and progress messages", () => {
+    const succeededTask = createTask({
+      status: "succeeded",
+      terminalSummary: "Imported 12 rows.",
+      runId: "run-0234567890",
+      label: "ACP import",
+    });
     const blockedTask = createTask({
       status: "succeeded",
       terminalOutcome: "blocked",
@@ -49,6 +58,12 @@ describe("task-executor-policy", () => {
       summary: "No output for 60s.",
     };
 
+    expect(formatTaskTerminalMessage(succeededTask, { surface: "parent_session" })).toBe(
+      "Background task ready for review: ACP import (run run-0234). Imported 12 rows. Next: parent will review/verify before calling it done.",
+    );
+    expect(formatTaskTerminalMessage(succeededTask)).toBe(
+      "Background task done: ACP import (run run-0234). Imported 12 rows.",
+    );
     expect(formatTaskTerminalMessage(blockedTask)).toBe(
       "Background task blocked: ACP import (run run-1234). Needs login.",
     );
@@ -57,6 +72,63 @@ describe("task-executor-policy", () => {
     );
     expect(formatTaskStateChangeMessage(blockedTask, progressEvent)).toBe(
       "Background task update: ACP import. No output for 60s.",
+    );
+  });
+
+  it("sanitizes leaked internal runtime context from terminal and progress copy", () => {
+    const leaked = [
+      "OpenClaw runtime context (internal):",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "[Internal task completion event]",
+      "source: subagent",
+    ].join("\n");
+    const blockedTask = createTask({
+      status: "succeeded",
+      terminalOutcome: "blocked",
+      terminalSummary: leaked,
+      runId: "run-1234567890",
+      label: leaked,
+    });
+    const failedTask = createTask({
+      status: "failed",
+      error: leaked,
+      terminalSummary: "Needs manual approval.",
+      runId: "run-2234567890",
+      label: leaked,
+    });
+    const progressEvent: TaskEventRecord = {
+      at: 10,
+      kind: "progress",
+      summary: leaked,
+    };
+
+    expect(formatTaskTerminalMessage(blockedTask)).toBe(
+      "Background task blocked: Background task (run run-1234).",
+    );
+    expect(formatTaskBlockedFollowupMessage(blockedTask)).toBe(
+      "Task needs follow-up: Background task (run run-1234). Task is blocked and needs follow-up.",
+    );
+    expect(formatTaskTerminalMessage(failedTask)).toBe(
+      "Background task failed: Background task (run run-2234). Needs manual approval.",
+    );
+    expect(formatTaskStateChangeMessage(blockedTask, progressEvent)).toBeNull();
+  });
+
+  it("redacts raw exec denial text from blocked task updates", () => {
+    const blockedTask = createTask({
+      status: "succeeded",
+      terminalOutcome: "blocked",
+      terminalSummary: "Exec denied (gateway id=req-1, approval-timeout): bash -lc ls",
+      runId: "run-1234567890",
+      label: "ACP import",
+    });
+
+    expect(formatTaskTerminalMessage(blockedTask)).toBe(
+      "Background task blocked: ACP import (run run-1234). Command did not run: approval timed out.",
+    );
+    expect(formatTaskBlockedFollowupMessage(blockedTask)).toBe(
+      "Task needs follow-up: ACP import (run run-1234). Command did not run: approval timed out.",
     );
   });
 
@@ -123,6 +195,24 @@ describe("task-executor-policy", () => {
         }),
         preferredTaskId: undefined,
       }),
+    ).toBe(false);
+    expect(
+      shouldUseParentReviewTaskTerminalMessage(
+        createTask({
+          runtime: "acp",
+          childSessionKey: "agent:main:acp:child",
+          status: "succeeded",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldUseParentReviewTaskTerminalMessage(
+        createTask({
+          runtime: "acp",
+          taskKind: "context_engine_turn_maintenance",
+          status: "succeeded",
+        }),
+      ),
     ).toBe(false);
   });
 });

@@ -1,5 +1,7 @@
-// Public binding helpers for both runtime plugin-owned bindings and
-// config-driven channel bindings.
+/**
+ * @deprecated Broad public SDK barrel. Prefer focused conversation/thread
+ * binding subpaths and avoid adding new imports here.
+ */
 
 export {
   createConversationBindingRecord,
@@ -13,6 +15,8 @@ export {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
   type ConfiguredBindingRouteResult,
+  resolveRuntimeConversationBindingRoute,
+  type RuntimeConversationBindingRouteResult,
 } from "../channels/plugins/binding-routing.js";
 export {
   primeConfiguredBindingRegistry,
@@ -42,9 +46,8 @@ export {
   resolveThreadBindingThreadName,
 } from "../channels/thread-bindings-messages.js";
 export {
-  DISCORD_THREAD_BINDING_CHANNEL,
-  MATRIX_THREAD_BINDING_CHANNEL,
   formatThreadBindingDisabledError,
+  formatThreadBindingSpawnDisabledError,
   resolveThreadBindingEffectiveExpiresAt,
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingIdleTimeoutMsForChannel,
@@ -86,7 +89,7 @@ export {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
-export { __testing } from "../infra/outbound/session-binding-service.js";
+export { testing, testing as __testing } from "../infra/outbound/session-binding-service.js";
 export * from "../pairing/pairing-challenge.js";
 export { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 export * from "../pairing/pairing-messages.js";
@@ -108,4 +111,4 @@ export {
   resolvePluginConversationBindingApproval,
   toPluginConversationBinding,
 } from "../plugins/conversation-binding.js";
-export { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
+export { resolvePinnedMainDmOwnerFromAllowlist } from "./channel-access-compat.js";

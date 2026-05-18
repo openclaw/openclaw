@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendLocalMediaParentRoots,
+  buildMediaLocalRoots,
   getAgentScopedMediaLocalRoots,
   getAgentScopedMediaLocalRootsForSources,
   getDefaultMediaLocalRoots,
@@ -77,12 +78,12 @@ describe("local media roots", () => {
 
   it.each([
     {
-      name: "keeps temp, media cache, and workspace roots by default",
+      name: "keeps temp, media cache, canvas, and workspace roots by default",
       stateDir: path.join("/tmp", "openclaw-media-roots-state"),
       getRoots: () => getDefaultMediaLocalRoots(),
-      expectedContained: ["media", "workspace", "sandboxes"],
+      expectedContained: ["media", "canvas", "workspace", "sandboxes"],
       expectedExcluded: ["agents"],
-      minLength: 3,
+      minLength: 4,
     },
     {
       name: "adds the active agent workspace without re-opening broad agent state roots",
@@ -117,14 +118,18 @@ describe("local media roots", () => {
       ],
     );
 
-    expect(roots.map(normalizeHostPath)).toEqual(
-      expect.arrayContaining([
-        normalizeHostPath("/tmp/base"),
-        normalizeHostPath(picturesDir),
-        normalizeHostPath(moviesDir),
-      ]),
-    );
+    expect(roots.map(normalizeHostPath)).toStrictEqual([
+      normalizeHostPath("/tmp/base"),
+      normalizeHostPath(picturesDir),
+      normalizeHostPath(moviesDir),
+    ]);
     expect(roots.map(normalizeHostPath)).not.toContain(normalizeHostPath("/"));
+  });
+
+  it("does not widen local roots for pass-through remote media schemes", () => {
+    const roots = appendLocalMediaParentRoots(["/tmp/base"], ["mxc://matrix.org/abc123def456"]);
+
+    expect(roots.map(normalizeHostPath)).toEqual([normalizeHostPath("/tmp/base")]);
   });
 
   it.each([
@@ -147,11 +152,23 @@ describe("local media roots", () => {
       shouldContainPictures: false,
     },
     {
-      name: "widens media roots again when messaging-profile agents explicitly enable filesystem tools",
+      name: "does not widen media roots when messaging-profile agents only configure filesystem guards",
       stateDir: path.join("/tmp", "openclaw-messaging-fs-media-roots-state"),
       cfg: {
         tools: {
           profile: "messaging",
+          fs: { workspaceOnly: false },
+        },
+      },
+      shouldContainPictures: false,
+    },
+    {
+      name: "widens media roots when messaging-profile agents explicitly allow reads",
+      stateDir: path.join("/tmp", "openclaw-messaging-read-media-roots-state"),
+      cfg: {
+        tools: {
+          profile: "messaging",
+          alsoAllow: ["read"] as string[],
           fs: { workspaceOnly: false },
         },
       },
@@ -166,5 +183,16 @@ describe("local media roots", () => {
       }),
     );
     expectPicturesRootPresence({ roots, shouldContainPictures });
+  });
+
+  it("keeps the config-dir media cache root when state and config paths differ", () => {
+    const stateDir = path.join("/tmp", "openclaw-legacy-state");
+    const configDir = path.join("/tmp", "openclaw-current-config");
+    const roots = buildMediaLocalRoots(stateDir, configDir);
+
+    expectNormalizedRootsContain(roots, [
+      path.join(stateDir, "media"),
+      path.join(configDir, "media"),
+    ]);
   });
 });

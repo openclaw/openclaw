@@ -40,10 +40,10 @@ describe("phase hooks merger", () => {
       result: PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult;
       priority?: number;
     }>;
-    expected: Record<string, unknown>;
+    expected: PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult;
   }) {
     const result = await runPhaseHook(params);
-    expect(result).toEqual(expect.objectContaining(params.expected));
+    expect(result).toStrictEqual(params.expected);
   }
 
   it.each([
@@ -77,12 +77,15 @@ describe("phase hooks merger", () => {
         },
         {
           pluginId: "low",
-          result: { prependContext: "context B" },
+          result: { prependContext: "context B", systemPrompt: "system B" },
           priority: 1,
         },
       ],
       expected: {
         prependContext: "context A\n\ncontext B",
+        appendContext: undefined,
+        prependSystemContext: undefined,
+        appendSystemContext: undefined,
         systemPrompt: "system A",
       },
     },
@@ -108,6 +111,9 @@ describe("phase hooks merger", () => {
         },
       ],
       expected: {
+        systemPrompt: undefined,
+        prependContext: undefined,
+        appendContext: undefined,
         prependSystemContext: "prepend A\n\nprepend B",
         appendSystemContext: "append A\n\nappend B",
       },

@@ -1,12 +1,12 @@
-import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
-import { getModelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
   getRuntimeConfig,
-  readSourceConfigSnapshotForWrite,
+  getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
-} from "../../config/config.js";
-import type { RuntimeEnv } from "../../runtime.js";
+  getModelsCommandSecretTargetIds,
+} from "./load-config.runtime.js";
 
 export type LoadedModelsConfig = {
   sourceConfig: OpenClawConfig;
@@ -14,35 +14,24 @@ export type LoadedModelsConfig = {
   diagnostics: string[];
 };
 
-async function loadSourceConfigSnapshot(fallback: OpenClawConfig): Promise<OpenClawConfig> {
-  try {
-    const { snapshot } = await readSourceConfigSnapshotForWrite();
-    if (snapshot.valid) {
-      return snapshot.sourceConfig;
-    }
-  } catch {
-    // Fall back to runtime-loaded config if source snapshot cannot be read.
-  }
-  return fallback;
-}
-
 export async function loadModelsConfigWithSource(params: {
   commandName: string;
   runtime?: RuntimeEnv;
 }): Promise<LoadedModelsConfig> {
   const runtimeConfig = getRuntimeConfig();
-  const sourceConfig = await loadSourceConfigSnapshot(runtimeConfig);
-  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
+  const pinnedSourceConfig = getRuntimeConfigSourceSnapshot();
+  const sourceConfig = pinnedSourceConfig ?? runtimeConfig;
+  const { resolvedConfig, diagnostics } = await resolveCommandConfigWithSecrets({
     config: runtimeConfig,
     commandName: params.commandName,
     targetIds: getModelsCommandSecretTargetIds(),
+    runtime: params.runtime,
   });
-  if (params.runtime) {
-    for (const entry of diagnostics) {
-      params.runtime.log(`[secrets] ${entry}`);
-    }
+  if (pinnedSourceConfig) {
+    setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
+  } else {
+    setRuntimeConfigSnapshot(resolvedConfig);
   }
-  setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
   return {
     sourceConfig,
     resolvedConfig,

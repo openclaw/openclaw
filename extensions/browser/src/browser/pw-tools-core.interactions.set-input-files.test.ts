@@ -11,6 +11,8 @@ const getPageForTargetId = vi.fn(async () => {
 });
 const ensurePageState = vi.fn(() => ({}));
 const restoreRoleRefsForTarget = vi.fn(() => {});
+const isBrowserObservedDialogBlockedError = vi.fn(() => false);
+const markObservedDialogsHandledRemotelyForPage = vi.fn(() => ({}));
 const refLocator = vi.fn(() => {
   if (!locator) {
     throw new Error("test: locator not set");
@@ -27,6 +29,8 @@ vi.mock("./pw-session.js", () => {
     ensurePageState,
     forceDisconnectPlaywrightForTarget,
     getPageForTargetId,
+    isBrowserObservedDialogBlockedError,
+    markObservedDialogsHandledRemotelyForPage,
     refLocator,
     restoreRoleRefsForTarget,
   };
@@ -39,7 +43,7 @@ vi.mock("./paths.js", () => {
   };
 });
 
-let setInputFilesViaPlaywright: typeof import("./pw-tools-core.interactions.js").setInputFilesViaPlaywright;
+const { setInputFilesViaPlaywright } = await import("./pw-tools-core.interactions.js");
 
 function seedSingleLocatorPage(): { setInputFiles: ReturnType<typeof vi.fn> } {
   const setInputFiles = vi.fn(async () => {});
@@ -54,9 +58,7 @@ function seedSingleLocatorPage(): { setInputFiles: ReturnType<typeof vi.fn> } {
 }
 
 describe("setInputFilesViaPlaywright", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ setInputFilesViaPlaywright } = await import("./pw-tools-core.interactions.js"));
+  beforeEach(() => {
     vi.clearAllMocks();
     page = null;
     locator = null;

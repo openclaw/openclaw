@@ -1,5 +1,5 @@
+import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../test/helpers/plugins/fetch-mock.js";
 import { createXSearchTool } from "./x-search.js";
 
 function installXSearchFetch(payload?: Record<string, unknown>) {
@@ -30,9 +30,37 @@ function installXSearchFetch(payload?: Record<string, unknown>) {
   return mockFetch;
 }
 
+function firstFetchCall(mockFetch: ReturnType<typeof installXSearchFetch>) {
+  const [call] = mockFetch.mock.calls;
+  if (!call) {
+    throw new Error("expected x_search fetch call");
+  }
+  return call;
+}
+
+function firstFetchUrl(mockFetch: ReturnType<typeof installXSearchFetch>) {
+  const [url] = firstFetchCall(mockFetch);
+  return String(url);
+}
+
+function firstFetchInit(mockFetch: ReturnType<typeof installXSearchFetch>): RequestInit {
+  const [, init] = firstFetchCall(mockFetch);
+  if (!init || typeof init !== "object" || Array.isArray(init)) {
+    throw new Error("expected x_search fetch init");
+  }
+  return init as RequestInit;
+}
+
+function firstAuthorizationHeader(mockFetch: ReturnType<typeof installXSearchFetch>) {
+  const headers = firstFetchInit(mockFetch).headers;
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+    throw new Error("expected x_search request headers");
+  }
+  return (headers as Record<string, string>).Authorization;
+}
+
 function parseFirstRequestBody(mockFetch: ReturnType<typeof installXSearchFetch>) {
-  const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-  const requestBody = request?.body;
+  const requestBody = firstFetchInit(mockFetch).body;
   return JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as Record<
     string,
     unknown
@@ -44,14 +72,18 @@ afterEach(() => {
 });
 
 describe("xai x_search tool", () => {
-  it("enables x_search when runtime metadata marks an xAI key active", () => {
+  it("enables x_search when runtime config carries the shared xAI key", () => {
     const tool = createXSearchTool({
       config: {},
       runtimeConfig: {
-        tools: {
-          web: {
-            x_search: {
-              apiKey: "x-search-runtime-key", // pragma: allowlist secret
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "x-search-runtime-key", // pragma: allowlist secret
+                },
+              },
             },
           },
         },
@@ -59,6 +91,25 @@ describe("xai x_search tool", () => {
     });
 
     expect(tool?.name).toBe("x_search");
+  });
+
+  it("enables x_search from an xAI auth profile and uses it for requests", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createXSearchTool({
+      config: {},
+      auth: {
+        hasAuthForProvider: (providerId) => providerId === "xai",
+        resolveApiKeyForProvider: async (providerId) =>
+          providerId === "xai" ? "xai-profile-key" : undefined, // pragma: allowlist secret
+      },
+    });
+
+    expect(tool?.name).toBe("x_search");
+    await tool?.execute?.("x-search:auth-profile", {
+      query: "auth profile search",
+    });
+
+    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-profile-key");
   });
 
   it("enables x_search when the xAI plugin web search key is configured", () => {
@@ -85,12 +136,18 @@ describe("xai x_search tool", () => {
     const mockFetch = installXSearchFetch();
     const tool = createXSearchTool({
       config: {
-        tools: {
-          web: {
-            x_search: {
-              apiKey: "xai-config-test", // pragma: allowlist secret
-              model: "grok-4-1-fast-non-reasoning",
-              maxTurns: 2,
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-config-test", // pragma: allowlist secret
+                },
+                xSearch: {
+                  model: "grok-4-1-fast-non-reasoning",
+                  maxTurns: 2,
+                },
+              },
             },
           },
         },
@@ -107,7 +164,7 @@ describe("xai x_search tool", () => {
     });
 
     expect(mockFetch).toHaveBeenCalled();
-    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("api.x.ai/v1/responses");
+    expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
     expect(body.model).toBe("grok-4-1-fast-non-reasoning");
     expect(body.max_turns).toBe(2);
@@ -124,6 +181,88 @@ describe("xai x_search tool", () => {
     expect((result?.details as { citations?: string[] } | undefined)?.citations).toEqual([
       "https://x.com/openclaw/status/1",
     ]);
+  });
+
+  it("routes x_search through plugin-owned xSearch.baseUrl", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-config-test", // pragma: allowlist secret
+                },
+                xSearch: {
+                  enabled: true,
+                  baseUrl: "https://api.x.ai/xai-search/v1/",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await tool?.execute?.("x-search:plugin-base-url", {
+      query: "base url route",
+    });
+
+    expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/xai-search/v1/responses");
+  });
+
+  it("falls back to Grok web search baseUrl for x_search", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createXSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              grok: {
+                apiKey: "xai-legacy-key", // pragma: allowlist secret
+                baseUrl: "https://api.x.ai/legacy/v1/",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await tool?.execute?.("x-search:legacy-grok-base-url", {
+      query: "legacy base url route",
+    });
+
+    expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/legacy/v1/responses");
+  });
+
+  it("shares plugin webSearch.baseUrl with x_search when xSearch.baseUrl is unset", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                  baseUrl: "https://api.x.ai/shared/v1/",
+                },
+                xSearch: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await tool?.execute?.("x-search:web-search-base-url", {
+      query: "shared base url route",
+    });
+
+    expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/shared/v1/responses");
   });
 
   it("reuses the xAI plugin web search key for x_search requests", async () => {
@@ -148,29 +287,102 @@ describe("xai x_search tool", () => {
       query: "latest post from huntharo",
     });
 
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer xai-plugin-key",
-    );
+    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-plugin-key");
   });
 
-  it("prefers the active runtime config for SecretRef-backed x_search keys", async () => {
+  it("reports malformed x_search JSON as a provider error", async () => {
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.reject(new SyntaxError("Unexpected token")),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                },
+                xSearch: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(
+      tool?.execute?.("x-search:malformed-json", {
+        query: "malformed x_search response probe",
+      }),
+    ).rejects.toThrow("xAI X search failed: malformed JSON response");
+  });
+
+  it("rejects x_search success JSON without answer text", async () => {
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ output: [] }),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                },
+                xSearch: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(
+      tool?.execute?.("x-search:missing-text", {
+        query: "malformed x_search missing text probe",
+      }),
+    ).rejects.toThrow("xAI X search failed: malformed JSON response");
+  });
+
+  it("prefers the active runtime config for shared xAI keys", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createXSearchTool({
       config: {
-        tools: {
-          web: {
-            x_search: {
-              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+                },
+              },
             },
           },
         },
       },
       runtimeConfig: {
-        tools: {
-          web: {
-            x_search: {
-              apiKey: "x-search-runtime-key", // pragma: allowlist secret
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "x-search-runtime-key", // pragma: allowlist secret
+                },
+              },
             },
           },
         },
@@ -181,10 +393,7 @@ describe("xai x_search tool", () => {
       query: "runtime key search",
     });
 
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer x-search-runtime-key",
-    );
+    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer x-search-runtime-key");
   });
 
   it("reuses the legacy grok web search key for x_search requests", async () => {
@@ -207,20 +416,56 @@ describe("xai x_search tool", () => {
       query: "latest legacy-key post from huntharo",
     });
 
-    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer xai-legacy-key",
-    );
+    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-legacy-key");
   });
 
-  it("rejects invalid date ordering before calling xAI", async () => {
+  it("uses migrated runtime auth when the source config still carries legacy x_search apiKey", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createXSearchTool({
       config: {
         tools: {
           web: {
             x_search: {
-              apiKey: "xai-config-test", // pragma: allowlist secret
+              apiKey: "legacy-x-search-key", // pragma: allowlist secret
+              enabled: true,
+            } as Record<string, unknown>,
+          },
+        },
+      },
+      runtimeConfig: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "migrated-runtime-key", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await tool?.execute?.("x-search:migrated-runtime-key", {
+      query: "migrated runtime auth",
+    });
+
+    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer migrated-runtime-key");
+  });
+
+  it("rejects invalid date ordering before calling xAI", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-config-test", // pragma: allowlist secret
+                },
+              },
             },
           },
         },

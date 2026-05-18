@@ -1,6 +1,7 @@
-import type { RequestClient } from "@buape/carbon";
 import { PermissionFlagsBits, Routes } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RequestClient } from "./internal/discord.js";
+import { EMPTY_DISCORD_TEST_OPTS } from "./test-support/config.js";
 
 const mockRest = vi.hoisted(() => ({
   get: vi.fn(),
@@ -43,13 +44,15 @@ function mockGuildMemberRoutes(params: RouteMockParams): void {
 }
 
 describe("discord guild permission authorization", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({
       fetchMemberGuildPermissionsDiscord,
       hasAllGuildPermissionsDiscord,
       hasAnyGuildPermissionDiscord,
     } = await import("./send.permissions.js"));
+  });
+
+  beforeEach(() => {
     mockRest.get.mockReset();
   });
 
@@ -57,7 +60,11 @@ describe("discord guild permission authorization", () => {
     it("returns null when user is not a guild member", async () => {
       mockRest.get.mockRejectedValueOnce(new Error("404 Member not found"));
 
-      const result = await fetchMemberGuildPermissionsDiscord("guild-1", "user-1");
+      const result = await fetchMemberGuildPermissionsDiscord(
+        "guild-1",
+        "user-1",
+        EMPTY_DISCORD_TEST_OPTS,
+      );
       expect(result).toBeNull();
     });
 
@@ -70,12 +77,18 @@ describe("discord guild permission authorization", () => {
         memberRoles: ["role-mod"],
       });
 
-      const result = await fetchMemberGuildPermissionsDiscord("guild-1", "user-1");
-      expect(result).not.toBeNull();
-      expect((result! & PermissionFlagsBits.ViewChannel) === PermissionFlagsBits.ViewChannel).toBe(
+      const result = await fetchMemberGuildPermissionsDiscord(
+        "guild-1",
+        "user-1",
+        EMPTY_DISCORD_TEST_OPTS,
+      );
+      if (result === null) {
+        throw new Error("Expected guild permissions bitfield");
+      }
+      expect((result & PermissionFlagsBits.ViewChannel) === PermissionFlagsBits.ViewChannel).toBe(
         true,
       );
-      expect((result! & PermissionFlagsBits.KickMembers) === PermissionFlagsBits.KickMembers).toBe(
+      expect((result & PermissionFlagsBits.KickMembers) === PermissionFlagsBits.KickMembers).toBe(
         true,
       );
     });
@@ -91,9 +104,12 @@ describe("discord guild permission authorization", () => {
         memberRoles: ["role-mod"],
       });
 
-      const result = await hasAnyGuildPermissionDiscord("guild-1", "user-1", [
-        PermissionFlagsBits.KickMembers,
-      ]);
+      const result = await hasAnyGuildPermissionDiscord(
+        "guild-1",
+        "user-1",
+        [PermissionFlagsBits.KickMembers],
+        EMPTY_DISCORD_TEST_OPTS,
+      );
       expect(result).toBe(true);
     });
 
@@ -109,9 +125,12 @@ describe("discord guild permission authorization", () => {
         memberRoles: ["role-admin"],
       });
 
-      const result = await hasAnyGuildPermissionDiscord("guild-1", "user-1", [
-        PermissionFlagsBits.KickMembers,
-      ]);
+      const result = await hasAnyGuildPermissionDiscord(
+        "guild-1",
+        "user-1",
+        [PermissionFlagsBits.KickMembers],
+        EMPTY_DISCORD_TEST_OPTS,
+      );
       expect(result).toBe(true);
     });
 
@@ -121,10 +140,12 @@ describe("discord guild permission authorization", () => {
         memberRoles: [],
       });
 
-      const result = await hasAnyGuildPermissionDiscord("guild-1", "user-1", [
-        PermissionFlagsBits.BanMembers,
-        PermissionFlagsBits.KickMembers,
-      ]);
+      const result = await hasAnyGuildPermissionDiscord(
+        "guild-1",
+        "user-1",
+        [PermissionFlagsBits.BanMembers, PermissionFlagsBits.KickMembers],
+        EMPTY_DISCORD_TEST_OPTS,
+      );
       expect(result).toBe(false);
     });
   });
@@ -139,10 +160,12 @@ describe("discord guild permission authorization", () => {
         memberRoles: ["role-mod"],
       });
 
-      const result = await hasAllGuildPermissionsDiscord("guild-1", "user-1", [
-        PermissionFlagsBits.KickMembers,
-        PermissionFlagsBits.BanMembers,
-      ]);
+      const result = await hasAllGuildPermissionsDiscord(
+        "guild-1",
+        "user-1",
+        [PermissionFlagsBits.KickMembers, PermissionFlagsBits.BanMembers],
+        EMPTY_DISCORD_TEST_OPTS,
+      );
       expect(result).toBe(false);
     });
 
@@ -155,10 +178,12 @@ describe("discord guild permission authorization", () => {
         memberRoles: ["role-admin"],
       });
 
-      const result = await hasAllGuildPermissionsDiscord("guild-1", "user-1", [
-        PermissionFlagsBits.KickMembers,
-        PermissionFlagsBits.BanMembers,
-      ]);
+      const result = await hasAllGuildPermissionsDiscord(
+        "guild-1",
+        "user-1",
+        [PermissionFlagsBits.KickMembers, PermissionFlagsBits.BanMembers],
+        EMPTY_DISCORD_TEST_OPTS,
+      );
       expect(result).toBe(true);
     });
   });

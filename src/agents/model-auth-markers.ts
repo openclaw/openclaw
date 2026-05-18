@@ -1,9 +1,12 @@
 import type { SecretRefSource } from "../config/types.secrets.js";
+import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
 import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 
+/** @deprecated MiniMax provider-owned marker; do not use from third-party plugins. */
 export const MINIMAX_OAUTH_MARKER = "minimax-oauth";
 export const OAUTH_API_KEY_MARKER_PREFIX = "oauth:";
 export const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
+/** @deprecated Bundled local-provider marker; do not use from third-party plugins. */
 export const CUSTOM_LOCAL_AUTH_MARKER = "custom-local";
 export const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 export const NON_ENV_SECRETREF_MARKER = "secretref-managed"; // pragma: allowlist secret
@@ -14,6 +17,13 @@ const AWS_SDK_ENV_MARKERS = new Set([
   "AWS_ACCESS_KEY_ID",
   "AWS_PROFILE",
 ]);
+const CORE_NON_SECRET_API_KEY_MARKERS = [
+  CUSTOM_LOCAL_AUTH_MARKER,
+  OLLAMA_LOCAL_AUTH_MARKER,
+  NON_ENV_SECRETREF_MARKER,
+] as const;
+let knownEnvApiKeyMarkersCache: Set<string> | undefined;
+let knownNonSecretApiKeyMarkersCache: string[] | undefined;
 
 // Legacy marker names kept for backward compatibility with existing models.json files.
 const LEGACY_ENV_API_KEY_MARKERS = [
@@ -27,11 +37,35 @@ const LEGACY_ENV_API_KEY_MARKERS = [
   "MINIMAX_CODE_PLAN_KEY",
 ];
 
-const KNOWN_ENV_API_KEY_MARKERS = new Set([
-  ...listKnownProviderEnvApiKeyNames(),
-  ...LEGACY_ENV_API_KEY_MARKERS,
-  ...AWS_SDK_ENV_MARKERS,
-]);
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+}
+
+function listKnownEnvApiKeyMarkers(): Set<string> {
+  knownEnvApiKeyMarkersCache ??= new Set([
+    ...listKnownProviderEnvApiKeyNames(),
+    ...LEGACY_ENV_API_KEY_MARKERS,
+    ...AWS_SDK_ENV_MARKERS,
+  ]);
+  return knownEnvApiKeyMarkersCache;
+}
+
+export function listKnownNonSecretApiKeyMarkers(): string[] {
+  knownNonSecretApiKeyMarkersCache ??= [
+    ...new Set([
+      ...CORE_NON_SECRET_API_KEY_MARKERS,
+      ...listOpenClawPluginManifestMetadata().flatMap((plugin) =>
+        plugin.origin === "bundled"
+          ? normalizeStringList(plugin.manifest.nonSecretAuthMarkers)
+          : [],
+      ),
+    ]),
+  ];
+  return [...knownNonSecretApiKeyMarkersCache];
+}
 
 export function isAwsSdkAuthMarker(value: string): boolean {
   return AWS_SDK_ENV_MARKERS.has(value.trim());
@@ -39,7 +73,7 @@ export function isAwsSdkAuthMarker(value: string): boolean {
 
 export function isKnownEnvApiKeyMarker(value: string): boolean {
   const trimmed = value.trim();
-  return KNOWN_ENV_API_KEY_MARKERS.has(trimmed) && !isAwsSdkAuthMarker(trimmed);
+  return listKnownEnvApiKeyMarkers().has(trimmed) && !isAwsSdkAuthMarker(trimmed);
 }
 
 export function resolveOAuthApiKeyMarker(providerId: string): string {
@@ -78,12 +112,8 @@ export function isNonSecretApiKeyMarker(
     return false;
   }
   const isKnownMarker =
-    trimmed === MINIMAX_OAUTH_MARKER ||
     isOAuthApiKeyMarker(trimmed) ||
-    trimmed === OLLAMA_LOCAL_AUTH_MARKER ||
-    trimmed === CUSTOM_LOCAL_AUTH_MARKER ||
-    trimmed === GCP_VERTEX_CREDENTIALS_MARKER ||
-    trimmed === NON_ENV_SECRETREF_MARKER ||
+    listKnownNonSecretApiKeyMarkers().includes(trimmed) ||
     isAwsSdkAuthMarker(trimmed);
   if (isKnownMarker) {
     return true;
@@ -93,5 +123,5 @@ export function isNonSecretApiKeyMarker(
   }
   // Do not treat arbitrary ALL_CAPS values as markers; only recognize the
   // known env-var markers we intentionally persist for compatibility.
-  return KNOWN_ENV_API_KEY_MARKERS.has(trimmed);
+  return listKnownEnvApiKeyMarkers().has(trimmed);
 }

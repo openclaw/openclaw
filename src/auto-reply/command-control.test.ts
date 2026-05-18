@@ -13,8 +13,16 @@ import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registr
 installDiscordRegistryHooks();
 
 describe("resolveCommandAuthorization", () => {
-  const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-    allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+  const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
+    const values: string[] = [];
+    for (const entry of allowFrom) {
+      const value = String(entry).trim();
+      if (value) {
+        values.push(value);
+      }
+    }
+    return values;
+  };
 
   function createAllowFromPlugin(
     id: string,
@@ -44,22 +52,37 @@ describe("resolveCommandAuthorization", () => {
     });
   }
 
+  function createOwnerEnforcingAllowFromPlugin(
+    id: string,
+    resolveAllowFrom: () => Array<string | number> | undefined,
+  ) {
+    const entry = createAllowFromPlugin(id, resolveAllowFrom);
+    return {
+      ...entry,
+      plugin: {
+        ...entry.plugin,
+        commands: { enforceOwnerForCommands: true },
+      },
+    };
+  }
+
   function registerAllowFromPlugins(...plugins: ReturnType<typeof createAllowFromPlugin>[]) {
     setActivePluginRegistry(createTestRegistry(plugins));
   }
 
-  function resolveWhatsAppAuthorization(params: {
+  function resolveTestChannelAuthorization(params: {
     from: string;
     senderId?: string;
     senderE164?: string;
     allowFrom: string[];
   }) {
+    registerAllowFromPlugins(createAllowFromPlugin("mobilechat", () => params.allowFrom));
     const cfg = {
-      channels: { whatsapp: { allowFrom: params.allowFrom } },
+      channels: { mobilechat: { allowFrom: params.allowFrom } },
     } as OpenClawConfig;
     const ctx = {
-      Provider: "whatsapp",
-      Surface: "whatsapp",
+      Provider: "mobilechat",
+      Surface: "mobilechat",
       From: params.from,
       SenderId: params.senderId,
       SenderE164: params.senderE164,
@@ -74,7 +97,7 @@ describe("resolveCommandAuthorization", () => {
   it.each([
     {
       name: "falls back from empty SenderId to SenderE164",
-      from: "whatsapp:+999",
+      from: "mobilechat:+999",
       senderId: "",
       senderE164: "+123",
       allowFrom: ["+123"],
@@ -82,7 +105,7 @@ describe("resolveCommandAuthorization", () => {
     },
     {
       name: "falls back from whitespace SenderId to SenderE164",
-      from: "whatsapp:+999",
+      from: "mobilechat:+999",
       senderId: "   ",
       senderE164: "+123",
       allowFrom: ["+123"],
@@ -90,7 +113,7 @@ describe("resolveCommandAuthorization", () => {
     },
     {
       name: "falls back to From when SenderId and SenderE164 are whitespace",
-      from: "whatsapp:+999",
+      from: "+999",
       senderId: "   ",
       senderE164: "   ",
       allowFrom: ["+999"],
@@ -98,7 +121,7 @@ describe("resolveCommandAuthorization", () => {
     },
     {
       name: "falls back from un-normalizable SenderId to SenderE164",
-      from: "whatsapp:+999",
+      from: "mobilechat:+999",
       senderId: "wat",
       senderE164: "+123",
       allowFrom: ["+123"],
@@ -106,14 +129,14 @@ describe("resolveCommandAuthorization", () => {
     },
     {
       name: "prefers SenderE164 when SenderId does not match allowFrom",
-      from: "whatsapp:120363401234567890@g.us",
-      senderId: "123@lid",
+      from: "mobilechat:group:room-1",
+      senderId: "opaque-user",
       senderE164: "+41796666864",
       allowFrom: ["+41796666864"],
       expectedSenderId: "+41796666864",
     },
   ])("$name", ({ from, senderId, senderE164, allowFrom, expectedSenderId }) => {
-    const auth = resolveWhatsAppAuthorization({
+    const auth = resolveTestChannelAuthorization({
       from,
       senderId,
       senderE164,
@@ -159,6 +182,124 @@ describe("resolveCommandAuthorization", () => {
     expect(otherAuth.isAuthorizedSender).toBe(false);
   });
 
+  it("rejects wildcard channel senders when the plugin enforces owner-only commands", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "discord",
+              outbound: { deliveryMode: "direct" },
+            }),
+            commands: { enforceOwnerForCommands: true },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+              resolveAllowFrom: () => ["*"],
+              formatAllowFrom,
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const cfg = {
+      channels: { discord: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        ChatType: "direct",
+        From: "discord:123",
+        SenderId: "123",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(false);
+  });
+
+  it("rejects channel-validated native commands when plugin owner enforcement has no owner allowlist", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "discord",
+              outbound: { deliveryMode: "direct" },
+            }),
+            commands: { enforceOwnerForCommands: true },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+              resolveAllowFrom: () => ["*"],
+              formatAllowFrom,
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const cfg = {
+      channels: { discord: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        ChatType: "direct",
+        From: "discord:123",
+        SenderId: "123",
+        CommandSource: "native",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(false);
+  });
+
+  it("uses explicit owner allowlist when allowFrom is empty", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["whatsapp:+15551234567"] },
+      channels: { whatsapp: {} },
+    } as OpenClawConfig;
+
+    const ownerAuth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        From: "whatsapp:+15551234567",
+        SenderE164: "+15551234567",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(ownerAuth.senderIsOwner).toBe(true);
+    expect(ownerAuth.isAuthorizedSender).toBe(true);
+
+    const otherAuth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        From: "whatsapp:+19995551234",
+        SenderE164: "+19995551234",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(otherAuth.senderIsOwner).toBe(false);
+    expect(otherAuth.isAuthorizedSender).toBe(false);
+  });
+
   it("uses owner allowlist override from context when configured", () => {
     setActivePluginRegistry(
       createTestRegistry([
@@ -194,6 +335,27 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.ownerList).toEqual(["123"]);
   });
 
+  it("suppresses inherited owner status when the context forbids it", () => {
+    const cfg = {
+      channels: { telegram: { allowFrom: ["owner-123"] } },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "exec-event",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        From: "owner-123",
+        To: "owner-123",
+        ForceSenderIsOwnerFalse: true,
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(false);
+  });
+
   it("does not infer a provider from channel allowlists for webchat command contexts", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+15551234567"] } },
@@ -214,6 +376,88 @@ describe("resolveCommandAuthorization", () => {
 
     expect(auth.providerId).toBeUndefined();
     expect(auth.isAuthorizedSender).toBe(true);
+  });
+
+  it("does not apply channel-prefixed owner wildcards to webchat command contexts", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:*"] },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "webchat",
+        Surface: "webchat",
+        OriginatingChannel: "webchat",
+        SenderId: "123456789012345678",
+        GatewayClientScopes: ["operator.write"],
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBeUndefined();
+    expect(auth.senderIsOwner).toBe(false);
+  });
+
+  it("does not apply channel-prefixed owner identities to webchat command contexts", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:123456789012345678"] },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "webchat",
+        Surface: "webchat",
+        OriginatingChannel: "webchat",
+        SenderId: "123456789012345678",
+        GatewayClientScopes: ["operator.write"],
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBeUndefined();
+    expect(auth.senderIsOwner).toBe(false);
+  });
+
+  it("applies channel-prefixed owner identities to matching providers", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:123456789012345678"] },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        From: "discord:123456789012345678",
+        SenderId: "123456789012345678",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBe("discord");
+    expect(auth.senderIsOwner).toBe(true);
+  });
+
+  it("does not apply channel-prefixed owner wildcards to mismatched providers", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["telegram:*"] },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        From: "discord:123456789012345678",
+        SenderId: "123456789012345678",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.providerId).toBe("discord");
+    expect(auth.senderIsOwner).toBe(false);
   });
 
   it("preserves external channel command auth in mixed webchat contexts", () => {
@@ -410,6 +654,62 @@ describe("resolveCommandAuthorization", () => {
       expect(auth.isAuthorizedSender).toBe(true);
     });
 
+    it("requires owner identity before commands.allowFrom when the plugin enforces owner-only commands", () => {
+      registerAllowFromPlugins(createOwnerEnforcingAllowFromPlugin("telegram", () => ["*"]));
+      const cfg = {
+        commands: {
+          allowFrom: {
+            "*": ["*"],
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+      } as OpenClawConfig;
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          From: "telegram:999",
+          SenderId: "999",
+          CommandSource: "native",
+        } as MsgContext,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(auth.senderIsOwner).toBe(false);
+      expect(auth.isAuthorizedSender).toBe(false);
+    });
+
+    it("keeps commands.allowFrom available to non-owner command users when an owner allowlist is configured", () => {
+      const cfg = {
+        commands: {
+          ownerAllowFrom: ["discord:owner"],
+          allowFrom: {
+            discord: ["helper"],
+          },
+        },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig;
+
+      const auth = resolveCommandAuthorization({
+        ctx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "group",
+          From: "discord:helper",
+          SenderId: "helper",
+          CommandSource: "native",
+        } as MsgContext,
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(auth.senderIsOwner).toBe(false);
+      expect(auth.isAuthorizedSender).toBe(true);
+    });
+
     it("does not treat conversation ids in From as sender identities", () => {
       const cfg = {
         commands: {
@@ -463,7 +763,7 @@ describe("resolveCommandAuthorization", () => {
       const cfg = {
         commands: {
           allowFrom: {
-            "*": ["120363411111111111@g.us"],
+            "*": ["demo:group:room-1"],
           },
         },
       } as OpenClawConfig;
@@ -472,7 +772,7 @@ describe("resolveCommandAuthorization", () => {
         ctx: {
           Provider: "whatsapp",
           Surface: "whatsapp",
-          From: "120363411111111111@g.us",
+          From: "demo:group:room-1",
           SenderId: " ",
           SenderE164: " ",
         } as MsgContext,
@@ -713,8 +1013,9 @@ describe("resolveCommandAuthorization", () => {
           commandAuthorized: true,
         });
         expect(warn).toHaveBeenCalledTimes(1);
-        expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("Error");
-        expect(String(warn.mock.calls[0]?.[0] ?? "")).not.toContain("SECRET-TOKEN-123");
+        const warning = String(warn.mock.calls[0]?.[0] ?? "");
+        expect(warning).toContain("Error");
+        expect(warning).not.toContain("SECRET-TOKEN-123");
       } finally {
         warn.mockRestore();
       }
@@ -855,5 +1156,41 @@ describe("control command parsing", () => {
         botUsername: "openclaw",
       }),
     ).toBe(true);
+  });
+
+  it("detects commands wrapped in inbound metadata blocks", () => {
+    const metaWrapped = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"msg-abc","chat_id":"chat-123"}',
+      "```",
+      "",
+      "/model spark",
+    ].join("\n");
+    expect(hasControlCommand(metaWrapped)).toBe(true);
+  });
+
+  it("detects /new command after metadata prefix", () => {
+    const metaWrapped = [
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"name":"Alice","id":"user-1"}',
+      "```",
+      "",
+      "/new spark",
+    ].join("\n");
+    expect(hasControlCommand(metaWrapped)).toBe(true);
+  });
+
+  it("detects /status command after timestamp + metadata prefix", () => {
+    const metaWrapped = [
+      "[Wed 2026-03-11 23:51 PDT] Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"chat-123"}',
+      "```",
+      "",
+      "/status",
+    ].join("\n");
+    expect(hasControlCommand(metaWrapped)).toBe(true);
   });
 });

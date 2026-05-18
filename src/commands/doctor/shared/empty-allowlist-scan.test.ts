@@ -1,5 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { scanEmptyAllowlistPolicyWarnings } from "./empty-allowlist-scan.js";
+
+vi.mock("../channel-capabilities.js", () => ({
+  getDoctorChannelCapabilities: (channelName?: string) => ({
+    dmAllowFromMode: "topOnly",
+    groupModel: "sender",
+    groupAllowFromFallbackToAllowFrom: channelName !== "imessage",
+    warnOnEmptyGroupSenderAllowlist: channelName !== "discord",
+  }),
+}));
+
+vi.mock("./channel-doctor.js", () => ({
+  shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: () => false,
+}));
 
 describe("doctor empty allowlist policy scan", () => {
   it("scans top-level and account-scoped channel warnings", () => {
@@ -18,10 +31,8 @@ describe("doctor empty allowlist policy scan", () => {
     );
 
     expect(warnings).toEqual([
-      expect.stringContaining('channels.signal.dmPolicy is "allowlist" but allowFrom is empty'),
-      expect.stringContaining(
-        'channels.signal.accounts.work.dmPolicy is "allowlist" but allowFrom is empty',
-      ),
+      '- channels.signal.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
+      '- channels.signal.accounts.work.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.accounts.work.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
     ]);
   });
 
@@ -41,6 +52,38 @@ describe("doctor empty allowlist policy scan", () => {
       },
     );
 
-    expect(warnings).toContain("extra:channels.telegram");
+    expect(warnings).toStrictEqual([
+      '- channels.telegram.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.telegram.groupAllowFrom or channels.telegram.allowFrom, or set groupPolicy to "open".',
+      "extra:channels.telegram",
+    ]);
+  });
+
+  it("skips disabled channel and account entries", () => {
+    const extraWarningsForAccount = vi.fn(({ prefix }) => [`extra:${prefix}`]);
+
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            enabled: false,
+            dmPolicy: "allowlist",
+            accounts: {
+              default: { dmPolicy: "allowlist" },
+            },
+          },
+          signal: {
+            accounts: {
+              disabled: { enabled: false, dmPolicy: "allowlist" },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix", extraWarningsForAccount },
+    );
+
+    expect(warnings).toEqual(["extra:channels.signal"]);
+    expect(extraWarningsForAccount).toHaveBeenCalledTimes(1);
+    const [warningOptions] = extraWarningsForAccount.mock.calls[0] ?? [];
+    expect(warningOptions?.prefix).toBe("channels.signal");
   });
 });

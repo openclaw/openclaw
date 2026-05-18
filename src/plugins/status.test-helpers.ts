@@ -1,6 +1,6 @@
 import type { PluginLoadResult } from "./loader.js";
 import type { PluginRecord } from "./registry.js";
-import type { PluginCompatibilityNotice, PluginStatusReport } from "./status.js";
+import type { PluginCompatibilityNotice } from "./status.js";
 import type { PluginHookName } from "./types.js";
 
 export const LEGACY_BEFORE_AGENT_START_MESSAGE =
@@ -11,21 +11,27 @@ export const HOOK_ONLY_MESSAGE =
 export function createCompatibilityNotice(
   params: Pick<PluginCompatibilityNotice, "pluginId" | "code">,
 ): PluginCompatibilityNotice {
-  if (params.code === "legacy-before-agent-start") {
-    return {
-      pluginId: params.pluginId,
-      code: params.code,
-      severity: "warn",
-      message: LEGACY_BEFORE_AGENT_START_MESSAGE,
-    };
+  switch (params.code) {
+    case "legacy-before-agent-start":
+      return {
+        pluginId: params.pluginId,
+        code: params.code,
+        compatCode: "legacy-before-agent-start",
+        severity: "warn",
+        message: LEGACY_BEFORE_AGENT_START_MESSAGE,
+      };
+    case "hook-only":
+      return {
+        pluginId: params.pluginId,
+        code: params.code,
+        compatCode: "hook-only-plugin-shape",
+        severity: "info",
+        message: HOOK_ONLY_MESSAGE,
+      };
   }
-
-  return {
-    pluginId: params.pluginId,
-    code: params.code,
-    severity: "info",
-    message: HOOK_ONLY_MESSAGE,
-  };
+  const unsupportedCode: never = params.code;
+  void unsupportedCode;
+  throw new Error("unsupported compatibility notice code");
 }
 
 export function createPluginRecord(
@@ -39,6 +45,11 @@ export function createPluginRecord(
     source: overrides.source ?? `/tmp/${id}/index.ts`,
     origin: overrides.origin ?? "workspace",
     enabled: overrides.enabled ?? true,
+    explicitlyEnabled: overrides.explicitlyEnabled ?? overrides.enabled ?? true,
+    activated: overrides.activated ?? overrides.enabled ?? true,
+    activationSource:
+      overrides.activationSource ?? ((overrides.enabled ?? true) ? "explicit" : "disabled"),
+    activationReason: overrides.activationReason,
     status: overrides.status ?? "loaded",
     toolNames: [],
     hookNames: [],
@@ -46,12 +57,21 @@ export function createPluginRecord(
     cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
+    webFetchProviderIds: [],
     webSearchProviderIds: [],
-    gatewayMethods: [],
+    migrationProviderIds: [],
+    contextEngineIds: [],
+    memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
     cliCommands: [],
     services: [],
+    gatewayDiscoveryServiceIds: [],
     commands: [],
     httpRoutes: 0,
     hookCount: 0,
@@ -101,7 +121,13 @@ export function createCustomHook(params: {
 export function createPluginLoadResult(
   overrides: Partial<PluginLoadResult> & Pick<PluginLoadResult, "plugins"> = { plugins: [] },
 ): PluginLoadResult {
-  const { plugins, ...rest } = overrides;
+  const {
+    plugins,
+    modelCatalogProviders,
+    realtimeTranscriptionProviders,
+    realtimeVoiceProviders,
+    ...rest
+  } = overrides;
   return {
     plugins,
     diagnostics: [],
@@ -111,26 +137,37 @@ export function createPluginLoadResult(
     speechProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
+    videoGenerationProviders: [],
+    musicGenerationProviders: [],
+    webFetchProviders: [],
     webSearchProviders: [],
+    migrationProviders: [],
+    codexAppServerExtensionFactories: [],
+    agentToolResultMiddlewares: [],
+    memoryEmbeddingProviders: [],
+    textTransforms: [],
+    agentHarnesses: [],
     tools: [],
     hooks: [],
     typedHooks: [],
     httpRoutes: [],
     gatewayHandlers: {},
+    gatewayMethodDescriptors: [],
     cliRegistrars: [],
     services: [],
     commands: [],
+    sessionExtensions: [],
+    trustedToolPolicies: [],
+    toolMetadata: [],
+    controlUiDescriptors: [],
+    runtimeLifecycles: [],
+    agentEventSubscriptions: [],
+    sessionSchedulerJobs: [],
     conversationBindingResolvedHandlers: [],
     ...rest,
-  };
-}
-
-export function createPluginStatusReport(
-  overrides: Partial<PluginStatusReport> & Pick<PluginStatusReport, "plugins">,
-): PluginStatusReport {
-  const { workspaceDir, ...loadResultOverrides } = overrides;
-  return {
-    workspaceDir,
-    ...createPluginLoadResult(loadResultOverrides),
+    modelCatalogProviders: modelCatalogProviders ?? [],
+    gatewayDiscoveryServices: rest.gatewayDiscoveryServices ?? [],
+    realtimeTranscriptionProviders: realtimeTranscriptionProviders ?? [],
+    realtimeVoiceProviders: realtimeVoiceProviders ?? [],
   };
 }

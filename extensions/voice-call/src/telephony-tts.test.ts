@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallTtsConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
@@ -92,5 +92,105 @@ describe("createTelephonyTtsProvider deepMerge hardening", () => {
     expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
     expect(openai.polluted).toBeUndefined();
     expect(openai.model).toBe("safe");
+  });
+
+  it("logs fallback metadata when telephony TTS uses a fallback provider", async () => {
+    const warn = vi.fn();
+    const provider = createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: {
+        textToSpeechTelephony: async () => ({
+          success: true,
+          audioBuffer: Buffer.alloc(2),
+          sampleRate: 8000,
+          provider: "microsoft",
+          fallbackFrom: "elevenlabs",
+          attemptedProviders: ["elevenlabs", "microsoft"],
+        }),
+      },
+      logger: { warn },
+    });
+
+    await provider.synthesizeForTelephony("hello");
+    expect(warn).toHaveBeenCalledWith(
+      "[voice-call] Telephony TTS fallback used from=elevenlabs to=microsoft attempts=elevenlabs -> microsoft",
+    );
+  });
+
+  it("strips telephony TTS directive tags before synthesis", async () => {
+    let requestText: string | undefined;
+    const provider = createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: {
+        textToSpeechTelephony: async ({ text }) => {
+          requestText = text;
+          return {
+            success: true,
+            audioBuffer: Buffer.alloc(2),
+            sampleRate: 8000,
+          };
+        },
+      },
+    });
+
+    await provider.synthesizeForTelephony("[[tts]]Hello caller[[/tts]]");
+
+    expect(requestText).toBe("Hello caller");
+  });
+
+  it("uses hidden telephony TTS directive text for synthesis", async () => {
+    let requestText: string | undefined;
+    let requestOverrides: unknown;
+    const provider = createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: {
+        textToSpeechTelephony: async ({ text, overrides }) => {
+          requestText = text;
+          requestOverrides = overrides;
+          return {
+            success: true,
+            audioBuffer: Buffer.alloc(2),
+            sampleRate: 8000,
+          };
+        },
+      },
+    });
+
+    await provider.synthesizeForTelephony(
+      "Visible text [[tts:text]]Speak this instead[[/tts:text]]",
+    );
+
+    expect(requestText).toBe("Speak this instead");
+    expect(requestOverrides).toStrictEqual({ ttsText: "Speak this instead" });
+  });
+
+  it("exposes configured timeoutMs as synthesisTimeoutMs", () => {
+    const provider = createTelephonyTtsProvider({
+      coreConfig: { messages: { tts: { provider: "openai", timeoutMs: 15000 } } },
+      runtime: {
+        textToSpeechTelephony: async () => ({
+          success: true,
+          audioBuffer: Buffer.alloc(2),
+          sampleRate: 8000,
+        }),
+      },
+    });
+
+    expect(provider.synthesisTimeoutMs).toBe(15000);
+  });
+
+  it("keeps the telephony timeout default when timeoutMs is not configured", () => {
+    const provider = createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: {
+        textToSpeechTelephony: async () => ({
+          success: true,
+          audioBuffer: Buffer.alloc(2),
+          sampleRate: 8000,
+        }),
+      },
+    });
+
+    expect(provider.synthesisTimeoutMs).toBe(8000);
   });
 });

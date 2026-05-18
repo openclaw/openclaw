@@ -4,7 +4,7 @@ read_when:
   - You want to see which skills are available and ready to run
   - You want to search, install, or update skills from ClawHub
   - You want to debug missing binaries/env/config for skills
-title: "skills"
+title: "Skills"
 ---
 
 # `openclaw skills`
@@ -15,22 +15,71 @@ Related:
 
 - Skills system: [Skills](/tools/skills)
 - Skills config: [Skills config](/tools/skills-config)
-- ClawHub installs: [ClawHub](/tools/clawhub)
+- ClawHub installs: [ClawHub](/clawhub/cli)
 
 ## Commands
 
 ```bash
 openclaw skills search "calendar"
+openclaw skills search --limit 20 --json
 openclaw skills install <slug>
 openclaw skills install <slug> --version <version>
+openclaw skills install <slug> --force
+openclaw skills install <slug> --agent <id>
+openclaw skills install <slug> --global
 openclaw skills update <slug>
+openclaw skills update <slug> --global
 openclaw skills update --all
+openclaw skills update --all --agent <id>
+openclaw skills update --all --global
 openclaw skills list
 openclaw skills list --eligible
+openclaw skills list --json
+openclaw skills list --verbose
+openclaw skills list --agent <id>
 openclaw skills info <name>
+openclaw skills info <name> --json
+openclaw skills info <name> --agent <id>
 openclaw skills check
+openclaw skills check --agent <id>
+openclaw skills check --json
 ```
 
-`search`/`install`/`update` use ClawHub directly and install into the active
-workspace `skills/` directory. `list`/`info`/`check` still inspect the local
-skills visible to the current workspace and config.
+`search`/`install`/`update` use ClawHub directly. By default, `install` and
+`update` target the active workspace `skills/` directory; with `--global`, they
+target the shared managed skills directory. `list`/`info`/`check` still inspect
+the local skills visible to the current workspace and config. Workspace-backed
+commands resolve the target workspace from `--agent <id>`, then the current
+working directory when it is inside a configured agent workspace, then the
+default agent.
+
+This CLI `install` command downloads skill folders from ClawHub. Gateway-backed
+skill dependency installs triggered from onboarding or Skills settings use the
+separate `skills.install` request path instead.
+
+Notes:
+
+- `search [query...]` accepts an optional query; omit it to browse the default
+  ClawHub search feed.
+- `search --limit <n>` caps returned results.
+- `install --force` overwrites an existing workspace skill folder for the same
+  slug.
+- `--global` targets the shared managed skills directory and cannot be combined
+  with `--agent <id>`.
+- `--agent <id>` targets one configured agent workspace and overrides current
+  working directory inference.
+- `update <slug>` updates a single tracked skill. Add `--global` to target the
+  shared managed skills directory instead of the workspace.
+- `update --all` updates tracked ClawHub installs in the selected workspace, or
+  in the shared managed skills directory when combined with `--global`.
+- `check --agent <id>` checks the selected agent's workspace and reports which
+  ready skills are actually visible to that agent's prompt or command surface.
+- `list` is the default action when no subcommand is provided.
+- `list`, `info`, and `check` write their rendered output to stdout. With
+  `--json`, that means the machine-readable payload stays on stdout for pipes
+  and scripts.
+
+## Related
+
+- [CLI reference](/cli)
+- [Skills](/tools/skills)

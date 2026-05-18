@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBindMode } from "../config/types.gateway.js";
+import { dashboardCommand } from "./dashboard.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   resolveGatewayPort: vi.fn(),
   resolveControlUiLinks: vi.fn(),
   copyToClipboard: vi.fn(),
+  ensureGatewayReadyForOperation: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -24,12 +26,15 @@ vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: mocks.copyToClipboard,
 }));
 
+vi.mock("./gateway-readiness.js", () => ({
+  ensureGatewayReadyForOperation: mocks.ensureGatewayReadyForOperation,
+}));
+
 const runtime = {
   log: vi.fn(),
   error: vi.fn(),
   exit: vi.fn(),
 };
-let dashboardCommand: typeof import("./dashboard.js").dashboardCommand;
 
 function mockSnapshot(params?: {
   token?: string;
@@ -62,13 +67,17 @@ function mockSnapshot(params?: {
 }
 
 describe("dashboardCommand bind selection", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ dashboardCommand } = await import("./dashboard.js"));
+  beforeEach(() => {
     mocks.readConfigFileSnapshot.mockClear();
     mocks.resolveGatewayPort.mockClear();
     mocks.resolveControlUiLinks.mockClear();
     mocks.copyToClipboard.mockClear();
+    mocks.ensureGatewayReadyForOperation.mockReset();
+    mocks.ensureGatewayReadyForOperation.mockResolvedValue({
+      ready: true,
+      status: {},
+      recovered: false,
+    });
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
@@ -87,6 +96,7 @@ describe("dashboardCommand bind selection", () => {
       bind: "loopback",
       customBindHost: undefined,
       basePath: undefined,
+      tlsEnabled: false,
     });
   });
 
@@ -100,6 +110,7 @@ describe("dashboardCommand bind selection", () => {
       bind: "custom",
       customBindHost: "10.0.0.5",
       basePath: undefined,
+      tlsEnabled: false,
     });
   });
 
@@ -113,6 +124,7 @@ describe("dashboardCommand bind selection", () => {
       bind: "tailnet",
       customBindHost: undefined,
       basePath: undefined,
+      tlsEnabled: false,
     });
   });
 });

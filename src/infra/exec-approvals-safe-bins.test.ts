@@ -19,6 +19,7 @@ import {
   SAFE_BIN_PROFILES,
   resolveSafeBinProfiles,
 } from "./exec-safe-bin-policy.js";
+import { buildTrustedSafeBinDirs } from "./exec-safe-bin-trust.js";
 
 describe("exec approvals safe bins", () => {
   type SafeBinCase = {
@@ -27,6 +28,7 @@ describe("exec approvals safe bins", () => {
     resolvedPath: string;
     expected: boolean;
     safeBins?: string[];
+    safeBinProfiles?: Readonly<Record<string, { minPositional?: number; maxPositional?: number }>>;
     executableName?: string;
     rawExecutable?: string;
     cwd?: string;
@@ -198,11 +200,53 @@ describe("exec approvals safe bins", () => {
       expected: false,
     },
     {
+      name: "blocks awk scripts even when awk is explicitly profiled",
+      argv: ["awk", 'BEGIN { system("id") }'],
+      resolvedPath: "/usr/bin/awk",
+      expected: false,
+      safeBins: ["awk"],
+      safeBinProfiles: { awk: {} },
+      executableName: "awk",
+    },
+    {
+      name: "blocks sed scripts even when sed is explicitly profiled",
+      argv: ["sed", "e"],
+      resolvedPath: "/usr/bin/sed",
+      expected: false,
+      safeBins: ["sed"],
+      safeBinProfiles: { sed: {} },
+      executableName: "sed",
+    },
+    {
       name: "blocks safe bins with file args",
       argv: ["jq", ".foo", "secret.json"],
       resolvedPath: "/usr/bin/jq",
       expected: false,
       setup: (cwd) => fs.writeFileSync(path.join(cwd, "secret.json"), "{}"),
+    },
+    {
+      name: "blocks POSIX parameter expansion in safe-bin value tokens",
+      argv: ["head", "-c${IFS}16${IFS}${OPENCLAW_CONFIG_PATH}"],
+      resolvedPath: "/usr/bin/head",
+      expected: false,
+      safeBins: ["head"],
+      executableName: "head",
+    },
+    {
+      name: "blocks POSIX parameter expansion in safe-bin long option values",
+      argv: ["head", "--bytes=${IFS}16"],
+      resolvedPath: "/usr/bin/head",
+      expected: false,
+      safeBins: ["head"],
+      executableName: "head",
+    },
+    {
+      name: "blocks POSIX parameter expansion in safe-bin positional tokens",
+      argv: ["tr", "${IFS}", "_"],
+      resolvedPath: "/usr/bin/tr",
+      expected: false,
+      safeBins: ["tr"],
+      executableName: "tr",
     },
     {
       name: "blocks safe bins resolved from untrusted directories",
@@ -267,6 +311,7 @@ describe("exec approvals safe bins", () => {
         executableName,
       },
       safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
+      safeBinProfiles: testCase.safeBinProfiles,
     });
     expect(ok).toBe(testCase.expected);
   });
@@ -286,6 +331,44 @@ describe("exec approvals safe bins", () => {
       trustedSafeBinDirs: new Set(["/custom/bin"]),
     });
     expect(ok).toBe(true);
+  });
+
+  it("checks safe-bin trusted dirs against the real executable identity", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const resolution = {
+      rawExecutable: "jq",
+      resolvedPath: "/opt/homebrew/bin/jq",
+      resolvedRealPath: "/opt/homebrew/Cellar/jq/1.7.1/bin/jq",
+      executableName: "jq",
+    };
+    expect(
+      isSafeBinUsage({
+        argv: ["jq", ".foo"],
+        resolution,
+        safeBins: normalizeSafeBins(["jq"]),
+        trustedSafeBinDirs: new Set(["/opt/homebrew/bin"]),
+      }),
+    ).toBe(false);
+    expect(
+      isSafeBinUsage({
+        argv: ["jq", ".foo"],
+        resolution,
+        safeBins: normalizeSafeBins(["jq"]),
+        trustedSafeBinDirs: buildTrustedSafeBinDirs({
+          extraDirs: ["/opt/homebrew/Cellar/jq/1.7.1/bin"],
+        }),
+      }),
+    ).toBe(true);
+    expect(
+      isSafeBinUsage({
+        argv: ["jq", ".foo"],
+        resolution,
+        safeBins: normalizeSafeBins(["jq"]),
+        trustedSafeBinDirs: new Set(["/tmp/other-bin"]),
+      }),
+    ).toBe(false);
   });
 
   it("supports injected platform for deterministic safe-bin checks", () => {
@@ -332,9 +415,11 @@ describe("exec approvals safe bins", () => {
   it("keeps safe-bin profile fixtures aligned with compiled profiles", () => {
     for (const [name, fixture] of Object.entries(SAFE_BIN_PROFILE_FIXTURES)) {
       const profile = SAFE_BIN_PROFILES[name];
-      expect(profile).toBeDefined();
+      if (profile === undefined) {
+        throw new Error(`missing compiled safe-bin profile fixture ${name}`);
+      }
       const fixtureDeniedFlags = fixture.deniedFlags ?? [];
-      const compiledDeniedFlags = profile?.deniedFlags ?? new Set<string>();
+      const compiledDeniedFlags = profile.deniedFlags ?? new Set<string>();
       for (const deniedFlag of fixtureDeniedFlags) {
         expect(compiledDeniedFlags.has(deniedFlag)).toBe(true);
       }

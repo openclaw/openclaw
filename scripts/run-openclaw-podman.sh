@@ -208,10 +208,6 @@ if [[ "${1:-}" == "setup-host" ]]; then
   if [[ -f "$SETUP_PODMAN" ]]; then
     exec "$SETUP_PODMAN" "$@"
   fi
-  SETUP_PODMAN="$REPO_ROOT/setup-podman.sh"
-  if [[ -f "$SETUP_PODMAN" ]]; then
-    exec "$SETUP_PODMAN" "$@"
-  fi
   echo "Podman setup script not found. Run from repo root: ./scripts/podman/setup.sh" >&2
   exit 1
 fi
@@ -516,7 +512,6 @@ RUN_UID="$(id -u)"
 RUN_GID="$(id -g)"
 if [[ "$PODMAN_USERNS" == "keep-id" ]]; then
   RUN_USER_ARGS=(--user "${RUN_UID}:${RUN_GID}")
-  echo "Starting container as uid=${RUN_UID} gid=${RUN_GID} (must match owner of $CONFIG_DIR)" >&2
 else
   echo "Starting container without --user (OPENCLAW_PODMAN_USERNS=$PODMAN_USERNS), mounts may require ownership fixes." >&2
 fi
@@ -564,22 +559,12 @@ podman run --pull="$PODMAN_PULL" -d --replace \
   -p "${PUBLISH_HOST}:${HOST_GATEWAY_PORT}:18789" \
   -p "${PUBLISH_HOST}:${HOST_BRIDGE_PORT}:18790" \
   "$OPENCLAW_IMAGE" \
-  node dist/index.js gateway --bind "$GATEWAY_BIND" --port 18789
+  node dist/index.js gateway --bind "$GATEWAY_BIND" --port 18789 >/dev/null
 
-echo "Container $CONTAINER_NAME started. Dashboard: http://127.0.0.1:${HOST_GATEWAY_PORT}/"
-echo "Host CLI: openclaw --container $CONTAINER_NAME dashboard --no-open"
-echo "Logs: podman logs -f $CONTAINER_NAME"
-if [[ "$PLATFORM_NAME" == "Darwin" ]]; then
-  echo "macOS Podman note: if Control UI login hits device-auth errors, prefer the SSH-tunnel or Tailscale paths in docs/install/podman.md."
-  echo "Local-safe workaround:"
-  echo "  OPENCLAW_CONTAINER=$CONTAINER_NAME openclaw dashboard --no-open"
-  echo "  One-time setup:"
-  echo "    OPENCLAW_CONTAINER=$CONTAINER_NAME openclaw config set gateway.controlUi.allowedOrigins '[\"http://127.0.0.1:18789\",\"http://localhost:18789\",\"http://127.0.0.1:28889\",\"http://localhost:28889\"]' --strict-json"
-  echo "    podman restart $CONTAINER_NAME"
-  echo "  ssh -N -i ~/.local/share/containers/podman/machine/machine -p <podman-vm-ssh-port> -L 28889:127.0.0.1:18789 core@127.0.0.1"
-  echo "  Then open http://127.0.0.1:28889/"
-  echo "  Note: find <podman-vm-ssh-port> with: podman system connection list"
-fi
+echo "Container $CONTAINER_NAME started: http://127.0.0.1:${HOST_GATEWAY_PORT}/"
+echo "podman exec -it $CONTAINER_NAME openclaw dashboard --no-open"
+echo "podman exec -it $CONTAINER_NAME openclaw devices approve --latest  # if pairing required"
+echo "podman logs -f $CONTAINER_NAME"
 if [[ "$PLATFORM_NAME" == "Linux" ]]; then
   echo "For auto-start/restarts, use: ./scripts/podman/setup.sh --quadlet (Quadlet + systemd user service)."
 fi

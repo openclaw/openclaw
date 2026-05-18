@@ -1,20 +1,10 @@
-/**
- * Background reflection triggered by negative user feedback (thumbs-down).
- *
- * Flow:
- * 1. User thumbs-down -> invoke handler acks immediately
- * 2. This module runs in the background (fire-and-forget)
- * 3. Reads recent session context
- * 4. Sends a synthetic reflection prompt to the agent
- * 5. Stores the derived learning in session
- * 6. Optionally sends a proactive follow-up to the user
- */
-
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   dispatchReplyFromConfigWithSettledDispatcher,
   type OpenClawConfig,
 } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
+import { formatUnknownError } from "./errors.js";
 import { buildReflectionPrompt, parseReflectionResponse } from "./feedback-reflection-prompt.js";
 import {
   DEFAULT_COOLDOWN_MS,
@@ -29,7 +19,7 @@ import { buildConversationReference } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 
-export type FeedbackEvent = {
+type FeedbackEvent = {
   type: "custom";
   event: "feedback";
   ts: number;
@@ -63,7 +53,7 @@ export function buildFeedbackEvent(params: {
   };
 }
 
-export type RunFeedbackReflectionParams = {
+type RunFeedbackReflectionParams = {
   cfg: OpenClawConfig;
   adapter: MSTeamsAdapter;
   appId: string;
@@ -137,7 +127,7 @@ function createReflectionCaptureDispatcher(params: {
     typingCallbacks: noopTypingCallbacks,
     humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
     onError: (err) => {
-      params.log.debug?.("reflection reply error", { error: String(err) });
+      params.log.debug?.("reflection reply error", { error: formatUnknownError(err) });
     },
   });
 
@@ -207,7 +197,7 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
       replyOptions: capture.replyOptions,
     });
   } catch (err) {
-    log.error("reflection dispatch failed", { error: String(err) });
+    log.error("reflection dispatch failed", { error: formatUnknownError(err) });
     return;
   }
 
@@ -237,10 +227,12 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
       learning: parsedReflection.learning,
     });
   } catch (err) {
-    log.debug?.("failed to store reflection learning", { error: String(err) });
+    log.debug?.("failed to store reflection learning", { error: formatUnknownError(err) });
   }
 
-  const conversationType = params.conversationRef.conversation?.conversationType?.toLowerCase();
+  const conversationType = normalizeOptionalLowercaseString(
+    params.conversationRef.conversation?.conversationType,
+  );
   const shouldNotify =
     conversationType === "personal" &&
     parsedReflection.followUp &&
@@ -265,7 +257,7 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     });
     log.info("sent reflection follow-up", { sessionKey });
   } catch (err) {
-    log.debug?.("failed to send reflection follow-up", { error: String(err) });
+    log.debug?.("failed to send reflection follow-up", { error: formatUnknownError(err) });
   }
 }
 

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramMessageActions, telegramMessageActionRuntime } from "./channel-actions.js";
 
@@ -20,6 +20,12 @@ describe("telegramMessageActions", () => {
     telegramMessageActionRuntime.handleTelegramAction = originalHandleTelegramAction;
   });
 
+  it("executes message actions in the gateway when a gateway is available", () => {
+    for (const action of ["send", "poll", "react", "delete", "edit"] as const) {
+      expect(telegramMessageActions.resolveExecutionMode?.({ action })).toBe("gateway");
+    }
+  });
+
   it("allows interactive-only sends", async () => {
     await telegramMessageActions.handleAction!({
       action: "send",
@@ -37,10 +43,11 @@ describe("telegramMessageActions", () => {
       cfg: {} as never,
       accountId: "default",
       mediaLocalRoots: [],
+      sessionKey: "telegram-session",
     } as never);
 
     expect(handleTelegramActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         action: "sendMessage",
         to: "123456",
         interactive: {
@@ -52,11 +59,14 @@ describe("telegramMessageActions", () => {
           ],
         },
         accountId: "default",
-      }),
-      expect.anything(),
-      expect.objectContaining({
+      },
+      {},
+      {
         mediaLocalRoots: [],
-      }),
+        mediaReadFile: undefined,
+        sessionKey: "telegram-session",
+        gatewayClientScopes: undefined,
+      },
     );
   });
 
@@ -183,14 +193,52 @@ describe("telegramMessageActions", () => {
           cfg: testCase.cfg,
         })?.actions ?? [];
       if (testCase.expectSticker) {
-        expect(actions, testCase.name).toEqual(
-          expect.arrayContaining(["sticker", "sticker-search"]),
-        );
+        expect(actions, testCase.name).toContain("sticker");
+        expect(actions, testCase.name).toContain("sticker-search");
       } else {
         expect(actions, testCase.name).not.toContain("sticker");
         expect(actions, testCase.name).not.toContain("sticker-search");
       }
     }
+  });
+
+  it("honors account-scoped action gates during discovery", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          actions: {
+            reactions: false,
+            poll: true,
+          },
+          accounts: {
+            work: {
+              botToken: "tok-work",
+              actions: {
+                reactions: true,
+                poll: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const defaultActions =
+      telegramMessageActions.describeMessageTool?.({
+        cfg,
+        accountId: "default",
+      })?.actions ?? [];
+    const workActions =
+      telegramMessageActions.describeMessageTool?.({
+        cfg,
+        accountId: "work",
+      })?.actions ?? [];
+
+    expect(defaultActions).toContain("poll");
+    expect(defaultActions).not.toContain("react");
+    expect(workActions).toContain("react");
+    expect(workActions).not.toContain("poll");
   });
 
   it("normalizes reaction message identifiers before dispatch", async () => {
@@ -251,18 +299,20 @@ describe("telegramMessageActions", () => {
         toolContext: "toolContext" in testCase ? testCase.toolContext : undefined,
       });
 
-      const call = handleTelegramActionMock.mock.calls[0]?.[0] as
+      const call = handleTelegramActionMock.mock.calls.at(0)?.[0] as
         | Record<string, unknown>
         | undefined;
-      expect(call, testCase.name).toBeDefined();
-      expect(call?.action, testCase.name).toBe("react");
-      expect(String(call?.[testCase.expectedChannelField]), testCase.name).toBe(
+      if (!call) {
+        throw new Error(`expected Telegram action call for ${testCase.name}`);
+      }
+      expect(call.action, testCase.name).toBe("react");
+      expect(String(call[testCase.expectedChannelField]), testCase.name).toBe(
         testCase.expectedChannelValue,
       );
       if (testCase.expectedMessageId === undefined) {
-        expect(call?.messageId, testCase.name).toBeUndefined();
+        expect(call.messageId, testCase.name).toBeUndefined();
       } else {
-        expect(String(call?.messageId), testCase.name).toBe(testCase.expectedMessageId);
+        expect(String(call.messageId), testCase.name).toBe(testCase.expectedMessageId);
       }
     }
   });

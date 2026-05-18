@@ -1,7 +1,9 @@
-import { readFileSync } from "node:fs";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchWithSsrFGuard, type RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
-import { normalizeResolvedSecretInputString } from "./secret-input.js";
+import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
 
 const ROOM_CACHE_TTL_MS = 5 * 60 * 1000;
 const ROOM_CACHE_ERROR_TTL_MS = 30 * 1000;
@@ -11,30 +13,14 @@ const roomCache = new Map<
   { kind?: "direct" | "group"; fetchedAt: number; error?: string }
 >();
 
+export const testing = {
+  resetRoomCache() {
+    roomCache.clear();
+  },
+};
+
 function resolveRoomCacheKey(params: { accountId: string; roomToken: string }) {
   return `${params.accountId}:${params.roomToken}`;
-}
-
-function readApiPassword(params: {
-  apiPassword?: unknown;
-  apiPasswordFile?: string;
-}): string | undefined {
-  const inlinePassword = normalizeResolvedSecretInputString({
-    value: params.apiPassword,
-    path: "channels.nextcloud-talk.apiPassword",
-  });
-  if (inlinePassword) {
-    return inlinePassword;
-  }
-  if (!params.apiPasswordFile) {
-    return undefined;
-  }
-  try {
-    const value = readFileSync(params.apiPasswordFile, "utf-8").trim();
-    return value || undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function coerceRoomType(value: unknown): number | undefined {
@@ -76,12 +62,12 @@ export async function resolveNextcloudTalkRoomKind(params: {
     }
   }
 
-  const apiUser = account.config.apiUser?.trim();
-  const apiPassword = readApiPassword({
+  const apiCredentials = resolveNextcloudTalkApiCredentials({
+    apiUser: account.config.apiUser,
     apiPassword: account.config.apiPassword,
     apiPasswordFile: account.config.apiPasswordFile,
   });
-  if (!apiUser || !apiPassword) {
+  if (!apiCredentials) {
     return undefined;
   }
 
@@ -91,7 +77,10 @@ export async function resolveNextcloudTalkRoomKind(params: {
   }
 
   const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v4/room/${roomToken}`;
-  const auth = Buffer.from(`${apiUser}:${apiPassword}`, "utf-8").toString("base64");
+  const auth = Buffer.from(
+    `${apiCredentials.apiUser}:${apiCredentials.apiPassword}`,
+    "utf-8",
+  ).toString("base64");
 
   try {
     const { response, release } = await fetchWithSsrFGuard({
@@ -105,7 +94,7 @@ export async function resolveNextcloudTalkRoomKind(params: {
         },
       },
       auditContext: "nextcloud-talk.room-info",
-      policy: account.config?.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+      policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
     });
     try {
       if (!response.ok) {
@@ -119,9 +108,9 @@ export async function resolveNextcloudTalkRoomKind(params: {
         return undefined;
       }
 
-      const payload = (await response.json()) as {
+      const payload = await readProviderJsonResponse<{
         ocs?: { data?: { type?: number | string } };
-      };
+      }>(response, "Nextcloud Talk room info failed");
       const type = coerceRoomType(payload.ocs?.data?.type);
       const kind = resolveRoomKindFromType(type);
       roomCache.set(key, { fetchedAt: Date.now(), kind });
@@ -132,9 +121,10 @@ export async function resolveNextcloudTalkRoomKind(params: {
   } catch (err) {
     roomCache.set(key, {
       fetchedAt: Date.now(),
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     });
     runtime?.error?.(`nextcloud-talk: room lookup error: ${String(err)}`);
     return undefined;
   }
 }
+export { testing as __testing };

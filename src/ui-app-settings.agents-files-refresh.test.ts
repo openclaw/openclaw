@@ -17,54 +17,37 @@ const loadAgentSkillsMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadAgentFilesMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadChannelsMock = vi.hoisted(() => vi.fn(async () => undefined));
 
-vi.mock("../ui/src/ui/controllers/agents.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../ui/src/ui/controllers/agents.ts")>();
-  return { ...actual, loadAgents: loadAgentsMock };
-});
+vi.mock("../ui/src/ui/controllers/agents.ts", () => ({
+  loadAgents: loadAgentsMock,
+}));
 
-vi.mock("../ui/src/ui/controllers/config.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../ui/src/ui/controllers/config.ts")>();
-  return {
-    ...actual,
-    loadConfig: loadConfigMock,
-    loadConfigSchema: vi.fn(async () => undefined),
-  };
-});
+vi.mock("../ui/src/ui/controllers/config.ts", () => ({
+  loadConfig: loadConfigMock,
+  loadConfigSchema: vi.fn(async () => undefined),
+}));
 
-vi.mock("../ui/src/ui/controllers/agent-identity.ts", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../ui/src/ui/controllers/agent-identity.ts")>();
-  return {
-    ...actual,
-    loadAgentIdentities: loadAgentIdentitiesMock,
-    loadAgentIdentity: loadAgentIdentityMock,
-  };
-});
+vi.mock("../ui/src/ui/controllers/agent-identity.ts", () => ({
+  loadAgentIdentities: loadAgentIdentitiesMock,
+  loadAgentIdentity: loadAgentIdentityMock,
+}));
 
-vi.mock("../ui/src/ui/controllers/agent-skills.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../ui/src/ui/controllers/agent-skills.ts")>();
-  return { ...actual, loadAgentSkills: loadAgentSkillsMock };
-});
+vi.mock("../ui/src/ui/controllers/agent-skills.ts", () => ({
+  loadAgentSkills: loadAgentSkillsMock,
+}));
 
-vi.mock("../ui/src/ui/controllers/agent-files.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../ui/src/ui/controllers/agent-files.ts")>();
-  return { ...actual, loadAgentFiles: loadAgentFilesMock };
-});
+vi.mock("../ui/src/ui/controllers/agent-files.ts", () => ({
+  loadAgentFiles: loadAgentFilesMock,
+}));
 
-vi.mock("../ui/src/ui/controllers/channels.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../ui/src/ui/controllers/channels.ts")>();
-  return { ...actual, loadChannels: loadChannelsMock };
-});
+vi.mock("../ui/src/ui/controllers/channels.ts", () => ({
+  loadChannels: loadChannelsMock,
+}));
 
-vi.mock("../ui/src/ui/controllers/cron.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../ui/src/ui/controllers/cron.ts")>();
-  return {
-    ...actual,
-    loadCronJobs: vi.fn(async () => undefined),
-    loadCronRuns: vi.fn(async () => undefined),
-    loadCronStatus: vi.fn(async () => undefined),
-  };
-});
+vi.mock("../ui/src/ui/controllers/cron.ts", () => ({
+  loadCronJobsPage: vi.fn(async () => undefined),
+  loadCronRuns: vi.fn(async () => undefined),
+  loadCronStatus: vi.fn(async () => undefined),
+}));
 
 import { refreshActiveTab } from "../ui/src/ui/app-settings.ts";
 
@@ -103,6 +86,14 @@ function createHost(agentsPanel: AgentsPanel): Parameters<typeof refreshActiveTa
     eventLog: [],
     eventLogBuffer: [],
     basePath: "",
+    dreamingStatusLoading: false,
+    dreamingStatusError: null,
+    dreamingStatus: null,
+    dreamingModeSaving: false,
+    dreamDiaryLoading: false,
+    dreamDiaryError: null,
+    dreamDiaryPath: null,
+    dreamDiaryContent: null,
   } as Parameters<typeof refreshActiveTab>[0];
 }
 

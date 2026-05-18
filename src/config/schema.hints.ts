@@ -8,6 +8,7 @@ import {
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
@@ -110,48 +111,7 @@ export function isPluginOwnedChannelHintPath(path: string): boolean {
   return !isKernelOwnedChannelHintPath(path);
 }
 
-/**
- * Non-sensitive field names that happen to match sensitive patterns.
- * These are explicitly excluded from redaction (plugin config) and
- * warnings about not being marked sensitive (base config).
- */
-const SENSITIVE_KEY_WHITELIST_SUFFIXES = [
-  "maxtokens",
-  "maxoutputtokens",
-  "maxinputtokens",
-  "maxcompletiontokens",
-  "contexttokens",
-  "totaltokens",
-  "tokencount",
-  "tokenlimit",
-  "tokenbudget",
-  "passwordFile",
-] as const;
-const NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES = SENSITIVE_KEY_WHITELIST_SUFFIXES.map((suffix) =>
-  suffix.toLowerCase(),
-);
-
-const SENSITIVE_PATTERNS = [
-  /token$/i,
-  /password/i,
-  /secret/i,
-  /api.?key/i,
-  /encrypt.?key/i,
-  /serviceaccount(?:ref)?$/i,
-];
-
-function isWhitelistedSensitivePath(path: string): boolean {
-  const lowerPath = path.toLowerCase();
-  return NORMALIZED_SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix));
-}
-
-function matchesSensitivePattern(path: string): boolean {
-  return SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
-}
-
-export function isSensitiveConfigPath(path: string): boolean {
-  return !isWhitelistedSensitivePath(path) && matchesSensitivePattern(path);
-}
+export { isSensitiveConfigPath };
 
 export function buildBaseHints(): ConfigUiHints {
   const hints: ConfigUiHints = {};
@@ -247,7 +207,7 @@ export function collectMatchingSchemaPaths(
       const nextPath = path ? `${path}.${key}` : key;
       collectMatchingSchemaPaths(shape[key], nextPath, matchesPath, paths);
     }
-    const catchallSchema = currentSchema._def.catchall as z.ZodType | undefined;
+    const catchallSchema = currentSchema["_def"].catchall as z.ZodType | undefined;
     if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
       const nextPath = path ? `${path}.*` : "*";
       collectMatchingSchemaPaths(catchallSchema, nextPath, matchesPath, paths);
@@ -258,7 +218,7 @@ export function collectMatchingSchemaPaths(
   } else if (currentSchema instanceof z.ZodRecord) {
     const nextPath = path ? `${path}.*` : "*";
     collectMatchingSchemaPaths(
-      currentSchema._def.valueType as z.ZodType,
+      currentSchema["_def"].valueType as z.ZodType,
       nextPath,
       matchesPath,
       paths,
@@ -271,8 +231,8 @@ export function collectMatchingSchemaPaths(
       collectMatchingSchemaPaths(option as z.ZodType, path, matchesPath, paths);
     }
   } else if (currentSchema instanceof z.ZodIntersection) {
-    collectMatchingSchemaPaths(currentSchema._def.left as z.ZodType, path, matchesPath, paths);
-    collectMatchingSchemaPaths(currentSchema._def.right as z.ZodType, path, matchesPath, paths);
+    collectMatchingSchemaPaths(currentSchema["_def"].left as z.ZodType, path, matchesPath, paths);
+    collectMatchingSchemaPaths(currentSchema["_def"].right as z.ZodType, path, matchesPath, paths);
   }
 
   return paths;
@@ -320,7 +280,7 @@ export function mapSensitivePaths(
       const nextPath = path ? `${path}.${key}` : key;
       next = mapSensitivePaths(shape[key], nextPath, next);
     }
-    const catchallSchema = currentSchema._def.catchall as z.ZodType | undefined;
+    const catchallSchema = currentSchema["_def"].catchall as z.ZodType | undefined;
     if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
       const nextPath = path ? `${path}.*` : "*";
       next = mapSensitivePaths(catchallSchema, nextPath, next);
@@ -330,7 +290,7 @@ export function mapSensitivePaths(
     next = mapSensitivePaths(currentSchema.element as z.ZodType, nextPath, next);
   } else if (currentSchema instanceof z.ZodRecord) {
     const nextPath = path ? `${path}.*` : "*";
-    next = mapSensitivePaths(currentSchema._def.valueType as z.ZodType, nextPath, next);
+    next = mapSensitivePaths(currentSchema["_def"].valueType as z.ZodType, nextPath, next);
   } else if (
     currentSchema instanceof z.ZodUnion ||
     currentSchema instanceof z.ZodDiscriminatedUnion
@@ -339,15 +299,16 @@ export function mapSensitivePaths(
       next = mapSensitivePaths(option as z.ZodType, path, next);
     }
   } else if (currentSchema instanceof z.ZodIntersection) {
-    next = mapSensitivePaths(currentSchema._def.left as z.ZodType, path, next);
-    next = mapSensitivePaths(currentSchema._def.right as z.ZodType, path, next);
+    next = mapSensitivePaths(currentSchema["_def"].left as z.ZodType, path, next);
+    next = mapSensitivePaths(currentSchema["_def"].right as z.ZodType, path, next);
   }
 
   return next;
 }
 
 /** @internal */
-export const __test__ = {
+export const testApi = {
   collectMatchingSchemaPaths,
   mapSensitivePaths,
 };
+export { testApi as __test__ };

@@ -4,6 +4,7 @@ import {
   formatNormalizedAllowFromEntries,
   isAllowedParsedChatSender,
   isNormalizedSenderAllowed,
+  mapAllowlistResolutionInputs,
 } from "./allow-from.js";
 
 function parseAllowTarget(
@@ -63,17 +64,67 @@ describe("isAllowedParsedChatSender", () => {
       expected: true,
     },
     {
-      name: "matches chat IDs when provided",
-      input: {
-        allowFrom: ["chat_id:42"],
-        sender: "+15551234567",
-        chatId: 42,
-        normalizeSender: (sender: string) => sender,
-        parseAllowTarget,
-      },
-      expected: true,
+      name: "does not match conversation targets by default",
+      input: [
+        {
+          allowFrom: ["chat_id:42"],
+          sender: "+15551234567",
+          chatId: 42,
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+        {
+          allowFrom: ["chat_guid:thread-42"],
+          sender: "+15551234567",
+          chatGuid: "thread-42",
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+        {
+          allowFrom: ["chat_identifier:team"],
+          sender: "+15551234567",
+          chatIdentifier: "team",
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+      ],
+      expected: [false, false, false],
+    },
+    {
+      name: "matches conversation targets when they are enabled",
+      input: [
+        {
+          allowFrom: ["chat_id:42"],
+          sender: "+15551234567",
+          chatId: 42,
+          allowConversationTargets: true,
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+        {
+          allowFrom: ["chat_guid:thread-42"],
+          sender: "+15551234567",
+          chatGuid: "thread-42",
+          allowConversationTargets: true,
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+        {
+          allowFrom: ["chat_identifier:team"],
+          sender: "+15551234567",
+          chatIdentifier: "team",
+          allowConversationTargets: true,
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+      ],
+      expected: [true, true, true],
     },
   ])("$name", ({ input, expected }) => {
+    if (Array.isArray(input)) {
+      expect(input.map((entry) => isAllowedParsedChatSender(entry))).toEqual(expected);
+      return;
+    }
     expect(isAllowedParsedChatSender(input)).toBe(expected);
   });
 });
@@ -142,5 +193,21 @@ describe("formatNormalizedAllowFromEntries", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(formatNormalizedAllowFromEntries(input)).toEqual(expected);
+  });
+});
+
+describe("mapAllowlistResolutionInputs", () => {
+  it("maps inputs sequentially and preserves order", async () => {
+    const visited: string[] = [];
+    const result = await mapAllowlistResolutionInputs({
+      inputs: ["one", "two", "three"],
+      mapInput: async (input) => {
+        visited.push(input);
+        return input.toUpperCase();
+      },
+    });
+
+    expect(visited).toEqual(["one", "two", "three"]);
+    expect(result).toEqual(["ONE", "TWO", "THREE"]);
   });
 });
