@@ -725,6 +725,11 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "none",
       };
     }
+    const directAgentThreadId = shouldDeliverAgentFinal
+      ? stringifyRouteThreadId(deliveryTarget.threadId)
+      : sessionOnlyOriginChannel
+        ? stringifyRouteThreadId(sessionOnlyOrigin?.threadId)
+        : undefined;
     const directAgentParams: Record<string, unknown> = {
       sessionKey: canonicalRequesterSessionKey,
       message: params.triggerMessage,
@@ -742,11 +747,7 @@ async function sendSubagentAnnounceDirectly(params: {
         : sessionOnlyOriginChannel
           ? sessionOnlyOrigin?.to
           : undefined,
-      threadId: shouldDeliverAgentFinal
-        ? deliveryTarget.threadId
-        : sessionOnlyOriginChannel
-          ? sessionOnlyOrigin?.threadId
-          : undefined,
+      threadId: directAgentThreadId,
       inputProvenance: {
         kind: "inter_session",
         sourceSessionKey: params.sourceSessionKey,
