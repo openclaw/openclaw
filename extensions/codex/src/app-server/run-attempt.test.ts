@@ -757,7 +757,7 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.mcpServersFingerprint).toBe("mcp-v1");
@@ -7377,7 +7377,7 @@ describe("runCodexAppServerAttempt", () => {
     const expectedConfig = {
       ...config,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     };
 
     await startOrResumeThread({
@@ -7445,7 +7445,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       hooks: { PreToolUse: [] },
       ...createPluginAppConfigPatch(),
     });
@@ -7523,14 +7523,14 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toMatchObject({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       "hooks.PreToolUse": finalConfigPatch["hooks.PreToolUse"],
       ...createPluginAppConfigPatch(),
     });
     expect(requestCalls[1]?.[1].config).toMatchObject({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       "hooks.PreToolUse": finalConfigPatch["hooks.PreToolUse"],
     });
   });
@@ -7591,13 +7591,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       ...createPluginAppConfigPatch(),
     });
     expect(requestCalls[1]?.[1].config).toEqual({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
   });
 
@@ -7655,7 +7655,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       apps: {
         _default: {
           enabled: false,
@@ -7709,7 +7709,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-existing");
@@ -7764,7 +7764,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       ...createPluginAppConfigPatch(),
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
@@ -7825,7 +7825,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
   });
 
@@ -7876,7 +7876,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       ...createTwoPluginAppConfigPatch(),
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
@@ -7936,7 +7936,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       ...createTwoCalendarAppConfigPatch(),
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
@@ -7983,7 +7983,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       ...createPluginAppConfigPatch(),
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-plugins");
@@ -8057,7 +8057,7 @@ describe("runCodexAppServerAttempt", () => {
     const resumeConfig = resumeRequestParams?.config as Record<string, unknown> | undefined;
     expect(resumeConfig?.["features.hooks"]).toBe(true);
     expect(resumeConfig?.["features.code_mode"]).toBe(true);
-    expect(resumeConfig?.["features.code_mode_only"]).toBe(true);
+    expect(resumeConfig?.["features.code_mode_only"]).toBe(false);
     expect(resumeRequestParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnRequest = requests.find((request) => request.method === "turn/start");
     const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
@@ -8246,7 +8246,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalsReviewer: "guardian_subagent",
       config: {
         "features.code_mode": true,
-        "features.code_mode_only": true,
+        "features.code_mode_only": false,
       },
       sandbox: "danger-full-access",
       serviceTier: "flex",

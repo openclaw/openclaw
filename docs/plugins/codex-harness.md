@@ -21,10 +21,11 @@ Do not configure `openai-codex/gpt-*` model refs. Put OpenAI agent auth order
 under `auth.order.openai`; older `openai-codex:*` profiles and
 `auth.order.openai-codex` entries remain supported for existing installs.
 
-OpenClaw starts Codex app-server threads with Codex native code mode and
-code-mode-only enabled. That keeps deferred/searchable OpenClaw dynamic tools
-inside Codex's own code execution and tool-search surface instead of adding a
-PI-style tool-search wrapper on top of Codex.
+OpenClaw starts Codex app-server threads with Codex native code mode enabled
+while leaving code-mode-only off by default. That keeps Codex native workspace
+and code capabilities available while OpenClaw dynamic tools continue through
+the app-server `item/tool/call` bridge. Restricted tool policies still disable
+native code mode entirely.
 
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes). The short version is:
