@@ -1,4 +1,7 @@
-import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
+import {
+  completionRequiresMessageToolDelivery,
+  resolveCompletionChatType,
+} from "../auto-reply/reply/completion-delivery-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
@@ -351,10 +354,10 @@ export async function resolveSubagentCompletionOrigin(params: {
   const accountId = normalizeAccountId(requesterOrigin?.accountId);
   const threadId =
     requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
-      ? stringifyRouteThreadId(requesterOrigin.threadId)
+      ? requesterOrigin.threadId
       : undefined;
   const conversationId =
-    threadId ||
+    stringifyRouteThreadId(threadId) ||
     resolveConversationIdFromTargets({
       targets: [to],
     }) ||
@@ -660,9 +663,18 @@ async function sendSubagentAnnounceDirectly(params: {
       sourceTool: params.sourceTool,
     });
     const expectedMediaUrls = collectExpectedMediaFromInternalEvents(params.internalEvents);
+    const completionChatType = resolveCompletionChatType({
+      requesterSessionKey: params.requesterSessionKey,
+      targetRequesterSessionKey: canonicalRequesterSessionKey,
+      requesterEntry,
+      directOrigin: effectiveDirectOrigin,
+      requesterSessionOrigin,
+    });
     const requiresMessageToolDelivery =
       agentMediatedCompletion &&
-      (expectedMediaUrls.length > 0 ||
+      (completionChatType === "channel" ||
+        completionChatType === "group" ||
+        expectedMediaUrls.length > 0 ||
         completionRequiresMessageToolDelivery({
           cfg,
           requesterSessionKey: params.requesterSessionKey,
@@ -725,6 +737,11 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "none",
       };
     }
+    const directAgentThreadId = shouldDeliverAgentFinal
+      ? stringifyRouteThreadId(deliveryTarget.threadId)
+      : sessionOnlyOriginChannel
+        ? stringifyRouteThreadId(sessionOnlyOrigin?.threadId)
+        : undefined;
     const directAgentParams: Record<string, unknown> = {
       sessionKey: canonicalRequesterSessionKey,
       message: params.triggerMessage,
@@ -742,11 +759,7 @@ async function sendSubagentAnnounceDirectly(params: {
         : sessionOnlyOriginChannel
           ? sessionOnlyOrigin?.to
           : undefined,
-      threadId: shouldDeliverAgentFinal
-        ? deliveryTarget.threadId
-        : sessionOnlyOriginChannel
-          ? sessionOnlyOrigin?.threadId
-          : undefined,
+      threadId: directAgentThreadId,
       inputProvenance: {
         kind: "inter_session",
         sourceSessionKey: params.sourceSessionKey,
@@ -900,7 +913,7 @@ export async function deliverSubagentAnnouncement(params: {
   });
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides?: Partial<SubagentAnnounceDeliveryDeps> & {
       callGateway?: typeof callGateway;
@@ -929,3 +942,4 @@ export const __testing = {
       : defaultSubagentAnnounceDeliveryDeps;
   },
 };
+export { testing as __testing };

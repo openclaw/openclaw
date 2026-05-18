@@ -48,6 +48,13 @@ function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function asStringNumberArray(value: unknown): Array<string | number> | undefined {
+  return Array.isArray(value) &&
+    value.every((entry) => typeof entry === "string" || typeof entry === "number")
+    ? value
+    : undefined;
+}
+
 function asInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
 }
@@ -638,6 +645,23 @@ export function resolveChannelStreamingPreviewCommandText(
     asCommandTextMode(config?.preview?.commandText) ??
     defaultValue
   );
+}
+
+export function resolveChannelStreamingPreviewNativeToolProgress(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = false,
+): boolean {
+  const config = getChannelStreamingConfigObject(entry);
+  const preview = asObjectRecord(config?.preview);
+  return asBoolean(preview?.nativeToolProgress) ?? defaultValue;
+}
+
+export function resolveChannelStreamingPreviewNativeToolProgressAllowFrom(
+  entry: StreamingCompatEntry | null | undefined,
+): Array<string | number> | undefined {
+  const config = getChannelStreamingConfigObject(entry);
+  const preview = asObjectRecord(config?.preview);
+  return asStringNumberArray(preview?.nativeToolProgressAllowFrom);
 }
 
 export function resolveChannelStreamingSuppressDefaultToolProgressMessages(

@@ -8,7 +8,6 @@ struct SettingsRootView: View {
     @State private var monitoringPermissions = false
     @State private var selectedTab: SettingsTab = .general
     @State private var cachedTabs: Set<SettingsTab>
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var snapshotPaths: (configPath: String?, stateDir: String?) = (nil, nil)
     let updater: UpdaterProviding?
     private let isPreview = ProcessInfo.processInfo.isPreview
@@ -23,31 +22,14 @@ struct SettingsRootView: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: self.$columnVisibility) {
-            List(selection: self.$selectedTab) {
-                ForEach(self.visibleGroups) { group in
-                    Section(group.title) {
-                        ForEach(group.tabs) { tab in
-                            NavigationLink(value: tab) {
-                                Label(tab.title, systemImage: tab.systemImage)
-                            }
-                        }
-                    }
-                }
-            }
-            .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 240)
-        } detail: {
-            VStack(alignment: .leading, spacing: 14) {
-                if self.isNixMode {
-                    self.nixManagedBanner
-                }
-                self.cachedDetailViews
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.horizontal, 22)
-            .padding(.vertical, 18)
+        HStack(spacing: 0) {
+            SettingsSidebar(
+                groups: self.visibleGroups,
+                selectedTab: self.$selectedTab)
+                .frame(width: SettingsLayout.sidebarWidth)
+
+            self.detailContainer
         }
-        .navigationSplitViewStyle(.balanced)
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(SettingsWindowChromeConfigurator())
@@ -91,6 +73,18 @@ struct SettingsRootView: View {
 
     private var visibleGroups: [SettingsTabGroup] {
         SettingsTabGroup.defaultGroups(showDebug: self.state.debugPaneEnabled)
+    }
+
+    private var detailContainer: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if self.isNixMode {
+                self.nixManagedBanner
+            }
+            self.cachedDetailViews
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
+        .padding(.vertical, SettingsLayout.detailVerticalPadding)
     }
 
     private var cachedDetailTabs: [SettingsTab] {
@@ -207,6 +201,77 @@ struct SettingsRootView: View {
     }
 }
 
+private struct SettingsSidebar: View {
+    let groups: [SettingsTabGroup]
+    @Binding var selectedTab: SettingsTab
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            VisualEffectView(material: .sidebar)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(.white.opacity(0.09), lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 12)
+
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 18) {
+                    ForEach(self.groups) { group in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(group.title)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 8)
+
+                            ForEach(group.tabs) { tab in
+                                SettingsSidebarRow(
+                                    tab: tab,
+                                    selected: self.selectedTab == tab)
+                                {
+                                    self.selectedTab = tab
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+            }
+        }
+        .padding(.leading, 12)
+        .padding(.vertical, 10)
+    }
+}
+
+private struct SettingsSidebarRow: View {
+    let tab: SettingsTab
+    let selected: Bool
+    let select: () -> Void
+
+    var body: some View {
+        Label(self.tab.title, systemImage: self.tab.systemImage)
+            .font(.body.weight(.medium))
+            .labelStyle(.titleAndIcon)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(self.selected ? Color.white.opacity(0.13) : Color.clear)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .onTapGesture(perform: self.select)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(self.tab.title)
+            .accessibilityAddTraits(self.selected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { self.select() }
+    }
+}
+
 private struct SettingsTabGroup: Identifiable {
     let title: String
     let tabs: [SettingsTab]
@@ -235,7 +300,7 @@ private struct SettingsTabGroup: Identifiable {
 enum SettingsTab: CaseIterable, Identifiable, Hashable {
     case general, connection, permissions, voiceWake, channels, skills, cron
     case execApprovals, sessions, instances, config, debug, about
-    static let windowWidth: CGFloat = 960
+    static let windowWidth: CGFloat = 1120
     static let windowHeight: CGFloat = 790
 
     var id: Self {

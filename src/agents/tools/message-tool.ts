@@ -551,6 +551,7 @@ type MessageToolOptions = {
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
+  sameChannelThreadRequired?: boolean;
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -1008,7 +1009,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         currentThreadTs ||
         hasCurrentMessageId ||
         replyToMode ||
-        options?.hasRepliedRef
+        options?.hasRepliedRef ||
+        options?.sameChannelThreadRequired
           ? {
               currentChannelId: effectiveCurrentChannel.currentChannelId,
               currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
@@ -1016,6 +1018,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               currentMessageId: options?.currentMessageId,
               replyToMode,
               hasRepliedRef: options?.hasRepliedRef,
+              sameChannelThreadRequired: options?.sameChannelThreadRequired,
               // Direct tool invocations should not add cross-context decoration.
               // The agent is composing a message, not forwarding from another chat.
               skipCrossContextDecoration: true,

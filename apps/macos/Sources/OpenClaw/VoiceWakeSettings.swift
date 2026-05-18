@@ -186,9 +186,7 @@ struct VoiceWakeSettings: View {
 
                 Spacer(minLength: 8)
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(.trailing, SettingsLayout.scrollbarGutter)
-            .padding(.vertical, 4)
+            .settingsDetailContent()
         }
         .task {
             guard !self.isPreview else { return }

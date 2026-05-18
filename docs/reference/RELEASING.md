@@ -185,10 +185,10 @@ vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
   - `custom`: exact `docker_lanes` selection for a focused rerun
 - Run the manual `CI` workflow directly when you only need full normal CI
   coverage for the release candidate. Manual CI dispatches bypass changed
-  scoping and force the Linux Node shards, bundled-plugin shards, channel
-  contracts, Node 22 compatibility, `check`, `check-additional`, build smoke,
-  docs checks, Python skills, Windows, macOS, Android, and Control UI i18n
-  lanes.
+  scoping and force the Linux Node shards, bundled-plugin shards, plugin and
+  channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`,
+  built-artifact smoke checks, docs checks, Python skills, Windows, macOS,
+  Android, and Control UI i18n lanes.
   Example: `gh workflow run ci.yml --ref release/YYYY.M.D`
 - Run `pnpm qa:otel:smoke` when validating release telemetry. It exercises
   QA-lab through a local OTLP/HTTP receiver and verifies the exported trace
@@ -451,9 +451,10 @@ summary.
 
 The Vitest box is the manual `CI` child workflow. Manual CI intentionally
 bypasses changed scoping and forces the normal test graph for the release
-candidate: Linux Node shards, bundled-plugin shards, channel contracts, Node 22
-compatibility, `check`, `check-additional`, build smoke, docs checks, Python
-skills, Windows, macOS, Android, and Control UI i18n.
+candidate: Linux Node shards, bundled-plugin shards, plugin and channel contract
+shards, Node 22 compatibility, `check-*`, `check-additional-*`,
+built-artifact smoke checks, docs checks, Python skills, Windows, macOS,
+Android, and Control UI i18n.
 
 Use this box to answer "did the source tree pass the full normal test suite?"
 It is not the same as release-path product validation. Evidence to keep:

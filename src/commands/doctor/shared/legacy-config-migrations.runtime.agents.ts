@@ -1,3 +1,5 @@
+import { listLegacyRuntimeModelProviderAliases } from "../../../agents/model-runtime-aliases.js";
+import { normalizeProviderId } from "../../../agents/provider-id.js";
 import {
   defineLegacyConfigMigration,
   ensureRecord,
@@ -26,6 +28,11 @@ const AGENT_HEARTBEAT_KEYS = new Set([
 ]);
 
 const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
+
+type LegacyAgentRuntimeIntent = {
+  provider: string;
+  runtime: string;
+};
 
 const MEMORY_SEARCH_RULE: LegacyConfigRule = {
   path: ["memorySearch"],
@@ -92,6 +99,27 @@ const LEGACY_AGENT_LLM_TIMEOUT_RULES: LegacyConfigRule[] = [
     message:
       'agents.defaults.llm is legacy; use models.providers.<id>.timeoutSeconds for slow model/provider timeouts. Run "openclaw doctor --fix".',
     match: (value) => getRecord(value) !== null,
+  },
+];
+
+const IGNORED_AGENT_MODEL_TIMEOUT_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "model"],
+    message:
+      'agents.defaults.model.timeoutMs is ignored; agent model config only selects primary/fallback models. Run "openclaw doctor --fix" to remove it.',
+    match: (value) => hasOwnTimeoutMs(value),
+  },
+  {
+    path: ["agents", "defaults", "subagents", "model"],
+    message:
+      'agents.defaults.subagents.model.timeoutMs is ignored; subagent model config only selects primary/fallback models. Run "openclaw doctor --fix" to remove it.',
+    match: (value) => hasOwnTimeoutMs(value),
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].model.timeoutMs and agents.list[].subagents.model.timeoutMs are ignored; agent model config only selects primary/fallback models. Run "openclaw doctor --fix" to remove them.',
+    match: (value) => hasAgentListModelTimeout(value),
   },
 ];
 
@@ -205,6 +233,24 @@ function hasAgentListRuntimePolicy(value: unknown): boolean {
   return value.some((agent) => getRecord(getRecord(agent)?.agentRuntime) !== null);
 }
 
+function hasOwnTimeoutMs(value: unknown): boolean {
+  const record = getRecord(value);
+  return Boolean(record && Object.prototype.hasOwnProperty.call(record, "timeoutMs"));
+}
+
+function hasAgentListModelTimeout(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) => {
+    const agentRecord = getRecord(agent);
+    return (
+      hasOwnTimeoutMs(agentRecord?.model) ||
+      hasOwnTimeoutMs(getRecord(agentRecord?.subagents)?.model)
+    );
+  });
+}
+
 function migrateLegacySandboxPerSession(
   sandbox: Record<string, unknown>,
   pathLabel: string,
@@ -236,9 +282,127 @@ function removeLegacyAgentRuntimePolicy(
     changes.push(`Removed ${pathLabel}.embeddedHarness; runtime is now provider/model scoped.`);
   }
   if (getRecord(container.agentRuntime) !== null) {
+    preserveLegacyWholeAgentRuntimePolicy(container, pathLabel, changes);
     delete container.agentRuntime;
     changes.push(`Removed ${pathLabel}.agentRuntime; runtime is now provider/model scoped.`);
   }
+}
+
+function resolveLegacyAgentRuntimeIntent(raw: unknown): LegacyAgentRuntimeIntent | undefined {
+  const record = getRecord(raw);
+  if (!record) {
+    return undefined;
+  }
+  const runtime = typeof record.id === "string" ? record.id.trim().toLowerCase() : "";
+  if (!runtime || runtime === "auto" || runtime === "pi") {
+    return undefined;
+  }
+  const alias = listLegacyRuntimeModelProviderAliases().find(
+    (entry) => entry.cli && normalizeProviderId(entry.runtime) === runtime,
+  );
+  return alias ? { provider: alias.provider, runtime: alias.runtime } : undefined;
+}
+
+function selectedCanonicalModelRefsForRuntimePolicy(rawModel: unknown, provider: string): string[] {
+  const refs: string[] = [];
+  const addRef = (rawRef: unknown) => {
+    if (typeof rawRef !== "string") {
+      return;
+    }
+    const trimmed = rawRef.trim();
+    const slash = trimmed.indexOf("/");
+    if (slash <= 0 || slash >= trimmed.length - 1) {
+      return;
+    }
+    if (normalizeProviderId(trimmed.slice(0, slash)) !== normalizeProviderId(provider)) {
+      return;
+    }
+    refs.push(trimmed);
+  };
+
+  if (typeof rawModel === "string") {
+    addRef(rawModel);
+    return refs;
+  }
+  const model = getRecord(rawModel);
+  if (!model) {
+    return refs;
+  }
+  addRef(model.primary);
+  if (Array.isArray(model.fallbacks)) {
+    for (const fallback of model.fallbacks) {
+      addRef(fallback);
+    }
+  }
+  return refs;
+}
+
+function modelEntryWithRuntimePolicy(
+  entry: unknown,
+  runtime: string,
+): {
+  changed: boolean;
+  entry: Record<string, unknown>;
+} {
+  const base = getRecord(entry) ? { ...(entry as Record<string, unknown>) } : {};
+  const currentRuntime = getRecord(base.agentRuntime);
+  const currentRuntimeId =
+    typeof currentRuntime?.id === "string" ? currentRuntime.id.trim().toLowerCase() : "";
+  if (currentRuntimeId && currentRuntimeId !== "auto") {
+    return { changed: false, entry: base };
+  }
+  base.agentRuntime = {
+    ...currentRuntime,
+    id: runtime,
+  };
+  return { changed: true, entry: base };
+}
+
+function preserveLegacyWholeAgentRuntimePolicy(
+  container: Record<string, unknown>,
+  pathLabel: string,
+  changes: string[],
+): void {
+  const intent = resolveLegacyAgentRuntimeIntent(container.agentRuntime);
+  if (!intent) {
+    return;
+  }
+  const selectedRefs = selectedCanonicalModelRefsForRuntimePolicy(container.model, intent.provider);
+  if (selectedRefs.length === 0) {
+    return;
+  }
+
+  const currentModels = getRecord(container.models);
+  const nextModels: Record<string, unknown> = currentModels ? { ...currentModels } : {};
+  let changed = false;
+  for (const ref of selectedRefs) {
+    const updated = modelEntryWithRuntimePolicy(nextModels[ref], intent.runtime);
+    if (!updated.changed) {
+      continue;
+    }
+    nextModels[ref] = updated.entry;
+    changed = true;
+  }
+  if (!changed) {
+    return;
+  }
+  container.models = nextModels;
+  changes.push(
+    `Moved ${pathLabel}.agentRuntime.id ${intent.runtime} to matching ${intent.provider} model runtime policy.`,
+  );
+}
+
+function removeIgnoredAgentModelTimeout(
+  model: unknown,
+  pathLabel: string,
+  changes: string[],
+): void {
+  const modelRecord = getRecord(model);
+  if (!modelRecord || !Object.prototype.hasOwnProperty.call(modelRecord, "timeoutMs")) {
+    return;
+  }
+  delete modelRecord.timeoutMs;
+  changes.push(`Removed ${pathLabel}.timeoutMs; agent model config only selects models.`);
 }
 
 function hasOwnRecordProperty(value: unknown, key: string): boolean {
@@ -328,6 +492,39 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
       changes.push(
         "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds within the agent/run timeout ceiling.",
       );
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "agents.model.timeoutMs-ignored",
+    describe: "Remove ignored timeoutMs keys from agent model selection config",
+    legacyRules: IGNORED_AGENT_MODEL_TIMEOUT_RULES,
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      const defaults = getRecord(agents?.defaults);
+      if (defaults) {
+        removeIgnoredAgentModelTimeout(defaults.model, "agents.defaults.model", changes);
+        removeIgnoredAgentModelTimeout(
+          getRecord(defaults.subagents)?.model,
+          "agents.defaults.subagents.model",
+          changes,
+        );
+      }
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        const agentRecord = getRecord(agent);
+        if (!agentRecord) {
+          continue;
+        }
+        removeIgnoredAgentModelTimeout(agentRecord.model, `agents.list.${index}.model`, changes);
+        removeIgnoredAgentModelTimeout(
+          getRecord(agentRecord.subagents)?.model,
+          `agents.list.${index}.subagents.model`,
+          changes,
+        );
+      }
     },
   }),
   defineLegacyConfigMigration({

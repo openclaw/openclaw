@@ -50,6 +50,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.SystemClock
+import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
@@ -425,6 +426,42 @@ class NodeRuntime(
     MicCaptureManager(
       context = appContext,
       scope = scope,
+      createTranscriptionSession = {
+        val params =
+          buildJsonObject {
+            put("mode", JsonPrimitive("transcription"))
+            put("transport", JsonPrimitive("gateway-relay"))
+            put("brain", JsonPrimitive("none"))
+          }
+        val response =
+          operatorSession.request(
+            "talk.session.create",
+            params.toString(),
+            timeoutMs = 15_000,
+          )
+        parseTalkSessionId(response)
+      },
+      appendTranscriptionAudio = { sessionId, audio, onError ->
+        val params =
+          buildJsonObject {
+            put("sessionId", JsonPrimitive(sessionId))
+            put("audioBase64", JsonPrimitive(Base64.encodeToString(audio, Base64.NO_WRAP)))
+            put("timestamp", JsonPrimitive(SystemClock.elapsedRealtime()))
+          }
+        operatorSession.sendRequestFrame(
+          "talk.session.appendAudio",
+          params.toString(),
+          timeoutMs = 8_000,
+        ) { error -> onError(error.message) }
+      },
+      closeTranscriptionSession = { sessionId ->
+        val params = buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }
+        operatorSession.request(
+          "talk.session.close",
+          params.toString(),
+          timeoutMs = 5_000,
+        )
+      },
       sendToGateway = { message, onRunIdKnown ->
         val idempotencyKey = UUID.randomUUID().toString()
         // Notify MicCaptureManager of the idempotency key *before* the network
@@ -486,6 +523,7 @@ class NodeRuntime(
       isConnected = { operatorConnected },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
+      onStoppedByRelay = { finishTalkModeAfterRelayClose() },
     )
   }
 
@@ -500,6 +538,9 @@ class NodeRuntime(
 
   val talkModeStatusText: StateFlow<String>
     get() = talkMode.statusText
+
+  val talkModeConversation: StateFlow<List<VoiceConversationEntry>>
+    get() = talkMode.conversation
 
   private fun syncMainSessionKey(agentId: String?) {
     val resolvedKey = resolveNodeMainSessionKey(agentId)
@@ -969,6 +1010,14 @@ class NodeRuntime(
     }
   }
 
+  private fun finishTalkModeAfterRelayClose() {
+    if (_voiceCaptureMode.value != VoiceCaptureMode.TalkMode) return
+    _voiceCaptureMode.value = VoiceCaptureMode.Off
+    talkMode.ttsOnAllResponses = false
+    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+    externalAudioCaptureActive.value = false
+  }
+
   val speakerEnabled: StateFlow<Boolean>
     get() = prefs.speakerEnabled
 
@@ -1410,6 +1459,17 @@ class NodeRuntime(
     }
   }
 
+  private fun parseTalkSessionId(response: String): String {
+    val root = json.parseToJsonElement(response).asObjectOrNull()
+    val sessionId =
+      root?.get("transcriptionSessionId").asStringOrNull()
+        ?: root?.get("sessionId").asStringOrNull()
+    if (sessionId.isNullOrBlank()) {
+      throw IllegalStateException("talk.session.create returned no session id")
+    }
+    return sessionId
+  }
+
   private suspend fun refreshBrandingFromGateway() {
     if (!_isConnected.value) return
     try {
@@ -1651,7 +1711,16 @@ internal fun resolveOperatorSessionConnectAuth(
     )
   }
 
-  return null
+  val explicitBootstrapToken = auth.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitBootstrapToken != null) {
+    return null
+  }
+
+  return NodeRuntime.GatewayConnectAuth(
+    token = null,
+    bootstrapToken = null,
+    password = null,
+  )
 }
 
 internal fun shouldConnectOperatorSession(
