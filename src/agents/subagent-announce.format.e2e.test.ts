@@ -268,6 +268,13 @@ function setConfigOverride(next: OpenClawConfig): void {
   setRuntimeConfigSnapshot(configOverride);
 }
 
+function setMessageToolGroupReplyConfig(): void {
+  setConfigOverride({
+    session: { mainKey: "main", scope: "per-sender" },
+    messages: { groupChat: { visibleReplies: "message_tool" } },
+  });
+}
+
 function toSessionEntry(
   sessionKey: string,
   entry?: Partial<SessionEntry>,
@@ -780,6 +787,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("keeps direct completion announce delivery immediate even when sibling counters are non-zero", async () => {
+    setMessageToolGroupReplyConfig();
     sessionStore = {
       "agent:main:subagent:test": {
         sessionId: "child-session-self-pending",
@@ -977,6 +985,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("delivers completion-mode announces immediately even when sibling runs are still active", async () => {
+    setMessageToolGroupReplyConfig();
     sessionStore = {
       "agent:main:subagent:test": {
         sessionId: "child-session-coordinated",
@@ -1377,7 +1386,7 @@ describe("subagent announce formatting", () => {
           threadId: 99,
         },
         requesterSessionMeta: {},
-        expectedThreadId: 99,
+        expectedThreadId: "99",
       },
     ] as const;
 
@@ -1905,6 +1914,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("uses direct completion delivery when explicit channel+to route is available", async () => {
+    setMessageToolGroupReplyConfig();
     sessionStore = {
       "agent:main:main": {
         sessionId: "requester-session-direct-route",
