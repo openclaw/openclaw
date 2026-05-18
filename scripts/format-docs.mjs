@@ -10,6 +10,7 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 const CHECK = process.argv.includes("--check");
 const OXFMT_BIN = path.join(ROOT, "node_modules", "oxfmt", "bin", "oxfmt");
 const OXFMT_CONFIG = path.join(ROOT, ".oxfmtrc.jsonc");
+const OXFMT_BATCH_SIZE = 50;
 
 function docsFiles() {
   const output = execFileSync("git", ["ls-files", "docs/**/*.md", "docs/**/*.mdx", "README.md"], {
@@ -23,19 +24,25 @@ function docsFiles() {
 }
 
 function runOxfmt(files) {
-  const result = spawnSync(
-    process.execPath,
-    [OXFMT_BIN, "--write", "--threads=1", "--config", OXFMT_CONFIG, ...files],
-    {
-      cwd: ROOT,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024 * 16,
-    },
-  );
+  for (let start = 0; start < files.length; start += OXFMT_BATCH_SIZE) {
+    const batch = files.slice(start, start + OXFMT_BATCH_SIZE);
+    const result = spawnSync(
+      process.execPath,
+      [OXFMT_BIN, "--write", "--threads=1", "--config", OXFMT_CONFIG, ...batch],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024 * 16,
+      },
+    );
 
-  if (result.status !== 0) {
-    const stderr = result.stderr.trim();
-    throw new Error(`oxfmt failed${stderr ? `:\n${stderr}` : ""}`);
+    if (result.error || result.status !== 0) {
+      const details = [result.stderr, result.stdout, result.error?.message]
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+      throw new Error(`oxfmt failed${details ? `:\n${details}` : ""}`);
+    }
   }
 }
 

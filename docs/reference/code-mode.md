@@ -13,13 +13,20 @@ default. When you enable it, OpenClaw changes what the model sees for one run:
 instead of exposing every enabled tool schema directly, the model sees only
 `exec` and `wait`.
 
-This page documents OpenClaw code mode. It is not Codex Code mode. Codex Code
-mode is part of the Codex coding harness and has its own project workspace,
-runtime, tools, and execution semantics. Codex Code mode and Codex-native
-dynamic tool search are stable Codex harness surfaces. OpenClaw code mode is an
-OpenClaw-owned experimental tool-surface adapter for generic OpenClaw runs. It
-uses `quickjs-wasi`, a hidden OpenClaw tool catalog, and the normal OpenClaw
-tool executor.
+This page documents OpenClaw code mode, not Codex Code Mode. They share the
+name "code mode", but they are different runtime surfaces:
+
+| Aspect                | Codex Code Mode                                                                                                                                      | OpenClaw code mode                                                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Owner and origin      | Codex app-server coding harness; OpenClaw configures the Codex thread.                                                                               | OpenClaw-owned experimental tool-surface adapter for generic OpenClaw runs.                                            |
+| Default state         | Enabled for Codex app-server runs when the native Codex tool surface is allowed. OpenClaw disables it when a narrow tool allowlist must fail closed. | Disabled unless `tools.codeMode.enabled: true` is set for the agent or run.                                            |
+| Model-visible work    | Codex-native shell and file operations inside Codex's own workspace runtime.                                                                         | JavaScript or TypeScript evaluated by OpenClaw through `quickjs-wasi`.                                                 |
+| `exec` input shape    | Codex app-server command payloads, such as shell-command `command` inputs.                                                                           | OpenClaw `exec` requires `code` and accepts optional `language`.                                                       |
+| Sandbox and lifecycle | Codex app-server owns process, filesystem, resume, compaction, and tool-continuation semantics.                                                      | OpenClaw owns the QuickJS-WASI worker, snapshots, limits, and wait/resume state.                                       |
+| OpenClaw tool path    | OpenClaw dynamic tools are bridged into Codex's native tool surface.                                                                                 | Nested calls go through the normal OpenClaw tool executor, policy, approvals, hooks, session context, and audit paths. |
+
+Use the [Codex harness](/plugins/codex-harness) docs for Codex Code Mode. Use
+this page for the OpenClaw QuickJS-WASI tool-surface adapter.
 
 ## What is this?
 
