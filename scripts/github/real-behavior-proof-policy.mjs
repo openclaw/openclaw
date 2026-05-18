@@ -3,7 +3,7 @@ export const PROOF_SUPPLIED_LABEL = "proof: supplied";
 export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";
 export const NEEDS_REAL_BEHAVIOR_PROOF_LABEL = "triage: needs-real-behavior-proof";
 export const MOCK_ONLY_PROOF_LABEL = "triage: mock-only-proof";
-export const MAINTAINER_AUTHOR_LABEL = "maintainer";
+export const MAINTAINER_TEAM_SLUG = "maintainer";
 
 const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
@@ -95,7 +95,7 @@ function isAutomationUser(user = {}, fallbackLogin = "") {
   return user?.type === "Bot" || /\[bot\]$/i.test(login) || login.startsWith("app/");
 }
 
-export function isExternalPullRequest(pullRequest, labels) {
+export function isExternalPullRequest(pullRequest) {
   if (!pullRequest) {
     return false;
   }
@@ -105,21 +105,39 @@ export function isExternalPullRequest(pullRequest, labels) {
   const authorAssociation = String(
     pullRequest.author_association ?? pullRequest.authorAssociation ?? "",
   ).toUpperCase();
-  if (privilegedAuthorAssociations.has(authorAssociation)) {
-    return false;
-  }
-  if (hasMaintainerAuthorLabel(labels ?? pullRequest.labels)) {
-    return false;
-  }
-  return true;
+  return !privilegedAuthorAssociations.has(authorAssociation);
 }
 
 export function hasProofOverride(labels) {
   return labelNames(labels).has(PROOF_OVERRIDE_LABEL);
 }
 
-export function hasMaintainerAuthorLabel(labels) {
-  return labelNames(labels).has(MAINTAINER_AUTHOR_LABEL);
+export async function isMaintainerTeamMember({
+  token,
+  org,
+  login,
+  teamSlug = MAINTAINER_TEAM_SLUG,
+  fetch = globalThis.fetch,
+} = {}) {
+  if (!token || !org || !login) {
+    return false;
+  }
+  const url = `https://api.github.com/orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(teamSlug)}/memberships/${encodeURIComponent(login)}`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (response.status === 404) {
+    return false;
+  }
+  if (!response.ok) {
+    throw new Error(`Team membership lookup failed: ${response.status}`);
+  }
+  const body = await response.json();
+  return body?.state === "active";
 }
 
 export function extractRealBehaviorProofSection(body = "") {
@@ -222,7 +240,7 @@ export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
   if (hasProofOverride(currentLabels)) {
     return result("override", `Maintainer override label ${PROOF_OVERRIDE_LABEL} is present.`);
   }
-  if (!isExternalPullRequest(pullRequest, currentLabels)) {
+  if (!isExternalPullRequest(pullRequest)) {
     return result("skipped", "Maintainer, collaborator, or bot PRs do not require this gate.");
   }
 
