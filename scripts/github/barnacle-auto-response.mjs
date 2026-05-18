@@ -794,11 +794,34 @@ async function addMissingLabels(github, context, core, issueNumber, labels, labe
   core.info(`Added candidate labels to #${issueNumber}: ${missingLabels.join(", ")}`);
 }
 
-function shouldRemoveProofSufficientLabel(context, proofEvaluation, hasExactHeadClawSweeperProof) {
+function isClawSweeperOwnedLabel(label) {
+  return label === "clawsweeper" || label.startsWith("clawsweeper:");
+}
+
+function isActiveClawSweeperWork(pullRequest, labelSet) {
+  const authorLogin = pullRequest.user?.login ?? "";
+  const headRef = pullRequest.head?.ref ?? "";
+  return (
+    /clawsweeper/i.test(authorLogin) ||
+    headRef.startsWith("clawsweeper/") ||
+    [...labelSet].some(isClawSweeperOwnedLabel)
+  );
+}
+
+function shouldRemoveProofSufficientLabel(
+  context,
+  pullRequest,
+  labelSet,
+  proofEvaluation,
+  hasExactHeadClawSweeperProof,
+) {
   if (hasExactHeadClawSweeperProof) {
     return false;
   }
   if (proofEvaluation.status === "override") {
+    return false;
+  }
+  if (isActiveClawSweeperWork(pullRequest, labelSet)) {
     return false;
   }
   if (!["edited", "synchronize"].includes(context.payload.action)) {
@@ -836,7 +859,13 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
   );
   if (
     labelSet.has(PROOF_SUFFICIENT_LABEL) &&
-    shouldRemoveProofSufficientLabel(context, proofEvaluation, hasExactHeadClawSweeperProof)
+    shouldRemoveProofSufficientLabel(
+      context,
+      pullRequest,
+      labelSet,
+      proofEvaluation,
+      hasExactHeadClawSweeperProof,
+    )
   ) {
     staleProofLabels.push(PROOF_SUFFICIENT_LABEL);
   }
@@ -925,6 +954,9 @@ async function applyPullRequestCandidateAction({
 async function removeLabels(github, context, issueNumber, labels, labelSet) {
   for (const label of labels) {
     if (!labelSet.has(label)) {
+      continue;
+    }
+    if (isClawSweeperOwnedLabel(label)) {
       continue;
     }
     try {
