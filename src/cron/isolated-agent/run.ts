@@ -4,6 +4,7 @@ import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/open
 import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -326,6 +327,21 @@ function resolveCronToolPolicy(params: { deliveryMode: "announce" | "webhook" | 
   };
 }
 
+function resolveCronSourceReplyDeliveryMode(params: {
+  deliveryPlan: CronDeliveryPlan;
+  resolvedDelivery: ResolvedCronDeliveryTarget;
+  toolPolicy: ReturnType<typeof resolveCronToolPolicy>;
+}): SourceReplyDeliveryMode | undefined {
+  if (
+    params.deliveryPlan.mode !== "announce" ||
+    params.toolPolicy.disableMessageTool ||
+    !params.resolvedDelivery.ok
+  ) {
+    return undefined;
+  }
+  return "message_tool_only";
+}
+
 function canPromptForMessageTool(params: {
   disableMessageTool: boolean;
   toolsAllow?: string[];
@@ -470,6 +486,7 @@ type PreparedCronRunContext = {
   deliveryPlan: CronDeliveryPlan;
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   suppressExecNotifyOnExit: boolean;
   senderIsOwner: boolean;
   toolPolicy: ReturnType<typeof resolveCronToolPolicy>;
@@ -701,6 +718,11 @@ async function prepareCronRunContext(params: {
       job: input.job,
       agentId,
     });
+  const sourceReplyDeliveryMode = resolveCronSourceReplyDeliveryMode({
+    deliveryPlan,
+    resolvedDelivery,
+    toolPolicy,
+  });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
   const base = `[cron:${input.job.id} ${input.job.name}] ${input.message}`.trim();
@@ -833,6 +855,7 @@ async function prepareCronRunContext(params: {
       deliveryPlan,
       resolvedDelivery,
       deliveryRequested,
+      sourceReplyDeliveryMode,
       suppressExecNotifyOnExit: deliveryPlan.mode === "none",
       senderIsOwner: !isExternalHook,
       toolPolicy,
@@ -1179,6 +1202,7 @@ export async function runCronIsolatedAgentTurn(params: {
         accountId: prepared.context.resolvedDelivery.accountId,
         threadId: prepared.context.resolvedDelivery.threadId,
       },
+      sourceReplyDeliveryMode: prepared.context.sourceReplyDeliveryMode,
       toolPolicy: prepared.context.toolPolicy,
       skillsSnapshot: prepared.context.skillsSnapshot,
       agentPayload: prepared.context.agentPayload,
