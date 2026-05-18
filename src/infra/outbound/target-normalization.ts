@@ -61,6 +61,10 @@ export function normalizeTargetForProvider(provider: string, raw?: string): stri
   // channel plugin loading during lightweight call sites (for example unit-fast
   // source-delivery suppression comparisons).
   if (providerId === "telegram") {
+    const loadedNormalizer = getLoadedChannelPluginForRead(providerId)?.messaging?.normalizeTarget;
+    if (loadedNormalizer) {
+      return normalizeOptionalString(loadedNormalizer(raw) ?? fallback);
+    }
     const trimmed = fallback;
     if (/^telegram:-?\d+:topic:\d+$/iu.test(trimmed)) {
       return trimmed;
