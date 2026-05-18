@@ -965,6 +965,43 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 
+  it("emits hooks when flushing a buffered final answer after skipped reasoning", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    deliverInboundReplyWithMessageSendContext.mockResolvedValueOnce({
+      status: "handled_no_send",
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>Hidden reasoning</think>Visible answer" },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Visible answer");
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+      content: "Visible answer",
+      messageId: 2001,
+    });
+    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
+      transcriptPath: "/tmp/session.jsonl",
+    });
+    expectRecordFields(transcriptCall.message, {
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: "Visible answer" }],
+    });
+  });
+
   it("does not mirror non-final tool progress into the session transcript", async () => {
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
