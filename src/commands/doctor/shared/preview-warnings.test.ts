@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/config.js";
 import {
   collectChannelBoundMessageToolPolicyWarnings,
   collectDoctorPreviewWarnings,
@@ -494,7 +495,7 @@ describe("doctor preview warnings", () => {
       tools: {
         profile: "coding" as const,
       },
-    };
+    } satisfies OpenClawConfig;
 
     expect(collectVisibleReplyToolPolicyWarnings(cfg)).toStrictEqual([]);
     expect(collectChannelBoundMessageToolPolicyWarnings(cfg)).toStrictEqual([]);
@@ -530,7 +531,7 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-    };
+    } satisfies OpenClawConfig;
 
     expectWarningsContaining(collectVisibleReplyToolPolicyWarnings(cfg), [
       'messages.groupChat.visibleReplies is set to "message_tool"',
@@ -570,7 +571,7 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-    };
+    } satisfies OpenClawConfig;
 
     expect(collectVisibleReplyToolPolicyWarnings(cfg)).toStrictEqual([]);
     expect(collectChannelBoundMessageToolPolicyWarnings(cfg)).toStrictEqual([]);

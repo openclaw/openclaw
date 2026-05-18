@@ -2921,7 +2921,7 @@ describe("dispatchReplyFromConfig", () => {
       messages: {
         groupChat: { visibleReplies: "message_tool" },
       },
-    };
+    } satisfies OpenClawConfig;
     const ctx = buildTestCtx({
       Provider: "telegram",
       Surface: "telegram",
