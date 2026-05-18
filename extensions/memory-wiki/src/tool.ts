@@ -1,3 +1,4 @@
+import path from "node:path";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
@@ -92,6 +93,20 @@ type WikiToolMemoryContext = {
   sandboxed?: boolean;
 };
 
+function formatWikiToolReportPath(config: ResolvedMemoryWikiConfig, reportPath: string): string {
+  const vaultRoot = path.resolve(config.vault.path);
+  const resolvedReportPath = path.resolve(reportPath);
+  const relativeReportPath = path.relative(vaultRoot, resolvedReportPath);
+  if (
+    !relativeReportPath ||
+    relativeReportPath.startsWith("..") ||
+    path.isAbsolute(relativeReportPath)
+  ) {
+    return reportPath;
+  }
+  return relativeReportPath.replace(/\\/g, "/");
+}
+
 export function createWikiStatusTool(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
@@ -182,6 +197,7 @@ export function createWikiLintTool(
       const provenance = result.issuesByCategory.provenance.length;
       const errors = result.issues.filter((issue) => issue.severity === "error").length;
       const warnings = result.issues.filter((issue) => issue.severity === "warning").length;
+      const reportPath = formatWikiToolReportPath(config, result.reportPath);
       const summary =
         result.issueCount === 0
           ? "No wiki lint issues."
@@ -190,11 +206,16 @@ export function createWikiLintTool(
               `Contradictions: ${contradictions}`,
               `Open questions: ${openQuestions}`,
               `Provenance gaps: ${provenance}`,
-              `Report: ${result.reportPath}`,
+              `Report: ${reportPath}`,
             ].join("\n");
       return {
         content: [{ type: "text", text: summary }],
-        details: result,
+        details: {
+          issueCount: result.issueCount,
+          issues: result.issues,
+          issuesByCategory: result.issuesByCategory,
+          reportPath,
+        },
       };
     },
   };
