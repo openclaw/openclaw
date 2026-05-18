@@ -33,7 +33,7 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRecentSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
+import { readLatestRecentSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import {
@@ -281,7 +281,14 @@ const readUsageFromSessionLog = (
   }
 
   try {
-    const snapshot = readRecentSessionUsageFromTranscript(
+    // #83526: use the latest-turn snapshot (not aggregate-across-turns) so
+    // the Context % display reflects the current request's prompt size
+    // rather than cumulative cache reads. The aggregate variant produced
+    // nonsensical percentages like `2.3m/1.0m (228%)` with `Compactions:
+    // 0` because it summed cacheRead across the whole session.
+    // `readRecentSessionUsageFromTranscript` (aggregate) is kept for the
+    // other callers that legitimately want cumulative tokens.
+    const snapshot = readLatestRecentSessionUsageFromTranscript(
       sessionId,
       storePath,
       sessionEntry?.sessionFile,

@@ -12,6 +12,7 @@ import {
   readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscript,
   readLatestSessionUsageFromTranscriptAsync,
+  readLatestRecentSessionUsageFromTranscript,
   readLatestRecentSessionUsageFromTranscriptAsync,
   readRecentSessionUsageFromTranscriptAsync,
   readRecentSessionUsageFromTranscript,
@@ -1041,6 +1042,38 @@ describe("readSessionMessages", () => {
       inputTokens: 42,
       outputTokens: 7,
     });
+  });
+
+  test("sync readLatestRecentSessionUsageFromTranscript returns latest turn only (#83526)", () => {
+    // Mirror of the async latest test. The Context % display in status-message
+    // uses the SYNC entrypoint and was previously calling the aggregate
+    // variant, producing `2.3m/1.0m (228%)` from cumulative cache reads.
+    const sessionId = "test-session-sync-latest-recent-usage-83526";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "assistant", content: "older", usage: { input: 50, output: 5 } } },
+      { message: { role: "assistant", content: "latest", usage: { input: 70, output: 9 } } },
+    ]);
+
+    const aggregate = readRecentSessionUsageFromTranscript(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      2048,
+    );
+    const latest = readLatestRecentSessionUsageFromTranscript(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      2048,
+    );
+
+    // Aggregate sums the two turns (50+70 in, 5+9 out).
+    expectUsageFields(aggregate, { inputTokens: 120, outputTokens: 14 });
+    // Latest returns the last turn only — this is what Context % must use.
+    expectUsageFields(latest, { inputTokens: 70, outputTokens: 9 });
   });
 
   test("reads latest recent session usage separately from tail aggregates", async () => {

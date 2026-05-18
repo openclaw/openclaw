@@ -1577,6 +1577,52 @@ export function readRecentSessionUsageFromTranscript(
   });
 }
 
+/**
+ * Sync companion to {@link readLatestRecentSessionUsageFromTranscriptAsync}.
+ *
+ * Returns the LATEST per-turn usage snapshot from the session transcript,
+ * not the aggregate-across-turns sum. Used by `Context %` displays where
+ * cumulative cache-read tokens were producing nonsensical percentages
+ * like `2.3m/1.0m (228%)` even with `Compactions: 0` (#83526).
+ *
+ * Note: there is also a longer-named `readLatestSessionUsageFromTranscript`
+ * (line ~1442) but it currently calls the aggregate extractor — keep this
+ * sibling separate to avoid silently changing that function's existing
+ * contract for its other callers.
+ */
+export function readLatestRecentSessionUsageFromTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  agentId: string | undefined,
+  maxBytes: number,
+): SessionTranscriptUsageSnapshot | null {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  return withOpenTranscriptFd(filePath, (fd) => {
+    const stat = fs.fstatSync(fd);
+    if (stat.size === 0) {
+      return null;
+    }
+    const readLen = Math.min(stat.size, Math.max(1024, Math.floor(maxBytes)));
+    const readStart = Math.max(0, stat.size - readLen);
+    const buf = Buffer.alloc(readLen);
+    const bytesRead = fs.readSync(fd, buf, 0, readLen, readStart);
+    if (bytesRead <= 0) {
+      return null;
+    }
+    const lines = buf
+      .toString("utf-8", 0, bytesRead)
+      .split(/\r?\n/)
+      .slice(readStart > 0 ? 1 : 0)
+      .filter((line) => line.trim().length > 0);
+    return extractLatestUsageFromTranscriptLines(lines);
+  });
+}
+
 const PREVIEW_READ_SIZES = [64 * 1024, 256 * 1024, 1024 * 1024];
 const PREVIEW_MAX_LINES = 200;
 

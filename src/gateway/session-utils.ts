@@ -107,6 +107,7 @@ export {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscriptAsync,
+  readLatestRecentSessionUsageFromTranscript,
   readLatestRecentSessionUsageFromTranscriptAsync,
   readRecentSessionUsageFromTranscriptAsync,
   readRecentSessionMessagesAsync,
