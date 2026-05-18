@@ -643,6 +643,15 @@ jobs:
             echo "${name}-result=${results[$name]}" >> "$GITHUB_OUTPUT"
           done
 
+          failures=0
+          for name in channels core-support-boundary gateway-watch; do
+            if [ "${results[$name]}" = "failure" ]; then
+              echo "::error title=${name} failed::${name} failed"
+              failures=1
+            fi
+          done
+          exit "$failures"
+
       - name: Upload gateway watch regression artifacts
         if: always() && needs.preflight.outputs.run_check_additional == 'true'
         uses: actions/upload-artifact@v7
@@ -830,28 +839,6 @@ jobs:
           EOF
           OPENCLAW_VITEST_INCLUDE_FILE="$include_file" pnpm test:contracts:plugins
 
-  checks-fast-plugin-contracts:
-    permissions:
-      contents: read
-    name: checks-fast-contracts-plugins
-    needs: [preflight, checks-fast-plugin-contracts-shard]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_plugin_contracts_shards == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 5
-    steps:
-      - name: Verify plugin contract shards
-        env:
-          SHARD_RESULT: ${{ needs.checks-fast-plugin-contracts-shard.result }}
-        run: |
-          if [ "$SHARD_RESULT" = "cancelled" ]; then
-            echo "Plugin contract shards were cancelled, usually because a newer commit superseded this run." >&2
-            exit 1
-          fi
-          if [ "$SHARD_RESULT" != "success" ]; then
-            echo "Plugin contract shards failed: $SHARD_RESULT" >&2
-            exit 1
-          fi
-
   checks-fast-channel-contracts-shard:
     permissions:
       contents: read
@@ -936,28 +923,6 @@ jobs:
           EOF
           OPENCLAW_VITEST_INCLUDE_FILE="$include_file" pnpm test:contracts:channels
 
-  checks-fast-channel-contracts:
-    permissions:
-      contents: read
-    name: checks-fast-contracts-channels
-    needs: [preflight, checks-fast-channel-contracts-shard]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_fast == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 5
-    steps:
-      - name: Verify channel contract shards
-        env:
-          SHARD_RESULT: ${{ needs.checks-fast-channel-contracts-shard.result }}
-        run: |
-          if [ "$SHARD_RESULT" = "cancelled" ]; then
-            echo "Channel contract shards were cancelled, usually because a newer commit superseded this run." >&2
-            exit 1
-          fi
-          if [ "$SHARD_RESULT" != "success" ]; then
-            echo "Channel contract shards failed: $SHARD_RESULT" >&2
-            exit 1
-          fi
-
   checks-fast-protocol:
     permissions:
       contents: read
@@ -1022,38 +987,6 @@ jobs:
 
       - name: Run protocol check
         run: pnpm protocol:check
-
-  checks:
-    permissions:
-      contents: read
-    name: ${{ matrix.check_name }}
-    needs: [preflight, build-artifacts]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 5
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.checks_matrix) }}
-    steps:
-      - name: Verify ${{ matrix.task }} (${{ matrix.runtime }})
-        env:
-          TASK: ${{ matrix.task }}
-          CHANNELS_RESULT: ${{ needs.build-artifacts.outputs['channels-result'] }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$TASK" in
-            channels)
-              if [ "$CHANNELS_RESULT" != "success" ]; then
-                echo "Channel tests failed in build-artifacts: $CHANNELS_RESULT" >&2
-                exit 1
-              fi
-              ;;
-            *)
-              echo "Unsupported checks task: $TASK" >&2
-              exit 1
-              ;;
-          esac
 
   checks-node-compat:
     permissions:
@@ -1242,63 +1175,6 @@ jobs:
           }
           EOF
 
-  checks-node-core-test-dist-shard:
-    permissions:
-      contents: read
-    name: ${{ matrix.check_name }}
-    needs: [preflight, build-artifacts]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_node_core_dist == 'true' && needs.build-artifacts.result == 'success' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 5
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_dist_matrix) }}
-    steps:
-      - name: Verify Node test shard
-        env:
-          CORE_SUPPORT_BOUNDARY_RESULT: ${{ needs.build-artifacts.outputs['core-support-boundary-result'] }}
-          SHARD_NAME: ${{ matrix.shard_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$SHARD_NAME" in
-            core-support-boundary)
-              if [ "$CORE_SUPPORT_BOUNDARY_RESULT" != "success" ]; then
-                echo "Core support boundary shard failed in build-artifacts: $CORE_SUPPORT_BOUNDARY_RESULT" >&2
-                exit 1
-              fi
-              ;;
-            *)
-              echo "Unsupported built-artifact shard: $SHARD_NAME" >&2
-              exit 1
-              ;;
-          esac
-
-  checks-node-core-test:
-    permissions:
-      contents: read
-    name: checks-node-core
-    needs: [preflight, checks-node-core-test-nondist-shard, checks-node-core-test-dist-shard]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 5
-    steps:
-      - name: Verify node test shards
-        env:
-          DIST_SHARD_RESULT: ${{ needs.checks-node-core-test-dist-shard.result }}
-          NONDIST_SHARD_RESULT: ${{ needs.checks-node-core-test-nondist-shard.result }}
-          RUN_DIST_SHARDS: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
-          RUN_NONDIST_SHARDS: ${{ needs.preflight.outputs.run_checks_node_core_nondist }}
-        run: |
-          if [ "$RUN_NONDIST_SHARDS" = "true" ] && [ "$NONDIST_SHARD_RESULT" != "success" ]; then
-            echo "Node non-dist test shards failed: $NONDIST_SHARD_RESULT" >&2
-            exit 1
-          fi
-          if [ "$RUN_DIST_SHARDS" = "true" ] && [ "$DIST_SHARD_RESULT" != "success" ]; then
-            echo "Node dist test shards failed: $DIST_SHARD_RESULT" >&2
-            exit 1
-          fi
-
   # Types, lint, and format check shards.
   check-shard:
     permissions:
@@ -1443,24 +1319,6 @@ jobs:
           name: deadcode-reports
           path: .artifacts/deadcode
           if-no-files-found: ignore
-
-  check:
-    permissions:
-      contents: read
-    name: "check"
-    needs: [preflight, check-shard]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 5
-    steps:
-      - name: Verify check shards
-        env:
-          SHARD_RESULT: ${{ needs.check-shard.result }}
-        run: |
-          if [ "$SHARD_RESULT" != "success" ]; then
-            echo "Check shards failed: $SHARD_RESULT" >&2
-            exit 1
-          fi
 
   check-additional-shard:
     permissions:
@@ -1638,52 +1496,6 @@ jobs:
           esac
 
           exit "$failures"
-
-  check-additional:
-    permissions:
-      contents: read
-    name: "check-additional"
-    needs: [preflight, check-additional-shard, build-artifacts]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 5
-    steps:
-      - name: Verify additional check shards
-        env:
-          SHARD_RESULT: ${{ needs.check-additional-shard.result }}
-          BUILD_ARTIFACTS_RESULT: ${{ needs.build-artifacts.result }}
-          GATEWAY_RESULT: ${{ needs.build-artifacts.outputs.gateway-watch-result }}
-        run: |
-          if [ "$SHARD_RESULT" != "success" ]; then
-            echo "Additional check shards failed: $SHARD_RESULT" >&2
-            exit 1
-          fi
-          if [ "$BUILD_ARTIFACTS_RESULT" != "success" ]; then
-            echo "Build artifact job failed: $BUILD_ARTIFACTS_RESULT" >&2
-            exit 1
-          fi
-          if [ "$GATEWAY_RESULT" != "success" ]; then
-            echo "Gateway topology check failed: $GATEWAY_RESULT" >&2
-            exit 1
-          fi
-
-  build-smoke:
-    permissions:
-      contents: read
-    name: "build-smoke"
-    needs: [preflight, build-artifacts]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_build_smoke == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success') }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 5
-    steps:
-      - name: Verify build smoke
-        env:
-          BUILD_ARTIFACTS_RESULT: ${{ needs.build-artifacts.result }}
-        run: |
-          if [ "$BUILD_ARTIFACTS_RESULT" != "success" ]; then
-            echo "Build smoke checks failed in build-artifacts: $BUILD_ARTIFACTS_RESULT" >&2
-            exit 1
-          fi
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
