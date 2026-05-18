@@ -53,7 +53,7 @@ type CodeModeWorkerResult =
   | {
       status: "failed";
       error: string;
-      code: "invalid_input" | "internal_error";
+      code: "invalid_input" | "internal_error" | "timeout";
       output: unknown[];
     };
 
@@ -392,7 +392,12 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
     }
   } catch (error) {
     if (didTimeout()) {
-      throw new Error("code mode timeout exceeded", { cause: error });
+      return {
+        status: "failed" as const,
+        error: errorMessage(new Error("code mode timeout exceeded", { cause: error })),
+        code: "timeout" as const,
+        output: [],
+      };
     }
     throw error;
   } finally {
@@ -449,7 +454,12 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
     }
   } catch (error) {
     if (didTimeout()) {
-      throw new Error("code mode timeout exceeded", { cause: error });
+      return {
+        status: "failed" as const,
+        error: errorMessage(new Error("code mode timeout exceeded", { cause: error })),
+        code: "timeout" as const,
+        output: [],
+      };
     }
     throw error;
   } finally {

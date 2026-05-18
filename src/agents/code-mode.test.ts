@@ -694,5 +694,22 @@ describe("Code Mode", () => {
     await expect(heartbeat).resolves.toBe("main-event-loop-alive");
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("timeout exceeded");
+    // #83389: surface the documented "timeout" code instead of "internal_error"
+    // so callers can distinguish overrun from genuine internal failures.
+    expect(details.code).toBe("timeout");
+  });
+
+  it("surfaces runtime_unavailable for missing worker module patterns (#83389)", () => {
+    // Unit-test the runtime-unavailable error-message classifier directly.
+    // worker.on("error") at the QuickJS-WASI worker construction path emits
+    // "Cannot find module" / "ERR_MODULE_NOT_FOUND" / "ERR_WORKER_PATH" when
+    // the worker module is missing or unloadable; the classifier maps those
+    // to the documented "runtime_unavailable" code.
+    expect(__testing.isRuntimeUnavailableError("Cannot find module '/foo/bar.js'")).toBe(true);
+    expect(__testing.isRuntimeUnavailableError("ERR_MODULE_NOT_FOUND: bla")).toBe(true);
+    expect(__testing.isRuntimeUnavailableError("ERR_WORKER_PATH: invalid url")).toBe(true);
+    // Genuine internal errors still resolve to internal_error (negative control).
+    expect(__testing.isRuntimeUnavailableError("Unexpected token at line 3")).toBe(false);
+    expect(__testing.isRuntimeUnavailableError("Assertion failed: invariant broken")).toBe(false);
   });
 });

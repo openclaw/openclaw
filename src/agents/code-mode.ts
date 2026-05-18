@@ -109,9 +109,27 @@ type CodeModeWorkerResult =
   | {
       status: "failed";
       error: string;
-      code: "invalid_input" | "internal_error";
+      // #83389: the timer-triggered terminate path surfaces as "timeout"; a
+      // missing/unloadable QuickJS-WASI worker module surfaces as
+      // "runtime_unavailable" (both documented in CodeModeErrorCode). Reserve
+      // "internal_error" for genuinely unexpected failures (assertion-style
+      // crashes and unmatched worker error shapes).
+      code: "invalid_input" | "internal_error" | "timeout" | "runtime_unavailable";
       output: unknown[];
     };
+
+// Patterns Node uses when the QuickJS-WASI worker module cannot be loaded
+// (missing dist file, broken install). When the worker.on("error") handler
+// sees one of these we surface the documented "runtime_unavailable" code.
+const RUNTIME_UNAVAILABLE_ERROR_PATTERNS: readonly RegExp[] = [
+  /Cannot find module/i,
+  /ERR_MODULE_NOT_FOUND/i,
+  /ERR_WORKER_PATH/i,
+];
+
+function isRuntimeUnavailableError(message: string): boolean {
+  return RUNTIME_UNAVAILABLE_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
 
 const activeRuns = new Map<string, CodeModeRunState>();
 const resumingRunIds = new Set<string>();
@@ -508,10 +526,13 @@ async function runCodeModeWorker(
       };
       timer = setTimeout(() => {
         void worker.terminate();
+        // #83389: this is the QuickJS interrupt-handler-style timeout (the
+        // worker overran the configured deadline). Surface the documented
+        // "timeout" code instead of "internal_error".
         finish({
           status: "failed",
           error: "code mode worker timeout exceeded",
-          code: "internal_error",
+          code: "timeout",
           output: [],
         });
       }, timeoutMs);
@@ -529,10 +550,17 @@ async function runCodeModeWorker(
         );
       });
       worker.once("error", (error) => {
+        // #83389: a missing or unloadable QuickJS-WASI worker module
+        // (broken install, dist file removed) surfaces here as a
+        // "Cannot find module" / "ERR_MODULE_NOT_FOUND" error. Surface
+        // the documented "runtime_unavailable" code so callers can
+        // distinguish operator-fixable env issues from genuine internal
+        // failures.
+        const message = errorMessage(error);
         finish({
           status: "failed",
-          error: errorMessage(error),
-          code: "internal_error",
+          error: message,
+          code: isRuntimeUnavailableError(message) ? "runtime_unavailable" : "internal_error",
           output: [],
         });
       });
@@ -922,4 +950,5 @@ export const __testing = {
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,
   getTypescriptRuntimePromise: () => typescriptRuntimePromise,
+  isRuntimeUnavailableError,
 };
