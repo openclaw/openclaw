@@ -7,6 +7,8 @@ import {
   type JsonRecord,
 } from "./legacy-config-record-shared.js";
 
+const DANGEROUS_RECORD_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 const BUNDLED_LEGACY_WEB_SEARCH_OWNERS = new Map<string, string>([
   ["brave", "brave"],
   ["duckduckgo", "duckduckgo"],
@@ -203,6 +205,9 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
       continue;
     }
     if (getLegacyWebSearchProviderIdSet(owners).has(key) && isRecord(value)) {
+      continue;
+    }
+    if (DANGEROUS_RECORD_KEYS.has(key)) {
       continue;
     }
     nextSearch[key] = value;
