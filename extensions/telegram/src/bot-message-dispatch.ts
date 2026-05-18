@@ -1092,6 +1092,7 @@ export const dispatchTelegramMessage = async ({
       }
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
         ...deliveryBaseOptions,
+        transcriptMirror: options?.durable ? deliveryBaseOptions.transcriptMirror : undefined,
         replies: [deliverablePayload],
         onVoiceRecording: sendRecordVoice,
         silent,

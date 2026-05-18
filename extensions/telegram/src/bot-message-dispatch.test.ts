@@ -965,6 +965,55 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 
+  it("does not mirror non-final tool progress into the session transcript", async () => {
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    deliverReplies.mockImplementation(
+      async (params: {
+        replies?: Array<{ text?: string }>;
+        transcriptMirror?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void>;
+      }) => {
+        const text = params.replies
+          ?.map((reply) => reply.text)
+          .filter(Boolean)
+          .join("\n\n");
+        await params.transcriptMirror?.({ text });
+        return { delivered: true };
+      },
+    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "🛠️ tool progress" }, { kind: "tool" });
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context,
+      streamMode: "partial",
+      cfg: { agents: { defaults: { blockStreamingDefault: "on" } } },
+      telegramCfg: { streaming: { mode: "partial", preview: { toolProgress: true } } },
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(deliverReplies, 0), {
+      transcriptMirror: undefined,
+    });
+    expect(typeof mockCallArg(deliverReplies, 1).transcriptMirror).toBe("function");
+    expect(appendSessionTranscriptMessage).toHaveBeenCalledTimes(1);
+    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
+      transcriptPath: "/tmp/session.jsonl",
+    });
+    expectRecordFields(transcriptCall.message, {
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: "Final answer" }],
+    });
+  });
+
   it("mirrors the longer streamed preview when final text is truncated", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     const fullAnswer =
