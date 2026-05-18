@@ -1157,10 +1157,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         content: [
           { type: "text", text: "Audio reply" },
           {
-            type: "audio",
-            source: {
-              type: "base64",
-              media_type: "audio/mpeg",
+            type: "attachment",
+            attachment: {
+              kind: "audio",
+              label: "reply.mp3",
+              mimeType: "audio/mpeg",
+              isVoiceNote: true,
             },
           },
         ],

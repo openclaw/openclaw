@@ -2692,12 +2692,15 @@ export const chatHandlers: GatewayRequestHandlers = {
           return;
         }
         const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
+        const transcriptSourcePayload = stripVisibleTextFromMediaSupplement(
+          stripVisibleTextFromTtsSupplement(payload),
+        );
         const [transcriptPayload] = await normalizeWebchatReplyMediaPathsForDisplay({
           cfg,
           sessionKey,
           agentId,
           accountId,
-          payloads: [stripVisibleTextFromMediaSupplement(payload)],
+          payloads: [transcriptSourcePayload],
         });
         if (!transcriptPayload) {
           return;
