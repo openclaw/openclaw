@@ -1406,6 +1406,46 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResult.result).toEqual({ status: "completed", exitCode: 0, durationMs: 42 });
   });
 
+  it("uses streamed command output for failed native tool errors", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-streamed-failure",
+        delta: "fatal: missing fixture\n",
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-streamed-failure",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "failed",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: 1,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
+      toolName: "bash",
+      meta: "run tests (workspace)",
+      error: "fatal: missing fixture",
+      mutatingAction: true,
+      actionFingerprint: JSON.stringify({
+        type: "commandExecution",
+        command: "pnpm test extensions/codex",
+        cwd: "/workspace",
+      }),
+    });
+  });
+
   it("does not duplicate native tool starts when the snapshot completes a started item", async () => {
     const onAgentEvent = vi.fn();
     const trajectoryRecorder = {
@@ -1609,6 +1649,121 @@ describe("CodexAppServerEventProjector", () => {
         toolCallId: "cmd-declined",
       },
     ]);
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
+      toolName: "bash",
+      meta: "run tests (workspace)",
+      error: "codex native tool blocked",
+      mutatingAction: true,
+      actionFingerprint: JSON.stringify({
+        type: "commandExecution",
+        command: "pnpm test extensions/codex",
+        cwd: "/workspace",
+      }),
+    });
+  });
+
+  it("clears a recovered declined native tool error", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-declined",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "declined",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: 1,
+        },
+      }),
+    );
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
+      toolName: "bash",
+      meta: "run tests (workspace)",
+      error: "codex native tool blocked",
+      mutatingAction: true,
+      actionFingerprint: JSON.stringify({
+        type: "commandExecution",
+        command: "pnpm test extensions/codex",
+        cwd: "/workspace",
+      }),
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-recovered",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: 42,
+        },
+      }),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
+  });
+
+  it("does not clear a declined native tool error with a different action", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-declined",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "declined",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: 1,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-unrelated-success",
+          command: "pnpm test src/foo.test.ts",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: 42,
+        },
+      }),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
+      toolName: "bash",
+      meta: "run tests (workspace)",
+      error: "codex native tool blocked",
+      mutatingAction: true,
+      actionFingerprint: JSON.stringify({
+        type: "commandExecution",
+        command: "pnpm test extensions/codex",
+        cwd: "/workspace",
+      }),
+    });
   });
 
   it("emits after_tool_call observations for Codex-native tool item completions", async () => {

@@ -152,6 +152,7 @@ export class CodexAppServerEventProjector {
   private readonly toolTranscriptCallIds = new Set<string>();
   private readonly toolTranscriptResultIds = new Set<string>();
   private readonly transcriptToolProgressCallIds = new Set<string>();
+  private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
   private readonly nativeGeneratedMediaUrls = new Set<string>();
   private readonly diagnosticToolStartedAtByItem = new Map<string, number>();
   private readonly afterToolCallObservedItemIds = new Set<string>();
@@ -338,6 +339,7 @@ export class CodexAppServerEventProjector {
       assistantTexts,
       toolMetas: [...this.toolMetas.values()],
       lastAssistant,
+      ...(this.lastNativeToolError ? { lastToolError: this.lastNativeToolError } : {}),
       didSendViaMessagingTool: toolTelemetry.didSendViaMessagingTool,
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
       messagingToolSentMediaUrls: toolTelemetry.messagingToolSentMediaUrls,
@@ -907,15 +909,18 @@ export class CodexAppServerEventProjector {
     }
     const status = params.phase === "result" ? itemStatus(item) : "running";
     const args = itemToolArgs(item);
+    const meta = itemMeta(item, this.toolProgressDetailMode());
     this.recordToolTrajectoryEvent({ phase: params.phase, item, name, args, status });
     this.emitDiagnosticToolExecutionEvent({ phase: params.phase, item, name, status });
+    if (params.phase === "result") {
+      this.recordNativeToolError({ item, name, meta, status });
+    }
     if (!shouldEmitTranscriptToolProgress(name, args)) {
       if (params.phase === "result") {
         this.emitAfterToolCallObservation(item);
       }
       return;
     }
-    const meta = itemMeta(item, this.toolProgressDetailMode());
     this.emitAgentEvent({
       stream: "tool",
       data: {
@@ -937,6 +942,41 @@ export class CodexAppServerEventProjector {
     if (params.phase === "result") {
       this.emitAfterToolCallObservation(item);
     }
+  }
+
+  private recordNativeToolError(params: {
+    item: CodexThreadItem;
+    name: string;
+    meta?: string;
+    status: ReturnType<typeof itemStatus>;
+  }): void {
+    if (!isNonSuccessItemStatus(params.status)) {
+      if (!this.lastNativeToolError) {
+        return;
+      }
+      if (!this.lastNativeToolError.mutatingAction) {
+        this.lastNativeToolError = undefined;
+        return;
+      }
+      const actionFingerprint = nativeToolActionFingerprint(params.item);
+      if (
+        this.lastNativeToolError.actionFingerprint &&
+        actionFingerprint &&
+        this.lastNativeToolError.actionFingerprint === actionFingerprint
+      ) {
+        this.lastNativeToolError = undefined;
+      }
+      return;
+    }
+    const error = itemToolError(params.item, params.status, this.toolResultOutputTextByItem);
+    const actionFingerprint = nativeToolActionFingerprint(params.item);
+    this.lastNativeToolError = {
+      toolName: params.name,
+      ...(params.meta ? { meta: params.meta } : {}),
+      ...(error ? { error } : {}),
+      ...(isMutatingNativeToolItem(params.item) ? { mutatingAction: true } : {}),
+      ...(actionFingerprint ? { actionFingerprint } : {}),
+    };
   }
 
   private recordToolTrajectoryEvent(params: {
@@ -1707,6 +1747,27 @@ function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): boolean {
     default:
       return false;
   }
+}
+
+function isMutatingNativeToolItem(item: CodexThreadItem): boolean {
+  return item.type === "commandExecution" || item.type === "fileChange";
+}
+
+function nativeToolActionFingerprint(item: CodexThreadItem): string | undefined {
+  if (item.type === "commandExecution" && typeof item.command === "string") {
+    return JSON.stringify({
+      type: item.type,
+      command: item.command,
+      cwd: typeof item.cwd === "string" ? item.cwd : "",
+    });
+  }
+  if (item.type === "fileChange") {
+    return JSON.stringify({
+      type: item.type,
+      changes: itemFileChanges(item),
+    });
+  }
+  return undefined;
 }
 
 function isNativePostToolUseRelayItem(item: CodexThreadItem): boolean {

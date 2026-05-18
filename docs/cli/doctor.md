@@ -90,7 +90,7 @@ openclaw doctor --lint --only core/doctor/gateway-config --json
 Human output is compact:
 
 ```text
-doctor --lint: ran 5 check(s), 1 finding(s)
+doctor --lint: ran 6 check(s), 1 finding(s)
   [warning] core/doctor/gateway-config gateway.mode - gateway.mode is unset; gateway start will be blocked.
     fix: Run `openclaw configure` and set Gateway mode (local/remote), or `openclaw config set gateway.mode local`.
 ```

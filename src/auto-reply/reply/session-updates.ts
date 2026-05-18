@@ -39,7 +39,7 @@ export { drainFormattedSystemEvents } from "./session-system-events.js";
 const resolvedSkillsCache = new Map<string, SkillSnapshot["resolvedSkills"]>();
 const RESOLVED_SKILLS_CACHE_MAX = 10;
 
-export function __testing_resetResolvedSkillsCache(): void {
+export function resetResolvedSkillsCacheForTests(): void {
   resolvedSkillsCache.clear();
 }
 

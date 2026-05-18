@@ -173,19 +173,7 @@ struct OpenClawApp: App {
     private func openDashboardWindow() {
         HoverHUDController.shared.setSuppressed(true)
         self.isMenuPresented = false
-        if DashboardManager.shared.showConfiguredWindowIfPossible() {
-            return
-        }
-        Task { @MainActor in
-            if DashboardManager.shared.showConfiguredWindowIfPossible() {
-                return
-            }
-            do {
-                try await DashboardManager.shared.show()
-            } catch {
-                DashboardManager.shared.showFailure(error)
-            }
-        }
+        AppNavigationActions.openDashboard()
     }
 
     @MainActor
@@ -249,6 +237,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var state: AppState?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     let updaterController: UpdaterProviding = makeUpdaterController()
+
+    func applicationDockMenu(_: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.addItem(self.dockMenuItem(
+            title: "Open Dashboard",
+            systemImage: "gauge",
+            action: #selector(self.openDashboardFromDockMenu(_:))))
+        menu.addItem(self.dockMenuItem(
+            title: "Open Chat",
+            systemImage: "bubble.left.and.bubble.right",
+            action: #selector(self.openChatFromDockMenu(_:))))
+        let canvasTitle = AppStateStore.shared.canvasPanelVisible ? "Close Canvas" : "Open Canvas"
+        let canvasItem = self.dockMenuItem(
+            title: canvasTitle,
+            systemImage: "rectangle.inset.filled.on.rectangle",
+            action: #selector(self.toggleCanvasFromDockMenu(_:)))
+        canvasItem.isEnabled = AppStateStore.shared.canvasEnabled
+        menu.addItem(canvasItem)
+        menu.addItem(.separator())
+        menu.addItem(self.dockMenuItem(
+            title: "Settings…",
+            systemImage: "gearshape",
+            action: #selector(self.openSettingsFromDockMenu(_:))))
+        return menu
+    }
+
+    private func dockMenuItem(title: String, systemImage: String, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: title)
+        return item
+    }
+
+    @objc
+    private func openDashboardFromDockMenu(_: Any?) {
+        AppNavigationActions.openDashboard()
+    }
+
+    @objc
+    private func openChatFromDockMenu(_: Any?) {
+        AppNavigationActions.openChat()
+    }
+
+    @objc
+    private func toggleCanvasFromDockMenu(_: Any?) {
+        AppNavigationActions.toggleCanvas()
+    }
+
+    @objc
+    private func openSettingsFromDockMenu(_: Any?) {
+        AppNavigationActions.openSettings()
+    }
 
     func application(_: NSApplication, open urls: [URL]) {
         Task { @MainActor in

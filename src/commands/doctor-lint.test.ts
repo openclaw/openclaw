@@ -65,7 +65,7 @@ describe("runDoctorLintCli", () => {
 
       expect(exitCode).toBe(0);
       expect(String(stdout.mock.calls[0]?.[0])).toBe(
-        "doctor --lint: ran 5 check(s), 0 finding(s)\n",
+        "doctor --lint: ran 6 check(s), 0 finding(s)\n",
       );
       expect(String(stdout.mock.calls[1]?.[0])).toBe("  no findings\n");
     } finally {

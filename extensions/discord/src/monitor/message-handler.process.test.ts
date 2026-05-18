@@ -207,7 +207,7 @@ const createDiscordRestClientSpy = vi.hoisted(() =>
 );
 let createBaseDiscordMessageContext: typeof import("./message-handler.test-harness.js").createBaseDiscordMessageContext;
 let createDiscordDirectMessageContextOverrides: typeof import("./message-handler.test-harness.js").createDiscordDirectMessageContextOverrides;
-let threadBindingTesting: typeof import("./thread-bindings.js").__testing;
+let threadBindingTesting: typeof import("./thread-bindings.js").testing;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
 let notifyDiscordInboundEventOutboundSuccess: typeof import("../inbound-event-delivery.js").notifyDiscordInboundEventOutboundSuccess;
@@ -370,7 +370,7 @@ beforeAll(async () => {
   vi.useRealTimers();
   ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
     await import("./message-handler.test-harness.js"));
-  ({ __testing: threadBindingTesting, createThreadBindingManager } =
+  ({ testing: threadBindingTesting, createThreadBindingManager } =
     await import("./thread-bindings.js"));
   ({ processDiscordMessage } = await import("./message-handler.process.js"));
   ({ notifyDiscordInboundEventOutboundSuccess } = await import("../inbound-event-delivery.js"));
@@ -1712,6 +1712,7 @@ describe("processDiscordMessage draft streaming", () => {
 
   it("defaults unset Discord preview streaming to progress mode without drafting text-only turns", async () => {
     await runSingleChunkFinalScenario({ maxLinesPerMessage: 5 });
+    expect(getLastDispatchReplyOptions()?.onPartialReply).toBeUndefined();
     expect(createDiscordDraftStream).toHaveBeenCalledTimes(1);
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);

@@ -794,7 +794,7 @@ jobs:
 
       - name: Upload parity lane artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-qa-parity-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -830,7 +830,7 @@ jobs:
           install-bun: "true"
 
       - name: Download parity lane artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: release-qa-parity-*-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -853,7 +853,7 @@ jobs:
 
       - name: Upload parity artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-qa-parity-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -948,10 +948,61 @@ jobs:
 
       - name: Upload runtime parity artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: warn
+
+  runtime_tool_coverage_release_checks:
+    name: Enforce QA Lab runtime tool coverage
+    needs: [resolve_target, qa_lab_runtime_parity_release_checks]
+    if: always() && contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Download runtime parity artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/qa-e2e/
+
+      - name: Enforce standard runtime tool coverage
+        run: |
+          set -euo pipefail
+          pnpm openclaw qa coverage \
+            --repo-root . \
+            --tools \
+            --summary .artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json \
+            --output .artifacts/qa-e2e/runtime-parity-standard-report/qa-runtime-tool-coverage-report.md
+
+      - name: Upload runtime tool coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-qa-runtime-tool-coverage-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/qa-e2e/runtime-parity-standard-report/
           retention-days: 14
           if-no-files-found: warn
 
@@ -1028,7 +1079,7 @@ jobs:
 
       - name: Upload Matrix QA artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-qa-live-matrix-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -1124,7 +1175,7 @@ jobs:
 
       - name: Upload Telegram QA artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-qa-live-telegram-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -1220,7 +1271,7 @@ jobs:
 
       - name: Upload Discord QA artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-qa-live-discord-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -1319,7 +1370,7 @@ jobs:
 
       - name: Upload WhatsApp QA artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-qa-live-whatsapp-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -1415,7 +1466,7 @@ jobs:
 
       - name: Upload Slack QA artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-qa-live-slack-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -1434,6 +1485,7 @@ jobs:
       - qa_lab_parity_lane_release_checks
       - qa_lab_parity_report_release_checks
       - qa_lab_runtime_parity_release_checks
+      - runtime_tool_coverage_release_checks
       - qa_live_matrix_release_checks
       - qa_live_telegram_release_checks
       - qa_live_discord_release_checks
@@ -1465,6 +1517,7 @@ jobs:
             "qa_lab_parity_lane_release_checks=${{ needs.qa_lab_parity_lane_release_checks.result }}" \
             "qa_lab_parity_report_release_checks=${{ needs.qa_lab_parity_report_release_checks.result }}" \
             "qa_lab_runtime_parity_release_checks=${{ needs.qa_lab_runtime_parity_release_checks.result }}" \
+            "runtime_tool_coverage_release_checks=${{ needs.runtime_tool_coverage_release_checks.result }}" \
             "qa_live_matrix_release_checks=${{ needs.qa_live_matrix_release_checks.result }}" \
             "qa_live_telegram_release_checks=${{ needs.qa_live_telegram_release_checks.result }}" \
             "qa_live_discord_release_checks=${{ needs.qa_live_discord_release_checks.result }}" \
