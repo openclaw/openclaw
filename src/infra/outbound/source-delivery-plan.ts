@@ -75,9 +75,41 @@ function isMessageToolOwnedDelivery(owner: SourceVisibleDeliveryOwner): boolean 
   return owner === "message_tool" || owner === "message_tool_then_direct_fallback";
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripChannelPrefix(channel: string, raw: string): string {
+  if (!channel) {
+    return raw;
+  }
+  return raw.replace(new RegExp(`^${escapeRegExp(channel)}:`, "iu"), "").trim();
+}
+
+function normalizeFeishuLikeTarget(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const withoutProvider = trimmed.replace(/^(feishu|lark):/iu, "").trim();
+  const lowered = withoutProvider.toLowerCase();
+  for (const prefix of ["chat:", "group:", "channel:", "user:", "dm:", "open_id:"]) {
+    if (lowered.startsWith(prefix)) {
+      return withoutProvider.slice(prefix.length).trim();
+    }
+  }
+  return withoutProvider;
+}
+
 function normalizeDeliveryTarget(channel: string, to: string): string {
-  void channel;
-  return to.trim();
+  const toTrimmed = to.trim();
+  if (!toTrimmed) {
+    return "";
+  }
+  if (channel === "feishu" || channel === "lark") {
+    return normalizeFeishuLikeTarget(toTrimmed);
+  }
+  return stripChannelPrefix(channel, toTrimmed);
 }
 
 const caseSensitivePrefixedTargetProviders = new Set(["googlechat", "mattermost", "matrix"]);
