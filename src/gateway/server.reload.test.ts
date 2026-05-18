@@ -510,7 +510,9 @@ describe("gateway hot reload", () => {
         await reloadPromise?.catch(() => {});
       }
 
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
     });
   });
@@ -561,7 +563,9 @@ describe("gateway hot reload", () => {
         await reloadPromise?.catch(() => {});
       }
 
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
     });
   });
@@ -609,7 +613,9 @@ describe("gateway hot reload", () => {
         await reloadPromise?.catch(() => {});
       }
 
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram");
     });
   });
@@ -691,15 +697,25 @@ describe("gateway hot reload", () => {
 
       expect(hoisted.providerManager.stopChannel).toHaveBeenCalledTimes(5);
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledTimes(5);
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("whatsapp");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("whatsapp", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("whatsapp");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("signal");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("signal", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("signal");
-      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("imessage");
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("imessage", undefined, {
+        manual: false,
+      });
       expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("imessage");
 
       const onRestart = hoisted.getOnRestart();
