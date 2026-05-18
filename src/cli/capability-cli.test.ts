@@ -895,6 +895,25 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
+  it("fails gateway model probes when the provider returns no text output", async () => {
+    mocks.callGateway.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        meta: { agentMeta: { provider: "openai", model: "gpt-5.5" } },
+      },
+    });
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "model", "run", "--prompt", "hello", "--gateway", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains('No text output returned for provider "openai" model "gpt-5.5"');
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  });
+
   it("rejects local Codex provider probes before simple-completion dispatch", async () => {
     mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
       selection: {

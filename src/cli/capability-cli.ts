@@ -843,6 +843,22 @@ async function runModelRun(params: {
     mode: hasModelOverride ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
     ...(hasModelOverride ? { scopes: [ADMIN_SCOPE] } : {}),
   });
+  const gatewayOutputs = (response?.result?.payloads ?? []).map((payload) => ({
+    text: payload.text,
+    mediaUrl: payload.mediaUrl,
+    mediaUrls: payload.mediaUrls,
+  }));
+  const gatewayText = gatewayOutputs
+    .map((o) => (typeof o.text === "string" ? o.text : ""))
+    .join("")
+    .trim();
+  if (!gatewayText) {
+    const gatewayProvider = response?.result?.meta?.agentMeta?.provider ?? "unknown";
+    const gatewayModel = response?.result?.meta?.agentMeta?.model ?? "unknown";
+    throw new Error(
+      `No text output returned for provider "${gatewayProvider}" model "${gatewayModel}".`,
+    );
+  }
   return {
     ok: true,
     capability: "model.run",
@@ -850,11 +866,7 @@ async function runModelRun(params: {
     provider: response?.result?.meta?.agentMeta?.provider,
     model: response?.result?.meta?.agentMeta?.model,
     attempts: response?.result?.meta?.agentMeta?.fallbackAttempts ?? [],
-    outputs: (response?.result?.payloads ?? []).map((payload) => ({
-      text: payload.text,
-      mediaUrl: payload.mediaUrl,
-      mediaUrls: payload.mediaUrls,
-    })),
+    outputs: gatewayOutputs,
     ...(imageFiles.length > 0
       ? {
           inputs: imageFiles.map((image) => ({
