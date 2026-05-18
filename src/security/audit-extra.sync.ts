@@ -403,6 +403,11 @@ type SharedIngressTarget = {
   guildId?: string;
 };
 
+type SharedIngressAgentIds = {
+  main: Set<string>;
+  external: Set<string>;
+};
+
 function listAuditAgentEntries(cfg: OpenClawConfig) {
   return (cfg.agents?.list ?? []).filter(
     (entry): entry is NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number] =>
@@ -508,6 +513,16 @@ function resolveAgentIdsForBroadSharedTarget(
   return Array.from(out);
 }
 
+function resolveSharedIngressSessionKind(
+  cfg: OpenClawConfig,
+  target: SharedIngressTarget,
+): ExposureSessionKind {
+  if (target.peerKind !== "direct") {
+    return "external";
+  }
+  return (cfg.session?.dmScope ?? "main") === "main" ? "main" : "external";
+}
+
 function collectConfiguredSharedTargets(params: {
   section: Record<string, unknown>;
   channelId: string;
@@ -568,8 +583,11 @@ function collectConfiguredSharedTargets(params: {
   return targets;
 }
 
-function collectSharedIngressAgentIds(cfg: OpenClawConfig): Set<string> {
-  const out = new Set<string>();
+function collectSharedIngressAgentIds(cfg: OpenClawConfig): SharedIngressAgentIds {
+  const out: SharedIngressAgentIds = {
+    main: new Set<string>(),
+    external: new Set<string>(),
+  };
   const channels = cfg.channels as Record<string, unknown> | undefined;
   if (!channels || typeof channels !== "object") {
     return out;
@@ -591,18 +609,21 @@ function collectSharedIngressAgentIds(cfg: OpenClawConfig): Set<string> {
           target.peerId || target.guildId
             ? resolveAgentIdsForExplicitSharedTarget(cfg, target)
             : resolveAgentIdsForBroadSharedTarget(cfg, target);
+        const bucket = out[resolveSharedIngressSessionKind(cfg, target)];
         for (const id of ids) {
-          out.add(id);
+          bucket.add(id);
         }
       }
     };
     const addBroadTarget = (peerKind: SharedIngressPeerKind) => {
-      for (const id of resolveAgentIdsForBroadSharedTarget(cfg, {
+      const target = {
         channelId,
         accountId,
         peerKind,
-      })) {
-        out.add(id);
+      };
+      const bucket = out[resolveSharedIngressSessionKind(cfg, target)];
+      for (const id of resolveAgentIdsForBroadSharedTarget(cfg, target)) {
+        bucket.add(id);
       }
     };
 
@@ -1409,10 +1430,28 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
   }
 
   const sharedIngressAgentIds = collectSharedIngressAgentIds(cfg);
-  const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg, {
-    agentIds: sharedIngressAgentIds.size > 0 ? sharedIngressAgentIds : undefined,
-    sessionKind: "external",
-  });
+  const riskyContextSet = new Set<string>();
+  let hasRuntimeRisk = false;
+  const collectScopedRisk = (params: {
+    agentIds?: ReadonlySet<string>;
+    sessionKind: ExposureSessionKind;
+  }) => {
+    const result = collectRiskyToolExposureContexts(cfg, params);
+    for (const context of result.riskyContexts) {
+      riskyContextSet.add(context);
+    }
+    hasRuntimeRisk ||= result.hasRuntimeRisk;
+  };
+  if (sharedIngressAgentIds.main.size > 0) {
+    collectScopedRisk({ agentIds: sharedIngressAgentIds.main, sessionKind: "main" });
+  }
+  if (sharedIngressAgentIds.external.size > 0) {
+    collectScopedRisk({ agentIds: sharedIngressAgentIds.external, sessionKind: "external" });
+  }
+  if (sharedIngressAgentIds.main.size === 0 && sharedIngressAgentIds.external.size === 0) {
+    collectScopedRisk({ sessionKind: "main" });
+  }
+  const riskyContexts = Array.from(riskyContextSet);
   if (riskyContexts.length === 0) {
     return findings;
   }

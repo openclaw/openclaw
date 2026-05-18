@@ -245,6 +245,53 @@ describe("security audit trust model findings", () => {
           ).toBe(false);
         },
       },
+      {
+        name: "warns for open direct DMs when only non-main sessions are sandboxed",
+        cfg: {
+          channels: { whatsapp: { dmPolicy: "open" } },
+          tools: {
+            elevated: { enabled: false },
+            profile: "coding",
+          },
+          agents: {
+            defaults: {
+              sandbox: { mode: "non-main" },
+            },
+          },
+        } satisfies OpenClawConfig,
+        assert: () => {
+          const findings = audit(cases[9].cfg);
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
+            ),
+          ).toBe(true);
+        },
+      },
+      {
+        name: "does not warn for open direct DMs when secure DM sessions are sandboxed",
+        cfg: {
+          session: { dmScope: "per-channel-peer" },
+          channels: { whatsapp: { dmPolicy: "open" } },
+          tools: {
+            elevated: { enabled: false },
+            profile: "coding",
+          },
+          agents: {
+            defaults: {
+              sandbox: { mode: "non-main" },
+            },
+          },
+        } satisfies OpenClawConfig,
+        assert: () => {
+          const findings = audit(cases[10].cfg);
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
+            ),
+          ).toBe(false);
+        },
+      },
     ] as const;
 
     for (const testCase of cases) {
