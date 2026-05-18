@@ -51,6 +51,7 @@ export async function executeNodeHostCommand(
     command: params.command,
     workdir: params.workdir,
     env: target.env ?? {},
+    patternEnv: params.env,
     namespace: resolveExecDeniedPathNamespaceForNode(target.platform),
   });
   if (

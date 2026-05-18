@@ -393,6 +393,51 @@ describe("exec host env validation", () => {
     }
   });
 
+  it("blocks sandbox home denied paths when request env overrides HOME", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-home-override-"));
+    const workspaceDir = path.join(tempRoot, "host", "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    const config = normalizeConfigPaths({
+      tools: {
+        exec: {
+          deniedPaths: ["~/.openclaw/credentials/**"],
+        },
+      },
+    });
+    const buildExecSpec = vi.fn(async (params) => ({
+      argv: ["sh", "-c", "echo should-not-run"],
+      env: params.env,
+      stdinMode: "pipe-closed" as const,
+    }));
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      deniedPaths: config.tools?.exec?.deniedPaths,
+      sandbox: {
+        containerName: "openclaw-test-sandbox",
+        workspaceDir,
+        containerWorkdir: "/workspace",
+        buildExecSpec,
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-denied-sandbox-home-override", {
+          command: "cat /workspace/.openclaw/credentials/provider.key",
+          env: { HOME: "/tmp" },
+          workdir: "/workspace",
+        }),
+      ).rejects.toThrow(
+        "Security Violation: exec command references denied path /workspace/.openclaw/credentials/provider.key",
+      );
+      expect(buildExecSpec).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("blocks home-relative denied path patterns against the resolved home directory", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-denied-home-"));
     const originalHome = process.env.HOME;

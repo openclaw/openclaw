@@ -226,6 +226,7 @@ export function assertExecDeniedPaths(params: {
   command: string;
   workdir: string | undefined;
   env: NodeJS.ProcessEnv;
+  patternEnv?: NodeJS.ProcessEnv;
   namespace?: ExecDeniedPathNamespace;
 }): void {
   const namespace = params.namespace ?? "host";
@@ -234,7 +235,7 @@ export function assertExecDeniedPaths(params: {
     params.deniedPaths,
     params.workdir,
     namespace,
-    params.env,
+    params.patternEnv ?? params.env,
   );
   if (patterns.length === 0) {
     return;

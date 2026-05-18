@@ -478,8 +478,45 @@ describe("executeNodeHostCommand", () => {
       executeNodeHostCommand({
         command: "type C:\\Users\\agent\\.openclaw\\credentials\\provider.key",
         workdir: "C:\\Work",
-        env: {},
+        env: { HOME: "C:\\Users\\agent" },
         requestedEnv: { HOME: "C:\\Users\\agent" },
+        security: "full",
+        ask: "off",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+        deniedPaths: config.tools?.exec?.deniedPaths,
+      }),
+    ).rejects.toThrow(
+      "Security Violation: exec command references denied path C:\\Users\\agent\\.openclaw\\credentials\\provider.key",
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks Windows node home denied paths when requested env overrides HOME", async () => {
+    const config = normalizeConfigPaths({
+      tools: {
+        exec: {
+          deniedPaths: ["~/.openclaw/credentials/**"],
+        },
+      },
+    });
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run"],
+        platform: "win32",
+      },
+    ]);
+
+    await expect(
+      executeNodeHostCommand({
+        command: "type C:\\Users\\agent\\.openclaw\\credentials\\provider.key",
+        workdir: "C:\\Work",
+        env: { HOME: "C:\\Users\\agent" },
+        requestedEnv: { HOME: "C:\\Temp" },
         security: "full",
         ask: "off",
         defaultTimeoutSec: 30,
