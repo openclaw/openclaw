@@ -513,18 +513,44 @@ export async function ensureAgentWorkspace(params?: {
     return existing.every((v) => !v) && !hasCanonicalRootMemory;
   })();
 
+  // Check for bootstrap files in common subdirectories (e.g., main/ for repo workspaces)
+  // to avoid recreating files in the root when they already exist elsewhere.
+  const hasSubdirectoryBootstrapFiles = await (async () => {
+    const subdirs = ["main", "agents", "workspace"];
+    for (const subdir of subdirs) {
+      const subdirPath = path.join(dir, subdir);
+      for (const fileName of WORKSPACE_ONBOARDING_PROFILE_FILENAMES) {
+        try {
+          await fs.access(path.join(subdirPath, fileName));
+          return true;
+        } catch {
+          // continue checking
+        }
+      }
+    }
+    return false;
+  })();
+
   const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
   const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
   const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
-  await writeFileIfMissing(agentsPath, agentsTemplate);
-  await writeFileIfMissing(soulPath, soulTemplate);
-  await writeFileIfMissing(toolsPath, toolsTemplate);
-  const identityPathCreated = await writeFileIfMissing(identityPath, identityTemplate);
-  await writeFileIfMissing(userPath, userTemplate);
-  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+
+  // Skip creating bootstrap files in root if they already exist in a subdirectory.
+  // This prevents subagent spawns from polluting repository roots.
+  if (!hasSubdirectoryBootstrapFiles) {
+    await writeFileIfMissing(agentsPath, agentsTemplate);
+    await writeFileIfMissing(soulPath, soulTemplate);
+    await writeFileIfMissing(toolsPath, toolsTemplate);
+    await writeFileIfMissing(identityPath, identityTemplate);
+    await writeFileIfMissing(userPath, userTemplate);
+    await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  }
+  const identityPathCreated = !hasSubdirectoryBootstrapFiles
+    ? await writeFileIfMissing(identityPath, identityTemplate)
+    : false;
 
   let state = await readWorkspaceSetupState(statePath, {
     persistLegacyMigration: true,
@@ -557,10 +583,11 @@ export async function ensureAgentWorkspace(params?: {
   }
 
   if (!state.bootstrapSeededAt && !state.setupCompletedAt && !bootstrapExists) {
-    // Legacy migration path: if USER/IDENTITY diverged from templates, or if user-content
-    // indicators exist, treat setup as complete and avoid recreating BOOTSTRAP for
-    // already-configured workspaces.
-    if (
+    // If bootstrap files exist in a subdirectory, mark setup as complete
+    // to avoid recreating files in the root on future calls.
+    if (hasSubdirectoryBootstrapFiles) {
+      markState({ setupCompletedAt: nowIso() });
+    } else if (
       await workspaceProfileLooksConfigured({
         dir,
         includeGitEvidence: true,

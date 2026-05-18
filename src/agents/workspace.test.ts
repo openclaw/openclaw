@@ -155,6 +155,34 @@ describe("ensureAgentWorkspace", () => {
     await expectCompletedWithoutBootstrap(tempDir);
   });
 
+  it("does not recreate bootstrap files in root when they exist in main/ subdirectory", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await fs.mkdir(path.join(tempDir, "main"), { recursive: true });
+    await writeWorkspaceFile({
+      dir: path.join(tempDir, "main"),
+      name: DEFAULT_IDENTITY_FILENAME,
+      content: "# IDENTITY.md\n\n- **Name:** Subagent\n",
+    });
+    await writeWorkspaceFile({
+      dir: path.join(tempDir, "main"),
+      name: DEFAULT_SOUL_FILENAME,
+      content: "# SOUL.md\n\nSubagent soul.\n",
+    });
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    // Root should NOT have bootstrap files created
+    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.access(path.join(tempDir, DEFAULT_IDENTITY_FILENAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    // Setup should be marked complete
+    const state = await readWorkspaceState(tempDir);
+    expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
   it("migrates legacy onboardingCompletedAt markers to setupCompletedAt", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await fs.mkdir(path.join(tempDir, ".openclaw"), { recursive: true });
