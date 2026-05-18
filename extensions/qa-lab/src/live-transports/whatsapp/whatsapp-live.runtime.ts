@@ -416,6 +416,17 @@ function buildWhatsAppQaConfig(
         skipBootstrap: true,
         thinkingDefault: "off",
       },
+      list: baseCfg.agents?.list?.map((agent) => ({
+        ...agent,
+        tools: {
+          ...agent.tools,
+          profile: "messaging",
+        },
+      })),
+    },
+    tools: {
+      ...baseCfg.tools,
+      profile: "messaging",
     },
     plugins: {
       ...baseCfg.plugins,
