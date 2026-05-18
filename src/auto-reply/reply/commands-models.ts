@@ -21,6 +21,7 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -393,6 +394,10 @@ function resolveProviderLabel(params: {
 }): string {
   const authLabel = resolveModelAuthLabel({
     provider: params.provider,
+    acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
+      provider: params.provider,
+      config: params.cfg,
+    }),
     cfg: params.cfg,
     sessionEntry: params.sessionEntry,
     agentDir: params.agentDir,

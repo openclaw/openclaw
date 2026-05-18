@@ -658,6 +658,33 @@ describe("handleModelsCommand", () => {
     expect(authLabelParams.workspaceDir).toBe("/tmp");
   });
 
+  it("labels OpenAI model lists through auth.order compatible Codex profiles", async () => {
+    modelAuthLabelMocks.resolveModelAuthLabel.mockImplementation((params: unknown) => {
+      const acceptedProviderIds = (params as { acceptedProviderIds?: string[] })
+        .acceptedProviderIds;
+      return acceptedProviderIds?.[0] === "openai-codex"
+        ? "oauth (openai-codex:status)"
+        : "api-key (env: OPENAI_API_KEY)";
+    });
+
+    const result = await handleModelsCommand(
+      buildParams("/models openai", {
+        auth: {
+          order: {
+            openai: ["openai-codex:status"],
+          },
+        },
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("Models (openai · 🔑 oauth (openai-codex:status))");
+    const [[authLabelParams]] = modelAuthLabelMocks.resolveModelAuthLabel.mock
+      .calls as unknown as Array<[{ provider?: string; acceptedProviderIds?: string[] }]>;
+    expect(authLabelParams.provider).toBe("openai");
+    expect(authLabelParams.acceptedProviderIds).toEqual(["openai-codex", "openai"]);
+  });
+
   it("uses spawned workspace for direct /models provider visibility", async () => {
     modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
     const params = buildParams("/models");
