@@ -230,6 +230,19 @@ describe("WhatsApp QA live runtime", () => {
     });
   });
 
+  it("preserves gateway debug artifacts for model transport diagnostics", () => {
+    expect(
+      __testing.shouldPreserveWhatsAppGatewayDebugArtifacts({
+        OPENCLAW_QA_WHATSAPP_MODEL_TRANSPORT_DEBUG: "0",
+      }),
+    ).toBe(false);
+    expect(
+      __testing.shouldPreserveWhatsAppGatewayDebugArtifacts({
+        OPENCLAW_QA_WHATSAPP_MODEL_TRANSPORT_DEBUG: "1",
+      }),
+    ).toBe(true);
+  });
+
   it("detects complete heap snapshot files before copying", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-heap-test-"));
     try {

@@ -297,6 +297,10 @@ function buildWhatsAppGatewayRuntimeEnvPatch(params: {
   return Object.keys(patch).length > 0 ? patch : undefined;
 }
 
+function shouldPreserveWhatsAppGatewayDebugArtifacts(env: NodeJS.ProcessEnv = process.env) {
+  return isTruthyOptIn(env[WHATSAPP_QA_MODEL_TRANSPORT_DEBUG_ENV]);
+}
+
 function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof WHATSAPP_QA_ENV_KEYS)[number]) {
   const value = env[key]?.trim();
   if (!value) {
@@ -759,6 +763,7 @@ async function runWhatsAppScenario(params: {
   gatewayTracePath?: string;
   observedMessages: WhatsAppObservedMessage[];
   providerMode: ReturnType<typeof normalizeQaProviderMode>;
+  preserveGatewayDebugArtifacts?: boolean;
   primaryModel: string;
   alternateModel: string;
   fastMode?: boolean;
@@ -927,7 +932,13 @@ async function runWhatsAppScenario(params: {
     throw error;
   } finally {
     if (!preservedGatewayDebug) {
-      await gatewayHarness.stop().catch(() => {});
+      const preserveToDir = params.preserveGatewayDebugArtifacts
+        ? path.join(
+            params.gatewayDebugDirPath,
+            sanitizeWhatsAppGatewayCheckpointLabel(params.scenario.id),
+          )
+        : undefined;
+      await gatewayHarness.stop(preserveToDir ? { preserveToDir } : undefined).catch(() => {});
     }
   }
 }
@@ -1089,6 +1100,7 @@ export async function runWhatsAppQaLive(params: {
   const gatewayTracePath = path.join(outputDir, gatewayTraceRelativePath);
   const gatewayDebugDirPath = path.join(outputDir, "gateway-debug");
   let preservedGatewayDebugArtifacts = false;
+  const preserveSuccessfulGatewayDebugArtifacts = shouldPreserveWhatsAppGatewayDebugArtifacts();
   let credentialLease: WhatsAppCredentialLease | undefined;
   let leaseHeartbeat: WhatsAppCredentialHeartbeat | undefined;
   let runtimeEnv: WhatsAppQaRuntimeEnv | undefined;
@@ -1173,6 +1185,7 @@ export async function runWhatsAppQaLive(params: {
             gatewayTracePath,
             observedMessages,
             providerMode,
+            preserveGatewayDebugArtifacts: preserveSuccessfulGatewayDebugArtifacts,
             primaryModel,
             alternateModel,
             fastMode: params.fastMode,
@@ -1185,6 +1198,9 @@ export async function runWhatsAppQaLive(params: {
             sutAuthDir,
             sutPhoneE164: runtimeEnv.sutPhoneE164,
           });
+          if (preserveSuccessfulGatewayDebugArtifacts) {
+            preservedGatewayDebugArtifacts = true;
+          }
           scenarioResults.push(
             driverAttempt > 1
               ? {
@@ -1382,6 +1398,7 @@ export const testing = {
   renderWhatsAppQaMarkdown,
   resolveWhatsAppQaRuntimeEnv,
   resolveWhatsAppMetadataRedaction,
+  shouldPreserveWhatsAppGatewayDebugArtifacts,
   toObservedWhatsAppArtifacts,
   unpackWhatsAppAuthArchive,
   WHATSAPP_QA_STANDARD_SCENARIO_IDS,
