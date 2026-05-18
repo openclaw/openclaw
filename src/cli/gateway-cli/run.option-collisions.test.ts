@@ -1,4 +1,4 @@
-import type { IncomingMessage } from "node:http";
+import type { ClientRequest, IncomingMessage } from "node:http";
 import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -247,20 +247,24 @@ describe("gateway run option collisions", () => {
         _callback: (res: Pick<IncomingMessage, "statusCode" | "resume">) => void,
       ) => {
         const handlers = new Map<string, (...args: unknown[]) => void>();
-        return {
+        const request = {
           once(event: string, handler: (...args: unknown[]) => void) {
             handlers.set(event, handler);
-            return this;
+            return request;
           },
           removeAllListeners() {
             handlers.clear();
-            return this;
+            return request;
           },
-          destroy() {},
+          destroy() {
+            return request;
+          },
           end() {
             handlers.get("error")?.(new Error("connection refused"));
+            return request;
           },
-        };
+        } as unknown as ClientRequest;
+        return request;
       },
     );
   });
@@ -358,21 +362,25 @@ describe("gateway run option collisions", () => {
   it("leaves an existing healthy service-mode gateway in control before stale cleanup", async () => {
     httpRequest.mockImplementationOnce(
       (_opts: unknown, callback: (res: Pick<IncomingMessage, "statusCode" | "resume">) => void) => {
-        return {
+        const request = {
           once() {
-            return this;
+            return request;
           },
           removeAllListeners() {
-            return this;
+            return request;
           },
-          destroy() {},
+          destroy() {
+            return request;
+          },
           end() {
             callback({
               statusCode: 200,
               resume() {},
             });
+            return request;
           },
-        };
+        } as unknown as ClientRequest;
+        return request;
       },
     );
     const previousMarker = process.env.OPENCLAW_SERVICE_MARKER;

@@ -653,11 +653,11 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
     | "auto"
     | "custom"
     | "tailnet";
-  const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
+  const gatewayHealthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
   const { detectRespawnSupervisor } = await import("../../infra/supervisor-markers.js");
   const supervisor = detectRespawnSupervisor(process.env);
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
-    if (await probeGatewayHealthz({ host: healthHost, port })) {
+    if (await probeGatewayHealthz({ host: gatewayHealthHost, port })) {
       gatewayLog.info(
         `service-mode: existing healthy gateway is already listening on port ${port}; leaving it in control`,
       );
@@ -811,7 +811,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
     await runGatewayLoop({
       runtime: defaultRuntime,
       lockPort: port,
-      healthHost,
+      healthHost: gatewayHealthHost,
       start: async ({ startupStartedAt } = {}) => {
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
@@ -832,7 +832,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
       startLoop,
       supervisor,
       port,
-      healthHost,
+      healthHost: gatewayHealthHost,
       log: gatewayLog,
     });
   } catch (err) {
