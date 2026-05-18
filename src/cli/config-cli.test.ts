@@ -1222,12 +1222,7 @@ describe("config cli", () => {
       expect(helpText).toContain("--batch-json");
       expect(helpText).toContain("--dry-run");
       expect(helpText).toContain("--allow-exec");
-      // Example commands may include --profile/--container flags injected by
-      // formatCliCommand when OPENCLAW_PROFILE or OPENCLAW_CONTAINER_HINT env
-      // vars leak from a prior test in the same worker. Commander also
-      // word-wraps long description lines.
-      // We normalize all whitespace to single spaces so we can use simple
-      // string matching without worrying about flag injection or line reflowing.
+      // Ignore Commander line wrapping and env-injected CLI prefixes.
       const normalizedHelp = helpText.replace(/\s+/g, " ");
       expect(normalizedHelp).toContain("config set gateway.port 19001 --strict-json");
       expect(normalizedHelp).toContain(
