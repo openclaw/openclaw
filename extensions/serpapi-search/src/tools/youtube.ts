@@ -6,12 +6,11 @@ import { type SerpApiToolCtx, resolveToolConfig } from "../tool-utils.js";
 const ALLOWED_PARAMS = ["search_query", "hl", "sp", "zero_trace"] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
-  const videos = Array.isArray(raw.video_results)
-    ? (raw.video_results as Record<string, unknown>[])
-    : [];
   return {
     engine: "youtube",
-    videos,
+    channel_results: raw.channel_results ?? [],
+    video_results: raw.video_results ?? [],
+    shorts_results: raw.shorts_results ?? [],
   };
 }
 
@@ -20,7 +19,8 @@ export function createSerpApiYouTubeTool(api: OpenClawPluginApi, ctx?: SerpApiTo
     name: "serpapi_youtube",
     label: "SerpApi YouTube Search",
     description:
-      "Search YouTube for videos. Returns titles, channels, view counts, durations, publish dates, and URLs.",
+      "Search YouTube for videos, channels, and shorts. Returns video_results (title, views, duration, channel), " +
+      "channel_results (name, subscribers, handle), and shorts_results.",
     parameters: {
       type: "object",
       properties: {

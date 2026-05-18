@@ -1,9 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../tool-utils.js";
 
-const ALLOWED_PARAMS = ["q", "gl", "hl", "location", "htichips", "zero_trace"] as const;
+const ALLOWED_PARAMS = ["q", "gl", "hl", "location", "htichips", "start", "zero_trace"] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
   const events = Array.isArray(raw.events_results)
@@ -31,6 +31,7 @@ export function createSerpApiEventsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
         },
         gl: { type: "string", description: "Country code (e.g. us, de, ua)." },
         hl: { type: "string", description: "Language code override." },
+        start: { type: "number", description: "Result offset for pagination (0, 10, 20...)." },
       },
       required: ["query"],
       additionalProperties: false,
@@ -47,6 +48,7 @@ export function createSerpApiEventsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
           htichips: readStringParam(args, "htichips") ?? undefined,
           gl: readStringParam(args, "gl") ?? undefined,
           hl: readStringParam(args, "hl") ?? undefined,
+          start: readNumberParam(args, "start", { integer: true }) ?? undefined,
         },
       });
       return extract(raw);

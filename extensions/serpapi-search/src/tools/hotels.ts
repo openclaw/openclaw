@@ -1,10 +1,12 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../tool-utils.js";
 
 const ALLOWED_PARAMS = [
-  "q", "check_in_date", "check_out_date", "adults", "currency", "gl", "hl", "zero_trace",
+  "q", "check_in_date", "check_out_date", "adults", "currency", "gl", "hl",
+  "sort_by", "min_price", "max_price", "hotel_class", "rating", "vacation_rentals",
+  "next_page_token", "zero_trace",
 ] as const;
 
 function isoDateOffset(days: number): string {
@@ -14,10 +16,11 @@ function isoDateOffset(days: number): string {
 }
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
-  const properties = Array.isArray(raw.properties)
-    ? (raw.properties as unknown[])
-    : [];
-  return { engine: "google_hotels", properties };
+  return {
+    engine: "google_hotels",
+    properties: raw.properties ?? [],
+    ads: raw.ads ?? [],
+  };
 }
 
 export function createSerpApiHotelsTool(api: OpenClawPluginApi, ctx?: SerpApiToolCtx) {
@@ -25,7 +28,7 @@ export function createSerpApiHotelsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
     name: "serpapi_hotels",
     label: "SerpApi Google Hotels",
     description:
-      "Search hotels and accommodation via Google Hotels. Returns name, price/night, rating, class. " +
+      "Search hotels and accommodation via Google Hotels. Returns properties with price, rating, amenities, images. " +
       "Defaults to tomorrow + 2 nights when dates are not provided.",
     parameters: {
       type: "object",
@@ -42,6 +45,27 @@ export function createSerpApiHotelsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
         adults: { type: "string", description: "Number of adults (default: 1)." },
         currency: { type: "string", description: "Currency code (e.g. USD, EUR)." },
         gl: { type: "string", description: "Country code (e.g. us, de, ua)." },
+        sort_by: {
+          type: "number",
+          description: "Sort: 3=lowest price, 8=highest rating, 13=most reviewed.",
+          enum: [3, 8, 13],
+        },
+        min_price: { type: "number", description: "Minimum price per night." },
+        max_price: { type: "number", description: "Maximum price per night." },
+        hotel_class: {
+          type: "string",
+          description: "Star class filter, comma-separated (e.g. \"4,5\" for 4- and 5-star).",
+        },
+        rating: {
+          type: "number",
+          description: "Minimum rating: 7=3.5+, 8=4.0+, 9=4.5+.",
+          enum: [7, 8, 9],
+        },
+        vacation_rentals: {
+          type: "boolean",
+          description: "Set true to search vacation rentals instead of hotels.",
+        },
+        next_page_token: { type: "string", description: "Token for next page of results." },
       },
       required: ["query"],
       additionalProperties: false,
@@ -59,6 +83,16 @@ export function createSerpApiHotelsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
           adults: readStringParam(args, "adults") ?? undefined,
           currency: readStringParam(args, "currency") ?? undefined,
           gl: readStringParam(args, "gl") ?? undefined,
+          sort_by: readNumberParam(args, "sort_by", { integer: true }) ?? undefined,
+          min_price: readNumberParam(args, "min_price") ?? undefined,
+          max_price: readNumberParam(args, "max_price") ?? undefined,
+          hotel_class: readStringParam(args, "hotel_class") ?? undefined,
+          rating: readNumberParam(args, "rating", { integer: true }) ?? undefined,
+          vacation_rentals:
+            typeof args["vacation_rentals"] === "boolean"
+              ? String(args["vacation_rentals"])
+              : undefined,
+          next_page_token: readStringParam(args, "next_page_token") ?? undefined,
         },
       });
       return extract(raw);

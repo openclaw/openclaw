@@ -3,13 +3,17 @@ import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/provider-w
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../tool-utils.js";
 
-const ALLOWED_PARAMS = ["q", "gl", "hl", "ll", "location", "type", "zero_trace"] as const;
+const ALLOWED_PARAMS = ["q", "gl", "hl", "ll", "location", "type", "nearby", "start", "zero_trace"] as const;
 
 function extract(raw: Record<string, unknown>, maxCount: number): Record<string, unknown> {
   const results = Array.isArray(raw.local_results)
     ? (raw.local_results as unknown[]).slice(0, maxCount)
     : [];
-  return { engine: "google_maps", results };
+  return {
+    engine: "google_maps",
+    results,
+    serpapi_pagination: raw.serpapi_pagination ?? null,
+  };
 }
 
 export function createSerpApiMapsTool(api: OpenClawPluginApi, ctx?: SerpApiToolCtx) {
@@ -30,6 +34,11 @@ export function createSerpApiMapsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
         location: { type: "string", description: "City or area string (e.g. 'Austin, Texas')." },
         count: { type: "number", description: "Number of results (1-20).", minimum: 1, maximum: 20 },
         gl: { type: "string", description: "Country code (e.g. us, de, ua)." },
+        nearby: {
+          type: "string",
+          description: "Force results near this location. Recommended when query contains 'near me'.",
+        },
+        start: { type: "number", description: "Result offset for pagination (0, 20, 40...)." },
       },
       required: ["query"],
       additionalProperties: false,
@@ -49,6 +58,8 @@ export function createSerpApiMapsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
           ll: ll ?? undefined,
           location: location ?? undefined,
           gl: readStringParam(args, "gl") ?? undefined,
+          nearby: readStringParam(args, "nearby") ?? undefined,
+          start: readNumberParam(args, "start", { integer: true }) ?? undefined,
         },
       });
       return extract(raw, count);

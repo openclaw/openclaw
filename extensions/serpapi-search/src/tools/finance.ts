@@ -9,7 +9,12 @@ function extract(raw: Record<string, unknown>): Record<string, unknown> {
   return {
     engine: "google_finance",
     summary: raw.summary ?? null,
+    markets: raw.markets ?? null,
+    graph: raw.graph ?? null,
+    knowledge_graph: raw.knowledge_graph ?? null,
+    financials: raw.financials ?? null,
     news_results: raw.news_results ?? null,
+    discover_more: raw.discover_more ?? null,
   };
 }
 
