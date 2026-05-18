@@ -10,6 +10,7 @@ const PACKAGE_JSON = "package.json";
 const WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof.yml";
 const LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 const PROMPT = ".github/codex/prompts/mantis-telegram-desktop-proof.md";
+const TELEGRAM_PROOF_SKILL = ".agents/skills/telegram-crabbox-e2e-proof/SKILL.md";
 const DOCS = ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"];
 
 type WorkflowStep = {
@@ -196,6 +197,12 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     for (const doc of DOCS) {
       expect(readFileSync(doc, "utf8")).not.toContain("pnpm qa:telegram-user:crabbox");
     }
+    expect(readFileSync(TELEGRAM_PROOF_SKILL, "utf8")).not.toContain(
+      "pnpm qa:telegram-user:crabbox",
+    );
+    expect(readFileSync(TELEGRAM_PROOF_SKILL, "utf8")).toContain(
+      "OPENCLAW_TELEGRAM_USER_PROOF_CMD",
+    );
     expect(readFileSync(PROOF_SCRIPT, "utf8")).not.toContain("pnpm qa:telegram-user:crabbox");
     expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).toContain(
       'const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";',
