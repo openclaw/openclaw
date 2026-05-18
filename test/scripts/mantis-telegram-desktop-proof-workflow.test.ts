@@ -171,6 +171,24 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(readFileSync(USER_DRIVER, "utf8")).toContain("/usr/local/lib/libtdjson.so");
   });
 
+  it("authorizes Telegram Desktop from the leased TDLib user session", () => {
+    const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
+    const userDriver = readFileSync(USER_DRIVER, "utf8");
+
+    expect(proofScript).toContain("zbar-tools");
+    expect(proofScript).toContain("isTransientSshFailure");
+    expect(proofScript).toContain('rm -rf "$root/desktop/tdata"');
+    expect(proofScript).toContain("terminate-desktop-sessions");
+    expect(proofScript).toContain('confirm-qr --link "$link"');
+    expect(proofScript).toContain("Telegram Desktop QR login code was not found.");
+    expect(proofScript).toContain("terminateRemoteDesktopSession");
+    expect(userDriver).toContain('"@type": "confirmQrCodeAuthentication"');
+    expect(userDriver).toContain('"@type": "getActiveSessions"');
+    expect(userDriver).toContain('"@type": "terminateSession"');
+    expect(userDriver).toContain('sub.add_parser("terminate-session")');
+    expect(userDriver).toContain('sub.add_parser("terminate-desktop-sessions")');
+  });
+
   it("installs local proof tools before the Codex agent runs", () => {
     const install = workflowStep("Install local proof tools");
     expect(install.run).toContain("test -f scripts/e2e/telegram-user-driver.py");
