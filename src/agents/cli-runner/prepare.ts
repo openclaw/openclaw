@@ -284,19 +284,21 @@ export async function prepareCliRunContext(
     ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
     ...(preparedBackendCleanup ? { cleanup: preparedBackendCleanup } : {}),
   };
-  const promptTools = bundleMcpEnabled
-    ? prepareDeps.resolveMcpLoopbackScopedTools({
-        cfg: params.config ?? getRuntimeConfig(),
-        sessionKey: params.sessionKey ?? "",
-        messageProvider: params.messageChannel ?? params.messageProvider,
-        accountId: params.agentAccountId,
-        inboundEventKind: params.currentInboundEventKind,
-        senderIsOwner: params.senderIsOwner,
-      }).tools
-    : [];
-  const promptToolNamesHash = bundleMcpEnabled
-    ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
-    : undefined;
+  const promptTools =
+    bundleMcpEnabled && mcpLoopbackRuntime
+      ? prepareDeps.resolveMcpLoopbackScopedTools({
+          cfg: params.config ?? getRuntimeConfig(),
+          sessionKey: params.sessionKey ?? "",
+          messageProvider: params.messageChannel ?? params.messageProvider,
+          accountId: params.agentAccountId,
+          inboundEventKind: params.currentInboundEventKind,
+          senderIsOwner: params.senderIsOwner,
+        }).tools
+      : [];
+  const promptToolNamesHash =
+    bundleMcpEnabled && mcpLoopbackRuntime
+      ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
+      : undefined;
   // Pre-flight: if a saved Claude CLI sessionId points at a transcript that no
   // longer exists on disk (e.g. update.run aborted mid-swap, Claude CLI was
   // reinstalled, or the projects tree was manually pruned), `claude --resume`

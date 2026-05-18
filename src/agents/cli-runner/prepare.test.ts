@@ -1083,6 +1083,85 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("does not advertise loopback prompt tools when the runtime is unavailable", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      registerMemoryPromptSection(({ availableTools }) =>
+        availableTools.has("memory_search")
+          ? ["## Memory Recall", `tools=${[...availableTools].toSorted().join(",")}`, ""]
+          : [],
+      );
+      const getActiveMcpLoopbackRuntime = vi.fn(() => undefined);
+      const ensureMcpLoopbackServer = vi.fn(async () => {
+        throw new Error("loopback unavailable");
+      });
+      const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "memory_search",
+            label: "Memory Search",
+            description: "Search memory",
+            parameters: { type: "object", properties: {} },
+            execute: vi.fn(),
+          },
+        ],
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        ensureMcpLoopbackServer,
+        createMcpLoopbackServerConfig,
+        resolveMcpLoopbackScopedTools,
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "native-cli",
+            pluginId: "native-plugin",
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+            config: {
+              command: "native-cli",
+              args: ["--print"],
+              systemPromptArg: "--system-prompt",
+              systemPromptWhen: "first",
+              output: "text",
+              input: "arg",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-loopback-prompt-tools-fallback",
+        config: createCliBackendConfig({ bundleMcp: true, systemPromptOverride: null }),
+      });
+
+      expect(ensureMcpLoopbackServer).toHaveBeenCalledTimes(1);
+      expect(getActiveMcpLoopbackRuntime).toHaveBeenCalledTimes(2);
+      expect(createMcpLoopbackServerConfig).not.toHaveBeenCalled();
+      expect(resolveMcpLoopbackScopedTools).not.toHaveBeenCalled();
+      expect(context.systemPrompt).not.toContain("## Memory Recall");
+      expect(context.systemPrompt).not.toContain("memory_search");
+      expect(context.systemPromptReport.tools.entries).toEqual([]);
+      expect(context.promptToolNamesHash).toBeUndefined();
+      expect(context.preparedBackend.env).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("passes current turn kind into bundle MCP loopback env", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
