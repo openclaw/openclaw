@@ -1,6 +1,7 @@
 import {
   DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   parseNonNegativeByteSize,
+  resolveAgentConfig,
   resolveCronStyleNow,
   SILENT_REPLY_TOKEN,
   type MemoryFlushPlan,
@@ -95,24 +96,29 @@ function appendCurrentTimeLine(text: string, timeLine: string): string {
 export function buildMemoryFlushPlan(
   params: {
     cfg?: OpenClawConfig;
+    agentId?: string;
     nowMs?: number;
   } = {},
 ): MemoryFlushPlan | null {
   const resolved = params;
   const nowMs = Number.isFinite(resolved.nowMs) ? (resolved.nowMs as number) : Date.now();
   const cfg = resolved.cfg;
-  const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
-  if (defaults?.enabled === false) {
+  const agentCompaction =
+    cfg && resolved.agentId ? resolveAgentConfig(cfg, resolved.agentId)?.compaction : undefined;
+  const defaults = cfg?.agents?.defaults?.compaction;
+  const memoryFlush = agentCompaction?.memoryFlush ?? defaults?.memoryFlush;
+  if (memoryFlush?.enabled === false) {
     return null;
   }
 
   const softThresholdTokens =
-    normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
+    normalizeNonNegativeInt(memoryFlush?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
   const forceFlushTranscriptBytes =
-    parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
+    parseNonNegativeByteSize(memoryFlush?.forceFlushTranscriptBytes) ??
     DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
   const reserveTokensFloor =
-    normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
+    normalizeNonNegativeInt(agentCompaction?.reserveTokensFloor) ??
+    normalizeNonNegativeInt(defaults?.reserveTokensFloor) ??
     DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
 
   const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);
@@ -120,11 +126,11 @@ export function buildMemoryFlushPlan(
   const relativePath = `memory/${dateStamp}.md`;
 
   const promptBase = ensureNoReplyHint(
-    ensureMemoryFlushSafetyHints(defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT),
+    ensureMemoryFlushSafetyHints(memoryFlush?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT),
   );
   const systemPrompt = ensureNoReplyHint(
     ensureMemoryFlushSafetyHints(
-      defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT,
+      memoryFlush?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT,
     ),
   );
 
@@ -132,7 +138,7 @@ export function buildMemoryFlushPlan(
     softThresholdTokens,
     forceFlushTranscriptBytes,
     reserveTokensFloor,
-    model: defaults?.model?.trim() || undefined,
+    model: memoryFlush?.model?.trim() || undefined,
     prompt: appendCurrentTimeLine(promptBase.replaceAll("YYYY-MM-DD", dateStamp), timeLine),
     systemPrompt: systemPrompt.replaceAll("YYYY-MM-DD", dateStamp),
     relativePath,

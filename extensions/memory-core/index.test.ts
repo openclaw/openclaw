@@ -196,6 +196,76 @@ describe("buildMemoryFlushPlan", () => {
     expect(plan?.model).toBe("ollama/qwen3:8b");
   });
 
+  it("honors per-agent memoryFlush overrides", () => {
+    const plan = buildMemoryFlushPlan({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokensFloor: 20_000,
+              memoryFlush: {
+                model: "ollama/qwen3:8b",
+                softThresholdTokens: 4_000,
+                forceFlushTranscriptBytes: "2mb",
+                prompt: "Default prompt",
+                systemPrompt: "Default system prompt",
+              },
+            },
+          },
+          list: [
+            {
+              id: "main",
+              compaction: {
+                reserveTokensFloor: 12_345,
+                memoryFlush: {
+                  model: "openai/gpt-5.4-mini",
+                  softThresholdTokens: 123,
+                  forceFlushTranscriptBytes: "3mb",
+                  prompt: "Agent prompt",
+                  systemPrompt: "Agent system prompt",
+                },
+              },
+            },
+          ],
+        },
+      },
+      agentId: "main",
+    });
+
+    expect(plan?.model).toBe("openai/gpt-5.4-mini");
+    expect(plan?.softThresholdTokens).toBe(123);
+    expect(plan?.forceFlushTranscriptBytes).toBe(3 * 1024 * 1024);
+    expect(plan?.reserveTokensFloor).toBe(12_345);
+    expect(plan?.prompt).toContain("Agent prompt");
+    expect(plan?.systemPrompt).toContain("Agent system prompt");
+    expect(plan?.prompt).not.toContain("Default prompt");
+  });
+
+  it("honors per-agent disable overrides", () => {
+    expect(
+      buildMemoryFlushPlan({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: {
+                memoryFlush: { enabled: true },
+              },
+            },
+            list: [
+              {
+                id: "main",
+                compaction: {
+                  memoryFlush: { enabled: false },
+                },
+              },
+            ],
+          },
+        },
+        agentId: "main",
+      }),
+    ).toBeNull();
+  });
+
   it("falls back to defaults when numeric values are invalid", () => {
     const plan = buildMemoryFlushPlan({
       cfg: {

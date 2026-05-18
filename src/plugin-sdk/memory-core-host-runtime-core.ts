@@ -4,6 +4,7 @@ export {
   /** @deprecated Use DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR. */
   DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR as DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
 } from "../agents/agent-settings.js";
+export { resolveAgentConfig } from "../agents/agent-scope-config.js";
 export {
   asToolParamsRecord,
   jsonResult,
