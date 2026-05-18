@@ -16,6 +16,7 @@ import {
   renderMattermostModelSummaryView,
   renderMattermostModelsPickerView,
   renderMattermostProviderPickerView,
+  resolveMattermostModelPickerDialogChannelInfo,
   resolveMattermostModelPickerCurrentModel,
   resolveMattermostModelPickerCurrentRuntime,
   resolveMattermostModelPickerDialogValues,
@@ -42,6 +43,13 @@ describe("Mattermost model picker", () => {
       ownerUserId: "user-1",
       channelId: "chan-1",
       teamId: "team-1",
+      channelInfo: {
+        id: "chan-1",
+        type: "O",
+        name: "secret-planning",
+        display_name: "Secret Planning",
+        team_id: "team-1",
+      },
       accountId: "acct",
     });
 
@@ -55,6 +63,11 @@ describe("Mattermost model picker", () => {
       ownerUserId: "user-1",
       channelId: "chan-1",
       teamId: "team-1",
+      channelSnapshot: {
+        type: "O",
+        name: "secret-planning",
+        displayName: "Secret Planning",
+      },
     });
   });
 
@@ -302,6 +315,13 @@ describe("Mattermost model picker", () => {
       ownerUserId: "user-1",
       channelId: "chan-1",
       teamId: "team-1",
+      channelInfo: {
+        id: "chan-1",
+        type: "D",
+        name: "user-1__user-2",
+        display_name: "DM",
+        team_id: "team-1",
+      },
       callbackUrl: "https://gateway.example.com/mattermost/interactions/acct",
       data,
       currentModel: "openai/gpt-5",
@@ -315,6 +335,18 @@ describe("Mattermost model picker", () => {
     expect(dialog.elements.map((field) => field.name)).toEqual(["provider", "model", "runtime"]);
     expect(dialog.elements[0]?.refresh).toBe(true);
     expect(dialog.elements[2]?.default).toBe(MATTERMOST_MODEL_PICKER_RUNTIME_KEEP_CURRENT);
+    const dialogState = parseMattermostModelPickerDialogState({
+      state: dialog.state,
+      accountId: "acct",
+    });
+    expect(dialogState).toBeTruthy();
+    expect(resolveMattermostModelPickerDialogChannelInfo(dialogState!)).toEqual({
+      id: "chan-1",
+      type: "D",
+      name: "user-1__user-2",
+      display_name: "DM",
+      team_id: "team-1",
+    });
   });
 
   it("normalizes dialog submission values and preserves keep-current runtime", () => {

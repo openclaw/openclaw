@@ -182,6 +182,7 @@ async function tryOpenMattermostModelPickerDialog(params: {
   channelId: string;
   teamId: string;
   triggerId?: string;
+  channelInfo: MattermostChannel;
   kind: "direct" | "group" | "channel";
   log?: (msg: string) => void;
 }): Promise<{ handled: boolean; response?: MattermostSlashCommandResponse }> {
@@ -237,6 +238,7 @@ async function tryOpenMattermostModelPickerDialog(params: {
         ownerUserId: params.senderId,
         channelId: params.channelId,
         teamId: params.teamId,
+        channelInfo: params.channelInfo,
         callbackUrl,
         data,
         currentModel,
@@ -830,6 +832,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       channelId,
       teamId: payload.team_id,
       triggerId: payload.trigger_id,
+      channelInfo: auth.channelInfo,
       kind: auth.kind,
       log,
     });

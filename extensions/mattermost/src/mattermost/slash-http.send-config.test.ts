@@ -409,6 +409,16 @@ describe("slash-http cfg threading", () => {
         }),
       }),
     );
+    expect(mockState.buildMattermostModelPickerDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelInfo: expect.objectContaining({
+          id: "chan-private-1",
+          name: "secret-planning",
+          type: "O",
+          team_id: "team-1",
+        }),
+      }),
+    );
     expect(mockState.openMattermostInteractiveDialog).toHaveBeenCalled();
   });
 

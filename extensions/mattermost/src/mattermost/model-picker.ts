@@ -10,6 +10,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { MattermostChannel } from "./client.js";
 import {
   generateInteractionToken,
   verifyInteractionToken,
@@ -48,16 +49,53 @@ type MattermostModelPickerDialogStatePayload = {
   ownerUserId: string;
   channelId: string;
   teamId?: string;
+  channelSnapshot?: MattermostModelPickerDialogChannelSnapshot;
 };
 
 type MattermostModelPickerDialogStateSigned = MattermostModelPickerDialogStatePayload & {
   _token: string;
 };
 
+type MattermostModelPickerDialogChannelSnapshot = {
+  type: string;
+  name?: string;
+  displayName?: string;
+};
+
 type MattermostDialogSelectOption = {
   text: string;
   value: string;
 };
+
+function normalizeMattermostModelPickerDialogChannelSnapshot(
+  value: unknown,
+): MattermostModelPickerDialogChannelSnapshot | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const typed = value as Partial<MattermostModelPickerDialogChannelSnapshot>;
+  const type = normalizeOptionalString(typed.type)?.toUpperCase();
+  if (!type) {
+    return undefined;
+  }
+  const name = normalizeOptionalString(typed.name);
+  const displayName = normalizeOptionalString(typed.displayName);
+  return {
+    type,
+    ...(name ? { name } : {}),
+    ...(displayName ? { displayName } : {}),
+  };
+}
+
+function buildMattermostModelPickerDialogChannelSnapshot(
+  channelInfo?: MattermostChannel | null,
+): MattermostModelPickerDialogChannelSnapshot | undefined {
+  return normalizeMattermostModelPickerDialogChannelSnapshot({
+    type: channelInfo?.type,
+    name: channelInfo?.name,
+    displayName: channelInfo?.display_name,
+  });
+}
 
 export type MattermostInteractiveDialogElement = {
   display_name: string;
@@ -308,6 +346,9 @@ function decodeDialogState(value: string): MattermostModelPickerDialogStateSigne
     const channelId = normalizeOptionalString(typed.channelId);
     const teamId = normalizeOptionalString(typed.teamId);
     const token = normalizeOptionalString(typed._token);
+    const channelSnapshot = normalizeMattermostModelPickerDialogChannelSnapshot(
+      typed.channelSnapshot,
+    );
     if (typed.v !== 1 || !ownerUserId || !channelId || !token) {
       return null;
     }
@@ -316,6 +357,7 @@ function decodeDialogState(value: string): MattermostModelPickerDialogStateSigne
       ownerUserId,
       channelId,
       ...(teamId ? { teamId } : {}),
+      ...(channelSnapshot ? { channelSnapshot } : {}),
       _token: token,
     };
   } catch {
@@ -327,8 +369,10 @@ export function buildMattermostModelPickerDialogState(params: {
   ownerUserId: string;
   channelId: string;
   teamId?: string;
+  channelInfo?: MattermostChannel | null;
   accountId?: string;
 }): string {
+  const channelSnapshot = buildMattermostModelPickerDialogChannelSnapshot(params.channelInfo);
   const payload: MattermostModelPickerDialogStatePayload = {
     v: 1,
     ownerUserId: normalizeOptionalString(params.ownerUserId) ?? "",
@@ -336,6 +380,7 @@ export function buildMattermostModelPickerDialogState(params: {
     ...(normalizeOptionalString(params.teamId)
       ? { teamId: normalizeOptionalString(params.teamId) }
       : {}),
+    ...(channelSnapshot ? { channelSnapshot } : {}),
   };
   if (!payload.ownerUserId || !payload.channelId) {
     throw new Error("Mattermost model picker dialog state requires ownerUserId and channelId");
@@ -360,6 +405,22 @@ export function parseMattermostModelPickerDialogState(params: {
     return null;
   }
   return unsigned;
+}
+
+export function resolveMattermostModelPickerDialogChannelInfo(
+  state: MattermostModelPickerDialogStatePayload,
+): MattermostChannel | null {
+  const snapshot = state.channelSnapshot;
+  if (!snapshot?.type) {
+    return null;
+  }
+  return {
+    id: state.channelId,
+    type: snapshot.type,
+    ...(snapshot.name ? { name: snapshot.name } : {}),
+    ...(snapshot.displayName ? { display_name: snapshot.displayName } : {}),
+    ...(state.teamId ? { team_id: state.teamId } : {}),
+  };
 }
 
 export function resolveMattermostModelPickerCurrentModel(params: {
@@ -548,6 +609,7 @@ export function buildMattermostModelPickerDialog(params: {
   ownerUserId: string;
   channelId: string;
   teamId?: string;
+  channelInfo?: MattermostChannel | null;
   callbackUrl: string;
   data: ModelsProviderData;
   currentModel?: string;
@@ -593,6 +655,7 @@ export function buildMattermostModelPickerDialog(params: {
         ownerUserId: params.ownerUserId,
         channelId: params.channelId,
         teamId: params.teamId,
+        channelInfo: params.channelInfo,
         accountId: params.accountId,
       }),
     source_url: params.callbackUrl,

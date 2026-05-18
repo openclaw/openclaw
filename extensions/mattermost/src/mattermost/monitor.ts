@@ -53,6 +53,7 @@ import {
   parseMattermostModelPickerDialogState,
   renderMattermostModelsPickerView,
   renderMattermostProviderPickerView,
+  resolveMattermostModelPickerDialogChannelInfo,
   resolveMattermostModelPickerCurrentModel,
   resolveMattermostModelPickerCurrentRuntime,
   resolveMattermostModelPickerDialogValues,
@@ -1067,7 +1068,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       };
     }
 
-    const channelInfo = await resolveChannelInfo(params.payload.channel_id);
+    const channelInfo =
+      (await resolveChannelInfo(params.payload.channel_id)) ??
+      resolveMattermostModelPickerDialogChannelInfo(dialogState);
     const pickerCommandText =
       pickerState.action === "select"
         ? `/model ${pickerState.provider}/${pickerState.model}`
