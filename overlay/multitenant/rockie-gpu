@@ -12,16 +12,25 @@ Hits the platform-context HTTP surface under ``/api/gpu``. Subcommands:
 Output: JSON-lines by default (one JSON object per line on stdout).
 Pass ``--human`` for k:v dicts and ascii-table lists.
 
+Resolution order for the tenant token (first hit wins):
+
+  1. ``ROCKIELAB_TENANT_TOKEN`` env var (canonical; set by the per-tenant
+     runtime image's ``overlay/multitenant/entrypoint.sh``)
+  2. ``BROKER_TENANT_TOKEN`` env var (legacy alias; still honored)
+  3. ``~/.rockie/config.json`` key ``tenant_token`` (local-shell install)
+  4. error (exit code 2 — same class as "bad argv / usage error")
+
+Same ladder for the API base URL:
+
+  ROCKIELAB_API_BASE env → ``~/.rockie/config.json`` key ``api_base`` →
+  ``API_BASE_DEFAULT`` (``https://api.rockielab.com``).
+
 Exit codes:
     0  success
     1  network error / connection refused
+    2  argparse / usage error / missing tenant token
     3  HTTP 4xx (provider error, insufficient credits, etc.)
     4  HTTP 5xx (provider outage, retryable)
-    2  argparse / usage error (argparse default)
-
-Env (set by overlay/multitenant/entrypoint.sh in production):
-    ROCKIELAB_API_BASE     default http://localhost:8000  (e.g. https://api.rockielab.com)
-    BROKER_TENANT_TOKEN    dev-token forwarded as X-Tenant-Token header
 """
 
 from __future__ import annotations
@@ -33,10 +42,12 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any, Optional
 
 
-API_BASE_DEFAULT = "http://localhost:8000"
+API_BASE_DEFAULT = "https://api.rockielab.com"
+CONFIG_PATH_DEFAULT = "~/.rockie/config.json"
 
 
 # ---------------------------------------------------------------------------
@@ -54,27 +65,79 @@ class CLIError(Exception):
 
 
 # ---------------------------------------------------------------------------
+# Config / credential resolution
+# ---------------------------------------------------------------------------
+
+
+def _load_local_config(path: str = CONFIG_PATH_DEFAULT) -> dict:
+    """Return the parsed ``~/.rockie/config.json`` dict, or ``{}`` if
+    the file is missing, unreadable, or not valid JSON. Malformed JSON
+    emits a warning to stderr but does not raise — the env-var path
+    must still work even when the config file is broken."""
+    expanded = Path(os.path.expanduser(path))
+    if not expanded.is_file():
+        return {}
+    try:
+        with expanded.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError) as e:
+        sys.stderr.write(
+            f"rockie-gpu: warning: could not read {expanded}: {e}\n"
+        )
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _get_token() -> str:
+    """Resolve the tenant token. Raises ``CLIError`` with exit code 2
+    when no source is set (same class as argparse usage errors —
+    "you need to configure auth before this CLI can do anything")."""
+    tok = os.environ.get("ROCKIELAB_TENANT_TOKEN") or os.environ.get(
+        "BROKER_TENANT_TOKEN"
+    )
+    if tok:
+        return tok
+    cfg = _load_local_config()
+    tok = cfg.get("tenant_token")
+    if tok:
+        return tok
+    raise CLIError(
+        "no tenant token configured — set ROCKIELAB_TENANT_TOKEN, "
+        "BROKER_TENANT_TOKEN, or write ~/.rockie/config.json with "
+        '{"tenant_token": "t-..."}',
+        exit_code=2,
+    )
+
+
+def _get_api_base() -> str:
+    base = os.environ.get("ROCKIELAB_API_BASE")
+    if base:
+        return base
+    cfg = _load_local_config()
+    return cfg.get("api_base") or API_BASE_DEFAULT
+
+
+# ---------------------------------------------------------------------------
 # HTTP — small urllib wrapper so tests can monkeypatch the whole layer
 # ---------------------------------------------------------------------------
 
 
 def _http(method: str, path: str, body: Optional[dict] = None) -> Any:
-    """Perform one HTTP call against ``ROCKIELAB_API_BASE``.
+    """Perform one HTTP call against the resolved API base.
 
     Returns the decoded JSON body (dict, list, or None for empty 204).
     Raises :class:`CLIError` on any non-2xx; exit code is 1 for
     transport errors, 3 for 4xx, 4 for 5xx.
     """
-    base = os.environ.get("ROCKIELAB_API_BASE", API_BASE_DEFAULT)
-    url = base.rstrip("/") + path
+    url = _get_api_base().rstrip("/") + path
     data: Optional[bytes] = None
-    headers: dict[str, str] = {"Accept": "application/json"}
+    headers: dict[str, str] = {
+        "Accept": "application/json",
+        "X-Tenant-Token": _get_token(),
+    }
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    token = os.environ.get("BROKER_TENANT_TOKEN")
-    if token:
-        headers["X-Tenant-Token"] = token
 
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
@@ -212,7 +275,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_list = sub.add_parser("list-prices", help="Ranked unified price list.")
+    # `list` is an argparse alias for `list-prices` (operators reach for the
+    # shorter form first). Same subparser, same handler — so `args.func is`
+    # equality holds for both invocations.
+    p_list = sub.add_parser(
+        "list-prices",
+        aliases=["list"],
+        help="Ranked unified price list across all configured providers.",
+    )
     p_list.add_argument("--gpu", default=None, help="Filter by GPU type id.")
     p_list.add_argument(
         "--spot", action="store_true", help="Spot/preemptible quotes."
