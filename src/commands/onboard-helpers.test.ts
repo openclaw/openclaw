@@ -6,6 +6,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   handleReset,
+  moveToTrash,
   normalizeGatewayTokenInput,
   openUrl,
   probeGatewayReachable,
@@ -98,6 +99,87 @@ describe("handleReset", () => {
       workspaceDir,
     ]);
     expect(trashedPaths).not.toContain(defaultCredentialsDir);
+  });
+});
+
+describe("moveToTrash", () => {
+  it("falls back to fs.rm when `trash` is unavailable (#83459)", async () => {
+    // Reproduces the official Docker image scenario: `trash-cli` is not
+    // installed, so the `trash` command rejects with ENOENT (or similar
+    // spawn failure). Previously this left the directory on disk and only
+    // logged a "manual delete" message — silent leak per #83459.
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-fallback-"));
+    const targetDir = path.join(tmpRoot, "agent-workspace");
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(path.join(targetDir, "session.jsonl"), "{}\n");
+
+    mocks.runCommandWithTimeout.mockRejectedValueOnce(
+      Object.assign(new Error("spawn trash ENOENT"), { code: "ENOENT" }),
+    );
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    await moveToTrash(targetDir, runtime);
+
+    expect(fs.existsSync(targetDir)).toBe(false);
+    const logMessages = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => String(call[0]))
+      .join("\n");
+    expect(logMessages).toContain("Deleted (trash unavailable)");
+
+    // Cleanup
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("uses `trash` when available and does not fall back (#83459 — happy path)", async () => {
+    // Negative-control: when `trash` succeeds, the fallback must NOT run.
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-ok-"));
+    const targetDir = path.join(tmpRoot, "agent-workspace-ok");
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    // Default mock resolves with code:0 — simulates trash-cli present.
+    // But: trash doesn't actually move the dir in the test, so the dir
+    // still exists. We assert the log message reflects the trash path,
+    // not the fallback.
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+    await moveToTrash(targetDir, runtime);
+
+    const logMessages = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => String(call[0]))
+      .join("\n");
+    expect(logMessages).toContain("Moved to Trash:");
+    expect(logMessages).not.toContain("Deleted (trash unavailable)");
+
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("logs and returns when neither trash nor fs.rm succeeds (#83459 — degraded)", async () => {
+    // Extreme-degraded case: trash fails AND fs.rm fails (e.g., permission
+    // denied on a read-only mount). Should log the failure with the actual
+    // error message instead of corrupting state.
+    const fakePath = "/nonexistent/path/that/cannot/be/removed";
+    // First need fs.access to succeed (or function returns early). Use a real
+    // temp path that exists, then point fs.rm at a path we can't remove.
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-fail-"));
+    const targetDir = path.join(tmpRoot, "exists");
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    mocks.runCommandWithTimeout.mockRejectedValueOnce(new Error("spawn trash ENOENT"));
+    const rmSpy = vi.spyOn(fs.promises, "rm").mockRejectedValueOnce(
+      Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }),
+    );
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    await moveToTrash(targetDir, runtime);
+
+    const logMessages = (runtime.log as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => String(call[0]))
+      .join("\n");
+    expect(logMessages).toContain("Failed to delete");
+    expect(logMessages).toContain("EACCES: permission denied");
+
+    rmSpy.mockRestore();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    void fakePath;
   });
 });
 
