@@ -41,6 +41,7 @@
       "serpapi_flights",
       "serpapi_hotels",
       "serpapi_events",
+      "serpapi_facebook_profile",
       "serpapi_finance"
     ]
   },

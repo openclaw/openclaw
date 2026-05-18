@@ -5,6 +5,7 @@ import { createSerpApiAmazonTool } from "./src/tools/amazon.js";
 import { createSerpApiBingTool } from "./src/tools/bing.js";
 import { createSerpApiDuckDuckGoTool } from "./src/tools/duckduckgo.js";
 import { createSerpApiEventsTool } from "./src/tools/events.js";
+import { createSerpApiFacebookProfileTool } from "./src/tools/facebook-profile.js";
 import { createSerpApiImmersiveProductTool } from "./src/tools/immersive-product.js";
 import { createSerpApiFinanceTool } from "./src/tools/finance.js";
 import { createSerpApiFlightsTool } from "./src/tools/flights.js";
@@ -43,6 +44,7 @@ export default definePluginEntry({
     api.registerTool((ctx) => createSerpApiFlightsTool(api, ctx), { name: "serpapi_flights" });
     api.registerTool((ctx) => createSerpApiHotelsTool(api, ctx), { name: "serpapi_hotels" });
     api.registerTool((ctx) => createSerpApiEventsTool(api, ctx), { name: "serpapi_events" });
+    api.registerTool((ctx) => createSerpApiFacebookProfileTool(api, ctx), { name: "serpapi_facebook_profile" });
     api.registerTool((ctx) => createSerpApiFinanceTool(api, ctx), { name: "serpapi_finance" });
   },
 });
