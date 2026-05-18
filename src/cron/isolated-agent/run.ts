@@ -37,6 +37,7 @@ import {
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
 import {
+  applyCronDeliveryRouteToSessionEntry,
   createPersistCronSessionEntry,
   markCronSessionPreRun,
   persistCronSkillsSnapshotIfChanged,
@@ -744,6 +745,10 @@ async function prepareCronRunContext(params: {
   });
 
   markCronSessionPreRun({ entry: cronSession.sessionEntry, provider, model });
+  applyCronDeliveryRouteToSessionEntry({
+    entry: cronSession.sessionEntry,
+    resolvedDelivery,
+  });
   try {
     await persistSessionEntry();
   } catch (err) {

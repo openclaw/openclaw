@@ -3,6 +3,7 @@ import type { LiveSessionModelSelection } from "../../agents/live-model-switch.j
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { resolveCronSession } from "./session.js";
 
 type MutableSessionStore = Record<string, SessionEntry>;
@@ -20,6 +21,53 @@ type UpdateSessionStore = (
 ) => Promise<void>;
 
 export type PersistCronSessionEntry = () => Promise<void>;
+
+export function applyCronDeliveryRouteToSessionEntry(params: {
+  entry: MutableCronSessionEntry;
+  resolvedDelivery:
+    | {
+        ok: true;
+        channel: string;
+        to?: string;
+        accountId?: string;
+        threadId?: string | number;
+      }
+    | { ok: false };
+}) {
+  if (!params.resolvedDelivery.ok) {
+    return;
+  }
+  const channel = normalizeOptionalString(params.resolvedDelivery.channel);
+  const to = normalizeOptionalString(params.resolvedDelivery.to);
+  if (!channel || !to) {
+    return;
+  }
+  const accountId = normalizeOptionalString(params.resolvedDelivery.accountId);
+  const threadId =
+    params.resolvedDelivery.threadId === undefined || params.resolvedDelivery.threadId === null
+      ? undefined
+      : normalizeOptionalString(String(params.resolvedDelivery.threadId));
+
+  params.entry.channel = channel;
+  params.entry.lastChannel = channel;
+  params.entry.lastTo = to;
+  if (accountId) {
+    params.entry.lastAccountId = accountId;
+  } else {
+    delete params.entry.lastAccountId;
+  }
+  if (threadId) {
+    params.entry.lastThreadId = threadId;
+  } else {
+    delete params.entry.lastThreadId;
+  }
+  params.entry.deliveryContext = {
+    channel,
+    to,
+    ...(accountId ? { accountId } : {}),
+    ...(threadId ? { threadId } : {}),
+  };
+}
 
 function cronTranscriptExists(entry: SessionEntry): boolean {
   const sessionFile = entry.sessionFile?.trim();
