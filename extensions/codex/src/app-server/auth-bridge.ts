@@ -429,9 +429,12 @@ async function resolveLoginParamsForCredential(
       profileId,
       agentDir: params.agentDir,
     });
-    const accessToken = resolved?.apiKey?.trim();
-    return accessToken
-      ? buildChatgptAuthTokensParams(profileId, credential, accessToken)
+    const normalized = normalizeCodexAccessToken(resolved?.apiKey);
+    const credentialForLogin = normalized.accountId
+      ? { ...credential, accountId: normalized.accountId }
+      : credential;
+    return normalized.token
+      ? buildChatgptAuthTokensParams(profileId, credentialForLogin, normalized.token)
       : undefined;
   }
   if (credential.type !== "oauth") {
@@ -502,7 +505,14 @@ async function resolveOAuthCredentialForCodexAppServer(
           isCodexAppServerAuthProvider(storedCredential.provider, params.config)
         ? storedCredential
         : credential;
-  return resolved?.apiKey ? { ...candidate, access: resolved.apiKey } : candidate;
+  const normalized = normalizeCodexAccessToken(resolved?.apiKey);
+  return normalized.token
+    ? {
+        ...candidate,
+        access: normalized.token,
+        ...(normalized.accountId ? { accountId: normalized.accountId } : {}),
+      }
+    : candidate;
 }
 
 function isCodexAppServerAuthProvider(provider: string, config?: AuthProfileOrderConfig): boolean {
@@ -594,6 +604,52 @@ function buildChatgptAuthTokensParams(
     chatgptAccountId: resolveChatgptAccountId(profileId, credential),
     chatgptPlanType: resolveChatgptPlanType(credential),
   };
+}
+
+function normalizeCodexAccessToken(value: string | undefined): {
+  token: string | undefined;
+  accountId?: string;
+} {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return { token: undefined };
+  }
+  if (!trimmed.startsWith("{")) {
+    return { token: trimmed };
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      token?: unknown;
+      access_token?: unknown;
+      accessToken?: unknown;
+      account_id?: unknown;
+      accountId?: unknown;
+      tokens?: {
+        access_token?: unknown;
+        accessToken?: unknown;
+        account_id?: unknown;
+        accountId?: unknown;
+      };
+    };
+    const token =
+      readTrimmedString(parsed.token) ??
+      readTrimmedString(parsed.access_token) ??
+      readTrimmedString(parsed.accessToken) ??
+      readTrimmedString(parsed.tokens?.access_token) ??
+      readTrimmedString(parsed.tokens?.accessToken);
+    const accountId =
+      readTrimmedString(parsed.account_id) ??
+      readTrimmedString(parsed.accountId) ??
+      readTrimmedString(parsed.tokens?.account_id) ??
+      readTrimmedString(parsed.tokens?.accountId);
+    return { token, accountId };
+  } catch {
+    return { token: trimmed };
+  }
+}
+
+function readTrimmedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function resolveChatgptPlanType(credential: AuthProfileCredential): string | null {
