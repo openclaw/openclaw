@@ -1234,6 +1234,7 @@ function normalizeDeniedExecPathPatterns(
   entries: string[] | undefined,
   workdir: string | undefined,
   namespace: ExecPathNamespace,
+  env: NodeJS.ProcessEnv,
 ): DeniedExecPathPattern[] {
   const pathOps = getExecPathOps(namespace);
   const patterns: DeniedExecPathPattern[] = [];
@@ -1249,9 +1250,20 @@ function normalizeDeniedExecPathPatterns(
     if (!rootInput) {
       continue;
     }
-    const root = pathOps.isAbsolute(rootInput)
-      ? pathOps.resolve(rootInput)
-      : pathOps.resolve(workdir ?? process.cwd(), rootInput);
+    let root: string;
+    if (rootInput === "~" || rootInput.startsWith("~/") || rootInput.startsWith("~\\")) {
+      const home = normalizeOptionalString(env.HOME);
+      if (!home) {
+        throw new Error(
+          `Security Violation: exec denied path pattern ${rootInput} requires HOME to resolve.`,
+        );
+      }
+      root = rootInput === "~" ? pathOps.resolve(home) : pathOps.resolve(home, rootInput.slice(2));
+    } else {
+      root = pathOps.isAbsolute(rootInput)
+        ? pathOps.resolve(rootInput)
+        : pathOps.resolve(workdir ?? process.cwd(), rootInput);
+    }
     patterns.push({ root, recursive });
   }
   return patterns;
@@ -1388,7 +1400,12 @@ function assertExecDeniedPaths(params: {
 }): void {
   const namespace = params.namespace ?? "host";
   const pathOps = getExecPathOps(namespace);
-  const patterns = normalizeDeniedExecPathPatterns(params.deniedPaths, params.workdir, namespace);
+  const patterns = normalizeDeniedExecPathPatterns(
+    params.deniedPaths,
+    params.workdir,
+    namespace,
+    params.env,
+  );
   if (patterns.length === 0) {
     return;
   }

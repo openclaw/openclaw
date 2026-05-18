@@ -7,7 +7,12 @@ describe("normalizeConfigPaths", () => {
   it("expands tilde for path-ish keys only", async () => {
     await withTempHome(async (home) => {
       const cfg = normalizeConfigPaths({
-        tools: { exec: { pathPrepend: ["~/bin"] } },
+        tools: {
+          exec: {
+            pathPrepend: ["~/bin"],
+            deniedPaths: ["~/.openclaw/credentials/**"],
+          },
+        },
         plugins: { load: { paths: ["~/plugins/a"] } },
         logging: { file: "~/.openclaw/logs/openclaw.log" },
         hooks: {
@@ -54,6 +59,9 @@ describe("normalizeConfigPaths", () => {
       expect(cfg.hooks?.path).toBe(path.join(home, ".openclaw", "hooks.json5"));
       expect(cfg.hooks?.transformsDir).toBe(path.join(home, "hooks-xform"));
       expect(cfg.tools?.exec?.pathPrepend?.[0]).toBe(path.join(home, "bin"));
+      expect(cfg.tools?.exec?.deniedPaths?.[0]).toBe(
+        path.join(home, ".openclaw", "credentials", "**"),
+      );
       expect(cfg.channels?.telegram?.accounts?.personal?.tokenFile).toBe(
         path.join(home, ".openclaw", "telegram.token"),
       );

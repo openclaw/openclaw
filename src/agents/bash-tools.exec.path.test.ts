@@ -348,6 +348,34 @@ describe("exec host env validation", () => {
     }
   });
 
+  it("blocks home-relative denied path patterns against the resolved home directory", async () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-denied-home-"));
+    const originalHome = process.env.HOME;
+    process.env.HOME = homeDir;
+    const deniedFile = path.join(homeDir, ".openclaw", "credentials", "provider.key");
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      deniedPaths: ["~/.openclaw/credentials/**"],
+    });
+
+    try {
+      await expect(
+        tool.execute("call-denied-home-path", {
+          command: `cat "${deniedFile}"`,
+        }),
+      ).rejects.toThrow(`Security Violation: exec command references denied path ${deniedFile}`);
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
