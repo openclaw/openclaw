@@ -840,16 +840,6 @@ describe("resolveAgentConfig", () => {
             },
           },
           {
-            id: "metadata-only-subagent",
-            model: {
-              primary: "anthropic/claude-sonnet-4-6",
-              fallbacks: ["google/gemini-3-pro"],
-            },
-            subagents: {
-              model: { timeoutMs: 1_000 },
-            },
-          },
-          {
             id: "fallback-only-agent-model",
             model: {
               fallbacks: ["google/gemini-3-pro"],
@@ -883,9 +873,6 @@ describe("resolveAgentConfig", () => {
     expect(resolveSubagentModelFallbacksOverride(cfg, "agent-model")).toEqual([
       "google/gemini-3-pro",
     ]);
-    expect(resolveSubagentModelFallbacksOverride(cfg, "metadata-only-subagent")).toEqual([
-      "google/gemini-3-pro",
-    ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "fallback-only-agent-model")).toEqual([
       "openai-codex/gpt-5.4",
       "zai/glm-5",
@@ -900,23 +887,36 @@ describe("resolveAgentConfig", () => {
     expect(resolveSubagentModelFallbacksOverride(cfg, "strict")).toStrictEqual([]);
   });
 
-  it("resolves subagent model fallbacks from tools defaults before the agent primary model", () => {
+  it("uses subagent model fallbacks for auto-selected spawned subagent models", () => {
     const cfg: OpenClawConfig = {
-      tools: {
-        subagents: {
+      agents: {
+        defaults: {
           model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
+            fallbacks: ["openai/gpt-5.4"],
+          },
+          subagents: {
+            model: {
+              primary: "kimi/kimi-code",
+              fallbacks: ["openai-codex/gpt-5.4", "zai/glm-5"],
+            },
           },
         },
-      },
-      agents: {
         list: [
           {
             id: "research",
             model: {
-              primary: "google/gemini-3-pro",
-              fallbacks: ["kimi/kimi-code"],
+              primary: "anthropic/claude-sonnet-4-6",
+              fallbacks: ["google/gemini-3-pro"],
+            },
+          },
+          {
+            id: "fallback-only-subagent",
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+              fallbacks: ["google/gemini-3-pro"],
+            },
+            subagents: {
+              model: { fallbacks: ["zai/glm-5"] },
             },
           },
         ],
@@ -931,16 +931,25 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
         modelOverrideSource: "auto",
       }),
-    ).toEqual(["anthropic/claude-sonnet-4-6"]);
+    ).toEqual(["openai-codex/gpt-5.4", "zai/glm-5"]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg,
         agentId: "research",
-        sessionKey: "agent:research:main",
+        sessionKey: "agent:research:subagent:child",
+        hasSessionModelOverride: true,
+        modelOverrideSource: "user",
+      }),
+    ).toStrictEqual([]);
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg,
+        agentId: "fallback-only-subagent",
+        sessionKey: "agent:fallback-only-subagent:subagent:child",
         hasSessionModelOverride: true,
         modelOverrideSource: "auto",
       }),
-    ).toEqual(["kimi/kimi-code"]);
+    ).toEqual(["zai/glm-5"]);
   });
 
   it("resolves the subagent model config selected for isolated runs", () => {
@@ -968,10 +977,10 @@ describe("resolveAgentConfig", () => {
             },
           },
           {
-            id: "metadata-only-subagent",
+            id: "fallback-only-subagent",
             model: "anthropic/claude-sonnet-4-6",
             subagents: {
-              model: { timeoutMs: 1_000 },
+              model: { fallbacks: [] },
             },
           },
         ],
@@ -986,7 +995,7 @@ describe("resolveAgentConfig", () => {
       primary: "kimi/kimi-code",
       fallbacks: ["openai-codex/gpt-5.4"],
     });
-    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "metadata-only-subagent" })).toBe(
+    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "fallback-only-subagent" })).toBe(
       "anthropic/claude-sonnet-4-6",
     );
     expect(resolveSubagentModelConfigSelection({ cfg, agentId: "default-subagent" })).toBe(

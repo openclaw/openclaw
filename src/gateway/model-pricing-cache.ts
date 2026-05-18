@@ -920,12 +920,6 @@ export function collectConfiguredModelPricingRefs(
     refs,
     ...normalizationParams,
   });
-  addModelListLike({
-    value: config.tools?.subagents?.model,
-    aliasIndex,
-    refs,
-    ...normalizationParams,
-  });
   addResolvedModelRef({
     raw: config.messages?.tts?.summaryModel,
     aliasIndex,

@@ -382,23 +382,10 @@ describe("config schema", () => {
     });
   });
 
-  it("accepts subagent model config in top-level tools schema", () => {
-    const parsed = ToolsSchema.parse({
-      subagents: {
-        model: {
-          primary: "openai/gpt-5.5",
-          timeoutMs: 30_000,
-        },
-      },
-    });
-
-    expect(parsed.subagents?.model).toEqual({
-      primary: "openai/gpt-5.5",
-      timeoutMs: 30_000,
-    });
+  it("keeps top-level subagent tools schema limited to tool policy", () => {
     expect(
       ToolsSchema.safeParse({
-        subagents: { model: { primary: "openai/gpt-5.5", timeoutMs: 0 } },
+        subagents: { model: { primary: "openai/gpt-5.5" } },
       }).success,
     ).toBe(false);
   });

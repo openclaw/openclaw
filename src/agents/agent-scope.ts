@@ -483,7 +483,6 @@ function resolveSubagentSpawnModelFallbacksOverride(
   return resolveFirstModelFallbacksOverride([
     agentConfig?.subagents?.model,
     cfg.agents?.defaults?.subagents?.model,
-    cfg.tools?.subagents?.model,
     agentConfig?.model,
   ]);
 }
@@ -526,14 +525,12 @@ export function hasConfiguredModelFallbacks(params: {
 export function resolveEffectiveModelFallbacks(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  sessionKey?: string | null;
   hasSessionModelOverride: boolean;
   modelOverrideSource?: "auto" | "user";
   hasAutoFallbackProvenance?: boolean;
-  sessionKey?: string | null;
 }): string[] | undefined {
-  const agentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
-    ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
-    : resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
+  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
   if (!params.hasSessionModelOverride) {
     return agentFallbacksOverride;
   }
@@ -542,6 +539,12 @@ export function resolveEffectiveModelFallbacks(params: {
     (params.modelOverrideSource === undefined && params.hasAutoFallbackProvenance === true);
   if (!canUseConfiguredFallbacks) {
     return [];
+  }
+  const subagentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
+    ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
+    : undefined;
+  if (subagentFallbacksOverride !== undefined) {
+    return subagentFallbacksOverride;
   }
   const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
   return agentFallbacksOverride ?? defaultFallbacks;
