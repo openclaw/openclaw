@@ -61,7 +61,7 @@ export type CodexDynamicToolBridge = {
 
 export const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 
-const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set(["sessions_yield"]);
+const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set(["sessions_spawn", "sessions_yield"]);
 const DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
 
 export function createCodexDynamicToolBridge(params: {
