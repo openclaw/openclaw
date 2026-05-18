@@ -245,6 +245,11 @@ function createAppServerHarness(
     requests.push({ method, params });
     return requestImpl(method, params);
   });
+  const close = vi.fn(() => {
+    for (const handler of closeHandlers) {
+      handler();
+    }
+  });
 
   setCodexAppServerClientFactoryForTest(async (_startOptions, authProfileId, agentDir) => {
     options.onStart?.(authProfileId, agentDir);
@@ -262,6 +267,7 @@ function createAppServerHarness(
         closeHandlers.add(handler);
         return () => closeHandlers.delete(handler);
       },
+      close,
     } as never;
   });
 
@@ -1925,6 +1931,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("closes the app-server client when the active turn goes idle past the attempt timeout", async () => {
     const close = vi.fn();
+    const onRunAgentEvent = vi.fn();
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
         return threadStartResult("thread-1");
@@ -1950,7 +1957,8 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.timeoutMs = 250;
+    params.timeoutMs = 100;
+    params.onAgentEvent = onRunAgentEvent;
 
     const result = await runCodexAppServerAttempt(params);
 
@@ -1968,6 +1976,18 @@ describe("runCodexAppServerAttempt", () => {
       { timeoutMs: 5_000 },
     );
     expect(close).toHaveBeenCalledTimes(1);
+    expect(onRunAgentEvent).toHaveBeenCalledWith({
+      stream: "codex_app_server.lifecycle",
+      data: expect.objectContaining({
+        phase: "turn_timeout_client_retired",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        reason: "turn_progress_idle_timeout",
+        timeoutMs: 100,
+        clearedSharedClient: false,
+        closedNonCurrentClient: true,
+      }),
+    });
     expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
   });
 
@@ -7469,6 +7489,115 @@ describe("runCodexAppServerAttempt", () => {
       ["thread/resume"],
       ["thread/resume", "turn/start"],
     ]);
+  });
+
+  it("reports exhausted startup close retries when the failed client is no longer shared", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const onRunAgentEvent = vi.fn();
+    const requests: string[][] = [];
+    let closeCount = 0;
+    let starts = 0;
+    setCodexAppServerClientFactoryForTest(async () => {
+      starts += 1;
+      const methods: string[] = [];
+      requests.push(methods);
+      return {
+        request: vi.fn(async (method: string) => {
+          methods.push(method);
+          if (method === "thread/resume") {
+            throw new Error("codex app-server client is closed");
+          }
+          return {};
+        }),
+        close: () => {
+          closeCount += 1;
+        },
+        addNotificationHandler: () => () => undefined,
+        addRequestHandler: () => () => undefined,
+      } as never;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.onAgentEvent = onRunAgentEvent;
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
+      "codex app-server client is closed",
+    );
+
+    expect(starts).toBe(3);
+    expect(closeCount).toBe(3);
+    expect(requests).toEqual([["thread/resume"], ["thread/resume"], ["thread/resume"]]);
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server connection closed during startup; restarting app-server and retrying",
+      expect.objectContaining({
+        attempt: 1,
+        nextAttempt: 2,
+        maxAttempts: 3,
+        clearedSharedClient: false,
+        closedNonCurrentClient: true,
+      }),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server connection closed during startup; restarting app-server and retrying",
+      expect.objectContaining({
+        attempt: 2,
+        nextAttempt: 3,
+        maxAttempts: 3,
+        clearedSharedClient: false,
+        closedNonCurrentClient: true,
+      }),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server connection closed during startup; retries exhausted",
+      expect.objectContaining({
+        attempt: 3,
+        maxAttempts: 3,
+        clearedSharedClient: false,
+        closedNonCurrentClient: true,
+      }),
+    );
+    const lifecycleEvents = onRunAgentEvent.mock.calls.map(([event]) => event) as Array<{
+      data?: {
+        attempt?: number;
+        closedNonCurrentClient?: boolean;
+        failureClass?: string;
+        phase?: string;
+      };
+      stream?: string;
+    }>;
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          stream: "codex_app_server.lifecycle",
+          data: expect.objectContaining({
+            phase: "startup_retry",
+            attempt: 1,
+            failureClass: "app_server_client_closed",
+            closedNonCurrentClient: true,
+          }),
+        }),
+        expect.objectContaining({
+          stream: "codex_app_server.lifecycle",
+          data: expect.objectContaining({
+            phase: "startup_retry",
+            attempt: 2,
+            failureClass: "app_server_client_closed",
+            closedNonCurrentClient: true,
+          }),
+        }),
+        expect.objectContaining({
+          stream: "codex_app_server.lifecycle",
+          data: expect.objectContaining({
+            phase: "startup_retries_exhausted",
+            attempt: 3,
+            failureClass: "app_server_client_closed",
+            closedNonCurrentClient: true,
+          }),
+        }),
+      ]),
+    );
   });
 
   it("passes native hook relay config on thread start and resume", async () => {
