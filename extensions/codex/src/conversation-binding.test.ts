@@ -407,7 +407,7 @@ describe("codex conversation binding", () => {
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     let notificationHandler: ((notification: unknown) => void) | undefined;
     let requestHandler:
-      | ((request: { method: string; params?: unknown }) => Promise<unknown> | unknown)
+      | ((request: { method: string; params?: unknown }) => Promise<unknown>)
       | undefined;
     let toolResponse: unknown;
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({

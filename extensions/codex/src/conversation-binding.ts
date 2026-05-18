@@ -1,4 +1,4 @@
-import { formatErrorMessage, type AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   PluginConversationBindingResolvedEvent,
@@ -624,7 +624,7 @@ async function buildConversationDynamicToolBridge(params: {
     allowGatewaySubagentBinding: true,
     abortSignal: signal,
   });
-  const tools = filterCodexDynamicTools(allTools as AnyAgentTool[], codexConfig);
+  const tools = filterCodexDynamicTools(allTools, codexConfig);
   return createCodexDynamicToolBridge({
     tools,
     signal,
