@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { shouldSupersedeTelegramReplyFence } from "./telegram-reply-fence.js";
+import {
+  beginTelegramReplyFence,
+  buildTelegramNonInterruptingReplyFenceKey,
+  resetTelegramReplyFenceForTests,
+  shouldSupersedeTelegramReplyFence,
+  supersedeTelegramReplyFence,
+} from "./telegram-reply-fence.js";
 
 describe("shouldSupersedeTelegramReplyFence", () => {
   it("keeps non-interrupting side and status commands from superseding active runs", () => {
@@ -42,5 +48,32 @@ describe("shouldSupersedeTelegramReplyFence", () => {
         CommandAuthorized: true,
       }),
     ).toBe(true);
+  });
+});
+
+describe("telegram reply fence supersede", () => {
+  it("cascades base supersedes to non-interrupting child fences", () => {
+    resetTelegramReplyFenceForTests();
+    const activeKey = "agent:main:telegram:group:-100123";
+    const sideController = new AbortController();
+    const mainController = new AbortController();
+    beginTelegramReplyFence({
+      key: activeKey,
+      supersede: true,
+      abortController: mainController,
+    });
+    beginTelegramReplyFence({
+      key: buildTelegramNonInterruptingReplyFenceKey({
+        activeKey,
+        laneKey: "default\0telegram:-100123:btw:100",
+      }),
+      supersede: false,
+      abortController: sideController,
+    });
+
+    expect(supersedeTelegramReplyFence(activeKey)).toBe(true);
+    expect(mainController.signal.aborted).toBe(true);
+    expect(sideController.signal.aborted).toBe(true);
+    resetTelegramReplyFenceForTests();
   });
 });

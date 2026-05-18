@@ -31,7 +31,11 @@ export function buildTelegramNonInterruptingReplyFenceKey(params: {
   activeKey: string;
   laneKey: string;
 }): string {
-  return `${params.activeKey}\0non-interrupting\0${params.laneKey}`;
+  return `${buildTelegramNonInterruptingReplyFenceKeyPrefix(params.activeKey)}${params.laneKey}`;
+}
+
+function buildTelegramNonInterruptingReplyFenceKeyPrefix(activeKey: string): string {
+  return `${activeKey}\0non-interrupting\0`;
 }
 
 function normalizeTelegramFenceKey(value: unknown): string | undefined {
@@ -98,6 +102,7 @@ export function beginTelegramReplyFence(params: {
   if (params.supersede) {
     state.generation += 1;
     abortTelegramReplyFenceControllers(state);
+    supersedeTelegramNonInterruptingReplyFenceChildren(params.key);
   }
   if (params.abortController) {
     (state.abortControllers ??= new Set()).add(params.abortController);
@@ -114,7 +119,7 @@ export function beginTelegramReplyFence(params: {
   return state.generation;
 }
 
-export function supersedeTelegramReplyFence(key: string): boolean {
+function supersedeTelegramReplyFenceState(key: string): boolean {
   const state = telegramReplyFenceByKey.get(key);
   if (!state) {
     return false;
@@ -123,6 +128,23 @@ export function supersedeTelegramReplyFence(key: string): boolean {
   abortTelegramReplyFenceControllers(state);
   maybeDeleteTelegramReplyFenceState(key, state);
   return true;
+}
+
+function supersedeTelegramNonInterruptingReplyFenceChildren(key: string): boolean {
+  let superseded = false;
+  const childPrefix = buildTelegramNonInterruptingReplyFenceKeyPrefix(key);
+  for (const childKey of [...telegramReplyFenceByKey.keys()]) {
+    if (childKey.startsWith(childPrefix)) {
+      superseded = supersedeTelegramReplyFenceState(childKey) || superseded;
+    }
+  }
+  return superseded;
+}
+
+export function supersedeTelegramReplyFence(key: string): boolean {
+  let superseded = supersedeTelegramReplyFenceState(key);
+  superseded = supersedeTelegramNonInterruptingReplyFenceChildren(key) || superseded;
+  return superseded;
 }
 
 export function supersedeTelegramReplyFenceLane(laneKey: string): boolean {
