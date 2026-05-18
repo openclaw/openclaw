@@ -278,6 +278,16 @@ describe("discord live qa runtime", () => {
     ).toBe(false);
   });
 
+  it("computes Discord RTT from trigger and reply timestamps", () => {
+    expect(
+      __testing.computeDiscordRttMs(
+        "2026-04-22T11:59:59.125Z",
+        "2026-04-22T12:00:00.875Z",
+      ),
+    ).toBe(1750);
+    expect(__testing.computeDiscordRttMs("bad", "2026-04-22T12:00:00.875Z")).toBeUndefined();
+  });
+
   it("includes the Discord live scenarios", () => {
     expect(__testing.findScenario().map((scenario) => scenario.id)).toEqual([
       "discord-canary",
