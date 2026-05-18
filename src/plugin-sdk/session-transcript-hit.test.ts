@@ -59,6 +59,14 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     ).toBe("def-uuid");
   });
 
+  it("recognizes real QMD-slugified archived reset transcript .md stems", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z.md",
+      ),
+    ).toBe("abc-uuid");
+  });
+
   it("returns non-archived identity for QMD .md stems that are not archive patterns", () => {
     const identity = extractTranscriptIdentityFromSessionsMemoryHit(
       "qmd/sessions-main/normal-session.md",

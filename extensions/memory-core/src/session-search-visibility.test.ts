@@ -369,7 +369,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       },
     };
     const hit: MemorySearchResult = {
-      path: "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16T22-26-33.000Z.md",
+      path: "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z.md",
       source: "sessions",
       score: 1,
       snippet: "x",
@@ -395,7 +395,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
   it("drops QMD-normalized archived .md hits when no matching session store entry exists", async () => {
     combinedSessionStore = {};
     const hit: MemorySearchResult = {
-      path: "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16T22-26-33.000Z.md",
+      path: "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z.md",
       source: "sessions",
       score: 1,
       snippet: "x",

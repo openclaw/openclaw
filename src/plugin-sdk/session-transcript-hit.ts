@@ -7,6 +7,17 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
 const QMD_ARCHIVE_STEM_RE = /^(.+)-jsonl-(reset|deleted)-(.+)$/;
+const QMD_ARCHIVE_TIMESTAMP_RE =
+  /^(\d{4}-\d{2}-\d{2})[tT](\d{2}-\d{2}-\d{2})(?:(?:\.|-)(\d{3}))?[zZ]$/;
+
+function restoreQmdNormalizedArchiveTimestamp(timestamp: string): string | null {
+  const match = QMD_ARCHIVE_TIMESTAMP_RE.exec(timestamp);
+  if (!match) {
+    return null;
+  }
+  const [, date, time, milliseconds] = match;
+  return `${date}T${time}${milliseconds ? `.${milliseconds}` : ""}Z`;
+}
 
 function restoreQmdNormalizedArchiveName(mdStem: string): string | null {
   const match = QMD_ARCHIVE_STEM_RE.exec(mdStem);
@@ -14,7 +25,8 @@ function restoreQmdNormalizedArchiveName(mdStem: string): string | null {
     return null;
   }
   const [, sessionId, reason, timestamp] = match;
-  return `${sessionId}.jsonl.${reason}.${timestamp}`;
+  const restoredTimestamp = restoreQmdNormalizedArchiveTimestamp(timestamp);
+  return restoredTimestamp ? `${sessionId}.jsonl.${reason}.${restoredTimestamp}` : null;
 }
 
 export type SessionTranscriptHitIdentity = {
