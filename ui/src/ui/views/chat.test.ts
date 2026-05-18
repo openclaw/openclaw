@@ -503,6 +503,23 @@ describe("chat loading skeleton", () => {
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
   });
 
+  it("does not keep the reading indicator after an assistant response has rendered", () => {
+    const container = renderChatView({
+      canAbort: true,
+      messages: [
+        {
+          role: "assistant",
+          content: "Finished answer",
+          timestamp: 1,
+        },
+      ],
+      stream: null,
+    });
+
+    expect(container.querySelector(".chat-reading-indicator")).toBeNull();
+    expect(container.querySelector(".chat-group")?.textContent?.trim()).toBe("Finished answer");
+  });
+
   it("keeps existing messages visible without the skeleton during a background reload", () => {
     const container = renderChatView({
       loading: true,
