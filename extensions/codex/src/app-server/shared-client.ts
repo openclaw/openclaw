@@ -225,6 +225,7 @@ export async function createIsolatedCodexAppServerClient(options?: {
   authProfileId?: string | null;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  signal?: AbortSignal;
 }): Promise<CodexAppServerClient> {
   const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
   const usesNativeAuth = options?.authProfileId === null;
@@ -248,20 +249,55 @@ export async function createIsolatedCodexAppServerClient(options?: {
   });
   const client = CodexAppServerClient.start(startOptions);
   const initialize = client.initialize();
+  const abortMessage = "codex app-server initialize aborted";
   try {
-    await withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
-    await applyCodexAppServerAuthProfile({
-      client,
-      agentDir,
-      authProfileId: usesNativeAuth ? null : authProfileId,
-      startOptions,
-      config: options?.config,
-    });
+    await withAbortSignal(
+      withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out"),
+      options?.signal,
+      abortMessage,
+    );
+    await withAbortSignal(
+      applyCodexAppServerAuthProfile({
+        client,
+        agentDir,
+        authProfileId: usesNativeAuth ? null : authProfileId,
+        startOptions,
+        config: options?.config,
+      }),
+      options?.signal,
+      abortMessage,
+    );
     return client;
   } catch (error) {
     client.close();
     void initialize.catch(() => undefined);
     throw error;
+  }
+}
+
+async function withAbortSignal<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+  abortMessage: string,
+): Promise<T> {
+  if (!signal) {
+    return await promise;
+  }
+  if (signal.aborted) {
+    throw new Error(abortMessage);
+  }
+  let cleanup: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        const abortListener = () => reject(new Error(abortMessage));
+        signal.addEventListener("abort", abortListener, { once: true });
+        cleanup = () => signal.removeEventListener("abort", abortListener);
+      }),
+    ]);
+  } finally {
+    cleanup?.();
   }
 }
 

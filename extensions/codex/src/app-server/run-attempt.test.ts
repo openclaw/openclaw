@@ -184,6 +184,22 @@ async function drainActiveAppServerAttemptsForTest(): Promise<void> {
   ]);
 }
 
+const sharedClientMocks = vi.hoisted(() => ({
+  createIsolatedCodexAppServerClientMock: vi.fn(),
+  clearSharedCodexAppServerClientMock: vi.fn(),
+}));
+
+vi.mock("./shared-client.js", async () => {
+  const actual = await vi.importActual<typeof import("./shared-client.js")>("./shared-client.js");
+  return {
+    ...actual,
+    createIsolatedCodexAppServerClient: (...args: unknown[]) =>
+      sharedClientMocks.createIsolatedCodexAppServerClientMock(...args),
+    clearSharedCodexAppServerClientIfCurrent: (...args: unknown[]) =>
+      sharedClientMocks.clearSharedCodexAppServerClientMock(...args),
+  };
+});
+
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
   return {
     prompt: "hello",
@@ -880,6 +896,8 @@ describe("runCodexAppServerAttempt", () => {
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-run-"));
+    sharedClientMocks.createIsolatedCodexAppServerClientMock.mockReset();
+    sharedClientMocks.clearSharedCodexAppServerClientMock.mockReset();
   });
 
   afterEach(async () => {
@@ -9871,6 +9889,74 @@ describe("runCodexAppServerAttempt", () => {
       "codex app-server startup timed out",
     );
     expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
+  });
+
+  it("uses an isolated app-server client for spawned runs so auth failures do not clear the shared client", async () => {
+    const isolatedClient = {
+      request: vi.fn(async (method: string) => {
+        if (method === "thread/start") {
+          throw new Error("401 authentication_error: Invalid bearer token");
+        }
+        return {};
+      }),
+      addNotificationHandler: vi.fn(() => () => undefined),
+      addRequestHandler: vi.fn(() => () => undefined),
+      close: vi.fn(),
+    };
+
+    sharedClientMocks.createIsolatedCodexAppServerClientMock.mockResolvedValue(isolatedClient);
+    setCodexAppServerClientFactoryForTest(async () => {
+      throw new Error("shared client should not be used for spawned runs");
+    });
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.spawnedBy = "agent:main:session-1";
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("Invalid bearer token");
+    expect(sharedClientMocks.createIsolatedCodexAppServerClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: params.timeoutMs,
+        authProfileId: undefined,
+      }),
+    );
+    // `clearSharedCodexAppServerClientIfCurrent` is a safe no-op when invoked
+    // with an isolated client (it only acts on the current shared singleton),
+    // so the production cleanup path is allowed to call it; assert the isolated
+    // client itself was closed instead, which proves the spawned helper run
+    // tore down its own client without touching shared lifecycle state.
+    expect(isolatedClient.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not isolate runs based on subagent session keys alone", async () => {
+    const sharedClient = {
+      request: vi.fn(async (method: string) => {
+        if (method === "thread/start") {
+          throw new Error("401 authentication_error: Invalid bearer token");
+        }
+        return {};
+      }),
+      addNotificationHandler: vi.fn(() => () => undefined),
+      addRequestHandler: vi.fn(() => () => undefined),
+    };
+
+    sharedClientMocks.createIsolatedCodexAppServerClientMock.mockRejectedValue(
+      new Error("isolated client should not be used"),
+    );
+    setCodexAppServerClientFactoryForTest(async () => sharedClient as never);
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.sessionKey = "agent:main:subagent:child";
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("Invalid bearer token");
+    expect(sharedClient.request).toHaveBeenCalledWith("thread/start", expect.anything());
+    expect(sharedClientMocks.createIsolatedCodexAppServerClientMock).not.toHaveBeenCalled();
+    expect(sharedClientMocks.clearSharedCodexAppServerClientMock).toHaveBeenCalledTimes(1);
   });
 
   it("passes the selected auth profile into app-server startup", async () => {
