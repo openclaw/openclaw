@@ -590,7 +590,7 @@ describe("Codex plugin thread config", () => {
     );
   });
 
-  it("uses explicit plugin app ownership when the initial app inventory refresh fails", async () => {
+  it("fails closed when the initial app inventory refresh fails", async () => {
     const appCache = new CodexAppInventoryCache();
     const config = await buildCodexPluginThreadConfig({
       pluginConfig: {
@@ -627,24 +627,14 @@ describe("Codex plugin thread config", () => {
           destructive_enabled: false,
           open_world_enabled: false,
         },
-        "google-calendar-app": {
-          enabled: true,
-          destructive_enabled: true,
-          open_world_enabled: true,
-          default_tools_approval_mode: "auto",
-        },
       },
     });
-    expect(config.policyContext.apps["google-calendar-app"]).toEqual({
-      configKey: "google-calendar",
-      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-      pluginName: "google-calendar",
-      allowDestructiveActions: true,
-      mcpServerNames: [],
+    expect(config.policyContext.apps).toStrictEqual({});
+    expect(config.policyContext.pluginAppIds).toStrictEqual({
+      "google-calendar": ["google-calendar-app"],
     });
     expect(config.diagnostics.map((diagnostic) => diagnostic.code)).toStrictEqual([
       "app_inventory_missing",
-      "app_inventory_unavailable_using_plugin_detail",
     ]);
   });
 

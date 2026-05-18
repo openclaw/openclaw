@@ -51,7 +51,7 @@ describe("Codex app inventory cache", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("uses stale inventory for the current read while refreshing asynchronously", async () => {
+  it("uses stale inventory for the current read while still refreshing asynchronously", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 10 });
     const request = vi.fn(async () => {
       return {
@@ -62,7 +62,7 @@ describe("Codex app inventory cache", () => {
     const key = "runtime";
     await cache.refreshNow({ key, request, nowMs: 0 });
 
-    const stale = cache.read({ key, request, nowMs: 11 });
+    const stale = cache.read({ key, request, nowMs: 11, suppressRefresh: true });
     expect(stale.state).toBe("stale");
     expect(stale.snapshot?.apps.map((item) => item.id)).toEqual(["app-1"]);
     expect(stale.refreshScheduled).toBe(true);

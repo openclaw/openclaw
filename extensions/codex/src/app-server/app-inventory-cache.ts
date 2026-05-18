@@ -94,9 +94,7 @@ export class CodexAppInventoryCache {
     const state: CodexAppInventoryReadState =
       entry.invalidated || entry.expiresAtMs <= nowMs ? "stale" : "fresh";
     const refreshScheduled =
-      params.suppressRefresh || (state === "fresh" && !params.forceRefetch)
-        ? false
-        : this.scheduleRefresh(params);
+      state === "fresh" && !params.forceRefetch ? false : this.scheduleRefresh(params);
     embeddedAgentLog.debug("codex app inventory cache read", {
       state,
       refreshScheduled,

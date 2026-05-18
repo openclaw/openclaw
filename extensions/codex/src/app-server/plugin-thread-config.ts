@@ -43,10 +43,7 @@ export type PluginAppPolicyContext = {
 export type CodexPluginThreadConfigDiagnostic =
   | CodexPluginInventoryDiagnostic
   | {
-      code:
-        | "plugin_activation_failed"
-        | "app_not_ready"
-        | "app_inventory_unavailable_using_plugin_detail";
+      code: "plugin_activation_failed" | "app_not_ready";
       plugin?: ResolvedCodexPluginPolicy;
       message: string;
     };
@@ -220,15 +217,7 @@ export async function buildCodexPluginThreadConfig(
       continue;
     }
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
-    const resolvedApps = resolveThreadConfigAppsForRecord({ record, inventory });
-    if (resolvedApps.source === "plugin_detail_without_app_inventory") {
-      diagnostics.push({
-        code: "app_inventory_unavailable_using_plugin_detail",
-        plugin: record.policy,
-        message: `${record.policy.pluginName} app inventory is unavailable; exposing plugin-owned app ids from plugin/read: ${resolvedApps.apps.map((app) => app.id).join(", ")}.`,
-      });
-    }
-    for (const app of resolvedApps.apps) {
+    for (const app of resolveThreadConfigAppsForRecord({ record, inventory })) {
       if (!app.accessible || !app.enabled) {
         diagnostics.push({
           code: "app_not_ready",
@@ -414,30 +403,11 @@ async function refreshAppInventoryNow(
 function resolveThreadConfigAppsForRecord(params: {
   record: CodexPluginInventoryRecord;
   inventory: CodexPluginInventory;
-}): {
-  source: "app_inventory" | "plugin_detail_without_app_inventory";
-  apps: CodexPluginOwnedApp[];
-} {
-  if (params.record.apps.length > 0 || params.inventory.appInventory?.state !== "missing") {
-    return { source: "app_inventory", apps: params.record.apps };
+}): CodexPluginOwnedApp[] {
+  if (params.inventory.appInventory?.state === "missing") {
+    return [];
   }
-  const detailApps = params.record.detail?.apps ?? [];
-  if (detailApps.length === 0) {
-    return { source: "app_inventory", apps: [] };
-  }
-  return {
-    source: "plugin_detail_without_app_inventory",
-    apps: detailApps
-      .filter((app) => app.id)
-      .map((app) => ({
-        id: app.id,
-        name: app.name,
-        accessible: true,
-        enabled: true,
-        needsAuth: app.needsAuth,
-      }))
-      .toSorted((left, right) => left.id.localeCompare(right.id)),
-  };
+  return params.record.apps;
 }
 
 function shouldForceRefreshForNotReadyPluginApps(
