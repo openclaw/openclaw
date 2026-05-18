@@ -1,4 +1,5 @@
 export { createSerpApiAiOverviewTool } from "./ai-overview.js";
+export { createSerpApiAutocompleteTool } from "./autocomplete.js";
 export { createSerpApiAmazonTool } from "./amazon.js";
 export { createSerpApiBingTool } from "./bing.js";
 export { createSerpApiDuckDuckGoTool } from "./duckduckgo.js";

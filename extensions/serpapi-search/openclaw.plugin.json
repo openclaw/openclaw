@@ -45,7 +45,8 @@
       "serpapi_events",
       "serpapi_facebook_profile",
       "serpapi_finance",
-      "serpapi_yahoo"
+      "serpapi_yahoo",
+      "serpapi_autocomplete"
     ]
   },
   "configSchema": {

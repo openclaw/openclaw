@@ -2,6 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createSerpApiWebSearchProvider } from "./src/serpapi-search-provider.js";
 import {
   createSerpApiAiOverviewTool,
+  createSerpApiAutocompleteTool,
   createSerpApiAmazonTool,
   createSerpApiBingTool,
   createSerpApiDuckDuckGoTool,
@@ -54,5 +55,6 @@ export default definePluginEntry({
     api.registerTool((ctx) => createSerpApiFacebookProfileTool(api, ctx), { name: "serpapi_facebook_profile" });
     api.registerTool((ctx) => createSerpApiFinanceTool(api, ctx), { name: "serpapi_finance" });
     api.registerTool((ctx) => createSerpApiYahooTool(api, ctx), { name: "serpapi_yahoo" });
+    api.registerTool((ctx) => createSerpApiAutocompleteTool(api, ctx), { name: "serpapi_autocomplete" });
   },
 });
