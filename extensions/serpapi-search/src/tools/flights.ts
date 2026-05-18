@@ -44,7 +44,7 @@ export function createSerpApiFlightsTool(api: OpenClawPluginApi, ctx?: SerpApiTo
       required: ["departure_id", "arrival_id", "outbound_date"],
       additionalProperties: false,
     },
-    execute: async (_toolCallId: string, args: Record<string, unknown>) => {
+    execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const raw = await callSerpApi({
         cfg,
@@ -60,6 +60,7 @@ export function createSerpApiFlightsTool(api: OpenClawPluginApi, ctx?: SerpApiTo
           currency: readStringParam(args, "currency") ?? undefined,
           gl: readStringParam(args, "gl") ?? undefined,
         },
+        signal,
       });
       return extract(raw);
     },

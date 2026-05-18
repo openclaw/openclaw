@@ -68,7 +68,7 @@ export function createSerpApiWebSearchProvider(): WebSearchProviderPlugin {
       description:
         "Search the web using SerpApi (Google). Returns titles, URLs, and snippets with real-time results.",
       parameters: SerpApiGoogleSearchSchema,
-      execute: async (args) => {
+      execute: async (args, context) => {
         const { callSerpApi: call } = await loadClientModule();
         const count = readNumberParam(args, "count", { integer: true }) ?? 5;
         const raw = await call({
@@ -81,6 +81,7 @@ export function createSerpApiWebSearchProvider(): WebSearchProviderPlugin {
             gl: readStringParam(args, "gl") ?? "us",
             safe: readStringParam(args, "safe") ?? undefined,
           },
+          signal: context?.signal,
         });
         return extract(raw, count);
       },

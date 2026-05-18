@@ -40,7 +40,7 @@ export function createSerpApiJobsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
       required: ["query"],
       additionalProperties: false,
     },
-    execute: async (_toolCallId: string, args: Record<string, unknown>) => {
+    execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const count = readNumberParam(args, "count", { integer: true }) ?? 5;
       const raw = await callSerpApi({
@@ -54,6 +54,7 @@ export function createSerpApiJobsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
           uds: readStringParam(args, "uds") ?? undefined,
           next_page_token: readStringParam(args, "next_page_token") ?? undefined,
         },
+        signal,
       });
       return extract(raw, count);
     },

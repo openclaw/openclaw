@@ -63,7 +63,7 @@ export function createSerpApiTrendsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
       required: ["query"],
       additionalProperties: false,
     },
-    execute: async (_toolCallId: string, args: Record<string, unknown>) => {
+    execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const raw = await callSerpApi({
         cfg,
@@ -79,6 +79,7 @@ export function createSerpApiTrendsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
           gprop: readStringParam(args, "gprop") ?? undefined,
           tz: readNumberParam(args, "tz", { integer: true }) ?? undefined,
         },
+        signal,
       });
       return extract(raw);
     },

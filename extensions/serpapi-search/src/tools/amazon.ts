@@ -61,7 +61,7 @@ export function createSerpApiAmazonTool(api: OpenClawPluginApi, ctx?: SerpApiToo
       required: ["query"],
       additionalProperties: false,
     },
-    execute: async (_toolCallId: string, args: Record<string, unknown>) => {
+    execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const raw = await callSerpApi({
         cfg,
@@ -76,6 +76,7 @@ export function createSerpApiAmazonTool(api: OpenClawPluginApi, ctx?: SerpApiToo
           rh: readStringParam(args, "rh") ?? undefined,
           page: readNumberParam(args, "page", { integer: true }) ?? undefined,
         },
+        signal,
       });
       return extract(raw);
     },

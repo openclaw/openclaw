@@ -43,7 +43,7 @@ export function createSerpApiMapsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
       required: ["query"],
       additionalProperties: false,
     },
-    execute: async (_toolCallId: string, args: Record<string, unknown>) => {
+    execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const count = readNumberParam(args, "count", { integer: true }) ?? 5;
       const ll = readStringParam(args, "ll");
@@ -61,6 +61,7 @@ export function createSerpApiMapsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
           nearby: readStringParam(args, "nearby") ?? undefined,
           start: readNumberParam(args, "start", { integer: true }) ?? undefined,
         },
+        signal,
       });
       return extract(raw, count);
     },

@@ -53,7 +53,7 @@ export function createSerpApiScholarTool(api: OpenClawPluginApi, ctx?: SerpApiTo
       required: ["query"],
       additionalProperties: false,
     },
-    execute: async (_toolCallId: string, args: Record<string, unknown>) => {
+    execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const count = readNumberParam(args, "count", { integer: true }) ?? 5;
       const raw = await callSerpApi({
@@ -72,6 +72,7 @@ export function createSerpApiScholarTool(api: OpenClawPluginApi, ctx?: SerpApiTo
           start: readNumberParam(args, "start", { integer: true }) ?? undefined,
           num: count,
         },
+        signal,
       });
       return extract(raw, count);
     },

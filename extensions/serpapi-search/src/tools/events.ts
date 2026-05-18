@@ -36,7 +36,7 @@ export function createSerpApiEventsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
       required: ["query"],
       additionalProperties: false,
     },
-    execute: async (_toolCallId: string, args: Record<string, unknown>) => {
+    execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const raw = await callSerpApi({
         cfg,
@@ -50,6 +50,7 @@ export function createSerpApiEventsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
           hl: readStringParam(args, "hl") ?? undefined,
           start: readNumberParam(args, "start", { integer: true }) ?? undefined,
         },
+        signal,
       });
       return extract(raw);
     },

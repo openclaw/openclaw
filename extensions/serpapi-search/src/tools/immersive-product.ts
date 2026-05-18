@@ -63,7 +63,7 @@ export function createSerpApiImmersiveProductTool(api: OpenClawPluginApi, ctx?: 
       required: ["page_token"],
       additionalProperties: false,
     },
-    execute: async (_toolCallId: string, args: Record<string, unknown>) => {
+    execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const moreStores = args.more_stores === true || args.more_stores === "true" ? "true" : undefined;
       const raw = await callSerpApi({
@@ -75,6 +75,7 @@ export function createSerpApiImmersiveProductTool(api: OpenClawPluginApi, ctx?: 
           more_stores: moreStores,
           next_page_token: readStringParam(args, "next_page_token") ?? undefined,
         },
+        signal,
       });
       return extract(raw);
     },

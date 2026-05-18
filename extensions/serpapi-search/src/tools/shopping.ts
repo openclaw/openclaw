@@ -52,7 +52,7 @@ export function createSerpApiShoppingTool(api: OpenClawPluginApi, ctx?: SerpApiT
       required: ["query"],
       additionalProperties: false,
     },
-    execute: async (_toolCallId: string, args: Record<string, unknown>) => {
+    execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const count = readNumberParam(args, "count", { integer: true }) ?? 5;
       const raw = await callSerpApi({
@@ -74,6 +74,7 @@ export function createSerpApiShoppingTool(api: OpenClawPluginApi, ctx?: SerpApiT
           shoprs: readStringParam(args, "shoprs") ?? undefined,
           start: readNumberParam(args, "start", { integer: true }) ?? undefined,
         },
+        signal,
       });
       return extract(raw, count);
     },

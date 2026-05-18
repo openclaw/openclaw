@@ -42,7 +42,7 @@ export function createSerpApiFinanceTool(api: OpenClawPluginApi, ctx?: SerpApiTo
       required: ["query"],
       additionalProperties: false,
     },
-    execute: async (_toolCallId: string, args: Record<string, unknown>) => {
+    execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const raw = await callSerpApi({
         cfg,
@@ -52,6 +52,7 @@ export function createSerpApiFinanceTool(api: OpenClawPluginApi, ctx?: SerpApiTo
           q: readStringParam(args, "query", { required: true }),
           window: readStringParam(args, "window") ?? "1D",
         },
+        signal,
       });
       return extract(raw);
     },

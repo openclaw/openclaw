@@ -33,7 +33,7 @@ export function createSerpApiYouTubeTool(api: OpenClawPluginApi, ctx?: SerpApiTo
       required: ["query"],
       additionalProperties: false,
     },
-    execute: async (_toolCallId: string, args: Record<string, unknown>) => {
+    execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const raw = await callSerpApi({
         cfg,
@@ -43,6 +43,7 @@ export function createSerpApiYouTubeTool(api: OpenClawPluginApi, ctx?: SerpApiTo
           search_query: readStringParam(args, "query", { required: true }),
           sp: readStringParam(args, "sp") ?? undefined,
         },
+        signal,
       });
       return extract(raw);
     },

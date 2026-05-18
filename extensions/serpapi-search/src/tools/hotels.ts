@@ -70,7 +70,7 @@ export function createSerpApiHotelsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
       required: ["query"],
       additionalProperties: false,
     },
-    execute: async (_toolCallId: string, args: Record<string, unknown>) => {
+    execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const raw = await callSerpApi({
         cfg,
@@ -94,6 +94,7 @@ export function createSerpApiHotelsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
               : undefined,
           next_page_token: readStringParam(args, "next_page_token") ?? undefined,
         },
+        signal,
       });
       return extract(raw);
     },

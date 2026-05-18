@@ -50,7 +50,7 @@ export function createSerpApiNewsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
       required: ["query"],
       additionalProperties: false,
     },
-    execute: async (_toolCallId: string, args: Record<string, unknown>) => {
+    execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const count = readNumberParam(args, "count", { integer: true }) ?? 5;
       const raw = await callSerpApi({
@@ -67,6 +67,7 @@ export function createSerpApiNewsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
           section_token: readStringParam(args, "section_token") ?? undefined,
           story_token: readStringParam(args, "story_token") ?? undefined,
         },
+        signal,
       });
       return extract(raw, count);
     },
