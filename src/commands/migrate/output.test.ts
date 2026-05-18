@@ -81,6 +81,61 @@ describe("formatMigrationPreview", () => {
     expect(output).not.toContain("codex-plugins-root");
   });
 
+  it("reports hidden-config conflicts in the header from plan.summary (#83284)", () => {
+    // Pre-fix, the header derived conflict and sensitive counts from the
+    // post-HIDDEN_KINDS filter, so a plan whose only conflicts lived in
+    // hidden 'config' items reported '0 conflicts' in the preview even
+    // though assertConflictFreePlan (which reads plan.summary.conflicts)
+    // still blocked apply. Header must reflect the same summary numbers
+    // that gate apply-time conflict checks.
+    const conflictedConfig: MigrationItem = {
+      ...configItem(),
+      status: "conflict",
+    };
+    const planWithHiddenConflict: MigrationPlan = {
+      ...plan([skillItem(1), conflictedConfig]),
+      summary: {
+        total: 2,
+        planned: 1,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 1,
+        errors: 0,
+        sensitive: 0,
+      },
+    };
+    const output = formatMigrationPreview(planWithHiddenConflict)
+      .map(stripAnsi)
+      .join("\n");
+    expect(output).toContain("1 item, 1 conflict, 0 sensitive items");
+    // Hidden config item must still not appear in the body groupings.
+    expect(output).not.toContain("Config:");
+    expect(output).not.toContain("codex-plugins-root");
+  });
+
+  it("reports hidden-config sensitive count in the header from plan.summary (#83284)", () => {
+    const sensitiveConfig: MigrationItem = {
+      ...configItem(),
+      sensitive: true,
+    };
+    const planWithHiddenSensitive: MigrationPlan = {
+      ...plan([skillItem(1), sensitiveConfig]),
+      summary: {
+        total: 2,
+        planned: 2,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 1,
+      },
+    };
+    const output = formatMigrationPreview(planWithHiddenSensitive)
+      .map(stripAnsi)
+      .join("\n");
+    expect(output).toContain("1 item, 0 conflicts, 1 sensitive item");
+  });
+
   it("renders migration warnings with a warning glyph", () => {
     const output = formatMigrationPreview({
       ...plan([skillItem(1)]),

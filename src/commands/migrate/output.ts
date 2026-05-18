@@ -15,14 +15,19 @@ function formatPlanHeader(plan: MigrationPlan, heading: string): string[] {
   if (plan.target) {
     lines.push(`Target: ${plan.target}`);
   }
+  // #83284: previously the conflict and sensitive counts were derived from
+  // the post-HIDDEN_KINDS filter, so a plan whose only conflicts lived under
+  // hidden `config` items reported "0 conflicts" in the preview header even
+  // though assertConflictFreePlan (which reads plan.summary.conflicts) would
+  // still throw at apply time. Use plan.summary for the accuracy-critical
+  // counts; keep the item count derived from the visible list since the
+  // groupings below only render visible items.
   const visible = plan.items.filter((item) => !HIDDEN_KINDS.has(item.kind));
-  const visibleConflicts = visible.filter((item) => item.status === "conflict").length;
-  const visibleSensitive = visible.filter((item) => item.sensitive === true).length;
   lines.push(
     [
       formatCount(visible.length, "item"),
-      formatCount(visibleConflicts, "conflict"),
-      formatCount(visibleSensitive, "sensitive item"),
+      formatCount(plan.summary.conflicts, "conflict"),
+      formatCount(plan.summary.sensitive, "sensitive item"),
     ].join(", "),
   );
   return lines;
