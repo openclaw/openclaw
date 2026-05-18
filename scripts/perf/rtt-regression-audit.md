@@ -52,7 +52,8 @@ Status: branch-local checkpoint, not release notes.
   `@earendil-works/pi-ai@0.74.1` under `minimumReleaseAge`.
 - Follow-up branch `perf/discord-rtt-summary-import` in `openclaw-rtt` updates
   `scripts/import-discord-rtt.mjs` to prefer the new summary `rttMs` field
-  before observed-message or summary-duration fallback. `npm test -- scripts/import-discord-rtt.test.mjs`
+  before observed-message or summary-duration fallback, and teaches Discord and
+  live-transport importers to ingest gateway RSS summary metrics. `npm test -- scripts/import-discord-rtt.test.mjs scripts/import-live-transport-rtt.test.mjs`
   passed 19 tests and `npm run check` passed.
 
 ## Still weak
@@ -61,7 +62,7 @@ Status: branch-local checkpoint, not release notes.
   grew by about 11M on disk across the scenario, which is worth comparing
   across repeated warm samples before calling it a leak.
 - The branch fixes OpenClaw artifact quality. `openclaw-rtt` has a paired
-  importer branch for summary `rttMs`; gateway RSS import remains a later
-  schema/reporting decision.
+  importer branch for summary `rttMs` and gateway RSS metric ingestion;
+  dashboard presentation of gateway RSS remains a later reporting decision.
 - Gitcrawl data was stale for the newest RTT window, so live `gh` history was
   the source of truth for 2026-05-16 and 2026-05-17 PR attribution.
