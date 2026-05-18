@@ -1,5 +1,5 @@
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
+import { resolveDefaultAgentDir } from "../../agents/agent-scope-config.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -164,12 +164,11 @@ async function resolveProbeApiKey(
   // (getApiKeyForModel → resolveApiKeyForProvider). This checks all sources:
   // config apiKey, env vars, auth-profiles.json, OAuth tokens, plugin synthetic auth.
   try {
-    const agentDir = resolveOpenClawAgentDir();
+    const agentDir = resolveDefaultAgentDir(cfg);
     const result = await resolveApiKeyForProvider({
       provider,
       cfg,
       agentDir,
-      env: process.env,
     });
     if (result.apiKey && typeof result.apiKey === "string" && result.apiKey.trim()) {
       return result.apiKey.trim();
