@@ -170,6 +170,35 @@ describe("resolveAttemptConstructionToolsAllow", () => {
       }),
     ).toEqual(["read"]);
   });
+
+  it("keeps no-profile runs unrestricted when message delivery is forced", () => {
+    expect(
+      resolveAttemptConstructionToolsAllow({
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps forced message delivery tools in profile-derived construction allowlists", () => {
+    expect(
+      resolveAttemptConstructionToolsAllow({
+        config: { tools: { profile: "coding" } },
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    ).toEqual(expect.arrayContaining(["message"]));
+  });
+
+  it("keeps forced heartbeat tools in profile-derived construction allowlists", () => {
+    expect(
+      resolveAttemptConstructionToolsAllow({
+        config: {
+          messages: { visibleReplies: "message_tool" },
+          tools: { profile: "coding" },
+        },
+        trigger: "heartbeat",
+      }),
+    ).toEqual(expect.arrayContaining(["heartbeat_respond"]));
+  });
 });
 
 describe("buildCallableToolNamesForEmptyAllowlistCheck", () => {

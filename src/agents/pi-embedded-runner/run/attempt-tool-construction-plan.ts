@@ -110,22 +110,25 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
+const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
+
 export function mergeForcedEmbeddedAttemptToolsAllow(
   toolsAllow: string[] | undefined,
-  params: { forceMessageTool?: boolean },
+  params: { forceMessageTool?: boolean; forceHeartbeatTool?: boolean },
 ): string[] | undefined {
-  if (
-    !params.forceMessageTool ||
-    toolsAllow === undefined ||
-    hasWildcardToolAllowlist(toolsAllow)
-  ) {
+  const forcedTools = [
+    ...(params.forceMessageTool ? ["message"] : []),
+    ...(params.forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
+  ];
+  if (forcedTools.length === 0 || toolsAllow === undefined || hasWildcardToolAllowlist(toolsAllow)) {
     return toolsAllow;
   }
   if (toolsAllow.length === 0) {
-    return ["message"];
+    return forcedTools;
   }
   const normalized = new Set(toolsAllow.map((entry) => normalizeToolName(entry)));
-  return normalized.has("message") ? toolsAllow : [...toolsAllow, "message"];
+  const missingForcedTools = forcedTools.filter((toolName) => !normalized.has(toolName));
+  return missingForcedTools.length === 0 ? toolsAllow : [...toolsAllow, ...missingForcedTools];
 }
 
 function resolveCodingToolConstructionPlanForAllowlist(
@@ -168,6 +171,7 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   isRawModelRun?: boolean;
   toolsAllow?: string[];
   forceMessageTool?: boolean;
+  forceHeartbeatTool?: boolean;
 }): {
   constructTools: boolean;
   includeCoreTools: boolean;
@@ -183,6 +187,7 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   }
   const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
     forceMessageTool: params.forceMessageTool,
+    forceHeartbeatTool: params.forceHeartbeatTool,
   });
   const codingToolConstructionPlan = resolveCodingToolConstructionPlanForAllowlist(toolsAllow);
   const includeCoreTools =

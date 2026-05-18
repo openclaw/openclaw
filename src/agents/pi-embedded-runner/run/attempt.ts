@@ -7,6 +7,7 @@ import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-ag
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
+import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../../../auto-reply/heartbeat-tool-response.js";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../../../config/config.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
@@ -196,12 +197,12 @@ import {
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
+import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";
 import {
   mergeAlsoAllowPolicy,
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../tool-policy.js";
-import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";
 import {
   addClientToolsToToolSearchCatalog,
   applyToolSearchCatalog,
@@ -1270,6 +1271,11 @@ export function resolveAttemptConstructionToolsAllow(params: {
   modelProvider?: string;
   modelId?: string;
   runtimeToolsAllow?: string[];
+  sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
+  trigger?: EmbeddedRunAttemptParams["trigger"];
+  forceMessageTool?: boolean;
+  enableHeartbeatTool?: boolean;
+  forceHeartbeatTool?: boolean;
 }): string[] | undefined {
   if (params.runtimeToolsAllow !== undefined) {
     return params.runtimeToolsAllow;
@@ -1281,7 +1287,13 @@ export function resolveAttemptConstructionToolsAllow(params: {
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
-  const allow = [
+  const shouldForceMessageTool =
+    params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
+  const shouldForceHeartbeatTool =
+    params.forceHeartbeatTool === true ||
+    params.enableHeartbeatTool === true ||
+    (params.trigger === "heartbeat" && params.config?.messages?.visibleReplies === "message_tool");
+  const profileAllow = [
     ...(mergeAlsoAllowPolicy(resolveToolProfilePolicy(policy.profile), policy.profileAlsoAllow)
       ?.allow ?? []),
     ...(mergeAlsoAllowPolicy(
@@ -1291,9 +1303,14 @@ export function resolveAttemptConstructionToolsAllow(params: {
   ]
     .map((entry) => entry.trim())
     .filter(Boolean);
-  if (allow.length === 0 || allow.some((entry) => normalizeToolName(entry) === "*")) {
+  if (profileAllow.length === 0 || profileAllow.some((entry) => normalizeToolName(entry) === "*")) {
     return undefined;
   }
+  const allow = [
+    ...profileAllow,
+    ...(shouldForceMessageTool ? ["message"] : []),
+    ...(shouldForceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
+  ];
   const deny = [
     ...(policy.globalPolicy?.deny ?? []),
     ...(policy.globalProviderPolicy?.deny ?? []),
@@ -1619,6 +1636,11 @@ export async function runEmbeddedAttempt(
         forceMessageTool:
           params.forceMessageTool === true ||
           params.sourceReplyDeliveryMode === "message_tool_only",
+        forceHeartbeatTool:
+          params.forceHeartbeatTool === true ||
+          params.enableHeartbeatTool === true ||
+          (params.trigger === "heartbeat" &&
+            params.config?.messages?.visibleReplies === "message_tool"),
       },
     );
     const constructionToolsAllow = resolveAttemptConstructionToolsAllow({
@@ -1628,6 +1650,11 @@ export async function runEmbeddedAttempt(
       modelProvider: params.provider,
       modelId: params.modelId,
       runtimeToolsAllow: toolsAllowWithForcedRuntimeTools,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      trigger: params.trigger,
+      forceMessageTool: params.forceMessageTool,
+      enableHeartbeatTool: params.enableHeartbeatTool,
+      forceHeartbeatTool: params.forceHeartbeatTool,
     });
     const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
       disableTools: params.disableTools,
@@ -1654,12 +1681,7 @@ export async function runEmbeddedAttempt(
       toolSearchControlsEnabledForRun &&
       toolSearchBaseToolsAllow !== undefined &&
       toolSearchBaseToolsAllow.length > 0
-        ? [
-            ...new Set([
-              ...toolSearchBaseToolsAllow,
-              ...TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES,
-            ]),
-          ]
+        ? [...new Set([...toolSearchBaseToolsAllow, ...TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES])]
         : toolSearchBaseToolsAllow;
     const shouldConstructTools =
       toolConstructionPlan.constructTools ||
