@@ -459,26 +459,122 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
   return { found: true, value: current };
 }
 
-type PathPattern = readonly string[];
-
-const CONFIG_SET_NUMERIC_OBJECT_KEY_PARENT_PATHS: readonly PathPattern[] = [
-  ["channels", "discord", "dms"],
-  ["channels", "discord", "guilds"],
-  ["channels", "discord", "guilds", "*", "channels"],
-  ["channels", "discord", "guilds", "*", "toolsBySender"],
-  ["channels", "discord", "guilds", "*", "channels", "*", "toolsBySender"],
-];
+type JsonSchemaRecord = {
+  type?: unknown;
+  properties?: unknown;
+  additionalProperties?: unknown;
+  items?: unknown;
+  anyOf?: unknown;
+  oneOf?: unknown;
+  allOf?: unknown;
+};
 
 type SetAtPathOptions = {
   numericObjectKeys?: boolean;
-  numericObjectKeyParentPaths?: readonly PathPattern[];
+  schema?: JsonSchemaRecord;
 };
 
-function pathMatchesPattern(path: readonly PathSegment[], pattern: PathPattern): boolean {
+function isSchemaRecord(value: unknown): value is JsonSchemaRecord {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function schemaTypes(schema: JsonSchemaRecord): Set<string> {
+  if (typeof schema.type === "string") {
+    return new Set([schema.type]);
+  }
+  if (Array.isArray(schema.type)) {
+    return new Set(schema.type.filter((entry): entry is string => typeof entry === "string"));
+  }
+  return new Set();
+}
+
+function schemaAlternatives(schema: JsonSchemaRecord): JsonSchemaRecord[] {
+  const alternatives: JsonSchemaRecord[] = [schema];
+  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
+    const entries = schema[key];
+    if (!Array.isArray(entries)) {
+      continue;
+    }
+    for (const entry of entries) {
+      if (isSchemaRecord(entry)) {
+        alternatives.push(...schemaAlternatives(entry));
+      }
+    }
+  }
+  return alternatives;
+}
+
+function schemaLooksArray(schema: JsonSchemaRecord): boolean {
+  return schemaTypes(schema).has("array") || isSchemaRecord(schema.items);
+}
+
+function schemaLooksObject(schema: JsonSchemaRecord): boolean {
+  const types = schemaTypes(schema);
   return (
-    path.length === pattern.length &&
-    path.every((segment, index) => pattern[index] === "*" || pattern[index] === segment)
+    types.has("object") ||
+    isSchemaRecord(schema.properties) ||
+    schema.additionalProperties === true ||
+    isSchemaRecord(schema.additionalProperties)
   );
+}
+
+function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSchemaRecord[] {
+  const schemas: JsonSchemaRecord[] = [];
+  for (const alternative of schemaAlternatives(schema)) {
+    if (schemaLooksArray(alternative)) {
+      if (isIndexSegment(segment) && isSchemaRecord(alternative.items)) {
+        schemas.push(alternative.items);
+      }
+      continue;
+    }
+    const properties = isSchemaRecord(alternative.properties)
+      ? (alternative.properties as Record<string, unknown>)
+      : undefined;
+    const explicit = properties?.[segment];
+    if (isSchemaRecord(explicit)) {
+      schemas.push(explicit);
+      continue;
+    }
+    if (isSchemaRecord(alternative.additionalProperties)) {
+      schemas.push(alternative.additionalProperties);
+    }
+  }
+  return schemas;
+}
+
+function schemasAtPath(schema: JsonSchemaRecord | undefined, path: readonly PathSegment[]) {
+  if (!schema) {
+    return [];
+  }
+  let schemas = [schema];
+  for (const segment of path) {
+    schemas = schemas.flatMap((candidate) => propertySchema(candidate, segment));
+    if (schemas.length === 0) {
+      return [];
+    }
+  }
+  return schemas;
+}
+
+function schemaPrefersArrayAtPath(
+  schema: JsonSchemaRecord | undefined,
+  path: readonly PathSegment[],
+): boolean | undefined {
+  const candidates = schemasAtPath(schema, path).flatMap((candidate) =>
+    schemaAlternatives(candidate),
+  );
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  const hasArray = candidates.some((candidate) => schemaLooksArray(candidate));
+  const hasObject = candidates.some((candidate) => schemaLooksObject(candidate));
+  if (hasArray && !hasObject) {
+    return true;
+  }
+  if (hasObject && !hasArray) {
+    return false;
+  }
+  return undefined;
 }
 
 function shouldCreateArrayForMissingPathSegment(params: {
@@ -491,12 +587,9 @@ function shouldCreateArrayForMissingPathSegment(params: {
     return false;
   }
   const parentPath = params.path.slice(0, params.segmentIndex + 1);
-  if (
-    params.options?.numericObjectKeyParentPaths?.some((pattern) =>
-      pathMatchesPattern(parentPath, pattern),
-    )
-  ) {
-    return false;
+  const schemaPreference = schemaPrefersArrayAtPath(params.options?.schema, parentPath);
+  if (schemaPreference !== undefined) {
+    return schemaPreference;
   }
   return true;
 }
@@ -1678,6 +1771,14 @@ function formatAutoManagedMetaError(paths: readonly PathSegment[][]): string {
   ].join("\n");
 }
 
+async function loadConfigMutationSchema(): Promise<JsonSchemaRecord | undefined> {
+  try {
+    return structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as JsonSchemaRecord;
+  } catch {
+    return undefined;
+  }
+}
+
 function collectDryRunSchemaErrors(params: { config: OpenClawConfig }): ConfigSetDryRunError[] {
   const validated = validateConfigObjectRawWithPlugins(params.config);
   if (validated.ok) {
@@ -1768,6 +1869,7 @@ async function runConfigOperations(params: {
   // instead of snapshot.config (runtime-merged with defaults).
   // This prevents runtime defaults from leaking into the written config file (issue #6070)
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+  const mutationSchema = await loadConfigMutationSchema();
   const unsetPaths: PathSegment[][] = [];
   const explicitSetPaths: PathSegment[][] = [];
   for (const operation of operations) {
@@ -1780,7 +1882,7 @@ async function runConfigOperations(params: {
     if (operation.mutation === "merge" || (options.merge && operation.mutation !== "replace")) {
       mergeAtPath(next, operation.setPath, operation.value, {
         numericObjectKeys: params.successMode === "patch",
-        numericObjectKeyParentPaths: CONFIG_SET_NUMERIC_OBJECT_KEY_PARENT_PATHS,
+        schema: mutationSchema,
       });
     } else {
       assertNonDestructiveReplacement({
@@ -1791,7 +1893,7 @@ async function runConfigOperations(params: {
       });
       setAtPath(next, operation.setPath, operation.value, {
         numericObjectKeys: params.successMode === "patch",
-        numericObjectKeyParentPaths: CONFIG_SET_NUMERIC_OBJECT_KEY_PARENT_PATHS,
+        schema: mutationSchema,
       });
     }
   }
