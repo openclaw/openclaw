@@ -32,8 +32,12 @@ import {
 } from "../shared/live-transport-scenarios.js";
 
 const execFileAsync = promisify(execFile);
+const MODEL_PAYLOAD_DEBUG_ENV = "OPENCLAW_DEBUG_MODEL_PAYLOAD";
+const MODEL_SSE_DEBUG_ENV = "OPENCLAW_DEBUG_SSE";
+const MODEL_TRANSPORT_DEBUG_ENV = "OPENCLAW_DEBUG_MODEL_TRANSPORT";
 const WHATSAPP_QA_TRACE_ENV = "OPENCLAW_QA_WHATSAPP_TRACE";
 const WHATSAPP_QA_TRACE_PATH_ENV = "OPENCLAW_QA_WHATSAPP_TRACE_PATH";
+const WHATSAPP_QA_MODEL_TRANSPORT_DEBUG_ENV = "OPENCLAW_QA_WHATSAPP_MODEL_TRANSPORT_DEBUG";
 
 export type WhatsAppQaRuntimeEnv = {
   driverAuthArchiveBase64: string;
@@ -284,6 +288,11 @@ function buildWhatsAppGatewayRuntimeEnvPatch(params: {
   if (isTruthyOptIn(env[WHATSAPP_QA_TRACE_ENV]) && params.tracePath) {
     patch[WHATSAPP_QA_TRACE_ENV] = "1";
     patch[WHATSAPP_QA_TRACE_PATH_ENV] = params.tracePath;
+  }
+  if (isTruthyOptIn(env[WHATSAPP_QA_MODEL_TRANSPORT_DEBUG_ENV])) {
+    patch[MODEL_TRANSPORT_DEBUG_ENV] = "1";
+    patch[MODEL_PAYLOAD_DEBUG_ENV] = env[MODEL_PAYLOAD_DEBUG_ENV]?.trim() || "summary";
+    patch[MODEL_SSE_DEBUG_ENV] = env[MODEL_SSE_DEBUG_ENV]?.trim() || "events";
   }
   return Object.keys(patch).length > 0 ? patch : undefined;
 }

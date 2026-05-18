@@ -198,6 +198,7 @@ describe("WhatsApp QA live runtime", () => {
       testing.buildWhatsAppGatewayRuntimeEnvPatch({
         env: {
           OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "0",
+          OPENCLAW_QA_WHATSAPP_MODEL_TRANSPORT_DEBUG: "0",
           OPENCLAW_QA_WHATSAPP_TRACE: "0",
         },
         tracePath: "/tmp/openclaw-whatsapp-trace.jsonl",
@@ -207,13 +208,19 @@ describe("WhatsApp QA live runtime", () => {
       testing.buildWhatsAppGatewayRuntimeEnvPatch({
         env: {
           OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "1",
+          OPENCLAW_QA_WHATSAPP_MODEL_TRANSPORT_DEBUG: "1",
           OPENCLAW_QA_WHATSAPP_TRACE: "1",
+          OPENCLAW_DEBUG_MODEL_PAYLOAD: "detail",
+          OPENCLAW_DEBUG_SSE: "summary",
           NODE_OPTIONS: "--max-old-space-size=4096",
         },
         tracePath: "/tmp/openclaw-whatsapp-trace.jsonl",
       }),
     ).toEqual({
       NODE_OPTIONS: "--max-old-space-size=4096 --heapsnapshot-signal=SIGUSR2",
+      OPENCLAW_DEBUG_MODEL_PAYLOAD: "detail",
+      OPENCLAW_DEBUG_MODEL_TRANSPORT: "1",
+      OPENCLAW_DEBUG_SSE: "summary",
       OPENCLAW_QA_WHATSAPP_TRACE: "1",
       OPENCLAW_QA_WHATSAPP_TRACE_PATH: "/tmp/openclaw-whatsapp-trace.jsonl",
     });

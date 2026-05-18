@@ -723,6 +723,7 @@ jobs:
           OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "1"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT: "1"
+          OPENCLAW_QA_WHATSAPP_MODEL_TRANSPORT_DEBUG: "1"
           OPENCLAW_QA_WHATSAPP_TRACE: "1"
           INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.whatsapp_scenario || '' }}
         run: |
