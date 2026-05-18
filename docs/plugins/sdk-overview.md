@@ -135,6 +135,11 @@ Structured `surfaces` may include `pi_main`, `codex_app_server`, `cli_backend`,
 guidance. Do not pass an empty `surfaces` array; it is rejected so accidental
 scope loss does not become global prompt text.
 
+Native Codex app-server developer instructions are stricter than other prompt
+surfaces: only guidance explicitly scoped to `codex_app_server` is promoted into
+that higher-priority lane. Legacy string guidance and unscoped structured
+guidance remain available to non-Codex prompt surfaces for compatibility.
+
 ### Infrastructure
 
 | Method                                         | What it registers                       |

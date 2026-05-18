@@ -1105,6 +1105,7 @@ export async function runCodexAppServerAttempt(
     workspaceDir: effectiveWorkspace,
     developerInstructions: promptBuild.developerInstructions,
     workspaceBootstrapContext,
+    skillsPrompt: openClawPromptContext ? (params.skillsSnapshot?.prompt ?? "") : "",
     tools: toolBridge.specs,
   });
   const trajectoryRecorder = createCodexTrajectoryRecorder({
@@ -3954,10 +3955,12 @@ function buildCodexSystemPromptReport(params: {
   workspaceDir: string;
   developerInstructions: string;
   workspaceBootstrapContext: CodexWorkspaceBootstrapContext;
+  skillsPrompt: string;
   tools: CodexDynamicToolSpec[];
 }): CodexSystemPromptReport {
   const toolEntries = params.tools.map(buildCodexToolReportEntry);
   const schemaChars = toolEntries.reduce((sum, tool) => sum + tool.schemaChars, 0);
+  const skillsPrompt = params.skillsPrompt.trim();
   const bootstrapMaxChars = readPositiveNumber(
     params.attempt.config?.agents?.defaults?.bootstrapMaxChars,
   );
@@ -3984,8 +3987,8 @@ function buildCodexSystemPromptReport(params: {
       injectedFiles: params.workspaceBootstrapContext.contextFiles,
     }),
     skills: {
-      promptChars: 0,
-      entries: [],
+      promptChars: skillsPrompt.length,
+      entries: buildCodexSkillReportEntries(skillsPrompt),
     },
     tools: {
       listChars: 0,
@@ -3993,6 +3996,21 @@ function buildCodexSystemPromptReport(params: {
       entries: toolEntries,
     },
   };
+}
+
+function buildCodexSkillReportEntries(
+  skillsPrompt: string,
+): CodexSystemPromptReport["skills"]["entries"] {
+  if (!skillsPrompt) {
+    return [];
+  }
+  return Array.from(skillsPrompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi))
+    .map((match) => match[0] ?? "")
+    .map((block) => ({
+      name: block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)",
+      blockChars: block.length,
+    }))
+    .filter((entry) => entry.blockChars > 0);
 }
 
 function buildCodexToolReportEntry(tool: CodexDynamicToolSpec): CodexToolReportEntry {
