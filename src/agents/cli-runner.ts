@@ -402,6 +402,15 @@ export async function runPreparedCliAgent(
   const executeCliAttempt = async (cliSessionIdToUse?: string) => {
     const output = await executePreparedCliRun(context, cliSessionIdToUse);
     const assistantText = output.text.trim();
+    if (!assistantText) {
+      throw new FailoverError("CLI backend returned an empty response.", {
+        reason: "empty_response",
+        provider: params.provider,
+        model: context.modelId,
+        sessionId: params.sessionId,
+        lane: params.lane,
+      });
+    }
     const assistantTexts = assistantText ? [assistantText] : [];
     const lastAssistant =
       assistantText.length > 0
