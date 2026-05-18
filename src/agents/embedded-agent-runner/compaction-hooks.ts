@@ -4,13 +4,20 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { log } from "./logger.js";
 
-function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
-  const mode = config?.agents?.defaults?.compaction?.postIndexSync;
+function resolvePostCompactionIndexSyncMode(
+  config?: OpenClawConfig,
+  agentId?: string | null,
+): "off" | "async" | "await" {
+  const mode =
+    (config && agentId
+      ? resolveAgentConfig(config, agentId)?.compaction?.postIndexSync
+      : undefined) ?? config?.agents?.defaults?.compaction?.postIndexSync;
   if (mode === "off" || mode === "async" || mode === "await") {
     return mode;
   }
@@ -83,17 +90,26 @@ export async function runPostCompactionSideEffects(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionFile: string;
+  agentId?: string | null;
 }): Promise<void> {
   const sessionFile = params.sessionFile.trim();
   if (!sessionFile) {
     return;
   }
+  const agentId =
+    params.agentId ??
+    (params.config && params.sessionKey
+      ? resolveSessionAgentId({
+          sessionKey: params.sessionKey,
+          config: params.config,
+        })
+      : undefined);
   emitSessionTranscriptUpdate({ sessionFile, sessionKey: params.sessionKey });
   await syncPostCompactionSessionMemory({
     config: params.config,
     sessionKey: params.sessionKey,
     sessionFile,
-    mode: resolvePostCompactionIndexSyncMode(params.config),
+    mode: resolvePostCompactionIndexSyncMode(params.config, agentId),
   });
 }
 

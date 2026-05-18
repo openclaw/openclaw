@@ -1983,6 +1983,7 @@ export async function runEmbeddedAgent(
                     config: params.config,
                     sessionKey: params.sessionKey,
                     sessionFile: activeSessionFile,
+                    agentId: sessionAgentId,
                   });
                 }
                 log.info(

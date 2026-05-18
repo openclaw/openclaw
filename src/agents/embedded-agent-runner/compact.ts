@@ -551,10 +551,6 @@ async function compactEmbeddedAgentSessionDirectOnce(
         : undefined,
     };
   };
-  const earlyAgentIds = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-  });
   const agentDir =
     params.agentDir ?? resolveAgentDir(params.config ?? {}, earlyAgentIds.sessionAgentId);
   await ensureOpenClawModelsJson(params.config, agentDir, {
@@ -1045,7 +1041,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       });
     };
 
-    const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
+    const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config, sessionAgentId);
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
       ...resolveSessionWriteLockOptions(params.config, {
@@ -1344,7 +1340,10 @@ async function compactEmbeddedAgentSessionDirectOnce(
               const hardenedBoundary = await hardenManualCompactionBoundary({
                 sessionFile: params.sessionFile,
                 preserveRecentTail:
-                  typeof params.config?.agents?.defaults?.compaction?.keepRecentTokens === "number",
+                  typeof (
+                    resolveAgentConfig(params.config ?? {}, sessionAgentId)?.compaction ??
+                    params.config?.agents?.defaults?.compaction
+                  )?.keepRecentTokens === "number",
               });
               if (hardenedBoundary.applied) {
                 effectiveFirstKeptEntryId =
@@ -1371,7 +1370,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           const messageCountAfter = session.messages.length;
           const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
           let transcriptRotation: CompactionTranscriptRotation = { rotated: false };
-          if (shouldRotateCompactionTranscript(params.config)) {
+          if (shouldRotateCompactionTranscript(params.config, sessionAgentId)) {
             try {
               transcriptRotation = await rotateTranscriptAfterCompaction({
                 sessionManager: transcriptRotationSessionManager,
@@ -1397,6 +1396,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
             config: params.config,
             sessionKey: params.sessionKey,
             sessionFile: activeSessionFile,
+            agentId: sessionAgentId,
           });
           if (params.config && params.sessionKey && checkpointSnapshot) {
             try {

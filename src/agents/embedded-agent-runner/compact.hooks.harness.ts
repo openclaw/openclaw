@@ -174,6 +174,19 @@ export const rotateTranscriptAfterCompactionMock: Mock<
   rotated: false,
 }));
 export const enqueueCommandInLaneMock = vi.fn((_lane: unknown, task: () => unknown) => task());
+export const hardenManualCompactionBoundaryMock: Mock<
+  (_params?: unknown) => Promise<{
+    applied: boolean;
+    firstKeptEntryId?: string;
+    leafId?: string;
+    messages: unknown[];
+  }>
+> = vi.fn(async () => ({
+  applied: false,
+  firstKeptEntryId: "entry-1",
+  leafId: "entry-1",
+  messages: sessionMessages,
+}));
 
 function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
@@ -336,6 +349,13 @@ export function resetCompactSessionStateMocks(): void {
   rotateTranscriptAfterCompactionMock.mockResolvedValue({ rotated: false });
   enqueueCommandInLaneMock.mockReset();
   enqueueCommandInLaneMock.mockImplementation((_lane: unknown, task: () => unknown) => task());
+  hardenManualCompactionBoundaryMock.mockReset();
+  hardenManualCompactionBoundaryMock.mockResolvedValue({
+    applied: false,
+    firstKeptEntryId: "entry-1",
+    leafId: "entry-1",
+    messages: sessionMessages,
+  });
   listRegisteredPluginAgentPromptGuidanceMock.mockReset();
   listRegisteredPluginAgentPromptGuidanceMock.mockImplementation((params?: { surface?: string }) =>
     params?.surface === "subagent"
@@ -428,6 +448,10 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../runtime-plugins.js", () => ({
     ensureRuntimePluginsLoaded,
+  }));
+
+  vi.doMock("./manual-compaction-boundary.js", () => ({
+    hardenManualCompactionBoundary: hardenManualCompactionBoundaryMock,
   }));
 
   vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", async () => {

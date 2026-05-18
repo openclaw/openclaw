@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
 import { withTimeout } from "../../node-host/with-timeout.js";
 import { finiteSecondsToTimerSafeMilliseconds } from "../../shared/number-coercion.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
 
 export const EMBEDDED_COMPACTION_TIMEOUT_MS = 900_000;
 
@@ -53,9 +54,12 @@ function composeAbortSignals(...signals: Array<AbortSignal | undefined>): {
   };
 }
 
-export function resolveCompactionTimeoutMs(cfg?: OpenClawConfig): number {
+export function resolveCompactionTimeoutMs(cfg?: OpenClawConfig, agentId?: string | null): number {
+  const raw =
+    (cfg && agentId ? resolveAgentConfig(cfg, agentId)?.compaction?.timeoutSeconds : undefined) ??
+    cfg?.agents?.defaults?.compaction?.timeoutSeconds;
   return (
-    finiteSecondsToTimerSafeMilliseconds(cfg?.agents?.defaults?.compaction?.timeoutSeconds, {
+    finiteSecondsToTimerSafeMilliseconds(raw, {
       floorSeconds: true,
     }) ?? EMBEDDED_COMPACTION_TIMEOUT_MS
   );

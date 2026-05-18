@@ -2341,6 +2341,42 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
     expect(loopHookParams.midTurnPrecheck).toBeUndefined();
   });
 
+  it("enables mid-turn precheck from a per-agent compaction override", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                mode: "safeguard",
+                midTurnPrecheck: { enabled: false },
+              },
+            },
+            list: [
+              {
+                id: "main",
+                compaction: {
+                  midTurnPrecheck: { enabled: true },
+                },
+              },
+            ],
+          },
+        } as OpenClawConfig,
+      },
+    });
+
+    const guardParams = mockParams(
+      hoisted.installToolResultContextGuardMock,
+      0,
+      "tool result guard params",
+    );
+    expect(guardParams.midTurnPrecheck).toBeDefined();
+    expect(guardParams.midTurnPrecheck?.enabled).toBe(true);
+  });
+
   it("recovers when the runtime persists the mid-turn precheck as an assistant error", async () => {
     hoisted.installToolResultContextGuardMock.mockImplementation((...args: unknown[]) => {
       const params = args[0] as ToolResultGuardInstallParams;
