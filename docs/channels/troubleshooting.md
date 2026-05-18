@@ -27,6 +27,25 @@ Healthy baseline:
 - `Capability: read-only`, `write-capable`, or `admin-capable`
 - Channel probe shows transport connected and, where supported, `works` or `audit ok`
 
+## After an update
+
+Use this when Telegram, iMessage, BlueBubbles-era configs, or another plugin
+channel disappears after updating.
+
+```bash
+openclaw status --all
+openclaw doctor --fix
+openclaw gateway restart
+openclaw status --all
+```
+
+Look for `plugin load failed: dependency tree corrupted; run openclaw doctor
+--fix` in `openclaw status --all`. That means the channel is configured, but
+the plugin setup/load path hit a corrupt dependency tree instead of registering
+the channel. `openclaw doctor --fix` removes stale plugin dependency staging
+directories and stale auth shadows, then `openclaw gateway restart` reloads the
+clean state.
+
 ## WhatsApp
 
 ### WhatsApp failure signatures
@@ -61,12 +80,12 @@ Full troubleshooting: [Telegram troubleshooting](/channels/telegram#troubleshoot
 
 ### Discord failure signatures
 
-| Symptom                                   | Fastest check                                                          | Fix                                                                                                                                                                     |
-| ----------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Bot online but no guild replies           | `openclaw channels status --probe`                                     | Allow guild/channel and verify message content intent.                                                                                                                  |
-| Group messages ignored                    | Check logs for mention gating drops                                    | Mention bot or set guild/channel `requireMention: false`.                                                                                                               |
-| Typing/token usage but no Discord message | Session log shows assistant text with `didSendViaMessagingTool: false` | The model answered privately instead of calling the message tool. Use a tool-call-reliable model, or set `messages.groupChat.visibleReplies: "automatic"` to auto-post. |
-| DM replies missing                        | `openclaw pairing list discord`                                        | Approve DM pairing or adjust DM policy.                                                                                                                                 |
+| Symptom                                   | Fastest check                                                                                                                | Fix                                                                                                                                                                                                                                                                   |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bot online but no guild replies           | `openclaw channels status --probe`                                                                                           | Allow guild/channel and verify message content intent.                                                                                                                                                                                                                |
+| Group messages ignored                    | Check logs for mention gating drops                                                                                          | Mention bot or set guild/channel `requireMention: false`.                                                                                                                                                                                                             |
+| Typing/token usage but no Discord message | Check whether this is an ambient room event or an opted-in `message_tool` room where the model missed `message(action=send)` | Inspect the gateway verbose log for suppressed final payload metadata, verify `messages.groupChat.unmentionedInbound`, read [Ambient room events](/channels/ambient-room-events), or keep `messages.groupChat.visibleReplies: "automatic"` for normal group requests. |
+| DM replies missing                        | `openclaw pairing list discord`                                                                                              | Approve DM pairing or adjust DM policy.                                                                                                                                                                                                                               |
 
 Full troubleshooting: [Discord troubleshooting](/channels/discord#troubleshooting)
 

@@ -22,7 +22,7 @@ const { ensurePluginRegistryLoaded } = await import("../../plugin-registry.js");
 
 const hasHooksMock = vi.fn((_hookName: string) => false);
 const runGatewayStopMock = vi.fn(
-  async (_event: { reason?: string }, _ctx: Record<string, unknown>) => {},
+  async (eventValue: { reason?: string }, _ctx: Record<string, unknown>) => {},
 );
 const runGlobalGatewayStopSafelyMock = vi.fn(
   async (params: {
@@ -109,10 +109,12 @@ function expectMessageCommandOptions(expected: Record<string, unknown>, callInde
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(options[key], `messageCommand options.${key}`).toEqual(expectedValue);
   }
-  expect(call[1], "messageCommand runtime").not.toBeNull();
-  expect(call[1], "messageCommand runtime").not.toBeUndefined();
-  expect(call[2], "messageCommand deps").not.toBeNull();
-  expect(call[2], "messageCommand deps").not.toBeUndefined();
+  if (call[1] == null) {
+    throw new Error("expected messageCommand runtime");
+  }
+  if (call[2] == null) {
+    throw new Error("expected messageCommand deps");
+  }
 }
 
 describe("runMessageAction", () => {
@@ -272,7 +274,7 @@ describe("runMessageAction", () => {
       scope: "configured-channels",
       onlyChannelIds: ["telegram"],
     });
-    expect(messageCommandMock).toHaveBeenCalled();
+    expect(messageCommandMock).toHaveBeenCalledTimes(1);
   });
 
   it("loads configured channel plugins for mixed broadcast target prefixes", async () => {

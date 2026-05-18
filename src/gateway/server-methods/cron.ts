@@ -23,6 +23,7 @@ import {
   errorShape,
   formatValidationErrors,
   validateCronAddParams,
+  validateCronGetParams,
   validateCronListParams,
   validateCronRemoveParams,
   validateCronRunParams,
@@ -247,6 +248,39 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const status = await context.cron.status();
     respond(true, status, undefined);
+  },
+  "cron.get": async ({ params, respond, context }) => {
+    if (!validateCronGetParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.get params: ${formatValidationErrors(validateCronGetParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as { id?: string; jobId?: string };
+    const jobId = p.id ?? p.jobId;
+    if (!jobId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.get params: missing id"),
+      );
+      return;
+    }
+    const job = await context.cron.readJob(jobId);
+    if (!job) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `cron job not found: ${jobId}`),
+      );
+      return;
+    }
+    respond(true, job, undefined);
   },
   "cron.add": async ({ params, respond, context }) => {
     const sessionKey =
@@ -498,6 +532,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       scope?: "job" | "all";
       id?: string;
       jobId?: string;
+      runId?: string;
       limit?: number;
       offset?: number;
       statuses?: Array<"ok" | "error" | "skipped">;
@@ -531,6 +566,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         offset: p.offset,
         statuses: p.statuses,
         status: p.status,
+        runId: p.runId,
         deliveryStatuses: p.deliveryStatuses,
         deliveryStatus: p.deliveryStatus,
         query: p.query,
@@ -560,6 +596,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       jobId: jobId as string,
       statuses: p.statuses,
       status: p.status,
+      runId: p.runId,
       deliveryStatuses: p.deliveryStatuses,
       deliveryStatus: p.deliveryStatus,
       query: p.query,

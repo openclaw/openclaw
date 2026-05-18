@@ -72,11 +72,13 @@ const mocks = vi.hoisted(() => {
   });
   return {
     loadConfigMock: vi.fn(() => ({})),
-    resolveDefaultAgentIdMock: vi.fn((_config: unknown) => "main"),
+    resolveDefaultAgentIdMock: vi.fn((configForTest: unknown) => "main"),
     resolveAgentIdByWorkspacePathMock: vi.fn(
-      (_config: unknown, _workspacePath: string): string | undefined => undefined,
+      (configForTest: unknown, _workspacePath: string): string | undefined => undefined,
     ),
-    resolveAgentWorkspaceDirMock: vi.fn((_config: unknown, _agentId: string) => "/tmp/workspace"),
+    resolveAgentWorkspaceDirMock: vi.fn(
+      (configForTest: unknown, _agentId: string) => "/tmp/workspace",
+    ),
     searchSkillsFromClawHubMock: vi.fn(),
     installSkillFromClawHubMock: vi.fn(),
     updateSkillsFromClawHubMock: vi.fn(),
@@ -110,20 +112,24 @@ const {
 function mockCall(mock: unknown, index = 0): Array<unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
   const call = calls.at(index);
-  expect(call, `mock call ${index + 1}`).toBeDefined();
-  return call as Array<unknown>;
+  if (!call) {
+    throw new Error(`Expected mock call ${index + 1}`);
+  }
+  return call;
 }
 
 function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
   const [arg] = mockCall(mock);
-  expect(arg).toBeTypeOf("object");
-  expect(arg).not.toBeNull();
+  if (!arg || typeof arg !== "object") {
+    throw new Error("expected first mock argument object");
+  }
   return arg as Record<string, unknown>;
 }
 
 function expectObjectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected object fields");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -131,8 +137,9 @@ function expectObjectFields(value: unknown, expected: Record<string, unknown>): 
 }
 
 function expectLogger(value: unknown): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected logger object");
+  }
 }
 
 function expectStatusWorkspaceCall(workspaceDir: string): void {
@@ -143,6 +150,11 @@ function expectStatusWorkspaceCall(workspaceDir: string): void {
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
+}));
+
+vi.mock("../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils.js")>()),
+  CONFIG_DIR: "/tmp/openclaw-config",
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -234,7 +246,7 @@ describe("skills cli commands", () => {
 
   function routeWorkspaceByAgent() {
     resolveAgentWorkspaceDirMock.mockImplementation(
-      (_config: unknown, agentId: string) => `/tmp/workspace-${agentId}`,
+      (configForTest: unknown, agentId: string) => `/tmp/workspace-${agentId}`,
     );
   }
 
@@ -346,6 +358,44 @@ describe("skills cli commands", () => {
     );
   });
 
+  it("installs a skill into the shared global skills directory", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/openclaw-config/skills/calendar",
+    });
+
+    await runCommand(["skills", "install", "calendar", "--global"]);
+
+    expect(resolveAgentIdByWorkspacePathMock).not.toHaveBeenCalled();
+    expect(resolveDefaultAgentIdMock).not.toHaveBeenCalled();
+    expect(resolveAgentWorkspaceDirMock).not.toHaveBeenCalled();
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-config",
+      }),
+    );
+  });
+
+  it("rejects using --global and --agent together for installs", async () => {
+    await expect(
+      runCommand(["skills", "install", "calendar", "--global", "--agent", "main"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain("Use either --global or --agent, not both.");
+    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects using parent --agent with install --global", async () => {
+    await expect(
+      runCommand(["skills", "--agent", "writer", "install", "calendar", "--global"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain("Use either --global or --agent, not both.");
+    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+  });
+
   it("updates all tracked ClawHub skills", async () => {
     readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
     updateSkillsFromClawHubMock.mockResolvedValue([
@@ -431,6 +481,78 @@ describe("skills cli commands", () => {
     expectLogger(updateOverrideArgs.logger);
   });
 
+  it("updates tracked ClawHub skills in the shared global skills directory", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/openclaw-config/skills/calendar",
+      },
+    ]);
+
+    await runCommand(["skills", "update", "--all", "--global"]);
+
+    expect(resolveAgentIdByWorkspacePathMock).not.toHaveBeenCalled();
+    expect(resolveDefaultAgentIdMock).not.toHaveBeenCalled();
+    expect(resolveAgentWorkspaceDirMock).not.toHaveBeenCalled();
+    expect(readTrackedClawHubSkillSlugsMock).toHaveBeenCalledWith("/tmp/openclaw-config");
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw-config",
+      slug: undefined,
+      logger: expect.any(Object),
+    });
+  });
+
+  it("updates a single tracked ClawHub skill in the shared global skills directory", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/openclaw-config/skills/calendar",
+      },
+    ]);
+
+    await runCommand(["skills", "update", "calendar", "--global"]);
+
+    expect(resolveAgentIdByWorkspacePathMock).not.toHaveBeenCalled();
+    expect(resolveDefaultAgentIdMock).not.toHaveBeenCalled();
+    expect(resolveAgentWorkspaceDirMock).not.toHaveBeenCalled();
+    expect(readTrackedClawHubSkillSlugsMock).toHaveBeenCalledWith("/tmp/openclaw-config");
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw-config",
+      slug: "calendar",
+      logger: expect.any(Object),
+    });
+  });
+
+  it("rejects using --global and --agent together for updates", async () => {
+    await expect(
+      runCommand(["skills", "update", "--all", "--global", "--agent", "main"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain("Use either --global or --agent, not both.");
+    expect(readTrackedClawHubSkillSlugsMock).not.toHaveBeenCalled();
+    expect(updateSkillsFromClawHubMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects using parent --agent with update --global", async () => {
+    await expect(
+      runCommand(["skills", "--agent", "writer", "update", "--all", "--global"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain("Use either --global or --agent, not both.");
+    expect(readTrackedClawHubSkillSlugsMock).not.toHaveBeenCalled();
+    expect(updateSkillsFromClawHubMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       label: "list",
@@ -463,12 +585,11 @@ describe("skills cli commands", () => {
     await runCommand(argv);
 
     expectStatusWorkspaceCall("/tmp/workspace");
-    expect(
-      defaultRuntime.writeStdout.mock.calls.length + defaultRuntime.writeJson.mock.calls.length,
-    ).toBeGreaterThan(0);
+    expect(defaultRuntime.writeStdout).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(defaultRuntime.log).not.toHaveBeenCalled();
     expect(runtimeErrors).toStrictEqual([]);
-    expect(runtimeStdout.length).toBeGreaterThan(0);
+    expect(runtimeStdout).toHaveLength(1);
 
     const payload = JSON.parse(runtimeStdout.at(-1) ?? "{}") as Record<string, unknown>;
     assert(payload);

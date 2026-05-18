@@ -17,10 +17,10 @@ const {
 } = getProviderHttpMocks();
 
 let buildGoogleSpeechProvider: typeof import("./speech-provider.js").buildGoogleSpeechProvider;
-let __testing: typeof import("./speech-provider.js").__testing;
+let testing: typeof import("./speech-provider.js").testing;
 
 beforeAll(async () => {
-  ({ buildGoogleSpeechProvider, __testing } = await import("./speech-provider.js"));
+  ({ buildGoogleSpeechProvider, testing } = await import("./speech-provider.js"));
 });
 
 installProviderHttpMockCleanup();
@@ -56,14 +56,33 @@ function installGoogleTtsRequestMock(pcm = Buffer.from([1, 0, 2, 0])) {
 }
 
 function expectRecordFields(value: unknown, expected: Record<string, unknown>) {
-  expect(value).toBeDefined();
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(actual[key]).toEqual(expectedValue);
   }
   return actual;
+}
+
+function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[0];
+}
+
+function requireFirstRecordArg(
+  mock: ReturnType<typeof vi.fn>,
+  label: string,
+): Record<string, unknown> {
+  const value = requireFirstMockArg(mock, label);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Expected ${label}`);
+  }
+  return value as Record<string, unknown>;
 }
 
 describe("Google speech provider", () => {
@@ -94,7 +113,7 @@ describe("Google speech provider", () => {
       timeoutMs: 12_345,
     });
 
-    const request = expectRecordFields(requestMock.mock.calls[0]?.[0], {
+    const request = expectRecordFields(requireFirstRecordArg(requestMock, "Google TTS request"), {
       url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
       body: {
         contents: [
@@ -124,7 +143,7 @@ describe("Google speech provider", () => {
     expect(result.voiceCompatible).toBe(false);
     expect(result.audioBuffer.subarray(0, 4).toString("ascii")).toBe("RIFF");
     expect(result.audioBuffer.subarray(8, 12).toString("ascii")).toBe("WAVE");
-    expect(result.audioBuffer.readUInt32LE(24)).toBe(__testing.GOOGLE_TTS_SAMPLE_RATE);
+    expect(result.audioBuffer.readUInt32LE(24)).toBe(testing.GOOGLE_TTS_SAMPLE_RATE);
     expect(result.audioBuffer.subarray(44)).toEqual(Buffer.from([1, 0, 2, 0]));
     expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
   });
@@ -150,11 +169,14 @@ describe("Google speech provider", () => {
       fileExtension: ".opus",
       voiceCompatible: true,
     });
-    const transcodeArg = expectRecordFields(transcodeAudioBufferToOpusMock.mock.calls[0]?.[0], {
-      inputExtension: "wav",
-      tempPrefix: "tts-google-",
-      timeoutMs: 12_000,
-    });
+    const transcodeArg = expectRecordFields(
+      requireFirstRecordArg(transcodeAudioBufferToOpusMock, "Google TTS transcode request"),
+      {
+        inputExtension: "wav",
+        tempPrefix: "tts-google-",
+        timeoutMs: 12_000,
+      },
+    );
     expect(Buffer.isBuffer(transcodeArg.audioBuffer)).toBe(true);
     const audioBuffer = transcodeArg.audioBuffer as Buffer;
     expect(audioBuffer.subarray(0, 4).toString("ascii")).toBe("RIFF");
@@ -164,7 +186,7 @@ describe("Google speech provider", () => {
   it("advertises all documented Gemini TTS-capable models", () => {
     const provider = buildGoogleSpeechProvider();
 
-    expect(provider.models).toEqual(__testing.GOOGLE_TTS_MODELS);
+    expect(provider.models).toEqual(testing.GOOGLE_TTS_MODELS);
   });
 
   it("renders deterministic audio-profile-v1 prompts without generating tags", async () => {
@@ -362,10 +384,9 @@ describe("Google speech provider", () => {
       timeoutMs: 10_000,
     });
 
-    expectRecordFields(requestMock.mock.calls[0]?.[0], {
+    const request = expectRecordFields(requireFirstRecordArg(requestMock, "Google TTS request"), {
       url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
-    });
-    const request = requestMock.mock.calls[0]?.[0] as { headers?: HeadersInit };
+    }) as { headers?: HeadersInit };
     expect(new Headers(request.headers).get("x-goog-api-key")).toBe("env-google-key");
   });
 
@@ -394,7 +415,9 @@ describe("Google speech provider", () => {
       timeoutMs: 10_000,
     });
 
-    const request = requestMock.mock.calls[0]?.[0] as { headers?: HeadersInit };
+    const request = requireFirstRecordArg(requestMock, "Google TTS request") as {
+      headers?: HeadersInit;
+    };
     expect(new Headers(request.headers).get("x-goog-api-key")).toBe("model-provider-google-key");
   });
 
@@ -422,9 +445,12 @@ describe("Google speech provider", () => {
       timeoutMs: 5_000,
     });
 
-    const request = expectRecordFields(postJsonRequestMock.mock.calls[0]?.[0], {
-      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-tts:generateContent",
-    });
+    const request = expectRecordFields(
+      requireFirstRecordArg(postJsonRequestMock, "Google telephony TTS request"),
+      {
+        url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-tts:generateContent",
+      },
+    );
     const body = request.body as {
       contents?: unknown;
       generationConfig?: { speechConfig?: unknown };
@@ -465,7 +491,7 @@ describe("Google speech provider", () => {
       timeoutMs: 10_000,
     });
 
-    const request = requestMock.mock.calls[0]?.[0] as {
+    const request = requireFirstRecordArg(requestMock, "Google TTS request") as {
       body?: { contents?: Array<{ parts?: Array<{ text?: string }> }> };
     };
     expect(request.body?.contents?.[0]?.parts?.[0]?.text).toBe(
@@ -552,8 +578,9 @@ describe("Google speech provider", () => {
     const provider = buildGoogleSpeechProvider();
 
     const voices = await provider.listVoices?.({ providerConfig: {} });
-    expect(voices?.some((voice) => voice.id === "Kore" && voice.name === "Kore")).toBe(true);
-    expect(voices?.some((voice) => voice.id === "Puck" && voice.name === "Puck")).toBe(true);
+    const voiceLabels = voices?.map((voice) => `${voice.id}:${voice.name}`);
+    expect(voiceLabels).toContain("Kore:Kore");
+    expect(voiceLabels).toContain("Puck:Puck");
   });
 
   it("formats Google TTS HTTP errors with provider details", async () => {
@@ -615,7 +642,7 @@ describe("Google speech provider", () => {
     });
 
     const requestConfig = expectRecordFields(
-      resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0],
+      requireFirstRecordArg(resolveProviderHttpRequestConfigMock, "Google TTS HTTP config request"),
       {
         allowPrivateNetwork: true,
       },
@@ -645,7 +672,7 @@ describe("Google speech provider", () => {
     });
 
     const requestConfig = expectRecordFields(
-      resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0],
+      requireFirstRecordArg(resolveProviderHttpRequestConfigMock, "Google TTS HTTP config request"),
       {
         allowPrivateNetwork: true,
       },

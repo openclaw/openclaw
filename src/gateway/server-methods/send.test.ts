@@ -208,7 +208,11 @@ function firstRespondCall(respond: ReturnType<typeof vi.fn>) {
       Record<string, any> | undefined,
     ]
   >;
-  return calls[0];
+  const call = calls[0];
+  if (!call) {
+    throw new Error("Expected respond call");
+  }
+  return call;
 }
 
 function lastDispatchChannelMessageActionCall(): Record<string, any> | undefined {
@@ -218,9 +222,13 @@ function lastDispatchChannelMessageActionCall(): Record<string, any> | undefined
   return calls.at(-1)?.[0];
 }
 
-function pollCall(index = 0): Record<string, any> | undefined {
+function pollCall(index = 0): Record<string, any> {
   const calls = mocks.sendPoll.mock.calls as unknown as Array<[Record<string, any>]>;
-  return calls[index]?.[0];
+  const call = calls[index]?.[0];
+  if (!call) {
+    throw new Error(`Expected poll call at index ${index}`);
+  }
+  return call;
 }
 
 function outboundRouteCall(index = 0): Record<string, any> | undefined {
@@ -679,9 +687,12 @@ describe("gateway send mirroring", () => {
       { connect: { scopes: ["operator.admin"] } },
     );
 
-    expect(pollCall()?.cfg).toBeDefined();
-    expect(pollCall()?.to).toBe("resolved");
-    expect(pollCall()?.gatewayClientScopes).toEqual(["operator.admin"]);
+    const call = pollCall();
+    if (call.cfg === undefined) {
+      throw new Error("Expected poll delivery config");
+    }
+    expect(call.to).toBe("resolved");
+    expect(call.gatewayClientScopes).toEqual(["operator.admin"]);
   });
 
   it("forwards an empty gateway scope array into outbound poll delivery", async () => {
@@ -696,9 +707,12 @@ describe("gateway send mirroring", () => {
       { connect: { scopes: [] } },
     );
 
-    expect(pollCall()?.cfg).toBeDefined();
-    expect(pollCall()?.to).toBe("resolved");
-    expect(pollCall()?.gatewayClientScopes).toEqual([]);
+    const call = pollCall();
+    if (call.cfg === undefined) {
+      throw new Error("Expected poll delivery config");
+    }
+    expect(call.to).toBe("resolved");
+    expect(call.gatewayClientScopes).toEqual([]);
   });
 
   it("includes optional poll delivery identifiers in the gateway payload", async () => {
@@ -743,10 +757,12 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.resolveMessageChannelSelection).toHaveBeenCalled();
     const response = firstRespondCall(respond);
-    expect(response?.[0]).toBe(true);
-    expect(response?.[1]).toBeDefined();
-    expect(response?.[2]).toBeUndefined();
-    expect(response?.[3]).toEqual({ channel: "slack" });
+    expect(response[0]).toBe(true);
+    if (response[1] === undefined) {
+      throw new Error("Expected poll missing-channel response payload");
+    }
+    expect(response[2]).toBeUndefined();
+    expect(response[3]).toEqual({ channel: "slack" });
   });
 
   it("returns invalid request when poll channel selection is ambiguous", async () => {
@@ -998,7 +1014,7 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-send-options",
     });
 
-    const options = mocks.deliverOutboundPayloads.mock.calls[0]?.[0];
+    const options = mocks.deliverOutboundPayloads.mock.calls.at(0)?.[0];
     expect(options?.forceDocument).toBe(true);
     expect(options?.silent).toBe(true);
     expect(options?.formatting).toEqual({ parseMode: "HTML" });
@@ -1249,6 +1265,7 @@ describe("gateway send mirroring", () => {
         emoji: "✅",
       },
       requesterSenderId: "trusted-user",
+      inboundTurnKind: "room_event",
       toolContext: {
         currentGraphChannelId: "graph:team/chan",
         currentChannelProvider: "whatsapp",
@@ -1274,6 +1291,9 @@ describe("gateway send mirroring", () => {
       },
       undefined,
       { channel: "whatsapp" },
+    );
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({ inboundEventKind: "room_event" }),
     );
   });
 
@@ -1305,17 +1325,21 @@ describe("gateway send mirroring", () => {
       "send-test-message-action-media-roots",
     );
 
-    const { respond } = await runMessageActionRequest({
-      channel: "telegram",
-      action: "sendAttachment",
-      params: { chatId: "123", mediaUrl: `${TEST_AGENT_WORKSPACE}/render.png` },
-      agentId: "work",
-      idempotencyKey: "idem-message-action-media-roots",
-    });
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "sendAttachment",
+        params: { chatId: "123", mediaUrl: `${TEST_AGENT_WORKSPACE}/render.png` },
+        agentId: "work",
+        idempotencyKey: "idem-message-action-media-roots",
+      },
+      { connect: { scopes: ["operator.write"] } },
+    );
 
-    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(firstRespondCall(respond)[0]).toBe(true);
     const actionCall = lastDispatchChannelMessageActionCall();
     expect(actionCall?.mediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);
+    expect(actionCall?.gatewayClientScopes).toEqual(["operator.write"]);
   });
 
   it("forces senderIsOwner=false for narrowly-scoped callers but honors it for full operators", async () => {

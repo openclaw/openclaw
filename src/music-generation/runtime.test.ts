@@ -281,6 +281,64 @@ describe("music-generation runtime", () => {
     ]);
   });
 
+  it("ignores model-specific unsupported lyrics and instrumental overrides", async () => {
+    let seenRequest:
+      | {
+          lyrics?: string;
+          instrumental?: boolean;
+        }
+      | undefined;
+    providers = [
+      {
+        id: "fal",
+        capabilities: {
+          generate: {
+            supportsLyrics: true,
+            supportsLyricsByModel: {
+              "fal-ai/stable-audio-25/text-to-audio": false,
+            },
+            supportsInstrumental: true,
+            supportsInstrumentalByModel: {
+              "fal-ai/stable-audio-25/text-to-audio": false,
+            },
+          },
+        },
+        generateMusic: async (req) => {
+          seenRequest = {
+            lyrics: req.lyrics,
+            instrumental: req.instrumental,
+          };
+          return {
+            tracks: [{ buffer: Buffer.from("wav-bytes"), mimeType: "audio/wav" }],
+            model: "fal-ai/stable-audio-25/text-to-audio",
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "fal/fal-ai/stable-audio-25/text-to-audio" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "orchestral hit",
+      lyrics: "rise up",
+      instrumental: true,
+    });
+
+    expect(seenRequest).toEqual({
+      lyrics: undefined,
+      instrumental: undefined,
+    });
+    expect(result.ignoredOverrides).toEqual([
+      { key: "lyrics", value: "rise up" },
+      { key: "instrumental", value: true },
+    ]);
+  });
+
   it("uses mode-specific capabilities for edit requests", async () => {
     let seenRequest:
       | {
@@ -395,8 +453,6 @@ describe("music-generation runtime", () => {
       durationSeconds: 30,
     });
     expect(result.ignoredOverrides).toStrictEqual([]);
-    expect(result.normalization).toBeDefined();
-    expect(result.metadata).toBeDefined();
     if (!result.normalization || !result.metadata) {
       throw new Error("Expected normalization and metadata");
     }

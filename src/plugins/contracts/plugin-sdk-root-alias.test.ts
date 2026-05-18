@@ -87,8 +87,8 @@ function loadRootAliasWithStubs(options?: {
     exports: Record<string, unknown>,
     require: NodeJS.Require,
     module: { exports: Record<string, unknown> },
-    __filename: string,
-    __dirname: string,
+    filename: string,
+    dirname: string,
   ) => void;
   const module = { exports: {} as Record<string, unknown> };
   const aliasPath = options?.aliasPath ?? rootAliasPath;
@@ -327,7 +327,7 @@ describe("plugin-sdk root alias", () => {
       expectedTryNative: false,
     },
     {
-      name: "prefers source loading on Windows even when compat resolves to dist",
+      name: "prefers native loading on Windows when compat resolves to dist",
       options: {
         distExists: true,
         env: { NODE_ENV: "production" },
@@ -336,7 +336,7 @@ describe("plugin-sdk root alias", () => {
           slowHelper: (): string => "loaded",
         },
       },
-      expectedTryNative: false,
+      expectedTryNative: true,
     },
   ])("$name", ({ options, expectedTryNative }) => {
     const lazyModule = loadRootAliasWithStubs(options);
@@ -441,6 +441,30 @@ describe("plugin-sdk root alias", () => {
     );
     expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/../escape");
     expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/nested/path");
+  });
+
+  it("keeps non-QA private local-only plugin-sdk subpaths out of the CJS root alias", () => {
+    const packageRoot = path.dirname(path.dirname(path.dirname(rootAliasPath)));
+    const sourceCodexNativeTaskRuntimePath = path.join(
+      packageRoot,
+      "src",
+      "plugin-sdk",
+      "codex-native-task-runtime.ts",
+    );
+    const sourceQaRuntimePath = path.join(packageRoot, "src", "plugin-sdk", "qa-runtime.ts");
+    const lazyModule = loadRootAliasWithStubs({
+      privateLocalOnlySubpaths: ["codex-native-task-runtime", "qa-runtime"],
+      existingPaths: [sourceCodexNativeTaskRuntimePath, sourceQaRuntimePath],
+      monolithicExports: {
+        slowHelper: (): string => "loaded",
+      },
+    });
+
+    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
+    const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
+    expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/codex-native-task-runtime");
+    expect(aliasMap).not.toHaveProperty("@openclaw/plugin-sdk/codex-native-task-runtime");
+    expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/qa-runtime");
   });
 
   it("builds source plugin-sdk subpath aliases through the wider source extension family", () => {
@@ -555,7 +579,7 @@ describe("plugin-sdk root alias", () => {
     }
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
-    expect(rootSdk.__esModule).toBe(true);
+    expect(rootSdk["__esModule"]).toBe(true);
   });
 
   it("keeps legacy root export names present in the compat source", () => {

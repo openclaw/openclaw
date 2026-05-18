@@ -81,7 +81,9 @@ vi.mock("./channel-tools.js", () => ({
 
 async function waitForTransport(): Promise<{ onclose?: (() => void) | undefined }> {
   await vi.waitFor(() => {
-    expect(transportState.lastTransport).not.toBeNull();
+    if (transportState.lastTransport === null) {
+      throw new Error("MCP stdio transport was not created");
+    }
   });
   if (!transportState.lastTransport) {
     throw new Error("MCP stdio transport was not created");

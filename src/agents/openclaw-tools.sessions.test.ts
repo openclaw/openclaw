@@ -33,11 +33,11 @@ vi.mock("../config/config.js", () => ({
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { __testing as agentStepTesting } from "./tools/agent-step.js";
+import { testing as agentStepTesting } from "./tools/agent-step.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
-import { __testing as sessionsResolutionTesting } from "./tools/sessions-resolution.js";
-import { __testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.js";
+import { testing as sessionsResolutionTesting } from "./tools/sessions-resolution.js";
+import { testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 const TEST_CONFIG = {
@@ -496,18 +496,47 @@ describe("sessions tools", () => {
         includeDerivedTitles: true,
         includeLastMessage: true,
       });
-      const details = result.details as {
-        sessions?: Array<{
-          key?: string;
-          derivedTitle?: string;
-          lastMessagePreview?: string;
-        }>;
-      };
-      expect(details.sessions).toHaveLength(1);
-      const visible = details.sessions?.[0];
-      expect(visible?.key).toBe("agent:main:main");
-      expect(visible?.derivedTitle).toBe("Visible project kickoff");
-      expect(visible?.lastMessagePreview).toBe("Visible latest reply");
+      const details = result.details as { sessions?: Array<Record<string, unknown>> };
+      expect(details.sessions).toStrictEqual([
+        {
+          key: "agent:main:main",
+          agentId: "main",
+          kind: "other",
+          channel: "unknown",
+          origin: undefined,
+          spawnedBy: undefined,
+          label: undefined,
+          displayName: undefined,
+          derivedTitle: "Visible project kickoff",
+          lastMessagePreview: "Visible latest reply",
+          parentSessionKey: undefined,
+          deliveryContext: undefined,
+          updatedAt: 20,
+          sessionId: "visible",
+          model: undefined,
+          contextTokens: undefined,
+          totalTokens: undefined,
+          estimatedCostUsd: undefined,
+          status: undefined,
+          startedAt: undefined,
+          endedAt: undefined,
+          runtimeMs: undefined,
+          childSessions: undefined,
+          thinkingLevel: undefined,
+          fastMode: undefined,
+          verboseLevel: undefined,
+          reasoningLevel: undefined,
+          elevatedLevel: undefined,
+          responseUsage: undefined,
+          systemSent: undefined,
+          abortedLastRun: undefined,
+          sendPolicy: undefined,
+          lastChannel: undefined,
+          lastTo: undefined,
+          lastAccountId: undefined,
+          transcriptPath: path.join(fs.realpathSync(tmpDir), "visible.jsonl"),
+        },
+      ]);
       expect(JSON.stringify(details.sessions)).not.toContain("Hidden");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -810,7 +839,12 @@ describe("sessions tools", () => {
 
     const result = await tool.execute("call5", { sessionKey: sessionId });
     const details = result.details as { messages?: unknown[] };
-    expect(details.messages).toHaveLength(1);
+    expect(details.messages).toStrictEqual([
+      {
+        content: [{ text: "ok", type: "text" }],
+        role: "assistant",
+      },
+    ]);
     const historyCall = callGatewayMock.mock.calls.find(
       (call) => (call[0] as { method?: string }).method === "chat.history",
     );

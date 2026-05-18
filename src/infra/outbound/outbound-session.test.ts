@@ -15,6 +15,21 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error(`expected ${label} params to be an object`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
   recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
   resolveStorePath: mocks.resolveStorePath,
@@ -335,6 +350,54 @@ describe("resolveOutboundSessionRoute", () => {
         chatType: "channel",
       },
     },
+    {
+      name: "FallbackChat explicit group prefix",
+      cfg: baseConfig,
+      channel: "fallbackchat",
+      target: "group:ops",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:group:ops",
+        from: "fallbackchat:group:ops",
+        to: "channel:ops",
+        chatType: "group",
+      },
+    },
+    {
+      name: "FallbackChat plugin parser classifies space-style target",
+      cfg: baseConfig,
+      channel: "fallbackchat",
+      target: "spaces/AAA",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:group:spaces/aaa",
+        from: "fallbackchat:group:spaces/AAA",
+        to: "channel:spaces/AAA",
+        chatType: "group",
+      },
+    },
+    {
+      name: "FallbackChat explicit user prefix",
+      cfg: perChannelPeerCfg,
+      channel: "fallbackchat",
+      target: "user:U123",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:direct:u123",
+        from: "fallbackchat:U123",
+        to: "user:U123",
+        chatType: "direct",
+      },
+    },
+    {
+      name: "FallbackChat explicit thread prefix",
+      cfg: baseConfig,
+      channel: "fallbackchat",
+      target: "thread:abc",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:channel:abc",
+        from: "fallbackchat:channel:abc",
+        to: "channel:abc",
+        chatType: "channel",
+      },
+    },
   ] satisfies NamedRouteCase[])("$name", async ({ name: _name, ...params }) => {
     await expectResolvedRoute(params);
   });
@@ -444,8 +507,11 @@ describe("ensureOutboundSessionEntry", () => {
       agentId: "main",
     });
     expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalledOnce();
-    const metadata = mocks.recordSessionMetaFromInbound.mock.calls[0]?.[0];
-    expect(metadata?.storePath).toBe("/stores/main.json");
-    expect(metadata?.sessionKey).toBe("agent:main:workspace:channel:c1");
+    const metadata = firstMockArg(
+      mocks.recordSessionMetaFromInbound,
+      "recordSessionMetaFromInbound",
+    );
+    expect(metadata.storePath).toBe("/stores/main.json");
+    expect(metadata.sessionKey).toBe("agent:main:workspace:channel:c1");
   });
 });

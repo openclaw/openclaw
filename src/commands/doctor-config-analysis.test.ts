@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { OpenClawSchema } from "../config/zod-schema.js";
 import {
   collectImplicitFallbackClobberWarnings,
   formatConfigPath,
@@ -33,6 +34,117 @@ describe("doctor config analysis helpers", () => {
     expect(result.removed).toContain("unexpected");
     expect((result.config as Record<string, unknown>).unexpected).toBeUndefined();
     expect((result.config as Record<string, unknown>).hooks).toStrictEqual({});
+  });
+
+  it("preserves user-authored model and agent metadata during unknown-key cleanup", () => {
+    const result = stripUnknownConfigKeys({
+      defaultModel: "minimax/MiniMax-M2.7",
+      mcp: {
+        servers: {
+          tushareMcp: {
+            transport: "streamable-http",
+            url: "https://example.com/mcp",
+          },
+        },
+      },
+      agents: {
+        list: [
+          { id: "main", description: "Main coordinator" },
+          { id: "stock-news", description: "Tracks market news" },
+        ],
+      },
+      unexpected: true,
+    } as never);
+
+    expect(result.removed).toContain("unexpected");
+    expect(result.removed).not.toContain("defaultModel");
+    expect(result.removed).not.toContain("agents.list[0].description");
+    expect(result.removed).not.toContain("agents.list[1].description");
+    expect(OpenClawSchema.safeParse({ defaultModel: "minimax/MiniMax-M2.7" }).success).toBe(false);
+    expect(result.config).toMatchObject({
+      defaultModel: "minimax/MiniMax-M2.7",
+      mcp: {
+        servers: {
+          tushareMcp: {
+            transport: "streamable-http",
+            url: "https://example.com/mcp",
+          },
+        },
+      },
+      agents: {
+        list: [
+          { id: "main", description: "Main coordinator" },
+          { id: "stock-news", description: "Tracks market news" },
+        ],
+      },
+    });
+  });
+
+  describe("stripUnknownConfigKeys during update", () => {
+    const originalEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+
+    beforeEach(() => {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    });
+
+    afterEach(() => {
+      if (originalEnv !== undefined) {
+        process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalEnv;
+      } else {
+        delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+      }
+    });
+
+    it("returns input unchanged when OPENCLAW_UPDATE_IN_PROGRESS=1", () => {
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+      const input = { hooks: {}, unexpected: true } as never;
+      const result = stripUnknownConfigKeys(input);
+      expect(result.config).toBe(input);
+      expect(result.removed).toEqual([]);
+    });
+
+    it("returns input unchanged when OPENCLAW_UPDATE_IN_PROGRESS=true", () => {
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS = "true";
+      const input = { hooks: {}, unexpected: true } as never;
+      const result = stripUnknownConfigKeys(input);
+      expect(result.config).toBe(input);
+      expect(result.removed).toEqual([]);
+    });
+
+    it("strips unknown keys normally when env is unset", () => {
+      const result = stripUnknownConfigKeys({
+        hooks: {},
+        unexpected: true,
+      } as never);
+      expect(result.removed).toContain("unexpected");
+    });
+  });
+
+  describe("plugins.installs whitelist", () => {
+    const originalEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+
+    beforeEach(() => {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    });
+
+    afterEach(() => {
+      if (originalEnv !== undefined) {
+        process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalEnv;
+      } else {
+        delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+      }
+    });
+
+    it("never strips plugins.installs even when env is unset", () => {
+      const result = stripUnknownConfigKeys({
+        plugins: { installs: ["matrix"], badKey: true },
+      } as never);
+      expect(result.removed).toContain("plugins.badKey");
+      expect(result.removed).not.toContain("plugins.installs");
+      expect((result.config as Record<string, Record<string, unknown>>).plugins?.installs).toEqual([
+        "matrix",
+      ]);
+    });
   });
 });
 
@@ -109,13 +221,12 @@ describe("collectImplicitFallbackClobberWarnings", () => {
       list: [{ id: "ops", model: "openai/gpt-5.3" }],
     });
     const warnings = collectImplicitFallbackClobberWarnings(cfg);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("agents.list[0].model (id=ops)");
-    expect(warnings[0]).toContain('"openai/gpt-5.3"');
-    expect(warnings[0]).toContain("bare string with no fallbacks");
-    expect(warnings[0]).toContain("clobbers agents.defaults.model.fallbacks");
-    expect(warnings[0]).toContain("openai/gpt-5.4");
-    expect(warnings[0]).toContain("openai/gpt-5.3");
+    expect(warnings).toStrictEqual([
+      [
+        '- agents.list[0].model (id=ops) is "openai/gpt-5.3", a bare string with no fallbacks. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4, openai/gpt-5.3), leaving the agent with no fallbacks.',
+        '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
+      ].join("\n"),
+    ]);
   });
 
   it("matches runtime fallback resolution for warned string and partial-object shapes", () => {
@@ -146,11 +257,12 @@ describe("collectImplicitFallbackClobberWarnings", () => {
       list: [{ id: "researcher", model: { primary: "openai/gpt-5.4" } }],
     });
     const warnings = collectImplicitFallbackClobberWarnings(cfg);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("agents.list[0].model (id=researcher)");
-    expect(warnings[0]).toContain('{ primary: "openai/gpt-5.4" }');
-    expect(warnings[0]).toContain('object with no explicit "fallbacks" key');
-    expect(warnings[0]).toContain("clobbers agents.defaults.model.fallbacks");
+    expect(warnings).toStrictEqual([
+      [
+        '- agents.list[0].model (id=researcher) is { primary: "openai/gpt-5.4" }, a object with no explicit "fallbacks" key. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
+        '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
+      ].join("\n"),
+    ]);
   });
 
   it("does not warn for object form with blank primary", () => {
@@ -213,8 +325,15 @@ describe("collectImplicitFallbackClobberWarnings", () => {
       ],
     });
     const warnings = collectImplicitFallbackClobberWarnings(cfg);
-    expect(warnings).toHaveLength(2);
-    expect(warnings[0]).toContain("agents.list[0].model (id=ops)");
-    expect(warnings[1]).toContain("agents.list[1].model (id=researcher)");
+    expect(warnings).toStrictEqual([
+      [
+        '- agents.list[0].model (id=ops) is "openai/gpt-5.3", a bare string with no fallbacks. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
+        '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
+      ].join("\n"),
+      [
+        '- agents.list[1].model (id=researcher) is { primary: "openai/gpt-5.4" }, a object with no explicit "fallbacks" key. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
+        '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
+      ].join("\n"),
+    ]);
   });
 });

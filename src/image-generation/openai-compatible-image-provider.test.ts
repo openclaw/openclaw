@@ -61,7 +61,11 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
 }));
 
 function requireFirstRequestHeaders(mock: ReturnType<typeof vi.fn>): Headers {
-  const [request] = (mock.mock.calls[0] ?? []) as [{ headers?: Headers }?];
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected request call");
+  }
+  const [request] = call as [{ headers?: Headers }];
   if (!request) {
     throw new Error("expected request call");
   }
@@ -273,5 +277,22 @@ describe("OpenAI-compatible image provider helper", () => {
     });
     const timeoutRequest = requireFirstCallArg(postJsonRequestMock) as { timeoutMs?: number };
     expect(timeoutRequest.timeoutMs).toBe(60_000);
+  });
+
+  it("wraps malformed successful image responses with provider-owned errors", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: { json: async () => ({ data: { b64_json: "not-an-array" } }) },
+      release: vi.fn(async () => {}),
+    });
+    const provider = createProvider();
+
+    await expect(
+      provider.generateImage({
+        provider: "sample",
+        model: "sample-image",
+        prompt: "bad shape",
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("Sample image generation response malformed");
   });
 });

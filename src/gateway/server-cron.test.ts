@@ -109,8 +109,9 @@ function createCronConfig(name: string): OpenClawConfig {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -125,9 +126,23 @@ function callArg(
   argIndex: number,
   label: string,
 ) {
-  const call = mock.mock.calls.at(callIndex);
-  expect(call, label).toBeDefined();
-  return call?.[argIndex];
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call: ${label}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`Expected mock call argument ${argIndex}: ${label}`);
+  }
+  return call[argIndex];
+}
+
+function lastMockCall(mock: { mock: { calls: Array<Array<unknown>> } }, label: string) {
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error(`Expected last mock call: ${label}`);
+  }
+  return call;
 }
 
 function expectHookContext(callIndex: number, fields: { config?: unknown; hasGetCron?: boolean }) {
@@ -640,13 +655,15 @@ describe("buildGatewayCronService", () => {
       // configured default "primary". The exact resolved sessionKey is
       // delegated to resolveCronSessionKey (already covered by other tests);
       // here we only assert the agent target is consistent across both sides.
-      const enqueueCall = enqueueSystemEventMock.mock.calls.at(-1);
-      const wakeCall = requestHeartbeatMock.mock.calls.at(-1);
+      const enqueueCall = lastMockCall(enqueueSystemEventMock, "enqueue system event");
+      const wakeCall = lastMockCall(requestHeartbeatMock, "request heartbeat");
       const enqueueSessionKey = (enqueueCall?.[1] as { sessionKey?: string } | undefined)
         ?.sessionKey;
       const wakeOpts = wakeCall?.[0] as { agentId?: string; sessionKey?: string } | undefined;
 
-      expect(enqueueSessionKey).toBeDefined();
+      if (!enqueueSessionKey) {
+        throw new Error("Expected enqueue session key");
+      }
       expect(enqueueSessionKey).toMatch(/^agent:ops:/);
       expect(wakeOpts?.agentId).toBe("ops");
       expect(wakeOpts?.sessionKey).toMatch(/^agent:ops:/);
@@ -702,8 +719,8 @@ describe("buildGatewayCronService", () => {
         sessionKey: "discord:channel:ops",
       });
 
-      const enqueueCall = enqueueSystemEventMock.mock.calls.at(-1);
-      const wakeCall = requestHeartbeatMock.mock.calls.at(-1);
+      const enqueueCall = lastMockCall(enqueueSystemEventMock, "enqueue system event");
+      const wakeCall = lastMockCall(requestHeartbeatMock, "request heartbeat");
       expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toBe(
         "agent:primary:discord:channel:ops",
       );
@@ -762,8 +779,8 @@ describe("buildGatewayCronService", () => {
         sessionKey: "agent:ghost:discord:channel:ops",
       });
 
-      const enqueueCall = enqueueSystemEventMock.mock.calls.at(-1);
-      const wakeCall = requestHeartbeatMock.mock.calls.at(-1);
+      const enqueueCall = lastMockCall(enqueueSystemEventMock, "enqueue system event");
+      const wakeCall = lastMockCall(requestHeartbeatMock, "request heartbeat");
       expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toBe(
         "agent:primary:main",
       );
@@ -805,8 +822,8 @@ describe("buildGatewayCronService", () => {
         }),
       ).toEqual({ ok: true });
 
-      const enqueueCall = enqueueSystemEventMock.mock.calls.at(-1);
-      const wakeCall = requestHeartbeatMock.mock.calls.at(-1);
+      const enqueueCall = lastMockCall(enqueueSystemEventMock, "enqueue system event");
+      const wakeCall = lastMockCall(requestHeartbeatMock, "request heartbeat");
       expect(enqueueCall?.[0]).toBe("hello");
       expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toMatch(
         /^agent:ops:/,
@@ -830,8 +847,8 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("preserves trust downgrades when cron enqueues system events", () => {
-    const cfg = createCronConfig("server-cron-untrusted");
+  it("forwards cron system events with owner-downgrade metadata", () => {
+    const cfg = createCronConfig("server-cron-system-event");
     loadConfigMock.mockReturnValue(cfg);
 
     const state = buildGatewayCronService({
@@ -850,6 +867,7 @@ describe("buildGatewayCronService", () => {
                   agentId?: string;
                   sessionKey?: string;
                   contextKey?: string;
+                  forceSenderIsOwnerFalse?: boolean;
                   trusted?: boolean;
                 },
               ) => void;
@@ -861,12 +879,13 @@ describe("buildGatewayCronService", () => {
       cronDeps?.enqueueSystemEvent?.("hello", {
         sessionKey: "discord:channel:ops",
         contextKey: "cron:test",
-        trusted: false,
+        forceSenderIsOwnerFalse: true,
       });
 
       expect(enqueueSystemEventMock).toHaveBeenCalledWith("hello", {
         sessionKey: "agent:main:discord:channel:ops",
         contextKey: "cron:test",
+        forceSenderIsOwnerFalse: true,
         trusted: false,
       });
     } finally {

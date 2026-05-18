@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as providerTransportStream from "../provider-transport-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt-cache-boundary.js";
 import {
-  __testing,
+  testing,
   describeEmbeddedAgentStreamStrategy,
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentStreamFn,
@@ -30,8 +30,6 @@ const overrideBoundaryAwareStreamFnOnce = (streamFn: StreamFn): void => {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected ${label} to be an object`);
   }
@@ -46,7 +44,7 @@ async function expectStreamResultRecord(
 }
 
 afterEach(() => {
-  __testing.resetPiNativeCodexResponsesStreamFnForTest();
+  testing.resetPiNativeCodexResponsesStreamFnForTest();
 });
 
 describe("describeEmbeddedAgentStreamStrategy", () => {
@@ -150,7 +148,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("routes Codex responses fallbacks through PI native transport", async () => {
     const nativeStreamFn = vi.fn(async (_model, context, options) => ({ context, options }));
-    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
+    testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       sessionId: "session-1",
@@ -325,7 +323,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("injects the resolved run api key into the PI native Codex Responses fallback", async () => {
     const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
-    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
+    testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       sessionId: "session-1",
@@ -350,7 +348,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const authStorage = {
       getApiKey: vi.fn(async () => "stored-bearer-token"),
     };
-    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
+    testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       sessionId: "session-1",
@@ -373,7 +371,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
   it("forwards the run abort signal into the PI native fallback when callers omit one", async () => {
     const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
     const runSignal = new AbortController().signal;
-    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
+    testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       sessionId: "session-1",
@@ -398,7 +396,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
     const runSignal = new AbortController().signal;
     const explicitSignal = new AbortController().signal;
-    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
+    testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       sessionId: "session-1",
@@ -423,7 +421,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
   it("forwards the run signal on the sync PI native fallback path without auth credentials", async () => {
     const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
     const runSignal = new AbortController().signal;
-    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
+    testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       sessionId: "session-1",
@@ -444,7 +442,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("strips cache boundary markers on the PI native fallback path", async () => {
     const nativeStreamFn = vi.fn(async (_model, context, _options) => context);
-    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
+    testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       sessionId: "session-1",

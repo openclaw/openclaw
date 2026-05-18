@@ -185,6 +185,7 @@ type HostExecApprovalParams = {
   ask: ExecAsk;
   warningText?: string;
   commandSpans?: ExecApprovalCommandSpan[];
+  commandHighlighting?: boolean;
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
@@ -269,10 +270,12 @@ async function buildHostApprovalDecisionParams(
   params: HostExecApprovalParams,
 ): Promise<RequestExecApprovalDecisionParams> {
   const commandSpans =
-    params.commandSpans ??
-    (shouldSkipGeneratedCommandSpans(params)
-      ? undefined
-      : await resolveCommandSpans(params.command ?? params.systemRunPlan?.commandText));
+    params.commandHighlighting === true
+      ? (params.commandSpans ??
+        (shouldSkipGeneratedCommandSpans(params)
+          ? undefined
+          : await resolveCommandSpans(params.command ?? params.systemRunPlan?.commandText)))
+      : undefined;
   return {
     id: params.approvalId,
     command: params.command,

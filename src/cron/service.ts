@@ -64,6 +64,10 @@ export class CronService implements CronServiceContract {
     return this.state.store?.jobs.find((job) => job.id === id);
   }
 
+  async readJob(id: string): Promise<CronJob | undefined> {
+    return await ops.readJob(this.state, id);
+  }
+
   getDefaultAgentId(): string | undefined {
     return this.state.deps.defaultAgentId;
   }

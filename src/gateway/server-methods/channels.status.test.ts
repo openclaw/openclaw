@@ -70,24 +70,28 @@ function createOptions(
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected record");
+  }
   return value as Record<string, unknown>;
 }
 
 function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[])[] } }) {
   const call = mock.mock.calls[0];
-  expect(call).toBeTruthy();
-  return call?.[0];
+  if (!call) {
+    throw new Error("Expected first mock call");
+  }
+  return call[0];
 }
 
 function requireRespondPayload(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const call = respond.mock.calls[0];
-  expect(call).toBeTruthy();
-  expect(call?.[0]).toBe(true);
-  expect(call?.[2]).toBeUndefined();
-  return requireRecord(call?.[1]);
+  if (!call) {
+    throw new Error("Expected respond call");
+  }
+  expect(call[0]).toBe(true);
+  expect(call[2]).toBeUndefined();
+  return requireRecord(call[1]);
 }
 
 describe("channelsHandlers channels.status", () => {
@@ -221,10 +225,19 @@ describe("channelsHandlers channels.status", () => {
     const payload = requireRespondPayload(respond);
     expect(payload.channelOrder).toEqual(["imessage"]);
     expect(payload.channels).toEqual({
-      imessage: expect.any(Object),
+      imessage: { configured: true },
     });
     expect(payload.channelAccounts).toEqual({
-      imessage: [expect.objectContaining({ accountId: "default" })],
+      imessage: [
+        {
+          accountId: "default",
+          configured: true,
+          lastProbeAt: expect.any(Number),
+          lastInboundAt: null,
+          lastOutboundAt: null,
+          healthState: "not-running",
+        },
+      ],
     });
   });
 

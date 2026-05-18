@@ -103,8 +103,9 @@ function createAutoEnabledCliFixture() {
 
 function getMockCallObject(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
   const value = mock.mock.calls[callIndex]?.[argIndex];
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected mock call ${callIndex} arg ${argIndex} object`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -113,10 +114,12 @@ function expectAutoEnabledCliLoad(params: {
   autoEnabledConfig: OpenClawConfig;
   autoEnabledReasons?: Record<string, string[]>;
 }) {
-  expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-    config: params.rawConfig,
-    env: process.env,
-  });
+  expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config: params.rawConfig,
+      env: process.env,
+    }),
+  );
   const loadOptions = getMockCallObject(mocks.loadOpenClawPlugins);
   expect(loadOptions.config).toBe(params.autoEnabledConfig);
   expect(loadOptions.activationSourceConfig).toBe(params.rawConfig);
@@ -189,11 +192,11 @@ describe("registerPluginCliCommands", () => {
   it("injects gateway-backed node runtime into plugin CLI commands", async () => {
     await registerPluginCliCommands(createProgram(), {} as OpenClawConfig);
 
-    const loadOptions = mocks.loadOpenClawPlugins.mock.calls[0]?.[0] as
-      | { runtimeOptions?: { nodes?: { list?: unknown; invoke?: unknown } } }
-      | undefined;
-    expect(typeof loadOptions?.runtimeOptions?.nodes?.list).toBe("function");
-    expect(typeof loadOptions?.runtimeOptions?.nodes?.invoke).toBe("function");
+    const loadOptions = getMockCallObject(mocks.loadOpenClawPlugins) as {
+      runtimeOptions?: { nodes?: { list?: unknown; invoke?: unknown } };
+    };
+    expect(typeof loadOptions.runtimeOptions?.nodes?.list).toBe("function");
+    expect(typeof loadOptions.runtimeOptions?.nodes?.invoke).toBe("function");
   });
 
   it("reuses loaded plugin CLI entries on repeat calls for the same program", async () => {
@@ -214,6 +217,20 @@ describe("registerPluginCliCommands", () => {
     await registerPluginCliCommands(program, {} as OpenClawConfig);
 
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(2);
+  });
+
+  it("reloads plugin CLI entries when config or environment identity changes", async () => {
+    const program = createProgram();
+    const configA = {} as OpenClawConfig;
+    const configB = { plugins: {} } as OpenClawConfig;
+    const envA = { OPENCLAW_HOME: "/tmp/a" } as NodeJS.ProcessEnv;
+    const envB = { OPENCLAW_HOME: "/tmp/b" } as NodeJS.ProcessEnv;
+
+    await registerPluginCliCommands(program, configA, envA);
+    await registerPluginCliCommands(program, configA, envB);
+    await registerPluginCliCommands(program, configB, envB);
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(3);
   });
 
   it("loads plugin CLI commands from the auto-enabled config snapshot", async () => {
@@ -429,7 +446,7 @@ describe("registerPluginCliCommands", () => {
     await program.parseAsync(["nodes", "canvas", "snapshot"], { from: "user" });
 
     expect(mocks.memoryRegister).toHaveBeenCalledTimes(1);
-    expect(mocks.memoryRegister.mock.calls[0]?.[0].program).toBe(nodes);
+    expect(getMockCallObject(mocks.memoryRegister).program).toBe(nodes);
     expect(mocks.memoryListAction).toHaveBeenCalledTimes(1);
   });
 

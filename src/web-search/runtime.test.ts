@@ -111,9 +111,9 @@ function createGoogleSearchProvider(
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
   return value as Record<string, unknown>;
 }
 
@@ -138,11 +138,13 @@ describe("web search runtime", () => {
   let runWebSearch: typeof import("./runtime.js").runWebSearch;
   let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
+  let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 
   beforeAll(async () => {
     ({ runWebSearch } = await import("./runtime.js"));
     ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
       await import("../secrets/runtime.js"));
+    ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
   });
 
   beforeEach(() => {
@@ -323,6 +325,45 @@ describe("web search runtime", () => {
       provider: "custom",
       result: {
         query: "runtime-source",
+        apiKey: "resolved-custom-key",
+      },
+    });
+  });
+
+  it("can prefer an explicitly resolved input config over a pinned config snapshot", async () => {
+    const provider = createCustomSearchProvider({
+      createTool: ({ config }) => ({
+        description: "custom",
+        parameters: {},
+        execute: async (args) => ({
+          ...args,
+          apiKey: getCustomSearchApiKey(config),
+        }),
+      }),
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+
+    setRuntimeConfigSnapshot(
+      createCustomSearchConfig({
+        source: "env",
+        provider: "default",
+        id: "CUSTOM_SEARCH_API_KEY",
+      }),
+    );
+
+    await expect(
+      runWebSearch({
+        config: createCustomSearchConfig("resolved-custom-key"),
+        preferInputConfig: true,
+        providerId: "custom",
+        preferRuntimeProviders: false,
+        args: { query: "resolved-input" },
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: {
+        query: "resolved-input",
         apiKey: "resolved-custom-key",
       },
     });
@@ -595,8 +636,8 @@ describe("web search runtime", () => {
 
     const ownerCall = mockCallParam(resolveManifestContractOwnerPluginIdMock);
     expect(ownerCall.contract).toBe("webSearchProviders");
-    expect(ownerCall.origin).toBe("bundled");
     expect(ownerCall.value).toBe("duckduckgo");
+    expect(ownerCall).not.toHaveProperty("origin");
     expect(mockCallParam(resolveRuntimeWebSearchProvidersMock).onlyPluginIds).toEqual([
       "duckduckgo",
     ]);
@@ -626,6 +667,38 @@ describe("web search runtime", () => {
     expect(result.provider).toBe("gemini");
 
     expect(mockCallParam(resolveRuntimeWebSearchProvidersMock).onlyPluginIds).toEqual(["google"]);
+  });
+
+  it("scopes configured global web_search providers when runtime providers are not preferred", async () => {
+    resolveManifestContractOwnerPluginIdMock.mockImplementation(({ value }) =>
+      value === "custom" ? "custom-search" : undefined,
+    );
+    resolvePluginWebSearchProvidersMock.mockReturnValue([createCustomSearchProvider()]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "custom",
+              },
+            },
+          },
+          ...createCustomSearchConfig("custom-key"),
+        },
+        preferRuntimeProviders: false,
+        args: { query: "configured-custom" },
+      }),
+    ).resolves.toMatchObject({
+      provider: "custom",
+    });
+
+    expect(resolvePluginWebSearchProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["custom-search"],
+      }),
+    );
   });
 
   it("keeps runtime provider loading unscoped when configured provider ownership is unknown", async () => {

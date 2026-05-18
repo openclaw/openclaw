@@ -7,6 +7,16 @@ import {
   parseFiniteNumber,
 } from "./provider-usage.fetch.shared.js";
 
+function requireFetchCall(
+  mock: ReturnType<typeof vi.fn>,
+): [URL | RequestInfo, RequestInit | undefined] {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected fetch call");
+  }
+  return call as [URL | RequestInfo, RequestInit | undefined];
+}
+
 describe("provider usage fetch shared helpers", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -48,7 +58,7 @@ describe("provider usage fetch shared helpers", () => {
     );
 
     expect(fetchFnMock).toHaveBeenCalledOnce();
-    const [input, init] = fetchFnMock.mock.calls[0] ?? [];
+    const [input, init] = requireFetchCall(fetchFnMock);
     expect(input).toBe("https://example.com/usage");
     expect(init?.method).toBe("POST");
     expect(init?.headers).toEqual({ authorization: "Bearer test" });

@@ -27,7 +27,6 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 function expectBudgetResult(
   result: Awaited<ReturnType<typeof enforceSessionDiskBudget>>,
 ): asserts result is NonNullable<Awaited<ReturnType<typeof enforceSessionDiskBudget>>> {
-  expect(result).not.toBeNull();
   if (result === null) {
     throw new Error("expected disk budget enforcement result");
   }
@@ -100,6 +99,43 @@ describe("enforceSessionDiskBudget", () => {
       expectBudgetResult(result);
       expect(result.removedFiles).toBe(1);
       expect(result.removedEntries).toBe(0);
+    });
+  });
+
+  it("preserves runtime-provided session keys when removing entries for disk budget", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const childKey = "agent:main:subagent:pending-budget";
+      const removableKey = "agent:main:old-removable";
+      const now = Date.now();
+      const store: Record<string, SessionEntry> = {
+        [childKey]: {
+          sessionId: "pending-budget",
+          updatedAt: now - 10_000,
+          spawnedBy: "agent:main:main",
+        },
+        [removableKey]: {
+          sessionId: "old-removable",
+          updatedAt: now,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        preserveKeys: new Set([childKey]),
+        maintenance: {
+          maxDiskBytes: 120,
+          highWaterBytes: 80,
+        },
+        warnOnly: false,
+      });
+
+      expectBudgetResult(result);
+      expect(result.removedEntries).toBe(1);
+      expect(store).toHaveProperty(childKey);
+      expect(store).not.toHaveProperty(removableKey);
     });
   });
 

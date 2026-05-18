@@ -26,11 +26,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 let ensurePluginRegistryLoaded: typeof import("./runtime-registry-loader.js").ensurePluginRegistryLoaded;
-let resetPluginRegistryLoadedForTests: typeof import("./runtime-registry-loader.js").__testing.resetPluginRegistryLoadedForTests;
+let resetPluginRegistryLoadedForTests: typeof import("./runtime-registry-loader.js").testing.resetPluginRegistryLoadedForTests;
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -110,7 +111,7 @@ describe("ensurePluginRegistryLoaded", () => {
   beforeAll(async () => {
     const mod = await import("./runtime-registry-loader.js");
     ensurePluginRegistryLoaded = mod.ensurePluginRegistryLoaded;
-    resetPluginRegistryLoadedForTests = () => mod.__testing.resetPluginRegistryLoadedForTests();
+    resetPluginRegistryLoadedForTests = () => mod.testing.resetPluginRegistryLoadedForTests();
   });
 
   beforeEach(() => {
@@ -179,10 +180,12 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(channelOptions.activationSourceConfig).toEqual({ plugins: { allow: ["demo-channel"] } });
     expect(channelOptions.env).toBe(env);
     expect(channelOptions.workspaceDir).toBe("/resolved-workspace");
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: rawConfig,
-      env,
-    });
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: rawConfig,
+        env,
+      }),
+    );
     const load = loadOptions();
     const loadConfig = requireRecord(load.config, "load config");
     expect(loadConfig.channels).toEqual(rawConfig.channels);

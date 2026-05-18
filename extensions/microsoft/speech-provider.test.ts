@@ -25,6 +25,28 @@ import * as ttsModule from "./tts.js";
 
 const TEST_CFG = {} as OpenClawConfig;
 
+function requireFirstEdgeTtsCall(edgeSpy: ReturnType<typeof vi.spyOn>): {
+  config?: unknown;
+  outputPath: string;
+  text?: string;
+  timeoutMs?: number;
+} {
+  const [call] = edgeSpy.mock.calls;
+  if (!call) {
+    throw new Error("expected Microsoft Edge TTS call");
+  }
+  const [edgeCall] = call;
+  if (!edgeCall || typeof edgeCall !== "object" || Array.isArray(edgeCall)) {
+    throw new Error("expected Microsoft Edge TTS call");
+  }
+  return edgeCall as {
+    config?: unknown;
+    outputPath: string;
+    text?: string;
+    timeoutMs?: number;
+  };
+}
+
 describe("listMicrosoftVoices", () => {
   const proxyReset = installDebugProxyTestResetHooks();
 
@@ -213,10 +235,7 @@ describe("buildMicrosoftSpeechProvider", () => {
     });
 
     expect(edgeSpy).toHaveBeenCalledOnce();
-    const edgeCall = edgeSpy.mock.calls[0]?.[0];
-    if (!edgeCall) {
-      throw new Error("expected Microsoft Edge TTS call");
-    }
+    const edgeCall = requireFirstEdgeTtsCall(edgeSpy);
     expect(edgeCall.text).toBe("你好，这是一个测试 hello");
     expect(path.basename(edgeCall.outputPath)).toBe("speech.mp3");
     expect(edgeCall.timeoutMs).toBe(1000);
@@ -258,10 +277,7 @@ describe("buildMicrosoftSpeechProvider", () => {
     });
 
     expect(edgeSpy).toHaveBeenCalledOnce();
-    const edgeCall = edgeSpy.mock.calls[0]?.[0];
-    if (!edgeCall) {
-      throw new Error("expected Microsoft Edge TTS call");
-    }
+    const edgeCall = requireFirstEdgeTtsCall(edgeSpy);
     expect(edgeCall.text).toBe("你好，这是一个测试 hello");
     expect(path.basename(edgeCall.outputPath)).toBe("speech.mp3");
     expect(edgeCall.timeoutMs).toBe(1000);

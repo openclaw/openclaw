@@ -30,7 +30,6 @@ function expectModelFields(
   model: ProviderRuntimeModel | undefined,
   fields: Partial<ProviderRuntimeModel>,
 ) {
-  expect(model).toBeDefined();
   if (!model) {
     throw new Error("expected provider model");
   }
@@ -114,6 +113,24 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     expectModelFields(model, {
       provider: "google",
       id: "gemini-3.1-pro-preview",
+      api: "google-generative-ai",
+      reasoning: true,
+    });
+  });
+
+  it("canonicalizes provider-qualified retired Gemini 3 Pro preview requests", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      ctx: createContext({
+        provider: "google",
+        modelId: "google/gemini-3-pro-preview",
+        models: [createTemplateModel("google", "gemini-3.1-pro-preview")],
+      }),
+    });
+
+    expectModelFields(model, {
+      provider: "google",
+      id: "google/gemini-3.1-pro-preview",
       api: "google-generative-ai",
       reasoning: true,
     });

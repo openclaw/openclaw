@@ -66,6 +66,18 @@ const workspaceConfig = {
   },
 } as OpenClawConfig;
 
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  return requireRecord(arg);
+}
+
 async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
   try {
@@ -89,9 +101,9 @@ const runDrySend = (params: {
   });
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
   return value as Record<string, unknown>;
 }
 
@@ -106,9 +118,16 @@ function requireActionPayload(
 }
 
 function requireLoadWebMediaOptions(): Record<string, unknown> {
+  const call = requireLoadWebMediaCall();
+  return requireRecord(call[1]);
+}
+
+function requireLoadWebMediaCall(): readonly unknown[] {
   const call = vi.mocked(loadWebMedia).mock.calls[0];
-  expect(call).toBeTruthy();
-  return requireRecord(call?.[1]);
+  if (!call) {
+    throw new Error("Expected loadWebMedia to be called");
+  }
+  return call;
 }
 
 async function expectSandboxMediaRewrite(params: {
@@ -275,8 +294,43 @@ describe("runMessageAction media behavior", () => {
     });
 
     expect(result.kind).toBe("send");
-    const sendArgs = requireRecord(channelResolutionMocks.executeSendAction.mock.calls[0]?.[0]);
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
     expect(sendArgs.asVoice).toBe(true);
+  });
+
+  it("sends structured attachments as media urls", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspacePlugin,
+        },
+      ]),
+    );
+
+    await withSandbox(async (sandboxDir) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "12345678",
+          message: "track ready",
+          attachments: [{ path: "./song.mp3" }, { filePath: "/workspace/cover.png" }],
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+      if (result.kind !== "send") {
+        throw new Error("expected send result");
+      }
+      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "song.mp3"));
+      expect(result.sendResult?.mediaUrls).toEqual([
+        path.join(sandboxDir, "song.mp3"),
+        path.join(sandboxDir, "cover.png"),
+      ]);
+    });
   });
 
   describe("sendAttachment hydration", () => {
@@ -461,6 +515,22 @@ describe("runMessageAction media behavior", () => {
       expectAttachmentRemoteMediaPayload(result);
     });
 
+    it("keeps original upload-file bytes when forced to send as a document", async () => {
+      await runMessageAction({
+        cfg,
+        action: "upload-file",
+        params: {
+          channel: "attachmentchat",
+          target: "+15551234567",
+          media: "https://example.com/pic.png",
+          message: "caption",
+          forceDocument: true,
+        },
+      });
+
+      expect(requireLoadWebMediaOptions().optimizeImages).toBe(false);
+    });
+
     it("enforces sandboxed attachment paths for attachment actions", async () => {
       for (const testCase of [
         {
@@ -511,9 +581,9 @@ describe("runMessageAction media behavior", () => {
             sandboxRoot: sandboxDir,
           });
 
-          const call = vi.mocked(loadWebMedia).mock.calls[0];
-          expect(call?.[0], testCase.name).toBe(path.join(sandboxDir, testCase.expectedPath));
-          expect(requireRecord(call?.[1]).sandboxValidated, testCase.name).toBe(true);
+          const call = requireLoadWebMediaCall();
+          expect(call[0], testCase.name).toBe(path.join(sandboxDir, testCase.expectedPath));
+          expect(requireRecord(call[1]).sandboxValidated, testCase.name).toBe(true);
         });
       }
 
@@ -643,7 +713,7 @@ describe("runMessageAction media behavior", () => {
 
       expect(result.kind).toBe("action");
       expect(handleActionMock).toHaveBeenCalledTimes(1);
-      const handlerParams = handleActionMock.mock.calls[0]?.[0] as Record<string, unknown>;
+      const handlerParams = firstMockArg(handleActionMock, "handleAction");
       expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
       expect(handlerParams.filename).toBe("pic.png");
       expect(handlerParams.contentType).toBe("image/png");
@@ -700,7 +770,7 @@ describe("runMessageAction media behavior", () => {
       });
 
       expect(handleActionMock).toHaveBeenCalledTimes(1);
-      const handlerParams = handleActionMock.mock.calls[0]?.[0] as Record<string, unknown>;
+      const handlerParams = firstMockArg(handleActionMock, "handleAction");
       expect(handlerParams.caption).toBeUndefined();
       expect(handlerParams.message).toBe("look at this");
     });
@@ -830,8 +900,10 @@ describe("runMessageAction media behavior", () => {
         if (result.kind !== "send") {
           throw new Error("expected send result");
         }
-        expect(result.sendResult).toBeTruthy();
-        expect(result.sendResult?.channel).toBe("profile-demo");
+        if (!result.sendResult) {
+          throw new Error("Expected send result payload");
+        }
+        expect(result.sendResult.channel).toBe("profile-demo");
       });
     });
   });

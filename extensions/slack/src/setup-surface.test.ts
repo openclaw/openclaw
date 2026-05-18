@@ -29,6 +29,14 @@ const baseCfg = {
   },
 } as OpenClawConfig;
 
+function requireFirstStringArg(mock: ReturnType<typeof vi.fn>, label: string): string {
+  const [call] = mock.mock.calls;
+  if (!call || typeof call[0] !== "string") {
+    throw new Error(`expected ${label}`);
+  }
+  return call[0];
+}
+
 describe("slackSetupWizard.finalize", () => {
   it("prompts to enable interactive replies for newly configured Slack accounts", async () => {
     const confirm = vi.fn(async () => true);
@@ -101,8 +109,7 @@ describe("slackSetupWizard.prepare", () => {
 
     expect(plain).toHaveBeenCalledTimes(1);
     expect(note).not.toHaveBeenCalled();
-    const manifest = plain.mock.calls[0]?.[0];
-    expect(typeof manifest).toBe("string");
+    const manifest = requireFirstStringArg(plain, "Slack manifest plain text");
     expect(JSON.parse(manifest)).toEqual({
       display_information: {
         name: "OpenClaw",
@@ -117,6 +124,23 @@ describe("slackSetupWizard.prepare", () => {
           home_tab_enabled: true,
           messages_tab_enabled: true,
           messages_tab_read_only_enabled: false,
+        },
+        assistant_view: {
+          assistant_description: "OpenClaw connects Slack assistant threads to OpenClaw agents.",
+          suggested_prompts: [
+            {
+              title: "What can you do?",
+              message: "What can you help me with?",
+            },
+            {
+              title: "Summarize this channel",
+              message: "Summarize the recent activity in this channel.",
+            },
+            {
+              title: "Draft a reply",
+              message: "Help me draft a reply.",
+            },
+          ],
         },
         slash_commands: [
           {
@@ -161,6 +185,8 @@ describe("slackSetupWizard.prepare", () => {
           bot_events: [
             "app_home_opened",
             "app_mention",
+            "assistant_thread_context_changed",
+            "assistant_thread_started",
             "channel_rename",
             "member_joined_channel",
             "member_left_channel",

@@ -18,8 +18,10 @@ function expectFetchCalledWithManualRedirect(
   expectedUrl: string,
 ) {
   const call = fetchMock.mock.calls.find(([url]) => String(url) === expectedUrl);
-  expect(call).toBeDefined();
-  const init = call?.[1] as RequestInit | undefined;
+  if (!call) {
+    throw new Error(`Expected fetch call for ${expectedUrl}`);
+  }
+  const init = call[1] as RequestInit | undefined;
   expect(init?.redirect).toBe("manual");
   expect(init?.headers).toEqual({});
   expect(init?.signal).toBeInstanceOf(AbortSignal);

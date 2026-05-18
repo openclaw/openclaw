@@ -89,9 +89,11 @@ describe("provider local service", () => {
 
     const lease = await ensureModelProviderLocalService(model);
 
-    expect(lease).toBeDefined();
+    if (!lease) {
+      throw new Error("Expected provider local service lease");
+    }
     expect((await fetch(healthUrl)).ok).toBe(true);
-    lease?.release();
+    lease.release();
     await waitForProbeFailure(healthUrl);
   });
 
@@ -121,7 +123,9 @@ describe("provider local service", () => {
       "X-Tenant": "acme",
     });
 
-    expect(lease).toBeDefined();
+    if (!lease) {
+      throw new Error("Expected provider local service lease");
+    }
     expect((await fetch(healthUrl)).status).toBe(401);
     expect(
       (
@@ -283,9 +287,11 @@ describe("provider local service", () => {
       expect((await fetch(healthUrl)).status).toBe(503);
 
       const secondLease = await ensureModelProviderLocalService(model);
-      expect(secondLease).toBeDefined();
+      if (!secondLease) {
+        throw new Error("Expected restarted provider local service lease");
+      }
       expect((await fetch(healthUrl)).ok).toBe(true);
-      secondLease?.release();
+      secondLease.release();
 
       const starts = (await fs.readFile(startsPath, "utf8")).trim().split("\n");
       expect(starts).toHaveLength(2);

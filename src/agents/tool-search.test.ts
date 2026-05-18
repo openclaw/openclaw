@@ -6,7 +6,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
 import {
-  __testing,
+  testing,
   addClientToolsToToolSearchCatalog,
   applyToolSearchCatalog,
   clearToolSearchCatalog,
@@ -45,20 +45,23 @@ function pluginTool(name: string, description: string, pluginId = "fake-catalog"
 }
 
 function resultDetails(result: { details?: unknown }): Record<string, unknown> {
-  expect(result.details).toBeDefined();
-  expect(typeof result.details).toBe("object");
+  if (!result.details || typeof result.details !== "object") {
+    throw new Error("Expected result details");
+  }
   return result.details as Record<string, unknown>;
 }
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] {
   const call = mock.mock.calls[index];
-  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
   return call;
 }
 
 describe("Tool Search", () => {
   it("enables object config when a mode is set", () => {
-    const resolved = __testing.resolveToolSearchConfig({
+    const resolved = testing.resolveToolSearchConfig({
       tools: {
         toolSearch: {
           mode: "tools",
@@ -70,10 +73,10 @@ describe("Tool Search", () => {
   });
 
   it("falls back to structured controls when code mode is unsupported", () => {
-    __testing.setToolSearchCodeModeSupportedForTest(false);
+    testing.setToolSearchCodeModeSupportedForTest(false);
     try {
       const config = { tools: { toolSearch: true } } as never;
-      const resolved = __testing.resolveToolSearchConfig(config);
+      const resolved = testing.resolveToolSearchConfig(config);
       const compacted = applyToolSearchCatalog({
         tools: [
           fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"),
@@ -94,7 +97,7 @@ describe("Tool Search", () => {
       ]);
       expect(compacted.catalogToolCount).toBe(1);
     } finally {
-      __testing.setToolSearchCodeModeSupportedForTest(undefined);
+      testing.setToolSearchCodeModeSupportedForTest(undefined);
     }
   });
 
@@ -196,8 +199,8 @@ describe("Tool Search", () => {
       sessionKey: "agent:main:main",
       runId: "run-a",
     });
-    expect(__testing.sessionCatalogs.has("run:run-a")).toBe(false);
-    expect(__testing.sessionCatalogs.has("run:run-b")).toBe(true);
+    expect(testing.sessionCatalogs.has("run:run-a")).toBe(false);
+    expect(testing.sessionCatalogs.has("run:run-b")).toBe(true);
     expect(runATool.execute).toHaveBeenCalledTimes(1);
     expect(runBTool.execute).not.toHaveBeenCalled();
     clearToolSearchCatalog({ runId: "run-b" });
@@ -313,7 +316,7 @@ describe("Tool Search", () => {
 
     expect(compacted.tools).toEqual([]);
     expect(compacted.catalogToolCount).toBe(1);
-    const clientEntry = __testing.sessionCatalogs
+    const clientEntry = testing.sessionCatalogs
       .get("session:session-client")
       ?.entries.find((entry) => entry.id === "client:client:client_pick_file");
     expect(clientEntry?.source).toBe("client");
@@ -334,11 +337,13 @@ describe("Tool Search", () => {
       },
     });
 
-    const entry = __testing.sessionCatalogs
+    const entry = testing.sessionCatalogs
       .get("session:session-hooks")
       ?.entries.find((candidate) => candidate.name === "fake_hooked");
-    expect(entry).toBeTruthy();
-    expect(isToolWrappedWithBeforeToolCallHook(entry!.tool as AnyAgentTool)).toBe(true);
+    if (!entry) {
+      throw new Error("Expected fake_hooked catalog entry");
+    }
+    expect(isToolWrappedWithBeforeToolCallHook(entry.tool as AnyAgentTool)).toBe(true);
 
     const [runtimeCodeTool] = createToolSearchTools({
       sessionId: "session-hooks",
@@ -376,7 +381,7 @@ describe("Tool Search", () => {
       },
     });
 
-    const entry = __testing.sessionCatalogs
+    const entry = testing.sessionCatalogs
       .get("session:session-hooks-abort")
       ?.entries.find((candidate) => candidate.name === "fake_already_hooked");
     expect(entry?.tool).toBe(abortWrapped);
@@ -863,8 +868,10 @@ describe("Tool Search", () => {
         code: `return await openclaw.tools.call("fake_abort_on_timeout", { value: "wait" });`,
       }),
     ).rejects.toThrow("tool_search_code timed out");
-    expect(observedSignal).toBeDefined();
-    expect(observedSignal?.aborted).toBe(true);
+    if (!observedSignal) {
+      throw new Error("Expected observed abort signal");
+    }
+    expect(observedSignal.aborted).toBe(true);
     expect(abortCount).toBe(1);
   });
 });

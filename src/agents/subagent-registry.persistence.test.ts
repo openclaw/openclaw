@@ -13,7 +13,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { captureEnv, withEnv } from "../test-utils/env.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import {
-  __testing,
+  testing,
   addSubagentRunForTests,
   clearSubagentRunSteerRestart,
   getLatestSubagentRunByChildSessionKey,
@@ -47,8 +47,9 @@ vi.mock("./subagent-orphan-recovery.js", () => ({
 }));
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -199,7 +200,7 @@ describe("subagent registry persistence", () => {
   beforeEach(() => {
     announceSpy.mockReset();
     announceSpy.mockResolvedValue(true);
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
       persistSubagentRunsToDisk: fastPersistSubagentRunsToDisk,
       runSubagentAnnounceFlow: announceSpy,
@@ -215,7 +216,7 @@ describe("subagent registry persistence", () => {
   });
 
   afterEach(async () => {
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
     await drainSessionStoreWriterQueuesForTest();
     clearSessionStoreCacheForTest();
@@ -721,7 +722,7 @@ describe("subagent registry persistence", () => {
     await waitForRegistryWork(() => vi.mocked(callGateway).mock.calls.length > 0);
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    const [request] = vi.mocked(callGateway).mock.calls[0] ?? [];
+    const [request] = vi.mocked(callGateway).mock.calls.at(0) ?? [];
     expectFields(request, { method: "agent.wait" });
     expectFields((request as { params?: unknown } | undefined)?.params, { runId });
     expect(

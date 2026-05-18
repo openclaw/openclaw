@@ -3,7 +3,7 @@ import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
-import { __testing as geminiWebSearchTesting } from "./src/gemini-web-search-provider.js";
+import { testing as geminiWebSearchTesting } from "./src/gemini-web-search-provider.js";
 
 let ssrfMock: { mockRestore: () => void } | undefined;
 
@@ -54,11 +54,13 @@ function fetchRequest(fetchMock: ReturnType<typeof vi.fn>): {
 } {
   const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
   expect(typeof url).toBe("string");
-  expect(init).toBeDefined();
+  if (!init) {
+    throw new Error("Expected fetch init");
+  }
   return {
-    body: typeof init?.body === "string" ? init.body : undefined,
-    headers: init?.headers,
-    method: init?.method,
+    body: typeof init.body === "string" ? init.body : undefined,
+    headers: init.headers,
+    method: init.method,
     url,
   };
 }
@@ -69,7 +71,9 @@ function postJsonRequestOptions(spy: unknown): {
   ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean };
 } {
   const options = (spy as { mock?: { calls?: Array<[unknown]> } }).mock?.calls?.[0]?.[0];
-  expect(options).toBeDefined();
+  if (!options) {
+    throw new Error("Expected postJsonRequest options");
+  }
   return options as {
     allowPrivateNetwork?: boolean;
     pinDns?: boolean;
@@ -197,6 +201,56 @@ describe("Google image-generation provider", () => {
     expect(postJsonRequestOptions(postJsonRequest).ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
     });
+  });
+
+  it("wraps wrong-shape successful Gemini image responses", async () => {
+    mockGoogleApiKeyAuth();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ candidates: { content: { parts: [] } } }),
+      }),
+    );
+
+    const provider = buildGoogleImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "google",
+        model: "gemini-3.1-flash-image-preview",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Google image generation response malformed");
+  });
+
+  it("rejects invalid inline image data in successful Gemini responses", async () => {
+    mockGoogleApiKeyAuth();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          candidates: [
+            {
+              content: {
+                parts: [{ inlineData: { mimeType: "image/png", data: "not-base64!" } }],
+              },
+            },
+          ],
+        }),
+      }),
+    );
+
+    const provider = buildGoogleImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "google",
+        model: "gemini-3.1-flash-image-preview",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Google image generation response malformed");
   });
 
   it("accepts OAuth JSON auth and inline_data responses", async () => {

@@ -19,6 +19,24 @@ function requireValue<T>(value: T | undefined, label: string): T {
   return value;
 }
 
+function requireFirstRequestIdempotencyKey(requestMock: {
+  mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> };
+}): string {
+  const firstCall = requestMock.mock.calls[0];
+  if (!firstCall) {
+    throw new Error("expected request mock call");
+  }
+  const params = firstCall[1];
+  if (!params || typeof params !== "object") {
+    throw new Error("expected request params");
+  }
+  const idempotencyKey = (params as { idempotencyKey?: unknown }).idempotencyKey;
+  if (typeof idempotencyKey !== "string") {
+    throw new Error("expected request idempotency key");
+  }
+  return idempotencyKey;
+}
+
 describe("acp translator stop reason mapping", () => {
   it("error state resolves as end_turn, not refusal", async () => {
     const { agent, promptPromise, runId } = await createPendingPromptHarness();
@@ -331,7 +349,11 @@ describe("acp translator stop reason mapping", () => {
       await Promise.resolve();
       agent.handleGatewayDisconnect("1006: first disconnect");
       agent.handleGatewayReconnect();
-      await vi.waitFor(() => expect(resolveAgentWait).toBeDefined());
+      await vi.waitFor(() => {
+        if (resolveAgentWait === undefined) {
+          throw new Error("expected agent.wait resolver");
+        }
+      });
       const resolveWait = requireValue(resolveAgentWait, "agent.wait resolver");
 
       agent.handleGatewayDisconnect("1006: second disconnect");
@@ -563,7 +585,7 @@ describe("acp translator stop reason mapping", () => {
       const firstPrompt = promptAgent(agent, sessionId, "first");
       void firstPrompt.catch(() => {});
       await Promise.resolve();
-      const firstRunId = requestMock.mock.calls[0]?.[1]?.idempotencyKey as string;
+      const firstRunId = requireFirstRequestIdempotencyKey(requestMock);
 
       agent.handleGatewayDisconnect("1006: connection lost");
       agent.handleGatewayReconnect();

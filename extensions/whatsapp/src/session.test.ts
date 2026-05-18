@@ -7,6 +7,30 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { enqueueCredsSave } from "./creds-persistence.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
+const { envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
+  envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
+    this: { options: unknown; dispatch: () => void },
+    options: unknown,
+  ) {
+    this.options = options;
+    this.dispatch = () => {};
+  }),
+  proxyAgentCtor: vi.fn(function MockProxyAgent(
+    this: { options: unknown; dispatch: () => void },
+    options: unknown,
+  ) {
+    this.options = options;
+    this.dispatch = () => {};
+  }),
+}));
+
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
+
+vi.mock("undici", () => ({
+  EnvHttpProxyAgent: envHttpProxyAgentCtor,
+  ProxyAgent: proxyAgentCtor,
+}));
+
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
 
 let createWaSocket: typeof import("./session.js").createWaSocket;
@@ -34,6 +58,13 @@ function createTempAuthDir(prefix: string) {
   return path.resolve(
     fsSync.mkdtempSync(path.join((process.env.TMPDIR ?? "/tmp").replace(/\/+$/, ""), `${prefix}-`)),
   );
+}
+
+function createTempCaFile(contents: string): string {
+  const dir = createTempAuthDir("openclaw-wa-proxy-ca");
+  const caFile = path.join(dir, "proxy-ca.pem");
+  fsSync.writeFileSync(caFile, contents, "utf8");
+  return caFile;
 }
 
 function mockFsOpenForCredsWrites(params?: {
@@ -150,16 +181,53 @@ function mockLogWebSelfIdCreds(me: Record<string, string>) {
   };
 }
 
-function readLastSocketOptions(): { agent?: unknown; fetchAgent?: unknown } {
-  const options = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+function firstMockCall(
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  label: string,
+): readonly unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function readLastSocketOptions(): {
+  agent?: unknown;
+  connectTimeoutMs?: number;
+  defaultQueryTimeoutMs?: number;
+  fetchAgent?: unknown;
+  keepAliveIntervalMs?: number;
+  printQRInTerminal?: boolean;
+  logger?: { level?: string; trace?: unknown };
+} {
+  const [options] = firstMockCall(
+    baileys.makeWASocket as ReturnType<typeof vi.fn>,
+    "Baileys socket creation",
+  );
   if (typeof options !== "object" || options === null) {
     throw new Error("expected Baileys socket options");
   }
-  return options as { agent?: unknown; fetchAgent?: unknown };
+  return options as {
+    agent?: unknown;
+    connectTimeoutMs?: number;
+    defaultQueryTimeoutMs?: number;
+    fetchAgent?: unknown;
+    keepAliveIntervalMs?: number;
+    printQRInTerminal?: boolean;
+    logger?: { level?: string; trace?: unknown };
+  };
 }
 
 function requireValue<T>(value: T | undefined, label: string): T {
   if (value === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
     throw new Error(`expected ${label}`);
   }
   return value;
@@ -170,7 +238,7 @@ function firstWriteFileCall(writeFileSpy: ReturnType<typeof vi.fn>): {
   options: { flag?: string; mode?: number };
   path: string;
 } {
-  const [filePath, data, options] = writeFileSpy.mock.calls[0] ?? [];
+  const [filePath, data, options] = firstMockCall(writeFileSpy, "fs.writeFile");
   expect(typeof filePath).toBe("string");
   return {
     data,
@@ -183,7 +251,17 @@ function expectRuntimeLogContaining(
   runtime: { log: ReturnType<typeof vi.fn> },
   text: string,
 ): void {
-  expect(runtime.log.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+  expect(runtime.log.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
+}
+
+function installUndiciRuntimeDeps(): void {
+  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: vi.fn(),
+    EnvHttpProxyAgent: envHttpProxyAgentCtor,
+    Pool: vi.fn(),
+    ProxyAgent: proxyAgentCtor,
+    fetch: vi.fn(),
+  };
 }
 
 describe("web session", () => {
@@ -201,11 +279,15 @@ describe("web session", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    envHttpProxyAgentCtor.mockClear();
+    proxyAgentCtor.mockClear();
+    installUndiciRuntimeDeps();
     resetBaileysMocks();
     resetLoadConfigMock();
   });
 
   afterEach(async () => {
+    Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
     await waitForCredsSaveQueue();
     resetLogger();
     setLoggerOverride(null);
@@ -218,8 +300,7 @@ describe("web session", () => {
     const openMock = mockFsOpenForCredsWrites();
 
     await createWaSocket(true, false, { authDir });
-    const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
-    const passed = makeWASocket.mock.calls[0][0];
+    const passed = readLastSocketOptions();
     expect(passed.printQRInTerminal).toBe(false);
     expect(passed.keepAliveIntervalMs).toBe(DEFAULT_WHATSAPP_SOCKET_TIMING.keepAliveIntervalMs);
     expect(passed.connectTimeoutMs).toBe(DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs);
@@ -247,7 +328,7 @@ describe("web session", () => {
       defaultQueryTimeoutMs: 120_000,
     });
 
-    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    const passed = readLastSocketOptions();
     expect(passed.keepAliveIntervalMs).toBe(10_000);
     expect(passed.connectTimeoutMs).toBe(90_000);
     expect(passed.defaultQueryTimeoutMs).toBe(120_000);
@@ -263,6 +344,45 @@ describe("web session", () => {
     const fetchAgent = requireValue(passed.fetchAgent, "fetch proxy agent");
     expect(fetchAgent).not.toBe(agent);
     expect(typeof (fetchAgent as { dispatch?: unknown }).dispatch).toBe("function");
+  });
+
+  it("adds managed proxy CA trust to WhatsApp env proxy agents", async () => {
+    const caFile = createTempCaFile("whatsapp-managed-proxy-ca");
+    vi.stubEnv("HTTPS_PROXY", "https://proxy.test:8443");
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
+
+    await createWaSocket(false, false);
+
+    const passed = readLastSocketOptions();
+    const agent = requireValue(
+      passed.agent as { connectOpts?: { ca?: unknown } } | undefined,
+      "WebSocket proxy agent",
+    );
+    expect(agent.connectOpts?.ca).toBe("whatsapp-managed-proxy-ca");
+    expect(proxyAgentCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proxyTls: expect.objectContaining({ ca: "whatsapp-managed-proxy-ca" }),
+      }),
+    );
+  });
+
+  it("adds managed proxy CA trust to WhatsApp env fetch dispatchers", async () => {
+    const caFile = createTempCaFile("whatsapp-managed-env-proxy-ca");
+    vi.stubEnv("HTTPS_PROXY", "https://proxy.test:8443");
+    vi.stubEnv("NO_PROXY", "mmg.whatsapp.net");
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
+
+    await createWaSocket(false, false);
+
+    const passed = readLastSocketOptions();
+    expect(passed.agent).toBeUndefined();
+    expect(envHttpProxyAgentCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proxyTls: expect.objectContaining({ ca: "whatsapp-managed-env-proxy-ca" }),
+      }),
+    );
   });
 
   it("uses lowercase HTTPS proxy before uppercase for WA WebSocket connection", async () => {
@@ -303,10 +423,7 @@ describe("web session", () => {
 
     await createWaSocket(false, false);
 
-    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      agent?: unknown;
-      fetchAgent?: unknown;
-    };
+    const passed = readLastSocketOptions();
     expect(passed.agent).toBeUndefined();
     expect(passed.fetchAgent).toBeUndefined();
   });
@@ -510,9 +627,9 @@ describe("web session", () => {
     await waitForCredsSaveQueue();
 
     expect(creds.copySpy).toHaveBeenCalledTimes(1);
-    const args = creds.copySpy.mock.calls[0] ?? [];
-    expect(String(args[0] ?? "")).toContain(creds.credsSuffix);
-    expect(String(args[1] ?? "")).toContain(backupSuffix);
+    const [sourcePath, backupPath] = firstMockCall(creds.copySpy, "creds backup copy");
+    expect(requireString(sourcePath, "creds backup source path")).toContain(creds.credsSuffix);
+    expect(requireString(backupPath, "creds backup target path")).toContain(backupSuffix);
     expect(openMock.tempHandles).toHaveLength(1);
 
     creds.restore();
@@ -549,10 +666,10 @@ describe("web session", () => {
       expect(openMock.dirHandles).toHaveLength(1);
       expect(openMock.dirHandles[0]?.sync).toHaveBeenCalledTimes(1);
       const writePath = openMock.tempHandles[0]?.filePath;
-      const renameArgs = renameSpy.mock.calls[0] ?? [];
+      const [, renameTarget] = firstMockCall(renameSpy, "creds atomic rename");
       expect(typeof writePath).toBe("string");
       expect(writePath).toContain(".creds.");
-      expect(String(renameArgs[1] ?? "")).toContain(
+      expect(requireString(renameTarget, "creds rename target path")).toContain(
         path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json"),
       );
     } finally {

@@ -48,7 +48,7 @@ function issueMessages(issues: Array<{ message: string }>): string[] {
 }
 
 function expectSomeIssueMessageContains(issues: Array<{ message: string }>, text: string): void {
-  expect(issueMessages(issues).some((message) => message.includes(text))).toBe(true);
+  expect(issueMessages(issues).join("\n")).toContain(text);
 }
 
 describe("boolean config validation", () => {
@@ -606,6 +606,7 @@ describe("gateway.remote.transport", () => {
     const res = validateConfigObject({
       gateway: {
         remote: {
+          enabled: true,
           transport: "direct",
           url: "wss://gateway.example.ts.net",
         },
@@ -625,6 +626,35 @@ describe("gateway.remote.transport", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.issues[0]?.path).toBe("gateway.remote.transport");
+    }
+  });
+
+  it("accepts macOS SSH remote port", () => {
+    const res = validateConfigObject({
+      gateway: {
+        remote: {
+          remotePort: 18789,
+          sshTarget: "user@example.test",
+          transport: "ssh",
+          url: "ws://127.0.0.1:18789",
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid macOS SSH remote port", () => {
+    const res = validateConfigObject({
+      gateway: {
+        remote: {
+          remotePort: 0,
+          transport: "ssh",
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.remote.remotePort");
     }
   });
 });
@@ -919,7 +949,7 @@ describe("broadcast", () => {
 });
 
 describe("model compat config schema", () => {
-  it.each(["zai", "qwen", "qwen-chat-template"] as const)(
+  it.each(["together", "zai", "qwen", "qwen-chat-template"] as const)(
     "accepts full openai-completions compat fields with %s thinking format",
     (thinkingFormat) => {
       const res = OpenClawSchema.safeParse({
@@ -1105,6 +1135,26 @@ describe("config strict validation", () => {
       voiceId: "voice-1",
     });
     expect(raw.messages.tts).not.toHaveProperty("providers");
+  });
+
+  it("reports retired queue steering modes without read-time auto-migration", async () => {
+    const raw = {
+      messages: {
+        queue: {
+          mode: "queue",
+          byChannel: {
+            discord: "steer-backlog",
+            telegram: "collect",
+          },
+        },
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+
+    expect(issues.some((issue) => issue.path === "messages.queue.mode")).toBe(true);
+    expect(issues.some((issue) => issue.path === "messages.queue.byChannel")).toBe(true);
+    expect(raw.messages.queue.mode).toBe("queue");
+    expect(raw.messages.queue.byChannel.discord).toBe("steer-backlog");
   });
 
   it("rejects legacy sandbox perSession without read-time auto-migration", async () => {

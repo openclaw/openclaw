@@ -142,6 +142,20 @@ beforeAll(async () => {
     await import("./invoke-browser.js"));
 });
 
+type BrowserDispatchRequest = {
+  path?: string;
+  query?: unknown;
+};
+
+function firstBrowserDispatchRequest(): BrowserDispatchRequest {
+  const [call] = dispatcherMocks.dispatch.mock.calls;
+  if (!call) {
+    throw new Error("expected browser dispatch call");
+  }
+  const [request] = call as [BrowserDispatchRequest, ...unknown[]];
+  return request;
+}
+
 describe("runBrowserProxyCommand", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -335,7 +349,7 @@ describe("runBrowserProxyCommand", () => {
       }),
     );
 
-    const [request] = dispatcherMocks.dispatch.mock.calls[0] as [{ path?: string }, ...unknown[]];
+    const request = firstBrowserDispatchRequest();
     expect(request.path).toBe("/snapshot");
   });
 
@@ -433,10 +447,7 @@ describe("runBrowserProxyCommand", () => {
       }),
     );
 
-    const [request] = dispatcherMocks.dispatch.mock.calls[0] as [
-      { path?: string; query?: unknown },
-      ...unknown[],
-    ];
+    const request = firstBrowserDispatchRequest();
     expect(request.path).toBe("/stop");
     expect(request.query).toEqual({ profile: "openclaw" });
   });

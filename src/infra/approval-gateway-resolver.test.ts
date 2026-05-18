@@ -10,6 +10,14 @@ vi.mock("../gateway/operator-approvals-client.js", () => ({
   withOperatorApprovalsGatewayClient: hoisted.withOperatorApprovalsGatewayClient,
 }));
 
+function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("resolveApprovalOverGateway", () => {
   beforeEach(() => {
     hoisted.clientRequest.mockReset().mockResolvedValue({ ok: true });
@@ -28,8 +36,10 @@ describe("resolveApprovalOverGateway", () => {
     });
 
     expect(hoisted.withOperatorApprovalsGatewayClient).toHaveBeenCalledTimes(1);
-    const [gatewayClientOptions, gatewayClientRunner] =
-      hoisted.withOperatorApprovalsGatewayClient.mock.calls[0];
+    const [gatewayClientOptions, gatewayClientRunner] = requireFirstMockCall(
+      hoisted.withOperatorApprovalsGatewayClient,
+      "gateway client",
+    );
     expect(gatewayClientOptions).toEqual({
       config: { gateway: { auth: { token: "cfg-token" } } },
       gatewayUrl: "ws://gateway.example.test",
@@ -53,6 +63,21 @@ describe("resolveApprovalOverGateway", () => {
     expect(hoisted.clientRequest).toHaveBeenCalledWith("plugin.approval.resolve", {
       id: "plugin:approval-1",
       decision: "deny",
+    });
+  });
+
+  it("routes explicit plugin resolution through plugin.approval.resolve", async () => {
+    await resolveApprovalOverGateway({
+      cfg: {} as never,
+      approvalId: "approval-1",
+      decision: "allow-once",
+      resolveMethod: "plugin",
+    });
+
+    expect(hoisted.clientRequest).toHaveBeenCalledTimes(1);
+    expect(hoisted.clientRequest).toHaveBeenCalledWith("plugin.approval.resolve", {
+      id: "approval-1",
+      decision: "allow-once",
     });
   });
 

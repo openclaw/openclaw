@@ -146,7 +146,7 @@ function mockMessages(mock: unknown): string[] {
 }
 
 function expectMockMessageContains(mock: unknown, expected: string): void {
-  expect(mockMessages(mock).some((message) => message.includes(expected))).toBe(true);
+  expect(mockMessages(mock).join("\n")).toContain(expected);
 }
 
 function expectStatusCall(
@@ -570,7 +570,6 @@ describe("startTelegramWebhook", () => {
         const setWebhookCall = requireMockCall(setWebhookSpy, 0, "setWebhook");
         expect(typeof setWebhookCall[0]).toBe("string");
         const options = requireRecord(setWebhookCall[1], "setWebhook options");
-        expect(options.certificate).toBeTruthy();
         const certificate = options.certificate as
           | { path?: string; fileData?: string; filename?: string }
           | undefined;

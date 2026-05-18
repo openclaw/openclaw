@@ -141,6 +141,10 @@ vi.mock("./server-methods-list.js", () => ({
   listGatewayMethods: () => ["ping"],
 }));
 
+vi.mock("./methods/core-descriptors.js", () => ({
+  listCoreGatewayMethodNames: () => ["ping", "config.openFile"],
+}));
+
 vi.mock("./server-methods.js", () => ({
   coreGatewayHandlers: {},
 }));
@@ -163,9 +167,11 @@ function createLog() {
 }
 
 function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
-  const call = mock.mock.calls[0];
-  expect(call).toBeDefined();
-  return call?.[0] as T;
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected first mock call");
+  }
+  return call[0] as T;
 }
 
 describe("prepareGatewayPluginBootstrap startup plugins", () => {
@@ -282,8 +288,12 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     const startupInput = firstCallArg<{
       activationSourceConfig?: OpenClawConfig;
       cfg?: OpenClawConfig;
+      baseMethods?: string[];
+      coreGatewayMethodNames?: string[];
     }>(loadGatewayStartupPlugins);
     expect(startupInput.activationSourceConfig).toBe(sourceConfig);
+    expect(startupInput.baseMethods).toEqual(["ping"]);
+    expect(startupInput.coreGatewayMethodNames).toEqual(["ping", "config.openFile"]);
     expect(startupInput.cfg?.channels?.telegram?.enabled).toBe(true);
     expect(startupInput.cfg?.channels?.telegram?.dmPolicy).toBe("pairing");
     expect(startupInput.cfg?.channels?.telegram?.groupPolicy).toBe("allowlist");

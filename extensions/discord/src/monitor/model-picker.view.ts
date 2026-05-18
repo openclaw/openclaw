@@ -1,6 +1,9 @@
 import type { APISelectMenuOption } from "discord-api-types/v10";
 import { ButtonStyle } from "discord-api-types/v10";
-import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+import type {
+  ModelsProviderData,
+  ModelsRuntimeChoice,
+} from "openclaw/plugin-sdk/models-provider-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   Button,
@@ -76,9 +79,9 @@ export type DiscordModelPickerModelViewParams = {
   page?: number;
   providerPage?: number;
   currentModel?: string;
+  currentRuntime?: string;
   pendingModel?: string;
   pendingModelIndex?: number;
-  currentRuntime?: string;
   pendingRuntime?: string;
   quickModels?: string[];
   layout?: DiscordModelPickerLayout;
@@ -169,16 +172,18 @@ function createModelSelect(params: {
 function getRuntimeChoices(params: {
   data: ModelsProviderData;
   provider: string;
-}): Array<{ id: string; label: string; description?: string }> {
-  return (
-    params.data.runtimeChoicesByProvider?.get(normalizeProviderId(params.provider)) ?? [
-      {
-        id: "pi",
-        label: "OpenClaw Pi Default",
-        description: "Use the built-in OpenClaw Pi runtime.",
-      },
-    ]
-  );
+}): ModelsRuntimeChoice[] {
+  const choices = params.data.runtimeChoicesByProvider?.get(normalizeProviderId(params.provider));
+  if (choices?.length) {
+    return choices;
+  }
+  return [
+    {
+      id: "pi",
+      label: "OpenClaw Pi Default",
+      description: "Use the built-in OpenClaw Pi runtime.",
+    },
+  ];
 }
 
 function resolveSelectedRuntime(params: {
@@ -194,7 +199,27 @@ function resolveSelectedRuntime(params: {
     return pending;
   }
   const current = params.currentRuntime?.trim();
-  return current && allowed.has(current) ? current : "pi";
+  if (current && allowed.has(current)) {
+    return current;
+  }
+  return choices[0]?.id ?? "pi";
+}
+
+function resolveExplicitRuntimeState(params: {
+  choices: ModelsRuntimeChoice[];
+  currentRuntime?: string;
+  pendingRuntime?: string;
+}): string | undefined {
+  const allowed = new Set(params.choices.map((choice) => choice.id));
+  const pending = params.pendingRuntime?.trim();
+  if (pending && allowed.has(pending)) {
+    return pending;
+  }
+  const current = params.currentRuntime?.trim();
+  if (current && current !== "auto" && current !== "default" && allowed.has(current)) {
+    return current;
+  }
+  return undefined;
 }
 
 function buildRenderedShell(
@@ -274,9 +299,9 @@ function buildModelRows(params: {
   providerPage: number;
   modelPage: DiscordModelPickerModelPage;
   currentModel?: string;
+  currentRuntime?: string;
   pendingModel?: string;
   pendingModelIndex?: number;
-  currentRuntime?: string;
   pendingRuntime?: string;
   quickModels?: string[];
 }): { rows: DiscordModelPickerRow[]; buttonRow: Row<Button> } {
@@ -324,14 +349,12 @@ function buildModelRows(params: {
     currentRuntime: params.currentRuntime,
     pendingRuntime: params.pendingRuntime,
   });
-  const normalizedCurrentRuntime = params.currentRuntime?.trim();
-  const shouldCarryRuntime =
-    runtimeChoices.length > 1 ||
-    (Boolean(normalizedCurrentRuntime) &&
-      normalizedCurrentRuntime !== "auto" &&
-      normalizedCurrentRuntime !== "pi" &&
-      normalizedCurrentRuntime !== "default");
-  const stateRuntime = shouldCarryRuntime ? selectedRuntime : undefined;
+  const stateRuntime = resolveExplicitRuntimeState({
+    choices: runtimeChoices,
+    currentRuntime: params.currentRuntime,
+    pendingRuntime: params.pendingRuntime,
+  });
+
   if (runtimeChoices.length > 1) {
     rows.push(
       new Row([
@@ -547,9 +570,9 @@ export function renderDiscordModelPickerModelsView(
     providerPage,
     modelPage,
     currentModel: params.currentModel,
+    currentRuntime: params.currentRuntime,
     pendingModel: params.pendingModel,
     pendingModelIndex: params.pendingModelIndex,
-    currentRuntime: params.currentRuntime,
     pendingRuntime: params.pendingRuntime,
     quickModels: params.quickModels,
   });
@@ -580,6 +603,7 @@ export type DiscordModelPickerRecentsViewParams = {
   data: ModelsProviderData;
   quickModels: string[];
   currentModel?: string;
+  runtime?: string;
   provider?: string;
   page?: number;
   providerPage?: number;
@@ -619,6 +643,7 @@ export function renderDiscordModelPickerRecentsView(
           view: "recents",
           recentSlot: 1,
           provider: params.provider,
+          runtime: params.runtime,
           page: params.page,
           providerPage: params.providerPage,
           userId: params.userId,
@@ -641,6 +666,7 @@ export function renderDiscordModelPickerRecentsView(
             view: "recents",
             recentSlot: i + 2,
             provider: params.provider,
+            runtime: params.runtime,
             page: params.page,
             providerPage: params.providerPage,
             userId: params.userId,
@@ -660,6 +686,7 @@ export function renderDiscordModelPickerRecentsView(
         action: "back",
         view: "models",
         provider: params.provider,
+        runtime: params.runtime,
         page: params.page,
         providerPage: params.providerPage,
         userId: params.userId,

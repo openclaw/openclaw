@@ -71,8 +71,8 @@ describe("device bootstrap tokens", () => {
     expect(parsed[issued.token]?.ts).toBe(Date.now());
     expect(parsed[issued.token]?.issuedAtMs).toBe(Date.now());
     expect(parsed[issued.token]?.profile).toEqual({
-      roles: ["node", "operator"],
-      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      roles: ["node"],
+      scopes: [],
     });
   });
 
@@ -97,14 +97,62 @@ describe("device bootstrap tokens", () => {
     expect(parsed[issued.token]?.publicKey).toBe("public-key-123");
   });
 
+  it("rejects changing the requested profile while a bound use is pending", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: {
+        roles: ["operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.write"],
+      },
+    });
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.read"],
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.write", "operator.approvals"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.read"],
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    await expect(
+      redeemDeviceBootstrapTokenProfile({
+        baseDir,
+        token: issued.token,
+        role: "operator",
+        scopes: ["operator.read"],
+      }),
+    ).resolves.toEqual({
+      recorded: true,
+      fullyRedeemed: false,
+    });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.write", "operator.approvals"],
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
   it("loads the issued bootstrap profile for a valid token", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
 
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: issued.token })).resolves.toEqual(
       {
-        roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        roles: ["node"],
+        scopes: [],
       },
     );
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: "invalid" })).resolves.toBeNull();
@@ -124,7 +172,7 @@ describe("device bootstrap tokens", () => {
       }),
     ).resolves.toEqual({
       recorded: true,
-      fullyRedeemed: false,
+      fullyRedeemed: true,
     });
 
     await expect(
@@ -132,18 +180,7 @@ describe("device bootstrap tokens", () => {
         role: "operator",
         scopes: ["operator.approvals", "operator.read", "operator.write", "operator.talk.secrets"],
       }),
-    ).resolves.toEqual({ ok: true });
-    await expect(
-      redeemDeviceBootstrapTokenProfile({
-        baseDir,
-        token: issued.token,
-        role: "operator",
-        scopes: ["operator.approvals", "operator.read", "operator.write", "operator.talk.secrets"],
-      }),
-    ).resolves.toEqual({
-      recorded: true,
-      fullyRedeemed: true,
-    });
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
   });
 
   it("clears outstanding bootstrap tokens on demand", async () => {
@@ -268,9 +305,15 @@ describe("device bootstrap tokens", () => {
     expect(raw).toContain(issued.token);
   });
 
-  it("allows operator scope subsets within the issued bootstrap profile", async () => {
+  it("allows operator scope subsets within an explicitly issued bootstrap profile", async () => {
     const baseDir = await createTempDir();
-    const issued = await issueDeviceBootstrapToken({ baseDir });
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: {
+        roles: ["operator"],
+        scopes: ["operator.read"],
+      },
+    });
 
     await expect(
       verifyBootstrapToken(baseDir, issued.token, {
@@ -489,8 +532,8 @@ describe("device bootstrap tokens", () => {
         baseDir,
       }),
     ).resolves.toEqual({
-      roles: ["node", "operator"],
-      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      roles: ["node"],
+      scopes: [],
     });
   });
 

@@ -7,6 +7,7 @@ import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
 } from "../config/sessions/transcript.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -261,8 +262,9 @@ async function expectMessageEventMatch(
   expect((event.data as { messageSeq?: number }).messageSeq).toBe(params.seq);
   if (params.id !== undefined) {
     expectOpenClawMetadata(
-      (event.data as { message?: { __openclaw?: { id?: string; seq?: number } } }).message
-        ?.__openclaw,
+      (event.data as { message?: { __openclaw?: { id?: string; seq?: number } } }).message?.[
+        "__openclaw"
+      ],
       {
         id: params.id,
         seq: params.seq,
@@ -308,11 +310,27 @@ describe("session history HTTP endpoints", () => {
           body.messages?.[0] as {
             __openclaw?: { id?: string; seq?: number };
           }
-        )?.__openclaw,
+        )?.["__openclaw"],
         {
           seq: 1,
         },
       );
+    });
+  });
+
+  test("matches direct REST history paths without trusting malformed Host headers", async () => {
+    await seedSession({ text: "history with bad host" });
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+        headers: { Host: "[" },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        sessionKey?: string;
+        messages?: Array<{ content?: Array<{ text?: string }> }>;
+      };
+      expect(body.sessionKey).toBe("agent:main:main");
+      expect(body.messages?.[0]?.content?.[0]?.text).toBe("history with bad host");
     });
   });
 
@@ -412,7 +430,7 @@ describe("session history HTTP endpoints", () => {
         "second message",
         "third message",
       ]);
-      expect(firstBody.messages?.map((message) => message.__openclaw?.seq)).toEqual([2, 3]);
+      expect(firstBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([2, 3]);
       expect(firstBody.hasMore).toBe(true);
       expect(firstBody.nextCursor).toBe("2");
 
@@ -429,7 +447,7 @@ describe("session history HTTP endpoints", () => {
       expect(secondBody.items?.map((message) => message.content?.[0]?.text)).toEqual([
         "first message",
       ]);
-      expect(secondBody.messages?.map((message) => message.__openclaw?.seq)).toEqual([1]);
+      expect(secondBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([1]);
       expect(secondBody.hasMore).toBe(false);
       expect(secondBody.nextCursor).toBeUndefined();
     });
@@ -457,7 +475,7 @@ describe("session history HTTP endpoints", () => {
         }>;
       };
       expect(nextData.messages?.[0]?.content?.[0]?.text).toBe("third message");
-      expectOpenClawMetadata(nextData.messages?.[0]?.__openclaw, {
+      expectOpenClawMetadata(nextData.messages?.[0]?.["__openclaw"], {
         id: thirdMessageId,
         seq: 3,
       });
@@ -485,7 +503,7 @@ describe("session history HTTP endpoints", () => {
         messages?: Array<{ content?: Array<{ text?: string }>; __openclaw?: { seq?: number } }>;
       };
       expect(refreshData.messages?.[0]?.content?.[0]?.text).toBe("second message");
-      expect(refreshData.messages?.[0]?.__openclaw?.seq).toBe(2);
+      expect(refreshData.messages?.[0]?.["__openclaw"]?.seq).toBe(2);
 
       await stream.reader.cancel();
     });
@@ -547,7 +565,7 @@ describe("session history HTTP endpoints", () => {
       expect(body.sessionKey).toBe("agent:main:main");
       expect(body.messages).toHaveLength(1);
       expect(body.messages?.[0]?.content?.[0]?.text).toBe("Done.");
-      expectOpenClawMetadata(body.messages?.[0]?.__openclaw, {
+      expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
         id: visibleMessageId,
         seq: 2,
       });
@@ -576,6 +594,59 @@ describe("session history HTTP endpoints", () => {
         seq: 2,
         id: appended.messageId,
       });
+
+      await stream.reader.cancel();
+    });
+  });
+
+  test("refreshes SSE history for non-monotonic carried sequence", async () => {
+    const storePath = await createSessionStoreFile();
+    const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          id: "msg-first",
+          message: makeTranscriptAssistantMessage({ text: "first message" }),
+        }),
+        JSON.stringify({
+          id: "msg-second",
+          message: makeTranscriptAssistantMessage({ text: "second message" }),
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await withGatewayHarness(async (harness) => {
+      const stream = await openSessionHistorySse(harness.port, "agent:main:main");
+      await expectHistoryEventTexts(stream, ["first message", "second message"]);
+
+      emitSessionTranscriptUpdate({
+        sessionFile: transcriptPath,
+        sessionKey: "agent:main:main",
+        message: makeTranscriptAssistantMessage({ text: "rewound branch message" }),
+        messageId: "msg-rewound",
+        messageSeq: 1,
+      });
+
+      const refreshEvent = await readSseEvent(stream.reader, stream.streamState);
+      expect(refreshEvent.event).toBe("history");
+      expect(
+        (
+          refreshEvent.data as { messages?: Array<{ content?: Array<{ text?: string }> }> }
+        ).messages?.map((message) => message.content?.[0]?.text),
+      ).toEqual(["first message", "second message"]);
 
       await stream.reader.cancel();
     });

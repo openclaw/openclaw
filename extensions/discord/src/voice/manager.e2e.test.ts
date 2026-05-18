@@ -362,8 +362,9 @@ describe("DiscordVoiceManager", () => {
   };
 
   const requireRecord = (value: unknown, label: string): Record<string, unknown> => {
-    expect(value, label).toBeTypeOf("object");
-    expect(value, label).not.toBeNull();
+    if (!value || typeof value !== "object") {
+      throw new Error(`expected ${label}`);
+    }
     return value as Record<string, unknown>;
   };
 
@@ -377,7 +378,7 @@ describe("DiscordVoiceManager", () => {
 
   const lastMockCall = (source: MockCallSource, label: string) => {
     const calls = Array.from(source.mock.calls);
-    const call = calls.at(-1);
+    const call = calls[calls.length - 1];
     if (!call) {
       throw new Error(`expected mock call: ${label}`);
     }
@@ -386,8 +387,10 @@ describe("DiscordVoiceManager", () => {
 
   const expectOffEventWithFunction = (source: MockCallSource, event: string) => {
     const call = Array.from(source.mock.calls).find((candidate) => candidate[0] === event);
-    expect(call, `${event} listener removal`).toBeDefined();
-    expect(call?.[1], `${event} listener`).toBeTypeOf("function");
+    if (!call) {
+      throw new Error(`Expected ${event} listener removal`);
+    }
+    expect(call[1], `${event} listener`).toBeTypeOf("function");
   };
 
   const lastAgentCommandArgs = () =>
@@ -401,6 +404,18 @@ describe("DiscordVoiceManager", () => {
       mockCall(agentCommandMock as unknown as MockCallSource, index, `agent command ${index}`)[0],
       `agent command args ${index}`,
     );
+
+  const lastRealtimeBridgeParams = () =>
+    requireRecord(
+      lastMockCall(
+        createRealtimeVoiceBridgeSessionMock as unknown as MockCallSource,
+        "realtime bridge",
+      )[0],
+      "realtime bridge params",
+    );
+
+  const lastAudioResourceInput = () =>
+    lastMockCall(createAudioResourceMock as unknown as MockCallSource, "audio resource")[0];
 
   const lastTtsArgs = () =>
     requireRecord(
@@ -558,6 +573,24 @@ describe("DiscordVoiceManager", () => {
     expect(joinOptions.guildId).toBe("g1");
     expect(joinOptions.channelId).toBe("1002");
     expectConnectedStatus(manager, "1002");
+  });
+
+  it("suppresses repeated autoJoin attempts after fatal realtime startup failures", async () => {
+    realtimeSessionMock.connect.mockRejectedValueOnce(new Error("Incorrect API key provided"));
+    const manager = createManager({
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        autoJoin: [{ guildId: "g1", channelId: "1001" }],
+      },
+    });
+
+    await manager.autoJoin();
+    await manager.autoJoin();
+
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+    expect(realtimeSessionMock.connect).toHaveBeenCalledTimes(1);
+    expect(manager.status()).toStrictEqual([]);
   });
 
   it("rejects joins outside configured allowed voice channels", async () => {
@@ -724,11 +757,12 @@ describe("DiscordVoiceManager", () => {
 
     const player = getLastAudioPlayer();
     const entry = getSessionEntry(manager);
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           audioSink?: {
             sendAudio: (audio: Buffer) => void;
           };
+          onEvent?: (event: { direction: "server"; type: string }) => void;
         }
       | undefined;
     player.state.status = "playing";
@@ -748,6 +782,7 @@ describe("DiscordVoiceManager", () => {
     );
     expect(subscribeCall?.[0]).toBe("u1");
     expect(requireRecord(subscribeCall?.[1], "subscribe options").end).toBeTypeOf("object");
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
   });
 
   it("interrupts realtime playback when an already-active speaker keeps talking", async () => {
@@ -781,11 +816,12 @@ describe("DiscordVoiceManager", () => {
         ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
       };
     };
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           audioSink?: {
             sendAudio: (audio: Buffer) => void;
           };
+          onEvent?: (event: { direction: "server"; type: string }) => void;
         }
       | undefined;
     const player = getLastAudioPlayer();
@@ -805,6 +841,7 @@ describe("DiscordVoiceManager", () => {
     expect(lastTimestampCall).toBeLessThan(firstBargeInCall);
     expect(player.stop).not.toHaveBeenCalled();
     expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
   });
 
   it("does not interrupt realtime provider state when local playback is already idle", async () => {
@@ -847,6 +884,95 @@ describe("DiscordVoiceManager", () => {
     expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
     expect(player.stop).not.toHaveBeenCalled();
     expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
+  });
+
+  it("sends trailing realtime silence when a speaker turn closes", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      allowFrom: ["discord:u1"],
+      voice: {
+        enabled: true,
+        mode: "bidi",
+        realtime: {
+          provider: "openai",
+          providers: {
+            openai: {
+              silenceDurationMs: 450,
+            },
+          },
+        },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u1",
+    );
+
+    turn?.sendInputAudio(Buffer.alloc(3840));
+    turn?.close();
+
+    expect(realtimeSessionMock.sendAudio).toHaveBeenCalledTimes(2);
+    const trailingSilence = realtimeSessionMock.sendAudio.mock.calls.at(-1)?.[0] as
+      | Buffer
+      | undefined;
+    expect(trailingSilence).toBeInstanceOf(Buffer);
+    expect(trailingSilence?.length).toBe(33_600);
+    expect(trailingSilence?.equals(Buffer.alloc(33_600))).toBe(true);
+  });
+
+  it("clamps configured realtime trailing silence before allocating audio", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      allowFrom: ["discord:u1"],
+      voice: {
+        enabled: true,
+        mode: "bidi",
+        realtime: {
+          provider: "openai",
+          providers: {
+            openai: {
+              silenceDurationMs: 60_000,
+            },
+          },
+        },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u1",
+    );
+
+    turn?.sendInputAudio(Buffer.alloc(3840));
+    turn?.close();
+
+    const trailingSilence = realtimeSessionMock.sendAudio.mock.calls.at(-1)?.[0] as
+      | Buffer
+      | undefined;
+    expect(trailingSilence).toBeInstanceOf(Buffer);
+    expect(trailingSilence?.length).toBe(144_000);
+    expect(trailingSilence?.equals(Buffer.alloc(144_000))).toBe(true);
   });
 
   it("ignores realtime capture during playback when barge-in is disabled", async () => {
@@ -1056,7 +1182,7 @@ describe("DiscordVoiceManager", () => {
       model: "gpt-realtime-2",
       voice: "cedar",
     });
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           autoRespondToAudio?: boolean;
           instructions?: string;
@@ -1118,7 +1244,7 @@ describe("DiscordVoiceManager", () => {
     });
 
     await manager.join({ guildId: "g1", channelId: "1001" });
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onToolCall?: (
             event: {
@@ -1186,7 +1312,7 @@ describe("DiscordVoiceManager", () => {
       on: ReturnType<typeof vi.fn>;
       play: ReturnType<typeof vi.fn>;
     };
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           audioSink?: {
             sendAudio: (audio: Buffer) => void;
@@ -1196,13 +1322,12 @@ describe("DiscordVoiceManager", () => {
       | undefined;
 
     bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    expect(createAudioResourceMock).not.toHaveBeenCalled();
+    expect(player.play).not.toHaveBeenCalled();
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
     expect(createAudioResourceMock).toHaveBeenCalledTimes(1);
     expect(player.play).toHaveBeenCalledTimes(1);
-    const firstStream = createAudioResourceMock.mock.calls.at(-1)?.[0] as
-      | { writableEnded?: boolean }
-      | undefined;
-    expect(firstStream?.writableEnded).toBe(false);
-    bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+    const firstStream = lastAudioResourceInput() as { writableEnded?: boolean } | undefined;
     expect(firstStream?.writableEnded).toBe(true);
 
     const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
@@ -1212,8 +1337,88 @@ describe("DiscordVoiceManager", () => {
     idleHandler?.();
 
     bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    expect(createAudioResourceMock).toHaveBeenCalledTimes(1);
+    expect(player.play).toHaveBeenCalledTimes(1);
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
     expect(createAudioResourceMock).toHaveBeenCalledTimes(2);
     expect(player.play).toHaveBeenCalledTimes(2);
+  });
+
+  it("prebuffers realtime output before starting Discord playback", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const player = getLastAudioPlayer();
+    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+      | {
+          audioSink?: {
+            sendAudio: (audio: Buffer) => void;
+          };
+          onEvent?: (event: { direction: "server"; type: string }) => void;
+        }
+      | undefined;
+
+    for (let index = 0; index < 49; index += 1) {
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    }
+
+    expect(createAudioResourceMock).not.toHaveBeenCalled();
+    expect(player.play).not.toHaveBeenCalled();
+
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+
+    expect(createAudioResourceMock).toHaveBeenCalledTimes(1);
+    expect(player.play).toHaveBeenCalledTimes(1);
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+  });
+
+  it("discards prebuffered realtime output when the response is cancelled", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const player = getLastAudioPlayer();
+    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+      | {
+          audioSink?: {
+            sendAudio: (audio: Buffer) => void;
+          };
+          onEvent?: (event: { detail?: string; direction: "server"; type: string }) => void;
+        }
+      | undefined;
+
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.cancelled" });
+
+    expect(createAudioResourceMock).not.toHaveBeenCalled();
+    expect(player.play).not.toHaveBeenCalled();
+    expect(player.stop).toHaveBeenCalledWith(true);
+
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    bridgeParams?.onEvent?.({
+      detail: "response completed with status=cancelled",
+      direction: "server",
+      type: "response.done",
+    });
+
+    expect(createAudioResourceMock).not.toHaveBeenCalled();
+    expect(player.play).not.toHaveBeenCalled();
+    expect(player.stop).toHaveBeenCalledTimes(2);
   });
 
   it("applies Discord realtime model and voice overrides during provider auto-selection", async () => {
@@ -1284,7 +1489,7 @@ describe("DiscordVoiceManager", () => {
     );
     nonOwnerTurn?.sendInputAudio(Buffer.alloc(8));
 
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
           onEvent?: (event: { direction: "server"; type: string }) => void;
@@ -1325,7 +1530,7 @@ describe("DiscordVoiceManager", () => {
         ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
       };
     };
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
           onEvent?: (event: { direction: "server"; type: string }) => void;
@@ -1379,7 +1584,7 @@ describe("DiscordVoiceManager", () => {
         ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
       };
     };
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
         }
@@ -1458,7 +1663,7 @@ describe("DiscordVoiceManager", () => {
     const player = getLastAudioPlayer() as {
       on: ReturnType<typeof vi.fn>;
     };
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           audioSink?: { sendAudio: (audio: Buffer) => void };
           onEvent?: (event: { direction: "server"; type: string }) => void;
@@ -1497,7 +1702,7 @@ describe("DiscordVoiceManager", () => {
     expectUserMessageNotIncludes("third answer");
 
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
-    const firstStream = createAudioResourceMock.mock.calls.at(-1)?.[0] as PassThrough | undefined;
+    const firstStream = lastAudioResourceInput() as PassThrough | undefined;
     await vi.waitFor(() => expect(firstStream?.writableEnded).toBe(true));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expectUserMessageNotIncludes("second answer");
@@ -1511,7 +1716,7 @@ describe("DiscordVoiceManager", () => {
 
     bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
-    const secondStream = createAudioResourceMock.mock.calls.at(-1)?.[0] as PassThrough | undefined;
+    const secondStream = lastAudioResourceInput() as PassThrough | undefined;
     await vi.waitFor(() => expect(secondStream?.writableEnded).toBe(true));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expectUserMessageNotIncludes("third answer");
@@ -1543,7 +1748,7 @@ describe("DiscordVoiceManager", () => {
       };
     };
     const player = getLastAudioPlayer();
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           audioSink?: { sendAudio: (audio: Buffer) => void };
           onEvent?: (event: { direction: "server"; type: string }) => void;
@@ -1579,7 +1784,7 @@ describe("DiscordVoiceManager", () => {
     expectUserMessageNotIncludes("second answer");
 
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
-    const firstStream = createAudioResourceMock.mock.calls.at(-1)?.[0] as PassThrough | undefined;
+    const firstStream = lastAudioResourceInput() as PassThrough | undefined;
     await vi.waitFor(() => expect(firstStream?.writableEnded).toBe(true));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expectUserMessageNotIncludes("second answer");
@@ -1588,6 +1793,66 @@ describe("DiscordVoiceManager", () => {
       | (() => void)
       | undefined;
     idleHandler?.();
+    expectUserMessageIncludes("second answer");
+  });
+
+  it("drains queued exact speech after cancelled prebuffered output is discarded", async () => {
+    agentCommandMock
+      .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
+      .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const player = getLastAudioPlayer();
+    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+      | {
+          audioSink?: { sendAudio: (audio: Buffer) => void };
+          onEvent?: (event: { detail?: string; direction: "server"; type: string }) => void;
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    const firstTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    firstTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "first question", true);
+
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    await vi.waitFor(() => expectUserMessageIncludes("first answer"));
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+
+    const secondTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    secondTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "second question", true);
+
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    expectUserMessageNotIncludes("second answer");
+
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.cancelled" });
+
+    expect(createAudioResourceMock).not.toHaveBeenCalled();
+    expect(player.play).not.toHaveBeenCalled();
+    expect(player.stop).toHaveBeenCalledWith(true);
     expectUserMessageIncludes("second answer");
   });
 
@@ -1613,7 +1878,7 @@ describe("DiscordVoiceManager", () => {
         ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
       };
     };
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onToolCall?: (
             event: {
@@ -1688,7 +1953,7 @@ describe("DiscordVoiceManager", () => {
         ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
       };
     };
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onToolCall?: (
             event: {
@@ -1762,7 +2027,7 @@ describe("DiscordVoiceManager", () => {
         ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
       };
     };
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onToolCall?: (
             event: {
@@ -1834,7 +2099,7 @@ describe("DiscordVoiceManager", () => {
         ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
       };
     };
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onToolCall?: (
             event: {
@@ -1916,7 +2181,7 @@ describe("DiscordVoiceManager", () => {
         ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
       };
     };
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onToolCall?: (
             event: {
@@ -2018,7 +2283,7 @@ describe("DiscordVoiceManager", () => {
     );
     guestTurn?.sendInputAudio(Buffer.alloc(8));
 
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
         }
@@ -2070,7 +2335,7 @@ describe("DiscordVoiceManager", () => {
     );
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
 
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           autoRespondToAudio?: boolean;
           interruptResponseOnInputAudio?: boolean;
@@ -2179,7 +2444,7 @@ describe("DiscordVoiceManager", () => {
     );
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
 
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onToolCall?: (
             event: {
@@ -2247,7 +2512,7 @@ describe("DiscordVoiceManager", () => {
     );
     ownerTurn?.sendInputAudio(Buffer.alloc(8));
 
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onToolCall?: (
             event: {
@@ -2320,7 +2585,7 @@ describe("DiscordVoiceManager", () => {
     );
     guestTurn?.sendInputAudio(Buffer.alloc(8));
 
-    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+    const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onToolCall?: (
             event: {
@@ -2625,9 +2890,7 @@ describe("DiscordVoiceManager", () => {
     const manager = createManager({ groupPolicy: "open", allowFrom: ["discord:u-owner"] }, client);
     await processVoiceSegment(manager, "u-owner");
 
-    const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
-      | { senderIsOwner?: boolean }
-      | undefined;
+    const commandArgs = lastAgentCommandArgs() as { senderIsOwner?: boolean } | undefined;
     expect(commandArgs?.senderIsOwner).toBe(true);
   });
 
@@ -2647,9 +2910,7 @@ describe("DiscordVoiceManager", () => {
     });
     await processVoiceSegment(manager, "u-guest");
 
-    const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
-      | { senderIsOwner?: boolean }
-      | undefined;
+    const commandArgs = lastAgentCommandArgs() as { senderIsOwner?: boolean } | undefined;
     expect(commandArgs?.senderIsOwner).toBe(false);
   });
 
@@ -2678,7 +2939,7 @@ describe("DiscordVoiceManager", () => {
     );
     await processVoiceSegment(manager, "u-guest");
 
-    const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
+    const commandArgs = lastAgentCommandArgs() as
       | { allowModelOverride?: boolean; model?: string }
       | undefined;
 
@@ -2706,7 +2967,7 @@ describe("DiscordVoiceManager", () => {
     });
     await processVoiceSegment(manager, "u-guest");
 
-    const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
+    const commandArgs = lastAgentCommandArgs() as
       | { message?: string; messageChannel?: string; messageProvider?: string }
       | undefined;
 
@@ -2781,9 +3042,13 @@ describe("DiscordVoiceManager", () => {
     expect(lastTtsStreamArgs().disableFallback).toBe(true);
     expect(lastTtsStreamArgs().text).toBe("hello back");
     expect(textToSpeechMock).not.toHaveBeenCalled();
-    expect(
-      lastMockCall(createAudioResourceMock as unknown as MockCallSource, "audio resource")[0],
-    ).toBeDefined();
+    const audioResourceInput = lastMockCall(
+      createAudioResourceMock as unknown as MockCallSource,
+      "audio resource",
+    )[0];
+    if (audioResourceInput === undefined) {
+      throw new Error("expected Discord audio resource input");
+    }
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
   });
 
@@ -2818,9 +3083,7 @@ describe("DiscordVoiceManager", () => {
     );
     await processVoiceSegment(manager, "u-guest");
 
-    const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
-      | { extraSystemPrompt?: string }
-      | undefined;
+    const commandArgs = lastAgentCommandArgs() as { extraSystemPrompt?: string } | undefined;
 
     expect(commandArgs?.extraSystemPrompt).toBe("Use short voice replies.");
   });

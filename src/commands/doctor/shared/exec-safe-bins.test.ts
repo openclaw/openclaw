@@ -119,37 +119,38 @@ describe("doctor exec safe bin helpers", () => {
 
   it("flags safeBins that resolve outside trusted directories", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-safe-bin-"));
-    const binPath = join(tempDir, "custom-safe-bin");
-    writeFileSync(binPath, "#!/bin/sh\nexit 0\n");
-    chmodSync(binPath, 0o755);
-    process.env.PATH = [tempDir, originalPath].filter((entry) => entry.length > 0).join(delimiter);
+    try {
+      const binPath = join(tempDir, "custom-safe-bin");
+      writeFileSync(binPath, "#!/bin/sh\nexit 0\n");
+      chmodSync(binPath, 0o755);
+      process.env.PATH = [tempDir, originalPath]
+        .filter((entry) => entry.length > 0)
+        .join(delimiter);
 
-    const hits = scanExecSafeBinTrustedDirHints({
-      tools: {
-        exec: {
-          safeBins: ["custom-safe-bin"],
-          safeBinProfiles: { "custom-safe-bin": {} },
+      const hits = scanExecSafeBinTrustedDirHints({
+        tools: {
+          exec: {
+            safeBins: ["custom-safe-bin"],
+            safeBinProfiles: { "custom-safe-bin": {} },
+          },
         },
-      },
-    } as OpenClawConfig);
+      } as OpenClawConfig);
 
-    expect(hits).toHaveLength(1);
-    const hit = hits[0];
-    if (!hit) {
-      throw new Error("expected trusted-dir hint hit");
+      expect(hits).toStrictEqual([
+        {
+          scopePath: "tools.exec",
+          bin: "custom-safe-bin",
+          resolvedPath: binPath,
+        },
+      ]);
+
+      const warnings = collectExecSafeBinTrustedDirHintWarnings(hits);
+      expect(warnings).toStrictEqual([
+        `- tools.exec.safeBins entry 'custom-safe-bin' resolves to '${binPath}' outside trusted safe-bin dirs.`,
+        "- If intentional, add the binary directory to tools.exec.safeBinTrustedDirs (global or agent scope).",
+      ]);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
     }
-    expect(hit.scopePath).toBe("tools.exec");
-    expect(hit.bin).toBe("custom-safe-bin");
-    expect(hit.resolvedPath).toBe(binPath);
-
-    const warnings = collectExecSafeBinTrustedDirHintWarnings(hits);
-    expect(
-      warnings.some((warning) => warning.includes("tools.exec.safeBins entry 'custom-safe-bin'")),
-    ).toBe(true);
-    expect(warnings.some((warning) => warning.includes("tools.exec.safeBinTrustedDirs"))).toBe(
-      true,
-    );
-
-    rmSync(tempDir, { recursive: true, force: true });
   });
 });

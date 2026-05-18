@@ -49,6 +49,15 @@ describe("cdp.helpers internal", () => {
     }
   });
 
+  function requireGuardedFetchRequest() {
+    const [call] = fetchWithSsrFGuardMock.mock.calls;
+    if (!call) {
+      throw new Error("expected guarded CDP fetch call");
+    }
+    const [request] = call;
+    return request;
+  }
+
   describe("assertCdpEndpointAllowed", () => {
     it("throws on non-http/https/ws/wss protocols under any SSRF policy", async () => {
       await expect(
@@ -142,7 +151,7 @@ describe("cdp.helpers internal", () => {
       await fetchCdpChecked("http://93.184.216.34:9222/json/version", 250, undefined, {
         allowPrivateNetwork: true,
       });
-      const [request] = fetchWithSsrFGuardMock.mock.calls[0] ?? [];
+      const request = requireGuardedFetchRequest();
       expect(request?.policy?.allowPrivateNetwork).toBe(true);
     });
 
@@ -154,7 +163,7 @@ describe("cdp.helpers internal", () => {
         release,
       });
       await fetchCdpChecked("http://93.184.216.34:9222/json/version", 250);
-      const [request] = fetchWithSsrFGuardMock.mock.calls[0] ?? [];
+      const request = requireGuardedFetchRequest();
       expect(request?.policy).toEqual({ allowPrivateNetwork: true });
     });
   });

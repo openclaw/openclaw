@@ -73,6 +73,22 @@ describe("agent components", () => {
     };
   };
 
+  const firstReplyContent = (reply: ReturnType<typeof vi.fn>): string => {
+    const [call] = reply.mock.calls;
+    if (!call) {
+      throw new Error("expected interaction reply call");
+    }
+    const [payload] = call;
+    if (!payload || typeof payload !== "object" || !("content" in payload)) {
+      throw new Error("expected interaction reply content");
+    }
+    const { content } = payload as { content?: unknown };
+    if (typeof content !== "string") {
+      throw new Error("expected interaction reply content to be a string");
+    }
+    return content;
+  };
+
   const createBaseGroupDmInteraction = (overrides: Record<string, unknown> = {}) => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const defer = vi.fn().mockResolvedValue(undefined);
@@ -124,6 +140,7 @@ describe("agent components", () => {
       {
         sessionKey: defaultDmSessionKey,
         contextKey: "discord:agent-button:dm-channel:hello:123456789",
+        forceSenderIsOwnerFalse: true,
         trusted: false,
       },
     );
@@ -151,7 +168,7 @@ describe("agent components", () => {
 
     expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledTimes(1);
-    const pairingText = String(reply.mock.calls[0]?.[0]?.content ?? "");
+    const pairingText = firstReplyContent(reply);
     const code = expectPairingReplyText(pairingText, {
       channel: "discord",
       idLine: "Your Discord user id: 123456789",
@@ -252,6 +269,7 @@ describe("agent components", () => {
       {
         sessionKey: defaultGroupDmSessionKey,
         contextKey: "discord:agent-button:group-dm-channel:hello:123456789",
+        forceSenderIsOwnerFalse: true,
         trusted: false,
       },
     );
@@ -333,6 +351,7 @@ describe("agent components", () => {
       {
         sessionKey: defaultDmSessionKey,
         contextKey: "discord:agent-select:dm-channel:hello:123456789",
+        forceSenderIsOwnerFalse: true,
         trusted: false,
       },
     );
@@ -357,6 +376,7 @@ describe("agent components", () => {
       {
         sessionKey: defaultDmSessionKey,
         contextKey: "discord:agent-button:dm-channel:hello_cid:123456789",
+        forceSenderIsOwnerFalse: true,
         trusted: false,
       },
     );
@@ -381,6 +401,7 @@ describe("agent components", () => {
       {
         sessionKey: defaultDmSessionKey,
         contextKey: "discord:agent-button:dm-channel:hello%2G:123456789",
+        forceSenderIsOwnerFalse: true,
         trusted: false,
       },
     );

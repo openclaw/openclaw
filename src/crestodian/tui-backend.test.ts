@@ -68,7 +68,8 @@ describe("runCrestodianTui", () => {
     expect(options.historyLimit).toBe(200);
     expect(options.config).toEqual({});
     expect(options.title).toBe("openclaw crestodian");
-    expect(typeof options.backend).toBe("object");
-    expect(options.backend).not.toBeNull();
+    if (!options.backend || typeof options.backend !== "object") {
+      throw new Error("expected crestodian TUI backend");
+    }
   });
 });

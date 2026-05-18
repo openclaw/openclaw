@@ -654,7 +654,7 @@ vi.mock("./doctor/channel-capabilities.js", () => {
     msteams: {
       dmAllowFromMode: "topOnly",
       groupModel: "hybrid",
-      groupAllowFromFallbackToAllowFrom: false,
+      groupAllowFromFallbackToAllowFrom: true,
       warnOnEmptyGroupSenderAllowlist: true,
     },
     zalouser: {
@@ -1714,8 +1714,9 @@ describe("doctor config flow", () => {
     expect(
       ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
     ).toBe("existing-session");
-    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser", "codex"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
   });
 
   it("preserves commitments config on repair", async () => {
@@ -2607,6 +2608,51 @@ describe("doctor config flow", () => {
             message.includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
         ),
       ).toBe(true);
+    } finally {
+      noteSpy.mockClear();
+    }
+  });
+
+  it("titles the legacy migration panel as a preview when --fix is not passed (#80817)", async () => {
+    const noteSpy = resetTerminalNoteMock();
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          heartbeat: {
+            model: "anthropic/claude-3-5-haiku-20241022",
+            every: "30m",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+      const changeTitles = noteSpy.mock.calls.map(([, title]) => title);
+      expect(changeTitles).toContain("Doctor changes preview");
+      expect(changeTitles).not.toContain("Doctor changes");
+      const previewPanel = noteSpy.mock.calls.find(
+        ([, title]) => title === "Doctor changes preview",
+      );
+      expect(previewPanel?.[0]).toContain("Moved heartbeat to");
+    } finally {
+      noteSpy.mockClear();
+    }
+  });
+
+  it("titles the legacy migration panel as applied when --fix is passed (#80817)", async () => {
+    const noteSpy = resetTerminalNoteMock();
+    try {
+      await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          heartbeat: {
+            model: "anthropic/claude-3-5-haiku-20241022",
+            every: "30m",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+      const changeTitles = noteSpy.mock.calls.map(([, title]) => title);
+      expect(changeTitles).toContain("Doctor changes");
+      expect(changeTitles).not.toContain("Doctor changes preview");
     } finally {
       noteSpy.mockClear();
     }

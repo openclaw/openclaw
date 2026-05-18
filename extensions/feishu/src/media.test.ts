@@ -1,6 +1,8 @@
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -54,6 +56,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
 
 let downloadImageFeishu: typeof import("./media.js").downloadImageFeishu;
 let downloadMessageResourceFeishu: typeof import("./media.js").downloadMessageResourceFeishu;
+let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFeishu;
 let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
@@ -91,8 +94,10 @@ function mockCallArg<T>(
   _type?: (value: unknown) => value is T,
 ): T {
   const call = mock.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return call?.[argIndex] as T;
+  if (!call) {
+    throw new Error(`Expected mock call at index ${callIndex}`);
+  }
+  return call[argIndex] as T;
 }
 
 function callData<T>(
@@ -101,7 +106,9 @@ function callData<T>(
   _type?: (value: unknown) => value is T,
 ): T {
   const arg = mockCallArg<{ data?: unknown }>(mock, callIndex, 0);
-  expect(arg.data).toBeDefined();
+  if (arg.data === undefined) {
+    throw new Error(`Expected mock call data at index ${callIndex}`);
+  }
   return arg.data as T;
 }
 
@@ -110,6 +117,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     ({
       downloadImageFeishu,
       downloadMessageResourceFeishu,
+      saveMessageResourceFeishu,
       sanitizeFileNameForUpload,
       sendMediaFeishu,
       shouldSuppressFeishuTextForVoiceMedia,
@@ -293,9 +301,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     const ffmpegArgs = mockCallArg<string[]>(runFfmpegMock, 0, 0);
-    for (const arg of ["-c:a", "libopus", "-ar", "48000", "-b:a", "64k"]) {
+    for (const arg of ["-c:a", "libopus", "-ar", "48000", "-b:a", "64k", "-f", "ogg"]) {
       expect(ffmpegArgs).toContain(arg);
     }
+    expect(ffmpegArgs.slice(-3, -1)).toEqual(["-f", "ogg"]);
     const fileData = callData<{ file?: Buffer; file_name?: string; file_type?: string }>(
       fileCreateMock,
     );
@@ -346,9 +355,8 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(fileData.file).toEqual(Buffer.from("remote-mp3"));
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("file");
     expect(result.voiceIntentDegradedToFile).toBe(true);
-    const warnCall = warnSpy.mock.calls[0];
-    expect(warnCall?.[0]).toContain("audioAsVoice transcode failed");
-    expect(warnCall?.[1]).toBeInstanceOf(Error);
+    expect(mockCallArg<string>(warnSpy, 0, 0)).toContain("audioAsVoice transcode failed");
+    expect(mockCallArg<unknown>(warnSpy, 0, 1)).toBeInstanceOf(Error);
     warnSpy.mockRestore();
   });
 
@@ -440,8 +448,9 @@ describe("sendMediaFeishu msg_type routing", () => {
       replyInThread: false,
     });
 
-    const callData = messageReplyMock.mock.calls[0][0].data;
-    expect(callData).not.toHaveProperty("reply_in_thread");
+    expect(callData<Record<string, unknown>>(messageReplyMock)).not.toHaveProperty(
+      "reply_in_thread",
+    );
   });
 
   it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {
@@ -541,6 +550,40 @@ describe("sendMediaFeishu msg_type routing", () => {
     expectPathIsolatedToTmpRoot(capturedPath, fileKey);
   });
 
+  it("rejects oversized message resource streams before buffering the rest", async () => {
+    messageResourceGetMock.mockResolvedValueOnce({
+      getReadableStream: () => Readable.from([Buffer.alloc(4), Buffer.alloc(4)]),
+    });
+
+    await expect(
+      downloadMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_123",
+        fileKey: "file_v3_01abc123",
+        type: "file",
+        maxBytes: 7,
+      }),
+    ).rejects.toThrow(/Media exceeds/i);
+  });
+
+  it("rejects oversized writeFile downloads before reading the temp file", async () => {
+    messageResourceGetMock.mockResolvedValueOnce({
+      writeFile: async (tmpPath: string) => {
+        await fs.writeFile(tmpPath, Buffer.alloc(8));
+      },
+    });
+
+    await expect(
+      downloadMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_123",
+        fileKey: "file_v3_01abc123",
+        type: "file",
+        maxBytes: 7,
+      }),
+    ).rejects.toThrow(/Media exceeds/i);
+  });
+
   it("rejects invalid image keys before calling feishu api", async () => {
     await expect(
       downloadImageFeishu({
@@ -573,8 +616,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "测试文档.pdf",
     });
 
-    const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).toBe("测试文档.pdf");
+    expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("测试文档.pdf");
   });
 
   it("preserves ASCII filenames unchanged for file uploads", async () => {
@@ -585,8 +627,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "report-2026.pdf",
     });
 
-    const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).toBe("report-2026.pdf");
+    expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("report-2026.pdf");
   });
 
   it("preserves special Unicode characters (em-dash, full-width brackets) in filenames", async () => {
@@ -597,8 +638,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "报告—详情（2026）.md",
     });
 
-    const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).toBe("报告—详情（2026）.md");
+    expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("报告—详情（2026）.md");
   });
 });
 
@@ -874,5 +914,42 @@ describe("downloadMessageResourceFeishu", () => {
     });
 
     expect(result.fileName).toBe(latin1LookingFileName);
+  });
+
+  it("saves message resource streams directly to the media store", async () => {
+    const originalHome = process.env.HOME;
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-media-"));
+    try {
+      process.env.HOME = tempHome;
+      messageResourceGetMock.mockResolvedValueOnce({
+        getReadableStream: () => Readable.from([Buffer.from([0xff, 0xd8, 0xff, 0x00])]),
+        headers: {
+          "content-type": "image/jpeg",
+          "content-disposition": `attachment; filename="photo.jpg"`,
+        },
+      });
+
+      const result = await saveMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_stream_msg",
+        fileKey: "img_key_stream",
+        type: "image",
+        maxBytes: 1024,
+      });
+
+      expect(result.saved.path).toContain(`${path.sep}.openclaw${path.sep}media${path.sep}inbound`);
+      expect(result.saved.id).toMatch(/^photo---[a-f0-9-]{36}\.jpg$/);
+      expect(result.saved.size).toBe(4);
+      await expect(fs.readFile(result.saved.path)).resolves.toEqual(
+        Buffer.from([0xff, 0xd8, 0xff, 0x00]),
+      );
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
   });
 });

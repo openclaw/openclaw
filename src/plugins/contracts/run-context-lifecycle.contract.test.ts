@@ -38,7 +38,9 @@ function requireFailureByHookId(
   hookId: string,
 ) {
   const failure = result.failures.find((entry) => entry.hookId === hookId);
-  expect(failure).toBeTruthy();
+  if (!failure) {
+    throw new Error(`Expected cleanup failure for hook ${hookId}`);
+  }
   return failure;
 }
 
@@ -247,7 +249,7 @@ describe("plugin run context lifecycle", () => {
         api.registerAgentEventSubscription({
           id: "delayed",
           streams: ["tool"],
-          async handle(_event, ctx) {
+          async handle(eventValue, ctx) {
             ctx.setRunContext("before-terminal", { visible: true });
             await new Promise<void>((resolve) => {
               releaseToolHandler = resolve;

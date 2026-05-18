@@ -79,8 +79,9 @@ type MockCallSource = {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -102,6 +103,14 @@ function findRequestPayload(source: MockCallSource, method: string, label: strin
 
 function fetchInit(source: MockCallSource, callIndex: number) {
   return requireRecord(mockArg(source, callIndex, 1, `fetch init ${callIndex}`), "fetch init");
+}
+
+function fetchUrl(source: MockCallSource, callIndex: number) {
+  const input = mockArg(source, callIndex, 0, `fetch input ${callIndex}`);
+  if (typeof input === "string" || input instanceof URL || input instanceof Request) {
+    return requestUrl(input);
+  }
+  throw new Error(`expected fetch input ${callIndex}`);
 }
 
 function makeHost(overrides?: Partial<ChatHost>): ChatHost {
@@ -302,14 +311,11 @@ describe("refreshChatAvatar", () => {
     const host = makeHost({ basePath: "", sessionKey: "agent:main" });
     await refreshChatAvatar(host);
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/avatar/main?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe("/avatar/main?meta=1");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/avatar/main");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/main");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 1).method).toBe("GET");
-    const avatarFetchInit = (
-      fetchMock.mock.calls as Array<[string | URL | Request, RequestInit?]>
-    )[1]?.[1];
-    expect(avatarFetchInit).not.toHaveProperty("headers");
+    expect(fetchInit(fetchMock as unknown as MockCallSource, 1)).not.toHaveProperty("headers");
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).not.toHaveBeenCalled();
     expect(host.chatAvatarUrl).toBe("blob:local-avatar");
@@ -352,12 +358,14 @@ describe("refreshChatAvatar", () => {
     });
     await refreshChatAvatar(host);
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/openclaw/avatar/main?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe(
+      "/openclaw/avatar/main?meta=1",
+    );
     expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 0).headers).toEqual({
       Authorization: "Bearer device-token",
     });
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/avatar/main");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/main");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 1).method).toBe("GET");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 1).headers).toEqual({
       Authorization: "Bearer device-token",
@@ -402,12 +410,14 @@ describe("refreshChatAvatar", () => {
     });
     await refreshChatAvatar(host);
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/openclaw/avatar/main?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe(
+      "/openclaw/avatar/main?meta=1",
+    );
     expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 0).headers).toEqual({
       Authorization: "Bearer session-token",
     });
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/avatar/main");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/main");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 1).method).toBe("GET");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 1).headers).toEqual({
       Authorization: "Bearer session-token",
@@ -427,7 +437,7 @@ describe("refreshChatAvatar", () => {
     const host = makeHost({ basePath: "/openclaw/", sessionKey: "agent:ops:main" });
     await refreshChatAvatar(host);
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/openclaw/avatar/ops?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe("/openclaw/avatar/ops?meta=1");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
     expect(host.chatAvatarUrl).toBeNull();
   });
@@ -524,11 +534,11 @@ describe("refreshChatAvatar", () => {
 
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(host.chatAvatarUrl).toBe("blob:ops-avatar");
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/avatar/main?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 0)).toBe("/avatar/main?meta=1");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 0).method).toBe("GET");
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/avatar/ops?meta=1");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 1)).toBe("/avatar/ops?meta=1");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 1).method).toBe("GET");
-    expect(fetchMock.mock.calls[2]?.[0]).toBe("/avatar/ops");
+    expect(fetchUrl(fetchMock as unknown as MockCallSource, 2)).toBe("/avatar/ops");
     expect(fetchInit(fetchMock as unknown as MockCallSource, 2).method).toBe("GET");
   });
 });
@@ -1258,7 +1268,7 @@ describe("handleSendChat", () => {
     expect(host.chatRunId).toBe("run-main");
     expect(host.chatStream).toBe("Working...");
     expect(host.chatMessage).toBe("/btw what changed?");
-    expect(host.lastError).toContain("network down");
+    expect(host.lastError).toBe("network down");
   });
 
   it("clears BTW side results when /clear resets chat history", async () => {
@@ -1421,7 +1431,24 @@ describe("handleSendChat", () => {
 
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
     expect(getChatAttachmentPreviewUrl(attachment)).toBe("blob:brief");
-    expect(JSON.stringify(host.chatMessages)).not.toContain("JVBERi0xLjQK");
+    expect(host.chatMessages).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "summarize" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "blob:brief",
+              kind: "document",
+              label: "brief.pdf",
+              mimeType: "application/pdf",
+            },
+          },
+        ],
+        timestamp: expect.any(Number),
+      },
+    ]);
   });
 
   it("releases queued attachment payloads when the queued item is removed", () => {

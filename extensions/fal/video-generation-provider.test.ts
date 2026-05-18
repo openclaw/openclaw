@@ -3,7 +3,7 @@ import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  _setFalVideoFetchGuardForTesting,
+  setFalVideoFetchGuardForTesting,
   buildFalVideoGenerationProvider,
 } from "./video-generation-provider.js";
 
@@ -30,7 +30,7 @@ describe("fal video generation provider", () => {
       requestConfig: createMockRequestConfig(),
     });
     vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
-    _setFalVideoFetchGuardForTesting(fetchGuardMock as never);
+    setFalVideoFetchGuardForTesting(fetchGuardMock as never);
   }
 
   function releasedJson(value: unknown) {
@@ -84,21 +84,34 @@ describe("fal video generation provider", () => {
       );
   }
 
+  function requireFetchGuardCall(callNumber: number): { init?: RequestInit; url?: string } {
+    const call = fetchGuardMock.mock.calls[callNumber - 1];
+    if (!call) {
+      throw new Error(`expected fal fetch guard call ${callNumber}`);
+    }
+    const [request] = call;
+    if (!request || typeof request !== "object" || Array.isArray(request)) {
+      throw new Error(`expected fal fetch guard request ${callNumber}`);
+    }
+    return request as { init?: RequestInit; url?: string };
+  }
+
   function getSubmitBody(): Record<string, unknown> {
-    return JSON.parse(String(fetchGuardMock.mock.calls[0]?.[0]?.init?.body ?? "{}")) as Record<
-      string,
-      unknown
-    >;
+    const body = requireFetchGuardCall(1).init?.body;
+    if (typeof body !== "string") {
+      throw new Error("expected fal submit JSON body");
+    }
+    return JSON.parse(body) as Record<string, unknown>;
   }
 
   function fetchGuardUrl(callNumber: number): string | undefined {
-    return (fetchGuardMock.mock.calls[callNumber - 1]?.[0] as { url?: string } | undefined)?.url;
+    return requireFetchGuardCall(callNumber).url;
   }
 
   afterEach(() => {
     vi.restoreAllMocks();
     fetchGuardMock.mockReset();
-    _setFalVideoFetchGuardForTesting(null);
+    setFalVideoFetchGuardForTesting(null);
   });
 
   it("declares explicit mode capabilities", () => {
@@ -142,9 +155,7 @@ describe("fal video generation provider", () => {
     });
 
     expect(fetchGuardUrl(1)).toBe("https://queue.fal.run/fal-ai/minimax/video-01-live");
-    const submitBody = JSON.parse(
-      String(fetchGuardMock.mock.calls[0]?.[0]?.init?.body ?? "{}"),
-    ) as Record<string, unknown>;
+    const submitBody = getSubmitBody();
     expect(submitBody).toEqual({
       prompt: "A spaceship emerges from the clouds",
     });
@@ -157,6 +168,115 @@ describe("fal video generation provider", () => {
     expect(result.metadata).toEqual({
       requestId: "req-123",
     });
+  });
+
+  it("wraps malformed successful fal submit responses", async () => {
+    mockFalProviderRuntime();
+    fetchGuardMock.mockResolvedValueOnce(releasedJson([]));
+
+    const provider = buildFalVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "fal",
+        model: "fal-ai/minimax/video-01-live",
+        prompt: "bad shape",
+        cfg: {},
+      }),
+    ).rejects.toThrow("fal video generation response malformed");
+  });
+
+  it("wraps non-JSON successful fal submit responses", async () => {
+    mockFalProviderRuntime();
+    fetchGuardMock.mockResolvedValueOnce({
+      response: {
+        json: async () => {
+          throw new SyntaxError("Unexpected token < in JSON");
+        },
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildFalVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "fal",
+        model: "fal-ai/minimax/video-01-live",
+        prompt: "html body",
+        cfg: {},
+      }),
+    ).rejects.toThrow("fal video generation response malformed");
+  });
+
+  it("rejects missing fal queue statuses without waiting for timeout", async () => {
+    mockFalProviderRuntime();
+    fetchGuardMock
+      .mockResolvedValueOnce(
+        releasedJson({
+          request_id: "req-123",
+          status_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
+          response_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
+        }),
+      )
+      .mockResolvedValueOnce(releasedJson({}));
+
+    const provider = buildFalVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "fal",
+        model: "fal-ai/minimax/video-01-live",
+        prompt: "missing status",
+        cfg: {},
+      }),
+    ).rejects.toThrow("fal video generation response malformed");
+    expect(fetchGuardMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects unknown fal queue statuses without waiting for timeout", async () => {
+    mockFalProviderRuntime();
+    fetchGuardMock
+      .mockResolvedValueOnce(
+        releasedJson({
+          request_id: "req-123",
+          status_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
+          response_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
+        }),
+      )
+      .mockResolvedValueOnce(releasedJson({ status: "ALMOST_DONE" }));
+
+    const provider = buildFalVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "fal",
+        model: "fal-ai/minimax/video-01-live",
+        prompt: "bad status",
+        cfg: {},
+      }),
+    ).rejects.toThrow("fal video generation response malformed");
+    expect(fetchGuardMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects malformed fal completed result payloads", async () => {
+    mockFalProviderRuntime();
+    fetchGuardMock
+      .mockResolvedValueOnce(
+        releasedJson({
+          request_id: "req-123",
+          status_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
+          response_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
+        }),
+      )
+      .mockResolvedValueOnce(releasedJson({ status: "COMPLETED" }))
+      .mockResolvedValueOnce(releasedJson({ status: "COMPLETED", response: [] }));
+
+    const provider = buildFalVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "fal",
+        model: "fal-ai/minimax/video-01-live",
+        prompt: "bad result",
+        cfg: {},
+      }),
+    ).rejects.toThrow("fal video generation response malformed");
   });
 
   it("exposes Seedance 2 models", () => {

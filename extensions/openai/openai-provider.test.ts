@@ -93,8 +93,9 @@ function runWrappedPayloadCase(params: {
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -111,7 +112,7 @@ function expectCatalogEntry(entries: unknown, id: string, expected: Record<strin
 
 function expectNoCatalogEntry(entries: unknown, id: string): void {
   expect(Array.isArray(entries)).toBe(true);
-  expect((entries as Array<Record<string, unknown>>).some((entry) => entry.id === id)).toBe(false);
+  expect((entries as Array<Record<string, unknown>>).map((entry) => entry.id)).not.toContain(id);
 }
 
 describe("buildOpenAIProvider", () => {
@@ -128,9 +129,10 @@ describe("buildOpenAIProvider", () => {
 
     expectFields(apiKey?.wizard, {
       choiceLabel: "OpenAI API Key",
+      choiceHint: "Use your OpenAI API key directly",
       groupId: "openai",
       groupLabel: "OpenAI",
-      groupHint: "Direct API key",
+      groupHint: "ChatGPT/Codex sign-in or API key",
     });
   });
 
@@ -211,16 +213,16 @@ describe("buildOpenAIProvider", () => {
           provider: "openai",
           modelId: "gpt-5.4-mini",
         } as never)
-        ?.levels.some((level) => level.id === "xhigh"),
-    ).toBe(true);
+        ?.levels.map((level) => level.id),
+    ).toContain("xhigh");
     expect(
       provider
         .resolveThinkingProfile?.({
           provider: "openai",
           modelId: "gpt-5.4-nano",
         } as never)
-        ?.levels.some((level) => level.id === "xhigh"),
-    ).toBe(true);
+        ?.levels.map((level) => level.id),
+    ).toContain("xhigh");
 
     const entries = provider.augmentModelCatalog?.({
       env: process.env,
@@ -421,8 +423,8 @@ describe("buildOpenAIProvider", () => {
           provider: "openai",
           modelId: "gpt-5.5",
         } as never)
-        ?.levels.some((level) => level.id === "xhigh"),
-    ).toBe(true);
+        ?.levels.map((level) => level.id),
+    ).toContain("xhigh");
 
     const entries = provider.augmentModelCatalog?.({
       env: process.env,
@@ -545,6 +547,7 @@ describe("buildOpenAIProvider", () => {
       sanitizeToolCallIds: false,
       validateGeminiTurns: false,
       validateAnthropicTurns: false,
+      allowSyntheticToolResults: true,
     });
   });
 

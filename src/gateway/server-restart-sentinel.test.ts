@@ -297,7 +297,9 @@ function expectRecordFields(
   record: unknown,
   expected: Record<string, unknown>,
 ): Record<string, unknown> {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -307,14 +309,19 @@ function expectRecordFields(
 
 function mockCallArg(mock: { mock: { calls: Array<Array<unknown>> } }, callIndex = 0): unknown {
   const call = mock.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return call?.[0];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[0];
 }
 
 function lastMockCallArg(mock: { mock: { calls: Array<Array<unknown>> } }): unknown {
-  const call = mock.mock.calls.at(-1);
-  expect(call).toBeDefined();
-  return call?.[0];
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("Expected last mock call");
+  }
+  return call[0];
 }
 
 function expectMockCallFields(
@@ -327,8 +334,10 @@ function expectMockCallFields(
 
 function expectNthSystemEventFields(callIndex: number, expected: Record<string, unknown>): void {
   const call = mocks.enqueueSystemEvent.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  expectRecordFields(call?.[1], expected);
+  if (!call) {
+    throw new Error(`Expected enqueueSystemEvent call at index ${callIndex}`);
+  }
+  expectRecordFields(call[1], expected);
 }
 
 function expectContinuationDispatchFields(
@@ -429,7 +438,7 @@ describe("scheduleRestartSentinelWake", () => {
     });
     expect(mocks.ackDelivery).toHaveBeenCalledWith("queue-1");
     expect(mocks.failDelivery).not.toHaveBeenCalled();
-    expect(mocks.enqueueSystemEvent.mock.calls[0]?.[0]).toBe("restart message");
+    expect(mockCallArg(mocks.enqueueSystemEvent)).toBe("restart message");
     expectNthSystemEventFields(0, {
       sessionKey: "agent:main:main",
     });
@@ -1110,7 +1119,7 @@ describe("scheduleRestartSentinelWake", () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
-    expect(mocks.enqueueSystemEvent.mock.calls[1]?.[0]).toBe("continue");
+    expect(mockCallArg(mocks.enqueueSystemEvent, 1)).toBe("continue");
     expectNthSystemEventFields(1, {
       sessionKey: "agent:main:main",
     });
@@ -1231,7 +1240,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.enqueueSystemEvent.mock.calls[0]?.[0]).toBe("restart message");
+    expect(mockCallArg(mocks.enqueueSystemEvent)).toBe("restart message");
     expectNthSystemEventFields(0, {
       sessionKey: "agent:main:matrix:channel:!lowercased:example.org",
     });

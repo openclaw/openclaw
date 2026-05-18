@@ -63,8 +63,9 @@ function requireApprovalRequestPayload(callIndex: number): ApprovalRequestPayloa
   const call = vi.mocked(callGatewayTool).mock.calls[callIndex];
   expect(call?.[0]).toBe("exec.approval.request");
   const payload = call?.[2];
-  expect(typeof payload).toBe("object");
-  expect(payload).not.toBeNull();
+  if (!payload || typeof payload !== "object") {
+    throw new Error(`expected approval request payload ${callIndex}`);
+  }
   return payload as ApprovalRequestPayload;
 }
 
@@ -241,10 +242,60 @@ describe("requestExecApprovalDecision", () => {
     });
 
     expect(result).toBe("deny");
-    expect(vi.mocked(callGatewayTool).mock.calls).toHaveLength(1);
+    expect(vi.mocked(callGatewayTool).mock.calls).toStrictEqual([
+      [
+        "exec.approval.request",
+        { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
+        {
+          ask: "on-miss",
+          command: "echo hi",
+          commandSpans: undefined,
+          cwd: "/tmp",
+          env: undefined,
+          host: "gateway",
+          id: "approval-id",
+          nodeId: undefined,
+          resolvedPath: undefined,
+          security: "allowlist",
+          sessionKey: undefined,
+          systemRunPlan: undefined,
+          timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+          twoPhase: true,
+          turnSourceAccountId: undefined,
+          turnSourceChannel: undefined,
+          turnSourceThreadId: undefined,
+          turnSourceTo: undefined,
+          warningText: undefined,
+          agentId: undefined,
+        },
+        { expectFinal: false },
+      ],
+    ]);
   });
 
   it("adds command spans to host approval registration payloads", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id",
+      command: 'ls | grep "stuff" | python -c \'print("hi")\'',
+      commandHighlighting: true,
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    const payload = requireApprovalRequestPayload(0);
+    expect(payload?.commandSpans).toStrictEqual([
+      { startIndex: 0, endIndex: 2 },
+      { startIndex: 0, endIndex: 4 },
+      { startIndex: 5, endIndex: 9 },
+      { startIndex: 20, endIndex: 26 },
+    ]);
+  });
+
+  it("does not generate command spans by default", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
     await registerExecApprovalRequestForHost({
@@ -256,12 +307,29 @@ describe("requestExecApprovalDecision", () => {
       ask: "always",
     });
 
-    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
-      | ApprovalRequestPayload
-      | undefined;
-    expect(payload?.commandSpans).toContainEqual({ startIndex: 0, endIndex: 2 });
-    expect(payload?.commandSpans).toContainEqual({ startIndex: 5, endIndex: 9 });
-    expect(payload?.commandSpans).toContainEqual({ startIndex: 20, endIndex: 26 });
+    expect(commandExplainerMock.explainShellCommand).not.toHaveBeenCalled();
+    expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
+    const payload = requireApprovalRequestPayload(0);
+    expect(payload?.commandSpans).toBeUndefined();
+  });
+
+  it("does not generate command spans when command highlighting is disabled", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id",
+      command: 'ls | grep "stuff" | python -c \'print("hi")\'',
+      commandHighlighting: false,
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    expect(commandExplainerMock.explainShellCommand).not.toHaveBeenCalled();
+    expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
+    const payload = requireApprovalRequestPayload(0);
+    expect(payload?.commandSpans).toBeUndefined();
   });
 
   it("uses system run plan command text for host approval explanations", async () => {
@@ -276,16 +344,15 @@ describe("requestExecApprovalDecision", () => {
         agentId: null,
         sessionKey: null,
       },
+      commandHighlighting: true,
       workdir: "/tmp/project",
       host: "node",
       security: "allowlist",
       ask: "always",
     });
 
-    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
-      | ApprovalRequestPayload
-      | undefined;
-    expect(payload?.commandSpans).toContainEqual({ startIndex: 0, endIndex: 4 });
+    const payload = requireApprovalRequestPayload(0);
+    expect(payload?.commandSpans).toStrictEqual([{ startIndex: 0, endIndex: 4 }]);
   });
 
   it("omits generated command spans for unsupported shell wrapper languages", async () => {
@@ -362,15 +429,14 @@ describe("requestExecApprovalDecision", () => {
       approvalId: "approval-id",
       command: "echo hi",
       commandSpans: [{ startIndex: 0, endIndex: 4 }],
+      commandHighlighting: true,
       workdir: "/tmp/project",
       host: "node",
       security: "allowlist",
       ask: "always",
     });
 
-    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
-      | ApprovalRequestPayload
-      | undefined;
+    const payload = requireApprovalRequestPayload(0);
     expect(payload?.commandSpans).toEqual([{ startIndex: 0, endIndex: 4 }]);
   });
 });

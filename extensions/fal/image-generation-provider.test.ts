@@ -6,7 +6,7 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
 }));
 
 import {
-  _setFalFetchGuardForTesting,
+  setFalFetchGuardForTesting,
   buildFalImageGenerationProvider,
 } from "./image-generation-provider.js";
 
@@ -39,7 +39,7 @@ describe("fal image-generation provider", () => {
   });
 
   afterEach(() => {
-    _setFalFetchGuardForTesting(null);
+    setFalFetchGuardForTesting(null);
     vi.restoreAllMocks();
   });
 
@@ -49,7 +49,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     const releaseRequest = vi.fn(async () => {});
     const releaseDownload = vi.fn(async () => {});
     fetchWithSsrFGuardMock
@@ -116,13 +116,42 @@ describe("fal image-generation provider", () => {
     });
   });
 
+  it("wraps wrong-shape successful fal image responses", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({ images: { url: "https://example.test/image.png" } }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildFalImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "fal-ai/flux/dev",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("fal image generation response malformed");
+  });
+
   it("uses image-to-image endpoint and data-uri input for edits", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",
       source: "env",
       mode: "api-key",
     });
-    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -179,7 +208,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -236,7 +265,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -292,7 +321,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
 
     const provider = buildFalImageGenerationProvider();
     await expect(
@@ -316,7 +345,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -375,7 +404,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
 
     const provider = buildFalImageGenerationProvider();
     await expect(
@@ -399,7 +428,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -448,7 +477,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -497,7 +526,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(
@@ -589,7 +618,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     const blocked = new Error("Blocked: resolves to private/internal/special-use IP address");
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
@@ -628,7 +657,7 @@ describe("fal image-generation provider", () => {
       source: "env",
       mode: "api-key",
     });
-    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(

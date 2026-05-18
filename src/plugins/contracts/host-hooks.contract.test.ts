@@ -76,7 +76,9 @@ function diagnosticSummaries(diagnostics: readonly unknown[]) {
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -1713,7 +1715,7 @@ describe("host-hook fixture plugin contract", () => {
         api.registerAgentEventSubscription({
           id: "delayed",
           streams: ["tool"],
-          async handle(_event, ctx) {
+          async handle(eventValue, ctx) {
             await new Promise<void>((resolve) => {
               releaseToolHandler = resolve;
             });

@@ -1,19 +1,18 @@
 import path from "node:path";
 import { markMigrationItemSkipped, summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
+import { MIGRATION_CONFLICT_REASON_PHRASES } from "./output.js";
 
 export const MIGRATION_SKILL_NOT_SELECTED_REASON = "not selected for migration";
 export const MIGRATION_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
+export const MIGRATION_SELECTION_ACCEPT = "__openclaw_migrate_accept_recommended__";
 export const MIGRATION_SELECTION_TOGGLE_ALL_ON = "__openclaw_migrate_toggle_all_on__";
 export const MIGRATION_SELECTION_TOGGLE_ALL_OFF = "__openclaw_migrate_toggle_all_off__";
-export const MIGRATION_SELECTION_SKIP = "__openclaw_migrate_skip_for_now__";
+export const MIGRATION_SKILL_SELECTION_ACCEPT = MIGRATION_SELECTION_ACCEPT;
 export const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON = MIGRATION_SELECTION_TOGGLE_ALL_ON;
 export const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF = MIGRATION_SELECTION_TOGGLE_ALL_OFF;
-export const MIGRATION_SKILL_SELECTION_SKIP = MIGRATION_SELECTION_SKIP;
 
-type InteractiveMigrationSelection =
-  | { action: "skip" }
-  | { action: "select"; selectedItemIds: Set<string> };
+type InteractiveMigrationSelection = { action: "select"; selectedItemIds: Set<string> };
 export type InteractiveMigrationSkillSelection = InteractiveMigrationSelection;
 export type InteractiveMigrationPluginSelection = InteractiveMigrationSelection;
 
@@ -255,33 +254,29 @@ export function formatMigrationSkillSelectionLabel(item: MigrationItem): string 
   return readMigrationSkillName(item) ?? item.id.replace(/^skill:/u, "");
 }
 
-export function formatMigrationSkillSelectionHint(item: MigrationItem): string | undefined {
-  const parts = [readMigrationSkillSourceLabel(item)];
-  if (item.status === "conflict") {
-    parts.push(item.reason ? `conflict: ${item.reason}` : "conflict");
+function humanizeMigrationConflictReason(reason: string | undefined): string {
+  if (!reason) {
+    return "conflict";
   }
-  return (
-    parts
-      .filter((value): value is string => typeof value === "string" && value.length > 0)
-      .join("; ") || undefined
-  );
+  return MIGRATION_CONFLICT_REASON_PHRASES[reason] ?? reason;
+}
+
+export function formatMigrationSkillSelectionHint(item: MigrationItem): string | undefined {
+  if (item.status !== "conflict") {
+    return undefined;
+  }
+  const sourceLabel = readMigrationSkillSourceLabel(item);
+  const reason = humanizeMigrationConflictReason(item.reason);
+  return sourceLabel ? `${sourceLabel} ${reason}` : reason;
 }
 
 export function formatMigrationPluginSelectionHint(item: MigrationItem): string | undefined {
-  const pluginName = readMigrationPluginName(item);
-  const configKey = readMigrationPluginConfigKey(item);
-  const parts = [
-    readMigrationPluginMarketplaceName(item),
-    configKey && configKey !== pluginName ? `config: ${configKey}` : undefined,
-  ];
-  if (item.status === "conflict") {
-    parts.push(item.reason ? `conflict: ${item.reason}` : "conflict");
+  if (item.status !== "conflict") {
+    return undefined;
   }
-  return (
-    parts
-      .filter((value): value is string => typeof value === "string" && value.length > 0)
-      .join("; ") || undefined
-  );
+  const marketplace = readMigrationPluginMarketplaceName(item);
+  const reason = humanizeMigrationConflictReason(item.reason);
+  return marketplace ? `${marketplace} plugin ${reason}` : reason;
 }
 
 export function applyMigrationSelectedSkillItemIds(
@@ -425,10 +420,6 @@ function resolveInteractiveMigrationSelection(
   }
 
   const selectedValueSet = new Set(selectedValues);
-  if (selectedValueSet.has(MIGRATION_SELECTION_SKIP)) {
-    return { action: "skip" };
-  }
-
   if (selectedValueSet.has(MIGRATION_SELECTION_TOGGLE_ALL_OFF)) {
     return { action: "select", selectedItemIds: new Set() };
   }
@@ -469,9 +460,6 @@ export function reconcileInteractiveMigrationSkillToggleValues(
   activatedValue: string | undefined,
   selectableValues: readonly string[],
 ): string[] {
-  if (activatedValue === MIGRATION_SELECTION_SKIP) {
-    return selectedValues.includes(MIGRATION_SELECTION_SKIP) ? [MIGRATION_SELECTION_SKIP] : [];
-  }
   if (activatedValue === MIGRATION_SELECTION_TOGGLE_ALL_ON) {
     return [MIGRATION_SELECTION_TOGGLE_ALL_ON, ...selectableValues];
   }
@@ -481,9 +469,7 @@ export function reconcileInteractiveMigrationSkillToggleValues(
   if (activatedValue !== undefined && selectableValues.includes(activatedValue)) {
     return selectedValues.filter(
       (value) =>
-        value !== MIGRATION_SELECTION_TOGGLE_ALL_ON &&
-        value !== MIGRATION_SELECTION_TOGGLE_ALL_OFF &&
-        value !== MIGRATION_SELECTION_SKIP,
+        value !== MIGRATION_SELECTION_TOGGLE_ALL_ON && value !== MIGRATION_SELECTION_TOGGLE_ALL_OFF,
     );
   }
   return selectedValues.filter(
@@ -493,6 +479,31 @@ export function reconcileInteractiveMigrationSkillToggleValues(
   );
 }
 
+export function reconcileInteractiveMigrationEnterValues(
+  selectedValues: readonly string[],
+  activatedValue: string | undefined,
+  selectableValues: readonly string[],
+  opts: { preserveDeselectedActivatedValue?: boolean } = {},
+): string[] {
+  if (activatedValue === MIGRATION_SELECTION_TOGGLE_ALL_ON) {
+    return [MIGRATION_SELECTION_TOGGLE_ALL_ON, ...selectableValues];
+  }
+  if (activatedValue === MIGRATION_SELECTION_TOGGLE_ALL_OFF) {
+    return [MIGRATION_SELECTION_TOGGLE_ALL_OFF];
+  }
+  if (activatedValue !== undefined && selectableValues.includes(activatedValue)) {
+    const selectedSelectableValues = selectedValues.filter(
+      (value) =>
+        value !== MIGRATION_SELECTION_TOGGLE_ALL_ON && value !== MIGRATION_SELECTION_TOGGLE_ALL_OFF,
+    );
+    if (opts.preserveDeselectedActivatedValue && !selectedValues.includes(activatedValue)) {
+      return selectedSelectableValues;
+    }
+    return Array.from(new Set([...selectedSelectableValues, activatedValue]));
+  }
+  return [...selectedValues];
+}
+
 export function reconcileInteractiveMigrationShortcutValues(
   previousValues: readonly string[],
   selectedValues: readonly string[],
@@ -500,11 +511,7 @@ export function reconcileInteractiveMigrationShortcutValues(
   key: "a" | "i",
 ): string[] {
   const previousSelectable = previousValues.filter((value) => selectableValues.includes(value));
-  if (
-    key === "a" &&
-    !previousValues.includes(MIGRATION_SELECTION_SKIP) &&
-    previousSelectable.length === selectableValues.length
-  ) {
+  if (key === "a" && previousSelectable.length === selectableValues.length) {
     return [MIGRATION_SELECTION_TOGGLE_ALL_OFF];
   }
 

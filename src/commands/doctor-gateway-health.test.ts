@@ -63,24 +63,13 @@ describe("checkGatewayHealth", () => {
     const mismatchNotes = note.mock.calls
       .filter(([, title]) => title === "OpenClaw version mismatch")
       .map(([message]) => String(message));
-    expect(
-      mismatchNotes.some((message) =>
-        message.includes("the running Gateway is OpenClaw 2026.4.23"),
-      ),
-    ).toBe(true);
-    expect(mismatchNotes.some((message) => message.includes("That usually means"))).toBe(false);
-    expect(
-      mismatchNotes.some((message) =>
-        message.includes("Check `openclaw --version`, `which openclaw`"),
-      ),
-    ).toBe(true);
-    expect(
-      mismatchNotes.some((message) =>
-        message.includes(
-          "If this mismatch is unexpected, update PATH so `openclaw` points to the version you want",
-        ),
-      ),
-    ).toBe(true);
+    const mismatchOutput = mismatchNotes.join("\n");
+    expect(mismatchOutput).toContain("the running Gateway is OpenClaw 2026.4.23");
+    expect(mismatchOutput).not.toContain("That usually means");
+    expect(mismatchOutput).toContain("Check `openclaw --version`, `which openclaw`");
+    expect(mismatchOutput).toContain(
+      "If this mismatch is unexpected, update PATH so `openclaw` points to the version you want",
+    );
   });
 
   it("does not run follow-up channel probes when liveness fails", async () => {
@@ -92,7 +81,9 @@ describe("checkGatewayHealth", () => {
     ).resolves.toEqual({ healthOk: false });
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(String(runtime.error.mock.calls[0]?.[0])).toContain("gateway timeout after 3000ms");
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("gateway timeout after 3000ms"),
+    );
   });
 });
 

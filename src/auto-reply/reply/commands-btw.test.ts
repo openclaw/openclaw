@@ -26,20 +26,24 @@ function buildParams(commandBody: string) {
 function mockCall(mock: unknown, index = 0): Array<unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
   const call = calls.at(index);
-  expect(call, `mock call ${index + 1}`).toBeDefined();
-  return call as Array<unknown>;
+  if (!call) {
+    throw new Error(`Expected mock call ${index + 1}`);
+  }
+  return call;
 }
 
 function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
   const [arg] = mockCall(mock);
-  expect(arg).toBeTypeOf("object");
-  expect(arg).not.toBeNull();
+  if (!arg || typeof arg !== "object") {
+    throw new Error("expected first mock argument object");
+  }
   return arg as Record<string, unknown>;
 }
 
 function expectObjectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected object fields");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -151,11 +155,52 @@ describe("handleBtwCommand", () => {
       sessionEntry: params.sessionEntry,
       resolvedThinkLevel: "off",
       resolvedReasoningLevel: "off",
+      messageChannel: "whatsapp",
+      messageProvider: "whatsapp",
     });
     expect(String(runnerArgs.agentDir)).toContain("/agents/main/agent");
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "nothing important", btw: { question: "what changed?" } },
+    });
+  });
+
+  it("uses the originating target before the command transport target", async () => {
+    const params = buildParams("/btw what changed?");
+    params.ctx.OriginatingTo = "channel:source";
+    params.command.to = "slash:transport";
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "source target" });
+
+    await handleBtwCommand(params, true);
+
+    expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
+      currentChannelId: "channel:source",
+    });
+  });
+
+  it("keeps provider and conversation target separate for side-question approvals", async () => {
+    const params = buildParams("/btw what changed?");
+    params.command.channel = "telegram";
+    params.command.channelId = "telegram";
+    params.command.to = "+2000";
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "targeted answer" });
+
+    await handleBtwCommand(params, true);
+
+    expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+      currentChannelId: "+2000",
     });
   });
 
@@ -215,8 +260,9 @@ describe("handleBtwCommand", () => {
 
     const sessionAgentArgs = mockFirstObjectArg(resolveSessionAgentIdMock);
     expect(sessionAgentArgs.sessionKey).toBe("agent:worker-1:whatsapp:direct:12345");
-    expect(sessionAgentArgs.config).toBeTypeOf("object");
-    expect(sessionAgentArgs.config).not.toBeNull();
+    if (!sessionAgentArgs.config || typeof sessionAgentArgs.config !== "object") {
+      throw new Error("expected session agent config");
+    }
     expect(String(mockFirstObjectArg(runBtwSideQuestionMock).agentDir)).toContain(
       "/agents/worker-1/agent",
     );
@@ -243,11 +289,13 @@ describe("handleBtwCommand", () => {
 
     const canonicalAgentArgs = mockFirstObjectArg(resolveSessionAgentIdMock);
     expect(canonicalAgentArgs.sessionKey).toBe("agent:worker-1:whatsapp:direct:12345");
-    expect(canonicalAgentArgs.config).toBeTypeOf("object");
-    expect(canonicalAgentArgs.config).not.toBeNull();
+    if (!canonicalAgentArgs.config || typeof canonicalAgentArgs.config !== "object") {
+      throw new Error("expected canonical agent config");
+    }
     const resolveDirCall = mockCall(resolveAgentDirMock);
-    expect(resolveDirCall[0]).toBeTypeOf("object");
-    expect(resolveDirCall[0]).not.toBeNull();
+    if (!resolveDirCall[0] || typeof resolveDirCall[0] !== "object") {
+      throw new Error("expected resolveAgentDir config");
+    }
     expect(resolveDirCall[1]).toBe("worker-1");
     expect(mockFirstObjectArg(runBtwSideQuestionMock).agentDir).toBe("/tmp/worker-1-agent");
     expect(result).toEqual({

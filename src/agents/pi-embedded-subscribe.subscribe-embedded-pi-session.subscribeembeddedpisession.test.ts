@@ -121,12 +121,23 @@ describe("subscribeEmbeddedPiSession", () => {
       .find((payload) => payload.text === text);
   }
 
+  function mockCallArg(mock: { mock: { calls: unknown[][] } }, callIndex = 0): unknown {
+    const call = mock.mock.calls[callIndex];
+    if (!call) {
+      throw new Error(`expected mock call ${callIndex + 1}`);
+    }
+    return call[0];
+  }
+
+  function latestMockCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
+    return mockCallArg(mock, mock.mock.calls.length - 1);
+  }
+
   function expectBlockReplyPayload(
     onBlockReply: { mock: { calls: unknown[][] } },
     expected: { text: string; mediaUrls?: string[] },
   ): void {
     const payload = findBlockReplyPayload(onBlockReply, expected.text);
-    expect(payload).toBeDefined();
     if (!payload) {
       throw new Error(`Expected block reply text: ${expected.text}`);
     }
@@ -145,7 +156,9 @@ describe("subscribeEmbeddedPiSession", () => {
         item.livenessState === expected.livenessState &&
         item.replayInvalid === expected.replayInvalid,
     );
-    expect(payload).toBeDefined();
+    if (!payload) {
+      throw new Error(`Expected lifecycle payload for phase ${expected.phase}`);
+    }
   }
 
   it("captures usage from completions timings on done events", () => {
@@ -248,7 +261,7 @@ describe("subscribeEmbeddedPiSession", () => {
       await flushBlockReplyCallbacks();
 
       expect(onBlockReply).toHaveBeenCalledTimes(1);
-      expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
+      expect((mockCallArg(onBlockReply) as { text?: string }).text).toBe("Final answer");
 
       const streamTexts = onReasoningStream.mock.calls
         .map((call) => call[0]?.text)
@@ -337,13 +350,11 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
-    const payload = onToolResult.mock.calls.at(-1)?.[0] as
-      | { text?: string; mediaUrls?: string[] }
-      | undefined;
-    expect(payload?.text ?? "").toContain("Fetched page");
-    expect(payload?.mediaUrls).toBeUndefined();
+    const payload = latestMockCallArg(onToolResult) as { text?: string; mediaUrls?: string[] };
+    expect(payload.text ?? "").toContain("Fetched page");
+    expect(payload.mediaUrls).toBeUndefined();
   });
 
   it("delivers generated image media once in markdown verbose output", async () => {
@@ -379,13 +390,14 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
-    const toolPayload = onToolResult.mock.calls.at(-1)?.[0] as
-      | { text?: string; mediaUrls?: string[] }
-      | undefined;
-    expect(toolPayload?.text ?? "").toContain("Generated 1 image");
-    expect(toolPayload?.mediaUrls).toBeUndefined();
+    const toolPayload = latestMockCallArg(onToolResult) as {
+      text?: string;
+      mediaUrls?: string[];
+    };
+    expect(toolPayload.text ?? "").toContain("Generated 1 image");
+    expect(toolPayload.mediaUrls).toBeUndefined();
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "Here is the image.");
@@ -437,7 +449,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -491,7 +503,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -705,6 +717,39 @@ describe("subscribeEmbeddedPiSession", () => {
     });
   });
 
+  it("counts orphaned tool media emitted through block replies", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      builtinToolNames: new Set(["tts"]),
+      onBlockReply,
+    });
+
+    emit({
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          },
+        },
+      },
+    });
+    emit({ type: "agent_end" });
+    await flushBlockReplyCallbacks();
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(subscription.getPendingToolMediaReply()).toBeNull();
+    expect(subscription.getVisibleBlockReplyCount()).toBe(1);
+  });
+
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
     async ({ open, close }) => {
@@ -734,16 +779,14 @@ describe("subscribeEmbeddedPiSession", () => {
       });
       await flushBlockReplyCallbacks();
 
-      expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
       const payloadTexts = onBlockReply.mock.calls
         .map((call) => call[0]?.text)
         .filter((value): value is string => typeof value === "string");
+      expect(payloadTexts).toEqual(["Final answer"]);
       for (const text of payloadTexts) {
         expect(text).not.toContain("Reasoning");
         expect(text).not.toContain(open);
       }
-      const combined = payloadTexts.join(" ").replace(/\s+/g, " ").trim();
-      expect(combined).toBe("Final answer");
     },
   );
 
@@ -1057,8 +1100,10 @@ describe("subscribeEmbeddedPiSession", () => {
     // Look for lifecycle:error event
     const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
 
-    expect(lifecycleError).toBeDefined();
-    const error = (lifecycleError?.data as { error?: unknown } | undefined)?.error;
+    if (!lifecycleError) {
+      throw new Error("Expected lifecycle error event");
+    }
+    const error = (lifecycleError.data as { error?: unknown } | undefined)?.error;
     expect(typeof error).toBe("string");
     expect(error).toContain("API rate limit reached");
   });
