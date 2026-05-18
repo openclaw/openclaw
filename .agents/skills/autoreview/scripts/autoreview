@@ -20,6 +20,9 @@ Options:
   --opencode-bin PATH        OpenCode binary. Default: opencode.
   --droid-bin PATH           Droid binary. Default: droid.
   --copilot-bin PATH         GitHub Copilot binary. Default: copilot.
+  --codex-config KEY=VALUE   Pass a Codex -c config override to nested codex review. Repeatable.
+  --shell-env-inherit auto|all|default
+                              Environment inheritance policy for commands run by nested Codex. Default: auto.
   --full-access              Keep yolo/full-access mode enabled. Default.
   --no-yolo                  Run nested Codex review with normal sandbox/approval prompts.
   --output FILE              Also save output to file.
@@ -29,6 +32,14 @@ Options:
   -h, --help                 Show help.
 
 Environment:
+  Nested Codex review uses shell_environment_policy.inherit=all when nested
+                              Codex config overrides are supplied, so local gateway launchers carry env.
+  AUTOREVIEW_SHELL_ENV_INHERIT
+                              Set to all or default to force the nested Codex shell env policy.
+  CODEX_REVIEW_SHELL_ENV_INHERIT
+                              Legacy alias when AUTOREVIEW_SHELL_ENV_INHERIT is unset.
+  AUTOREVIEW_CODEX_CONFIG    Newline-delimited Codex -c config overrides.
+  CODEX_REVIEW_CODEX_CONFIG  Legacy alias when AUTOREVIEW_CODEX_CONFIG is unset.
   OPENCLAW_TESTBOX=1 or AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1
                               Enable maintainer-only OpenClaw Crabbox/Testbox validation policy.
 
@@ -52,6 +63,9 @@ opencode_bin=${OPENCODE_BIN:-opencode}
 droid_bin=${DROID_BIN:-droid}
 copilot_bin=${COPILOT_BIN:-copilot}
 codex_args=()
+codex_config_overrides=()
+codex_cli_config_overrides=()
+shell_env_inherit=${AUTOREVIEW_SHELL_ENV_INHERIT:-${CODEX_REVIEW_SHELL_ENV_INHERIT:-auto}}
 yolo=${AUTOREVIEW_YOLO:-${CODEX_REVIEW_YOLO:-1}}
 output=${AUTOREVIEW_OUTPUT:-${CODEX_REVIEW_OUTPUT:-}}
 parallel_tests=
@@ -108,6 +122,14 @@ while [[ $# -gt 0 ]]; do
       copilot_bin=${2:-}
       shift 2
       ;;
+    --codex-config)
+      codex_cli_config_overrides+=("${2:-}")
+      shift 2
+      ;;
+    --shell-env-inherit)
+      shell_env_inherit=${2:-}
+      shift 2
+      ;;
     --full-access)
       yolo=1
       shift
@@ -143,6 +165,41 @@ case "$yolo" in
   0|false|False|FALSE|no|No|NO|off|Off|OFF) ;;
   *) codex_args+=(--dangerously-bypass-approvals-and-sandbox --sandbox danger-full-access) ;;
 esac
+
+codex_config_env=${AUTOREVIEW_CODEX_CONFIG:-${CODEX_REVIEW_CODEX_CONFIG:-}}
+if [[ -n "$codex_config_env" ]]; then
+  while IFS= read -r codex_config_line; do
+    [[ -n "$codex_config_line" ]] || continue
+    codex_config_overrides+=("$codex_config_line")
+  done <<< "$codex_config_env"
+fi
+
+case "$shell_env_inherit" in
+  auto)
+    if (( ${#codex_config_overrides[@]} > 0 || ${#codex_cli_config_overrides[@]} > 0 )); then
+      shell_env_inherit=all
+    else
+      shell_env_inherit=default
+    fi
+    ;;
+  all|default) ;;
+  *)
+    echo "invalid --shell-env-inherit: $shell_env_inherit" >&2
+    exit 2
+    ;;
+esac
+if [[ "$shell_env_inherit" == all ]]; then
+  # Deliberate for local Codex launchers that rely on inherited provider,
+  # proxy, or gateway variables; use default to restore Codex filtering.
+  codex_args=(-c shell_environment_policy.inherit=all "${codex_args[@]}")
+fi
+
+for codex_config_override in "${codex_config_overrides[@]}"; do
+  codex_args+=(-c "$codex_config_override")
+done
+for codex_config_override in "${codex_cli_config_overrides[@]}"; do
+  codex_args+=(-c "$codex_config_override")
+done
 
 case "$mode" in
   auto|local|branch|commit) ;;
@@ -258,6 +315,25 @@ EOF
   fi
 fi
 
+print_review_command() {
+  local redact_next=false
+  local arg
+
+  printf 'review:'
+  for arg in "${review_cmd[@]}"; do
+    if [[ "$redact_next" == true ]]; then
+      printf ' %q' '<codex-config-redacted>'
+      redact_next=false
+      continue
+    fi
+    printf ' %q' "$arg"
+    if [[ "$arg" == "-c" || "$arg" == "--config" ]]; then
+      redact_next=true
+    fi
+  done
+  printf '\n'
+}
+
 printf 'autoreview target: %s\n' "$review_kind"
 printf 'branch: %s\n' "${current_branch:-detached}"
 if [[ -n "$pr_url" ]]; then
@@ -275,9 +351,7 @@ case "$reviewer" in
     ;;
 esac
 if [[ "$reviewer" == auto || "$reviewer" == codex ]]; then
-  printf 'review:'
-  printf ' %q' "${review_cmd[@]}"
-  printf '\n'
+  print_review_command
   if [[ "$codex_review_stdin_prompt" == true || "$codex_review_prompt_file" == true ]]; then
     printf 'review policy: OpenClaw maintainer Crabbox/Testbox-aware validation prompt injected\n'
   fi

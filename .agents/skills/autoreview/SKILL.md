@@ -121,11 +121,29 @@ The helper:
 - writes only to stdout unless `--output` or `AUTOREVIEW_OUTPUT` is set
 - supports `--dry-run`, `--parallel-tests`, and commit refs
 - runs nested review with `--dangerously-bypass-approvals-and-sandbox --sandbox danger-full-access` by default
+- uses Codex's normal shell environment filtering by default, but switches nested Codex review to `-c shell_environment_policy.inherit=all` when `--codex-config` or `AUTOREVIEW_CODEX_CONFIG` is supplied for local gateway launchers; use `--shell-env-inherit all|default` or `AUTOREVIEW_SHELL_ENV_INHERIT=all|default` to force either policy
+- supports repeated `--codex-config KEY=VALUE` and newline-delimited `AUTOREVIEW_CODEX_CONFIG` / legacy `CODEX_REVIEW_CODEX_CONFIG` for local Codex provider overrides that were originally supplied as CLI `-c` flags; explicit `--codex-config` entries are passed after env entries so command-line overrides win
 - injects maintainer-only OpenClaw validation policy into native Codex review when `OPENCLAW_TESTBOX=1` or `AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1`, so local memory-heavy Node/Vitest checks are avoided in favor of Crabbox/Testbox proof
 - branch mode may fail on Codex CLI versions that reject `--base` plus the helper's stdin prompt; on that exact parser error, rerun plain `codex review --base <ref>` instead of falling back to a non-Codex reviewer
 - keeps accepting `--full-access`; use `--no-yolo` or `AUTOREVIEW_YOLO=0` to opt out
 - still accepts legacy `CODEX_REVIEW_*` env vars when the matching `AUTOREVIEW_*` var is unset
 - prints `autoreview clean: no accepted/actionable findings reported` when the selected review command exits 0
+
+Local gateway/Copilot-style Codex launchers need both exported env vars and the
+matching nested Codex config, because parent CLI `-c` flags are not process
+environment variables:
+
+```bash
+export OPENAI_API_KEY="sk-dummy-00000000000000000000000000000000000000000000"
+export AUTOREVIEW_CODEX_CONFIG='openai_base_url="http://localhost:8080/v1"
+model_provider="copilot"
+model_providers.copilot.name="Copilot"
+model_providers.copilot.base_url="http://localhost:8080/v1"
+model_providers.copilot.env_key="OPENAI_API_KEY"
+model_providers.copilot.supports_websockets=false
+model="gpt-5.5"'
+.agents/skills/autoreview/scripts/autoreview
+```
 
 ## Final Report
 
