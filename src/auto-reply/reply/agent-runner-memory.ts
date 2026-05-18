@@ -755,26 +755,29 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     })();
     if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
       const rawUsagePromptTokens = Math.ceil(promptTokens);
+      const hasPostUsageCompactionMarker = snapshot.usage?.hasPostUsageCompactionMarker === true;
       // After a compaction marker, the last persisted usage line still records the
       // pre-compaction prompt size. Treat it as stale when it dwarfs the live replayed
       // message estimate, and bound the estimate to post-compaction context so preflight
       // does not repeatedly compact a session that is already well under the model limit.
       const hasStaleUsageSnapshot =
-        snapshot.usage?.hasPostUsageCompactionMarker === true &&
+        hasPostUsageCompactionMarker &&
         typeof estimatedMessageTokens === "number" &&
         rawUsagePromptTokens > estimatedMessageTokens * 2 + 10_000;
       const boundedUsagePromptTokens =
         hasStaleUsageSnapshot && typeof estimatedMessageTokens === "number"
           ? estimatedMessageTokens
           : rawUsagePromptTokens;
-      const tailTokens = hasStaleUsageSnapshot
+      // With a marker present, the bytes before it belong to stale pre-compaction state;
+      // only count post-marker trailing bytes so the tail does not re-inflate the estimate.
+      const tailTokens = hasPostUsageCompactionMarker
         ? (postCompactionTrailingBytesTokens ?? 0)
         : (trailingBytesTokens ?? 0);
       const usagePromptTokens = boundedUsagePromptTokens + tailTokens;
       return {
         promptTokens: Math.max(usagePromptTokens, estimatedMessageTokens ?? 0),
         outputTokens:
-          !hasStaleUsageSnapshot &&
+          !hasPostUsageCompactionMarker &&
           typeof outputTokens === "number" &&
           Number.isFinite(outputTokens) &&
           outputTokens > 0
