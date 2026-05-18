@@ -61,7 +61,7 @@ describe("registerCoreHealthChecks", () => {
     registerCoreHealthChecks();
 
     const registeredIds = new Set(listHealthChecks().map((check) => check.id));
-    const coreTargets = new Set(
+    const coreTargets = new Set<string>(
       doctorHealthConversionRules.flatMap((rule) =>
         rule.target.filter((target) => target.startsWith("core/doctor/")),
       ),
