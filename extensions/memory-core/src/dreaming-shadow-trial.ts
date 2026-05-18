@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 
 export type DreamingShadowTrialVerdict = "helpful" | "neutral" | "harmful";
 export type DreamingShadowTrialRecommendation = "promote" | "defer" | "reject";
@@ -16,6 +17,7 @@ export type DreamingShadowTrialInput = {
   workspaceDir?: string;
   reportPath?: string;
   nowMs?: number;
+  timezone?: string;
 };
 
 export type DreamingShadowTrialReport = {
@@ -62,13 +64,10 @@ function formatList(values: string[]): string {
   return values.map((value) => `- ${value}`).join("\n");
 }
 
-function formatShadowTrialDay(nowMs: number): string {
-  return new Date(nowMs).toISOString().slice(0, 10);
-}
-
 export function defaultDreamingShadowTrialReportPath(params: {
   workspaceDir: string;
   nowMs?: number;
+  timezone?: string;
 }): string {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   return path.join(
@@ -76,7 +75,7 @@ export function defaultDreamingShadowTrialReportPath(params: {
     "memory",
     "dreaming",
     "shadow-trials",
-    `${formatShadowTrialDay(nowMs)}.md`,
+    `${formatMemoryDreamingDay(nowMs, params.timezone)}.md`,
   );
 }
 
@@ -84,6 +83,7 @@ function resolveReportPath(params: {
   workspaceDir?: string;
   reportPath?: string;
   nowMs?: number;
+  timezone?: string;
 }): string | undefined {
   if (params.reportPath) {
     if (path.isAbsolute(params.reportPath)) {
@@ -100,6 +100,7 @@ function resolveReportPath(params: {
   return defaultDreamingShadowTrialReportPath({
     workspaceDir: params.workspaceDir,
     nowMs: params.nowMs,
+    timezone: params.timezone,
   });
 }
 
@@ -118,6 +119,7 @@ export function buildDreamingShadowTrialReport(
     workspaceDir: input.workspaceDir,
     reportPath: input.reportPath,
     nowMs: input.nowMs,
+    timezone: input.timezone,
   });
 
   const markdown = [

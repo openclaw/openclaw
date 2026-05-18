@@ -74,6 +74,25 @@ describe("dreaming shadow trial runner", () => {
     );
   });
 
+  it("uses the configured dreaming timezone for the default report day", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-shadow-trial-timezone-");
+
+    const report = await writeDreamingShadowTrialReport({
+      ...baseInput,
+      verdict: "helpful",
+      workspaceDir,
+      nowMs: Date.parse("2026-05-18T21:30:00.000Z"),
+      timezone: "Asia/Riyadh",
+    });
+
+    expect(report.reportPath).toBe(
+      path.join(workspaceDir, "memory", "dreaming", "shadow-trials", "2026-05-19.md"),
+    );
+    await expect(fs.readFile(report.reportPath!, "utf-8")).resolves.toContain(
+      "recommendation: promote",
+    );
+  });
+
   it("keeps risky candidates reject-only without promoting durable memory", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-shadow-trial-risk-");
     const reportPath = defaultDreamingShadowTrialReportPath({
