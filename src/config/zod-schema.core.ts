@@ -395,6 +395,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "fireworks",
   "github-copilot",
   "google",
+  "google-antigravity",
   "google-gemini-cli",
   "google-vertex",
   "groq",

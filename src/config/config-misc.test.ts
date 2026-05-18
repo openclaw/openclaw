@@ -98,6 +98,20 @@ describe("model provider localService config", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts bundled provider alias timeout overlays without custom provider fields", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          "google-antigravity": {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("still requires baseUrl and models for custom provider declarations", () => {
     const result = validateConfigObjectRaw({
       models: {
