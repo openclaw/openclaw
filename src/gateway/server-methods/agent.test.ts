@@ -1166,6 +1166,7 @@ describe("gateway agent handler", () => {
     });
     mocks.resolveSessionLifecycleTimestamps.mockReturnValue({
       sessionStartedAt: recoveredStartedAt,
+      lastInteractionAt: undefined,
     });
     let capturedEntry: Record<string, unknown> | undefined;
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
@@ -1213,6 +1214,7 @@ describe("gateway agent handler", () => {
     });
     mocks.resolveSessionLifecycleTimestamps.mockReturnValue({
       sessionStartedAt: recoveredStartedAt,
+      lastInteractionAt: undefined,
     });
     let capturedEntry: Record<string, unknown> | undefined;
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
