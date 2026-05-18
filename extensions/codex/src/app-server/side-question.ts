@@ -254,7 +254,9 @@ export async function runCodexAppServerSideQuestion(
       : options.nativeHookRelay?.enabled === false
         ? buildCodexNativeHookRelayDisabledConfig()
         : undefined;
-    const runtimeThreadConfig = buildCodexRuntimeThreadConfig(undefined);
+    const runtimeThreadConfig = buildCodexRuntimeThreadConfig(undefined, {
+      nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
+    });
     const threadConfig =
       mergeCodexThreadConfigs(nativeHookRelayConfig, runtimeThreadConfig) ?? runtimeThreadConfig;
     const modelProvider = resolveCodexAppServerModelProvider({

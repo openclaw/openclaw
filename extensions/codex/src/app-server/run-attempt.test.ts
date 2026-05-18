@@ -393,6 +393,7 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+    codeModeOnly: false,
   };
 }
 
@@ -1164,7 +1165,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(dynamicToolNames).toEqual(["message"]);
   });
 
-  it("starts Codex threads with searchable OpenClaw dynamic tools by default", async () => {
+  it("keeps searchable OpenClaw dynamic tools when code-mode-only is enabled", async () => {
     __testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("web_search"),
@@ -1180,16 +1181,9 @@ describe("runCodexAppServerAttempt", () => {
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.sourceReplyDeliveryMode = "message_tool_only";
-    params.toolsAllow = [
-      "message",
-      "web_search",
-      "heartbeat_respond",
-      "sessions_spawn",
-      "sessions_yield",
-    ];
 
     const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { mode: "yolo" } },
+      pluginConfig: { appServer: { mode: "yolo", codeModeOnly: true } },
     });
     await harness.waitForMethod("turn/start", 120_000);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -1199,6 +1193,8 @@ describe("runCodexAppServerAttempt", () => {
     const dynamicTools =
       (startRequest?.params as { dynamicTools?: Array<Record<string, unknown>> } | undefined)
         ?.dynamicTools ?? [];
+    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
     const message = dynamicTools.find((tool) => tool.name === "message");
     const webSearch = dynamicTools.find((tool) => tool.name === "web_search");
     const heartbeat = dynamicTools.find((tool) => tool.name === "heartbeat_respond");
@@ -1215,6 +1211,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(sessionsSpawn?.deferLoading).toBe(true);
     expect(sessionsYield).not.toHaveProperty("namespace");
     expect(sessionsYield).not.toHaveProperty("deferLoading");
+    expect(startConfig?.["features.code_mode"]).toBe(true);
+    expect(startConfig?.["features.code_mode_only"]).toBe(true);
   });
 
   it("disables Codex native tool surfaces when runtime toolsAllow is empty", async () => {
@@ -8349,6 +8347,7 @@ describe("runCodexAppServerAttempt", () => {
         args: ["app-server", "--listen", "stdio://"],
         headers: {},
       },
+      codeModeOnly: false,
       requestTimeoutMs: 60_000,
       turnCompletionIdleTimeoutMs: 60_000,
       approvalPolicy: "on-request" as const,
@@ -8465,6 +8464,7 @@ describe("runCodexAppServerAttempt", () => {
           args: ["app-server"],
           headers: {},
         },
+        codeModeOnly: false,
         requestTimeoutMs: 60_000,
         turnCompletionIdleTimeoutMs: 60_000,
         approvalPolicy: "never",

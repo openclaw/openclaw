@@ -46,6 +46,9 @@ const CODEX_HARNESS_SUBAGENT_PROBE = isTruthyEnvValue(
 const CODEX_HARNESS_GUARDIAN_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE,
 );
+const CODEX_HARNESS_CODE_MODE_ONLY = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_CODE_MODE_ONLY,
+);
 const CODEX_HARNESS_SUBAGENT_ONLY =
   CODEX_HARNESS_SUBAGENT_PROBE &&
   !CODEX_HARNESS_IMAGE_PROBE &&
@@ -198,6 +201,7 @@ function parseModelKey(modelKey: string): { provider: string; modelId: string } 
 
 async function writeLiveGatewayConfig(params: {
   codexAppServerMode?: "guardian" | "yolo";
+  codeModeOnly?: boolean;
   configPath: string;
   modelKey: string;
   port: number;
@@ -219,6 +223,7 @@ async function writeLiveGatewayConfig(params: {
           config: {
             appServer: {
               mode: params.codexAppServerMode ?? "yolo",
+              ...(params.codeModeOnly === true ? { codeModeOnly: true } : {}),
             },
           },
         },
@@ -310,6 +315,39 @@ async function requestAgentText(params: {
   });
   expect(text).toContain(params.expectedToken);
   return text;
+}
+
+async function verifyCodexCodeModeOnlyDynamicToolProbe(params: {
+  client: GatewayClient;
+  sessionKey: string;
+}): Promise<void> {
+  const runId = randomUUID();
+  const expectedToken = `CODEX-CODEMODE-TOOL-${runId.slice(0, 6).toUpperCase()}`;
+  const { text, events } = await requestAgentTextWithEvents({
+    client: params.client,
+    eventPrefix: "tool",
+    sessionKey: params.sessionKey,
+    message: [
+      "Code-mode-only bridge probe.",
+      "Before replying, call the OpenClaw sessions_list tool exactly once.",
+      "Use limit=1 and includeLastMessage=false.",
+      `After the tool result returns, reply exactly ${expectedToken} and nothing else.`,
+    ].join("\n"),
+  });
+  expect(text).toContain(expectedToken);
+  expect(
+    events.some((event) => event.data?.phase === "start" && event.data?.name === "sessions_list"),
+    `expected sessions_list start event; events=${JSON.stringify(events)}`,
+  ).toBe(true);
+  expect(
+    events.some(
+      (event) =>
+        event.data?.phase === "result" &&
+        event.data?.name === "sessions_list" &&
+        event.data?.isError !== true,
+    ),
+    `expected successful sessions_list result event; events=${JSON.stringify(events)}`,
+  ).toBe(true);
 }
 
 async function requestCodexCommandText(params: {
@@ -834,6 +872,7 @@ describeLive("gateway live (Codex harness)", () => {
         token,
         workspace,
         codexAppServerMode: CODEX_HARNESS_GUARDIAN_PROBE ? "guardian" : "yolo",
+        codeModeOnly: CODEX_HARNESS_CODE_MODE_ONLY,
       });
       const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
         displayName: "vitest-codex-harness-live",
@@ -895,6 +934,12 @@ describeLive("gateway live (Codex harness)", () => {
             });
             expect(secondText).toContain(secondToken);
             logCodexLiveStep("second-turn", { secondText });
+
+            if (CODEX_HARNESS_CODE_MODE_ONLY) {
+              logCodexLiveStep("code-mode-only-tool-probe:start", { sessionKey });
+              await verifyCodexCodeModeOnlyDynamicToolProbe({ client, sessionKey });
+              logCodexLiveStep("code-mode-only-tool-probe:done");
+            }
           } finally {
             unsubscribeDebugEvents();
           }
