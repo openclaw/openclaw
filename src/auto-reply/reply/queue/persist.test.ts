@@ -8,6 +8,7 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
+  clearFollowupQueuesRestoredFlagForTest,
   clearRestoredPendingDrainKey,
   clearRestoredPendingDrainKeysForTest,
   peekRestoredPendingDrainKeys,
@@ -74,11 +75,13 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     FOLLOWUP_QUEUES.clear();
     clearRestoredPendingDrainKeysForTest();
+    clearFollowupQueuesRestoredFlagForTest();
     clearRuntimeConfigSnapshot();
   });
 
   afterEach(() => {
     FOLLOWUP_QUEUES.clear();
+    clearFollowupQueuesRestoredFlagForTest();
     clearRuntimeConfigSnapshot();
     if (originalEnv === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
@@ -143,6 +146,65 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(FOLLOWUP_QUEUES.get(TEST_KEY)).toBeUndefined();
     expect(() => restoreFollowupQueues()).not.toThrow();
     expect(FOLLOWUP_QUEUES.get(TEST_KEY)).toBeUndefined();
+  });
+
+  it("guards restore against split-module re-evaluation (restore-once)", () => {
+    // First evaluation: state file present, restore populates the queue.
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push(makeFollowupRun("originally queued"));
+    persistFollowupQueues();
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    clearFollowupQueuesRestoredFlagForTest();
+
+    restoreFollowupQueues();
+    expect(FOLLOWUP_QUEUES.get(TEST_KEY)?.items[0].prompt).toBe("originally queued");
+
+    // Simulate the drain having taken over: the queue is now mid-flight with
+    // a fresh item and draining=true. A second module evaluation calling
+    // restoreFollowupQueues() MUST NOT overwrite this in-flight state — that
+    // would replay an already-delivered prompt or drop the fresh enqueue.
+    FOLLOWUP_QUEUES.set(TEST_KEY, {
+      items: [makeFollowupRun("arrived during drain")],
+      draining: true,
+      lastEnqueuedAt: Date.now(),
+      mode: "steer",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+      droppedCount: 0,
+      summaryLines: [],
+      summarySources: [],
+    });
+
+    restoreFollowupQueues();
+    const afterSecondRestore = FOLLOWUP_QUEUES.get(TEST_KEY);
+    expect(afterSecondRestore?.items[0].prompt).toBe("arrived during drain");
+    expect(afterSecondRestore?.draining).toBe(true);
+  });
+
+  it("resumes restore after the flag is explicitly cleared (test hook)", () => {
+    // The forTest clear hook lets the test suite re-exercise the round-trip
+    // without restarting the process. Without the clear, the second restore
+    // would be a no-op and this test (and the existing round-trip tests in
+    // this file) would assert against stale state.
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push(makeFollowupRun("first round"));
+    persistFollowupQueues();
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    clearFollowupQueuesRestoredFlagForTest();
+    restoreFollowupQueues();
+    expect(FOLLOWUP_QUEUES.get(TEST_KEY)?.items[0].prompt).toBe("first round");
+
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    // Without clearing the flag, the next restore is a no-op even though the
+    // state file is still on disk and the in-memory queue is empty.
+    restoreFollowupQueues();
+    expect(FOLLOWUP_QUEUES.get(TEST_KEY)).toBeUndefined();
+
+    // After explicitly clearing, restore runs again.
+    clearFollowupQueuesRestoredFlagForTest();
+    restoreFollowupQueues();
+    expect(FOLLOWUP_QUEUES.get(TEST_KEY)?.items[0].prompt).toBe("first round");
   });
 
   it("registers restored keys in the pending-drain set when queue has items", () => {
@@ -325,6 +387,9 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
       defaults: { agent: { model: "claude-new" } },
     } as unknown as OpenClawConfig;
     setRuntimeConfigSnapshot(newConfig);
+    // The restore-once guard would short-circuit the second pass; this test
+    // models two separate process boots, so explicitly reset the flag.
+    clearFollowupQueuesRestoredFlagForTest();
     restoreFollowupQueues();
     expect(FOLLOWUP_QUEUES.get(TEST_KEY)!.items[0].run.config).toBe(newConfig);
   });

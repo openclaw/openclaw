@@ -42,6 +42,30 @@ export function clearRestoredPendingDrainKeysForTest(): void {
   restoredPendingDrainKeys.clear();
 }
 
+// Process-wide restore-once flag. restoreFollowupQueues() is called at module
+// evaluation; in a bundled/split-runtime layout multiple copies of state.ts can
+// evaluate, each calling restore. Without a guard, a second restore could
+// overwrite an in-flight FOLLOWUP_QUEUES entry (already draining or carrying a
+// newer enqueue), causing replay of an already-delivered prompt or loss of a
+// fresh queued item. Symbol.for is used directly on globalThis (not via
+// resolveGlobalSingleton) so the flag is shared by reference across split
+// runtime chunks — see the note in src/shared/global-singleton.ts.
+const FOLLOWUP_QUEUES_RESTORED_KEY = Symbol.for("openclaw.followupQueuesRestored");
+type FollowupQueuesGlobal = { [FOLLOWUP_QUEUES_RESTORED_KEY]?: boolean };
+
+function hasFollowupQueuesRestored(): boolean {
+  return (globalThis as FollowupQueuesGlobal)[FOLLOWUP_QUEUES_RESTORED_KEY] === true;
+}
+
+function markFollowupQueuesRestored(): void {
+  (globalThis as FollowupQueuesGlobal)[FOLLOWUP_QUEUES_RESTORED_KEY] = true;
+}
+
+/** For testing only — reset the restore-once flag between test cases. */
+export function clearFollowupQueuesRestoredFlagForTest(): void {
+  delete (globalThis as FollowupQueuesGlobal)[FOLLOWUP_QUEUES_RESTORED_KEY];
+}
+
 export function resolveFollowupQueueStatePath(stateDir: string = resolveStateDir()): string {
   return path.join(stateDir, FOLLOWUP_QUEUE_STATE_FILENAME);
 }
@@ -320,6 +344,16 @@ export function persistFollowupQueues(): void {
  * Called once at module init, before any queue operations.
  */
 export function restoreFollowupQueues(): void {
+  // Restore exactly once per process. Mark the flag BEFORE doing any work so a
+  // concurrent call from a second module evaluation cannot race and replay the
+  // restore. If the work below throws, the in-memory state is left in whatever
+  // partial-restored shape the loop produced — that is the same shape a clean
+  // restore of fewer entries would produce, so it is safe and we still do not
+  // want to retry on a later module evaluation.
+  if (hasFollowupQueuesRestored()) {
+    return;
+  }
+  markFollowupQueuesRestored();
   try {
     const statePath = resolveFollowupQueueStatePath();
     if (!fs.existsSync(statePath)) {
