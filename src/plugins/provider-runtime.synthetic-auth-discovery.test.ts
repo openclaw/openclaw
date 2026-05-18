@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderPlugin } from "./types.js";
 
 const resolveProviderRuntimePlugin = vi.hoisted(() => vi.fn(() => undefined));
-const resolveLoadedProviderRuntimePlugin = vi.hoisted(() => vi.fn(() => undefined));
+const resolveLoadedProviderRuntimePlugin = vi.hoisted(() =>
+  vi.fn<() => ProviderPlugin | undefined>(() => undefined),
+);
 const resolvePluginDiscoveryProvidersRuntime = vi.hoisted(() =>
   vi.fn(() => [
     {
