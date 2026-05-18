@@ -108,6 +108,7 @@ vi.mock("../api.js", async () => {
 
 const {
   _test,
+  buildTtsSystemPromptHint,
   getTtsPersona,
   getTtsProvider,
   maybeApplyTtsToPayload,
@@ -210,6 +211,7 @@ async function expectTtsPayloadResult(params: {
     expect(result.audioAsVoice).toBe(params.audioAsVoice);
     expect(result.mediaUrl).toMatch(new RegExp(`voice-\\d+\\.${params.mediaExtension ?? "ogg"}$`));
     expect(result.spokenText).toBe(params.text);
+    expect(result.ttsSupplement).toEqual({ spokenText: params.text });
     expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBe(true);
 
     mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
@@ -236,6 +238,18 @@ describe("speech-core native voice-note routing", () => {
     }
     expect(_test.supportsNativeVoiceNoteTts("slack")).toBe(false);
     expect(_test.supportsNativeVoiceNoteTts(undefined)).toBe(false);
+  });
+
+  it("tells generic TTS guidance to defer to MEMORY voice-delivery instructions", () => {
+    const hint = buildTtsSystemPromptHint(createTtsConfig("openclaw-speech-core-tts-hint-test"));
+
+    expect(hint).toContain("Voice (TTS) is enabled.");
+    expect(hint).toContain(
+      "If workspace context (especially MEMORY.md) tells you not to use [[tts:...]] or to use a local/non-tagged voice workflow, follow that workspace instruction instead.",
+    );
+    expect(hint).toContain(
+      "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
+    );
   });
 
   it("marks Discord auto TTS replies as native voice messages", async () => {
@@ -434,6 +448,7 @@ describe("speech-core native voice-note routing", () => {
       expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
       expect(result.audioAsVoice).toBe(true);
       expect(result.text).toBeUndefined();
+      expect(result.ttsSupplement).toBeUndefined();
       mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
     } finally {
       if (mediaDir) {

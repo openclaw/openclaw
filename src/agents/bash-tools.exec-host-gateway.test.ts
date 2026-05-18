@@ -106,7 +106,7 @@ vi.mock("../infra/exec-approvals.js", () => ({
   requiresExecApproval: vi.fn(() => false),
   recordAllowlistUse: vi.fn(),
   recordAllowlistMatchesUse: recordAllowlistMatchesUseMock,
-  resolveApprovalAuditCandidatePath: vi.fn(() => null),
+  resolveApprovalAuditTrustPath: vi.fn(() => null),
   resolveAllowAlwaysPatterns: vi.fn(() => []),
   resolveExecApprovalAllowedDecisions: vi.fn(() => ["allow-once", "allow-always", "deny"]),
   addAllowlistEntry: vi.fn(),

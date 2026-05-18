@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 describe("legacy config migrate validation", () => {
-  it("returns valid migrated config for legacy group chat routing drift", () => {
-    const res = migrateLegacyConfig({
+  let groupChatRoutingResult: ReturnType<typeof migrateLegacyConfig>;
+  let partialValidationResult: ReturnType<typeof migrateLegacyConfig>;
+
+  beforeAll(() => {
+    groupChatRoutingResult = migrateLegacyConfig({
       routing: {
         allowFrom: ["+15550001111"],
         groupChat: {
@@ -17,7 +20,27 @@ describe("legacy config migrate validation", () => {
         telegram: {},
       },
     });
+    partialValidationResult = migrateLegacyConfig({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          llm: { idleTimeoutSeconds: 120 },
+        },
+      },
+      plugins: {
+        entries: {
+          brave: {
+            enabled: true,
+            config: { webSearch: { mode: "definitely-invalid" } },
+          },
+        },
+      },
+      tools: { web: { search: { provider: "brave" } } },
+    });
+  });
 
+  it("returns valid migrated config for legacy group chat routing drift", () => {
+    const res = groupChatRoutingResult;
     expect(res.partiallyValid).toBeUndefined();
     const migratedConfig = res.config as Record<string, unknown> | null;
     expect(migratedConfig?.routing).toBeUndefined();
@@ -42,23 +65,7 @@ describe("legacy config migrate validation", () => {
   });
 
   it("returns migrated config when unrelated plugin validation issues remain (#76798)", () => {
-    const res = migrateLegacyConfig({
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5" },
-          llm: { idleTimeoutSeconds: 120 },
-        },
-      },
-      plugins: {
-        entries: {
-          brave: {
-            enabled: true,
-            config: { webSearch: { mode: "definitely-invalid" } },
-          },
-        },
-      },
-      tools: { web: { search: { provider: "brave" } } },
-    });
+    const res = partialValidationResult;
 
     expect(res.partiallyValid).toBe(true);
     expect(res.changes).toStrictEqual([

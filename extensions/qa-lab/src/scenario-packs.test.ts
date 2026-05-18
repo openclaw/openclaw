@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { QA_SCENARIO_PACKS, readQaScenarioById } from "./scenario-catalog.js";
+import {
+  QA_PERSONAL_AGENT_SCENARIO_IDS,
+  QA_SCENARIO_PACKS,
+  readQaScenarioById,
+  resolveQaScenarioPackScenarioIds,
+} from "./scenario-catalog.js";
 
 describe("qa scenario packs", () => {
   it("points every pack scenario id at a loadable markdown scenario", () => {
@@ -31,6 +36,7 @@ describe("qa scenario packs", () => {
       "personal-memory-preference-recall",
       "personal-redaction-no-secret-leak",
       "personal-tool-safety-followthrough",
+      "personal-approval-denial-stop",
     ]);
 
     for (const scenarioId of personalPack?.scenarioIds ?? []) {
@@ -41,12 +47,36 @@ describe("qa scenario packs", () => {
     }
   });
 
+  it("expands the personal-agent pack in pack order", () => {
+    expect(resolveQaScenarioPackScenarioIds({ pack: "personal-agent" })).toEqual([
+      ...QA_PERSONAL_AGENT_SCENARIO_IDS,
+    ]);
+  });
+
+  it("combines explicit scenarios with pack scenarios", () => {
+    expect(
+      resolveQaScenarioPackScenarioIds({
+        pack: "personal-agent",
+        scenarioIds: ["channel-chat-baseline", "personal-reminder-roundtrip"],
+      }),
+    ).toEqual(["channel-chat-baseline", ...QA_PERSONAL_AGENT_SCENARIO_IDS]);
+  });
+
+  it("rejects unknown scenario packs", () => {
+    expect(() => resolveQaScenarioPackScenarioIds({ pack: "personal-admin" })).toThrow(
+      '--pack must be one of personal-agent, got "personal-admin"',
+    );
+  });
+
   it("keeps personal pack mock debug assertions scoped to each reviewed scenario", () => {
     const redactionFlow = JSON.stringify(
       readQaScenarioById("personal-redaction-no-secret-leak").execution.flow,
     );
     const toolSafetyFlow = JSON.stringify(
       readQaScenarioById("personal-tool-safety-followthrough").execution.flow,
+    );
+    const approvalDenialFlow = JSON.stringify(
+      readQaScenarioById("personal-approval-denial-stop").execution.flow,
     );
     const memoryScenario = readQaScenarioById("personal-memory-preference-recall");
     const memoryFlow = JSON.stringify(memoryScenario.execution.flow);
@@ -59,6 +89,11 @@ describe("qa scenario packs", () => {
     expect(toolSafetyFlow).toContain("preActionOutbound");
     expect(toolSafetyFlow).toContain("request.plannedToolName");
     expect(toolSafetyFlow).toContain("plannedToolName === 'read'");
+
+    expect(approvalDenialFlow).toContain("config.denialPromptSnippet");
+    expect(approvalDenialFlow).toContain("request.plannedToolName");
+    expect(approvalDenialFlow).toContain("config.deniedReadMarker");
+    expect(approvalDenialFlow).toContain("beforeDenialOutboundCursor");
 
     expect(memoryFlow).toContain("config.rememberPrompt");
     expect(memoryFlow).toContain("config.recallPrompt");

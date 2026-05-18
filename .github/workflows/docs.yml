@@ -6,6 +6,7 @@ on:
     paths:
       - "**/*.md"
       - "docs/**"
+      - "!CHANGELOG.md"
 
 permissions:
   contents: read

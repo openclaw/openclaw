@@ -10,6 +10,7 @@ import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
   readLatestAssistantTextFromSessionTranscript,
+  readTailAssistantTextFromSessionTranscript,
 } from "./transcript.js";
 
 describe("appendAssistantMessageToSessionTranscript", () => {
@@ -106,6 +107,37 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.role).toBe("assistant");
       expect(messageLine.message.content[0].type).toBe("text");
       expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
+    }
+  });
+
+  it("appends to legacy lowercase Signal group session entries", async () => {
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+    const signalSessionKey = `agent:main:signal:group:${mixedGroupId}`;
+    const legacySignalSessionKey = signalSessionKey.toLowerCase();
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [legacySignalSessionKey]: {
+          sessionId,
+          chatType: "group",
+          channel: "signal",
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey: signalSessionKey,
+      text: "Hello Signal group",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const lines = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
+      expect(lines).toHaveLength(2);
+      const messageLine = JSON.parse(lines[1]);
+      expect(messageLine.message.content[0].text).toBe("Hello Signal group");
     }
   });
 
@@ -273,6 +305,80 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
       expect(records.filter((record) => record.type === "message")).toHaveLength(2);
     }
+  });
+
+  it("skips transcript-only OpenClaw assistant entries when reading latest assistant text", async () => {
+    writeTranscriptStore();
+
+    const finalResult = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({ text: "Complete final answer" }),
+    });
+    expect(finalResult.ok).toBe(true);
+    if (!finalResult.ok) {
+      return;
+    }
+
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Earlier retained preview",
+      storePath: fixture.storePath(),
+    });
+    await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({
+        text: "Injected transcript text",
+        provider: "openclaw",
+        model: "gateway-injected",
+      }),
+    });
+
+    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(
+      finalResult.sessionFile,
+    );
+    expect(latestAssistantText?.id).toBe(finalResult.messageId);
+    expect(latestAssistantText?.text).toBe("Complete final answer");
+  });
+
+  it("does not report transcript-only OpenClaw assistant entries as latest assistant text", async () => {
+    writeTranscriptStore();
+
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Only delivery mirror",
+      storePath: fixture.storePath(),
+    });
+    expect(mirrorResult.ok).toBe(true);
+    if (!mirrorResult.ok) {
+      return;
+    }
+
+    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(
+      mirrorResult.sessionFile,
+    );
+    expect(latestAssistantText).toBeUndefined();
+  });
+
+  it("keeps transcript-only OpenClaw assistant entries available to the tail reader", async () => {
+    writeTranscriptStore();
+
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Tail delivery mirror",
+      storePath: fixture.storePath(),
+    });
+    expect(mirrorResult.ok).toBe(true);
+    if (!mirrorResult.ok) {
+      return;
+    }
+
+    const tailAssistantText = await readTailAssistantTextFromSessionTranscript(
+      mirrorResult.sessionFile,
+    );
+    expect(tailAssistantText?.id).toBe(mirrorResult.messageId);
+    expect(tailAssistantText?.text).toBe("Tail delivery mirror");
   });
 
   it("does not reuse an older matching assistant message across turns", async () => {

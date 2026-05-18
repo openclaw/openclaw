@@ -84,7 +84,11 @@ import {
   resolveCommandTurnTargetSessionKey,
 } from "../command-turn-context.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadAsTtsSupplement,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
@@ -1039,7 +1043,14 @@ export async function dispatchReplyFromConfig(
     const shouldSendVerboseProgressMessages =
       !isSlackNonDirectSurface && (ctx.ChatType !== "group" || ctx.IsForum === true);
     const shouldSendToolSummaries = shouldSendVerboseProgressMessages;
-    const shouldSendToolStartStatuses = shouldSendVerboseProgressMessages;
+    const shouldSendToolStartStatuses = false;
+    const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
+      suppressAutomaticSourceDelivery &&
+      sourceReplyDeliveryMode === "message_tool_only" &&
+      ctx.InboundEventKind !== "room_event" &&
+      !sendPolicyDenied &&
+      shouldEmitVerboseProgress() &&
+      shouldSendVerboseProgressMessages;
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
@@ -1203,7 +1214,7 @@ export async function dispatchReplyFromConfig(
       return parts.join("\n\n").trim() || "Planning next steps.";
     };
     const maybeSendWorkingStatus = async (label: string): Promise<void> => {
-      if (suppressDelivery) {
+      if (shouldSuppressProgressDelivery()) {
         return;
       }
       const normalizedLabel = normalizeWorkingLabel(label);
@@ -1232,7 +1243,11 @@ export async function dispatchReplyFromConfig(
       explanation?: string;
       steps?: string[];
     }): Promise<void> => {
-      if (suppressDelivery || !shouldEmitVerboseProgress() || !shouldSendVerboseProgressMessages) {
+      if (
+        shouldSuppressProgressDelivery() ||
+        !shouldEmitVerboseProgress() ||
+        !shouldSendVerboseProgressMessages
+      ) {
         return;
       }
       const replyPayload: ReplyPayload = {
@@ -1334,6 +1349,9 @@ export async function dispatchReplyFromConfig(
       params.replyOptions?.suppressDefaultToolProgressMessages === true;
     const shouldSuppressDefaultToolProgressMessages = () =>
       suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
+    const shouldSuppressProgressDelivery = () =>
+      sendPolicyDenied ||
+      (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -1405,7 +1423,7 @@ export async function dispatchReplyFromConfig(
               if (!suppressAutomaticSourceDelivery) {
                 await onToolResultFromReplyOptions?.(payload);
               }
-              if (suppressDelivery) {
+              if (shouldSuppressProgressDelivery()) {
                 return;
               }
               const ttsPayload = await maybeApplyTtsToReplyPayload({
@@ -1700,12 +1718,16 @@ export async function dispatchReplyFromConfig(
           if (ttsSyntheticReply.mediaUrl) {
             // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content.
             // Keep the spoken text only for hooks/archive consumers.
-            const ttsOnlyPayload: ReplyPayload = {
-              mediaUrl: ttsSyntheticReply.mediaUrl,
-              audioAsVoice: ttsSyntheticReply.audioAsVoice,
-              spokenText: accumulatedBlockTtsText,
-              trustedLocalMedia: true,
-            };
+            const ttsOnlyPayload = markReplyPayloadAsTtsSupplement(
+              {
+                mediaUrl: ttsSyntheticReply.mediaUrl,
+                audioAsVoice: ttsSyntheticReply.audioAsVoice,
+                spokenText: accumulatedBlockTtsText,
+                trustedLocalMedia: true,
+              },
+              accumulatedBlockTtsText,
+              { visibleTextAlreadyDelivered: true },
+            );
             const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
             const result = await routeReplyToOriginating(normalizedTtsOnlyPayload);
             if (result) {

@@ -81,6 +81,7 @@ import {
   applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
   collectExplicitDenylist,
+  expandToolGroups,
   hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
   normalizeToolName,
@@ -397,6 +398,8 @@ export function createOpenClawCodingTools(options?: {
   modelAuthMode?: ModelAuthMode;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
+  /** Normalized conversation id exposed to tool hooks. Defaults to currentChannelId. */
+  hookChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
@@ -545,10 +548,17 @@ export function createOpenClawCodingTools(options?: {
   const mergeToolSearchControlAllowlist = <TPolicy extends { allow?: string[] }>(
     policy: TPolicy | undefined,
   ) => mergeAlsoAllowPolicy(policy, toolSearchControlAllowlist);
+  const runtimeToolAllowlistIncludesMessage = expandToolGroups(
+    options?.runtimeToolAllowlist ?? [],
+  ).some((toolName) => {
+    const normalized = normalizeToolName(toolName);
+    return normalized === "*" || normalized === "message";
+  });
   const runtimeProfileAlsoAllow = [
     ...(options?.forceMessageTool || options?.sourceReplyDeliveryMode === "message_tool_only"
       ? ["message"]
       : []),
+    ...(runtimeToolAllowlistIncludesMessage ? ["message"] : []),
     ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
     ...toolSearchControlAllowlist,
   ];
@@ -982,6 +992,10 @@ export function createOpenClawCodingTools(options?: {
       toolsForMemoryFlush.push(tool);
     }
   }
+  const unavailableCoreToolReason =
+    isMemoryFlushRun && memoryFlushWritePath
+      ? "memory-triggered compaction runs expose only read and append-only write"
+      : undefined;
   const toolsForMessageProvider = filterToolsByMessageProvider(
     toolsForMemoryFlush,
     options?.messageProvider,
@@ -1023,10 +1037,19 @@ export function createOpenClawCodingTools(options?: {
         groupPolicy: groupPolicyWithToolSearchControls,
         senderPolicy: senderPolicyWithToolSearchControls,
         agentId,
+        unavailableCoreToolReason,
       }),
-      { policy: sandboxToolPolicyWithToolSearchControls, label: "sandbox tools.allow" },
-      { policy: subagentPolicyWithToolSearchControls, label: "subagent tools.allow" },
-      { policy: inheritedToolPolicy, label: "inherited tools" },
+      {
+        policy: sandboxToolPolicyWithToolSearchControls,
+        label: "sandbox tools.allow",
+        unavailableCoreToolReason,
+      },
+      {
+        policy: subagentPolicyWithToolSearchControls,
+        label: "subagent tools.allow",
+        unavailableCoreToolReason,
+      },
+      { policy: inheritedToolPolicy, label: "inherited tools", unavailableCoreToolReason },
     ],
   });
   if (shouldInheritEffectiveToolAllowlist) {
@@ -1055,6 +1078,7 @@ export function createOpenClawCodingTools(options?: {
       sessionKey: options?.sessionKey,
       sessionId: options?.sessionId,
       runId: options?.runId,
+      channelId: options?.hookChannelId ?? options?.currentChannelId,
       ...(options?.trace ? { trace: options.trace } : {}),
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
       onToolOutcome: options?.onToolOutcome,

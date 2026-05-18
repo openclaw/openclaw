@@ -622,6 +622,27 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("suppresses final text blocks already delivered through partial preview streaming", async () => {
+    const onPartialReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({ text: "First block\n\nSecond block" });
+      return {
+        payloads: [{ text: "First block" }, { text: "Second block" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onPartialReply },
+      typingMode: "message",
+    });
+
+    const result = await run();
+
+    expect(onPartialReply).toHaveBeenCalledWith({ text: "First block\n\nSecond block" });
+    expect(result).toBeUndefined();
+  });
+
   it("suppresses narrated silent-turn partials, block replies, and final payloads", async () => {
     const onPartialReply = vi.fn();
     const onBlockReply = vi.fn();
@@ -1984,7 +2005,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const res = await run();
 
     const payload = requireRecord(res, "ordering conflict payload");
-    expect(payload.text).toContain("Message ordering conflict");
+    expect(payload.text).toContain("model provider rejected the conversation state");
     expect(payload.text).not.toContain("400");
   });
 

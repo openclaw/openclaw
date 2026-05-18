@@ -90,6 +90,88 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Fixed.");
   });
 
+  it("uses the final assistant answer when streamed text was an incomplete preview", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Long answer, part one"],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Long answer, part one\nLong answer, part two\nLong answer, part three",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(
+      payloads,
+      "Long answer, part one\nLong answer, part two\nLong answer, part three",
+    );
+  });
+
+  it("uses the final assistant answer when one streamed text contains progress and final text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Need inspect.\n\nDone."],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Need inspect.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_commentary",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Done.");
+  });
+
+  it("keeps a current one-chunk reply when only a stale transcript assistant is available", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Current room event reply."],
+      currentAssistant: null,
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Previous transcript reply.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_previous",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Current room event reply.");
+  });
+
   it("delivers only the final assistant answer when accumulated text includes pre-tool progress", () => {
     const payloads = buildPayloads({
       assistantTexts: ["I'll inspect that first.", "Done."],
@@ -278,6 +360,23 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSingleToolErrorPayload(payloads, {
       title: "Bash",
       absentDetail: "command failed",
+    });
+  });
+
+  it("surfaces declined Codex native command errors for aborted empty turns", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [],
+      lastToolError: {
+        toolName: "bash",
+        error: "codex native tool blocked",
+        mutatingAction: true,
+      },
+      runAborted: true,
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Bash",
+      absentDetail: "codex native tool blocked",
     });
   });
 

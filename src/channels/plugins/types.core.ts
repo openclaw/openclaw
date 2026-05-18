@@ -695,6 +695,7 @@ export type ChannelMessageActionContext = {
   };
   toolContext?: ChannelThreadingToolContext;
   dryRun?: boolean;
+  gatewayClientScopes?: readonly string[];
 };
 
 export type ChannelToolSend = {

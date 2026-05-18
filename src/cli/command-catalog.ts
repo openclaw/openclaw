@@ -111,6 +111,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
   },
   {
+    commandPath: ["config", "models"],
+    exact: true,
+    policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["migrate"],
     policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
   },
@@ -264,7 +269,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["dashboard"], policy: { networkProxy: "bypass" } },
   { commandPath: ["daemon"], policy: { networkProxy: "bypass" } },
   { commandPath: ["devices"], policy: { networkProxy: "bypass" } },
-  { commandPath: ["doctor"], policy: { bypassConfigGuard: true } },
+  {
+    commandPath: ["doctor"],
+    policy: {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+    },
+  },
   { commandPath: ["exec-policy"], policy: { networkProxy: "bypass" } },
   { commandPath: ["hooks"], policy: { networkProxy: "bypass" } },
   { commandPath: ["logs"], policy: { networkProxy: "bypass" } },

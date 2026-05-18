@@ -279,12 +279,13 @@ export class TelegramPollingSession {
     const fetchAbortController = new AbortController();
     this.#activeFetchAbort = fetchAbortController;
     const telegramTransport = this.#transportState.acquireForNextCycle();
-    const updateOffset = this.opts.isolatedIngress?.enabled
-      ? undefined
-      : {
-          lastUpdateId: this.opts.getLastUpdateId(),
-          onUpdateId: this.opts.persistUpdateId,
-        };
+    const persistedLastUpdateId = this.opts.getLastUpdateId();
+    const lastUpdateId = this.opts.isolatedIngress?.enabled ? null : persistedLastUpdateId;
+    const updateOffset = {
+      lastUpdateId,
+      persistenceFloorUpdateId: persistedLastUpdateId,
+      onUpdateId: this.opts.persistUpdateId,
+    };
     try {
       return createTelegramBot({
         token: this.opts.token,
@@ -621,7 +622,27 @@ export class TelegramPollingSession {
     }, drainIntervalMs);
     drainTimer.unref?.();
     try {
-      await worker.task();
+      try {
+        await worker.task();
+      } catch (err) {
+        if (this.opts.abortSignal?.aborted) {
+          return "exit";
+        }
+        if (
+          pollState.error &&
+          !isRecoverableTelegramNetworkError(new Error(pollState.error), { context: "polling" })
+        ) {
+          this.#status.notePollingError(pollState.error);
+          throw new Error(pollState.error, { cause: err });
+        }
+        const message = formatErrorMessage(err);
+        this.opts.log(`[telegram][diag] isolated polling ingress failed: ${message}`);
+        this.#status.notePollingError(message);
+        const shouldRestart = await this.#waitBeforeRestart(
+          (delay) => `Telegram isolated polling ingress failed; restarting in ${delay}.`,
+        );
+        return shouldRestart ? "continue" : "exit";
+      }
       if (this.opts.abortSignal?.aborted) {
         return "exit";
       }
