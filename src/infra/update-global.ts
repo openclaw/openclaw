@@ -502,6 +502,16 @@ function isDirectNpmNodeModulesRoot(globalRoot: string | null): boolean {
   );
 }
 
+function inferBunGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
+  const directGlobalRoot = inferGlobalRootFromPackageRoot(pkgRoot);
+  if (!directGlobalRoot) {
+    return null;
+  }
+  return path.resolve(directGlobalRoot) === path.resolve(resolveBunGlobalRoot())
+    ? directGlobalRoot
+    : null;
+}
+
 function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
   const directGlobalRoot = inferGlobalRootFromPackageRoot(pkgRoot);
   if (resolvePnpmGlobalDirFromGlobalRoot(directGlobalRoot)) {
@@ -584,6 +594,17 @@ function normalizeGlobalInstallCommand(
     : managerOrCommand;
 }
 
+function resolveInstallCommandForManager(
+  managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
+  manager: GlobalInstallManager,
+  pkgRoot?: string | null,
+): ResolvedGlobalInstallCommand {
+  const normalized = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
+  return normalized.manager === manager
+    ? normalized
+    : resolveGlobalInstallCommand(manager, pkgRoot);
+}
+
 export async function resolveGlobalRoot(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   runCommand: CommandRunner,
@@ -623,29 +644,43 @@ export async function resolveGlobalInstallTarget(params: {
   pkgRoot?: string | null;
   honorPackageRoot?: boolean;
 }): Promise<ResolvedGlobalInstallTarget> {
-  const command = normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
+  const honoredPackageRootGlobalRoot = params.honorPackageRoot
+    ? inferGlobalRootFromPackageRoot(params.pkgRoot)
+    : null;
+  const pnpmPackageRootGlobalRoot = (await isPnpmGlobalPackageRoot(params.pkgRoot))
+    ? inferPnpmGlobalRootFromPackageRoot(params.pkgRoot)
+    : null;
+  const bunPackageRootGlobalRoot = inferBunGlobalRootFromPackageRoot(params.pkgRoot);
+  const honoredDirectNpmRoot =
+    pnpmPackageRootGlobalRoot === null &&
+    bunPackageRootGlobalRoot === null &&
+    isDirectNpmNodeModulesRoot(honoredPackageRootGlobalRoot);
+  const command = bunPackageRootGlobalRoot
+    ? resolveInstallCommandForManager(params.manager, "bun", params.pkgRoot)
+    : pnpmPackageRootGlobalRoot
+      ? resolveInstallCommandForManager(params.manager, "pnpm", params.pkgRoot)
+      : honoredDirectNpmRoot
+        ? resolveInstallCommandForManager(params.manager, "npm", params.pkgRoot)
+        : normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
   const globalRoot = await resolveGlobalRoot(
     command,
     params.runCommand,
     params.timeoutMs,
     params.pkgRoot,
   );
-  const pkgRootGlobalRoot =
-    command.manager === "pnpm" && (await isPnpmGlobalPackageRoot(params.pkgRoot))
-      ? inferPnpmGlobalRootFromPackageRoot(params.pkgRoot)
-      : null;
-  const honoredPackageRootGlobalRoot =
-    params.honorPackageRoot && command.manager === "npm"
-      ? inferGlobalRootFromPackageRoot(params.pkgRoot)
-      : null;
-  const targetGlobalRoot = pkgRootGlobalRoot ?? honoredPackageRootGlobalRoot ?? globalRoot;
+  const pkgRootGlobalRoot = command.manager === "pnpm" ? pnpmPackageRootGlobalRoot : null;
+  const targetGlobalRoot =
+    (command.manager === "bun" ? bunPackageRootGlobalRoot : null) ??
+    pkgRootGlobalRoot ??
+    (command.manager === "npm" ? honoredPackageRootGlobalRoot : null) ??
+    globalRoot;
   return {
     ...command,
     globalRoot: targetGlobalRoot,
     packageRoot: targetGlobalRoot ? path.join(targetGlobalRoot, PRIMARY_PACKAGE_NAME) : null,
     ...(honoredPackageRootGlobalRoot &&
     targetGlobalRoot === honoredPackageRootGlobalRoot &&
-    isDirectNpmNodeModulesRoot(honoredPackageRootGlobalRoot)
+    honoredDirectNpmRoot
       ? { directNodeModulesRoot: true }
       : {}),
   };
