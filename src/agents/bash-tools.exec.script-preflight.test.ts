@@ -25,6 +25,8 @@ const isWin = process.platform === "win32";
 const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
 const parseOpenClawChannelsLoginShellCommand = __testing.parseOpenClawChannelsLoginShellCommand;
+const parseOpenClawRawPackageUpgradeShellCommand =
+  __testing.parseOpenClawRawPackageUpgradeShellCommand;
 const validateExecScriptPreflight = __testing.validateScriptFileForShellBleed;
 const createPreflightTool = () =>
   createExecTool({ host: "gateway", security: "full", ask: "on-miss" });
@@ -108,6 +110,51 @@ describe("exec interactive OpenClaw channel login guard", () => {
         command: "env -S 'openclaw channels' login --channel whatsapp",
       }),
     ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+  });
+});
+
+describe("exec OpenClaw self-update guard", () => {
+  it("recognizes raw global package-manager OpenClaw upgrades", () => {
+    for (const command of [
+      "npm install -g openclaw@latest",
+      "npm i --global openclaw",
+      "npm update --location=global openclaw@2026.4.15",
+      "npm update --location global openclaw@latest",
+      "pnpm add -g openclaw@latest",
+      "bun add --global openclaw",
+      "yarn global add openclaw@latest",
+      "yarn add -g openclaw",
+    ]) {
+      expect(parseOpenClawRawPackageUpgradeShellCommand(command), command).toBe(true);
+    }
+    expect(parseOpenClawRawPackageUpgradeShellCommand("openclaw update")).toBe(false);
+    expect(parseOpenClawRawPackageUpgradeShellCommand("npm install openclaw")).toBe(false);
+    expect(parseOpenClawRawPackageUpgradeShellCommand("npm install -g @openclaw/sdk")).toBe(false);
+  });
+
+  it("blocks raw package-manager OpenClaw upgrades from exec", async () => {
+    const tool = createPreflightTool();
+
+    await expect(
+      tool.execute("call-raw-openclaw-upgrade", {
+        command: "sudo npm install -g openclaw@latest",
+      }),
+    ).rejects.toThrow(/exec cannot run raw package-manager upgrades of OpenClaw/);
+    await expect(
+      tool.execute("call-wrapped-raw-openclaw-upgrade", {
+        command: "sudo -u openclaw bash -lc 'pnpm add --global openclaw@latest'",
+      }),
+    ).rejects.toThrow(/exec cannot run raw package-manager upgrades of OpenClaw/);
+    await expect(
+      tool.execute("call-env-raw-openclaw-upgrade", {
+        command: "env -S 'npm install -g openclaw@latest'",
+      }),
+    ).rejects.toThrow(/exec cannot run raw package-manager upgrades of OpenClaw/);
+    await expect(
+      tool.execute("call-wrapped-npm-location-raw-openclaw-upgrade", {
+        command: "sudo -u openclaw bash -lc 'npm update --location global openclaw@latest'",
+      }),
+    ).rejects.toThrow(/exec cannot run raw package-manager upgrades of OpenClaw/);
   });
 });
 

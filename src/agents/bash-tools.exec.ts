@@ -1185,6 +1185,75 @@ function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
   );
 }
 
+function isOpenClawPackageSpec(token: string | undefined): boolean {
+  if (!token) {
+    return false;
+  }
+  return /^openclaw(?:@.+)?$/iu.test(token.trim());
+}
+
+function parsePackageManagerGlobalFlag(argv: readonly string[], startIndex: number): boolean {
+  for (let i = startIndex; i < argv.length; i += 1) {
+    const token = argv[i];
+    if (token === "-g" || token === "--global") {
+      return true;
+    }
+    if (token === "--") {
+      return false;
+    }
+    if (token === "--location=global") {
+      return true;
+    }
+    if (token === "--location" && argv[i + 1] === "global") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function parseNpmLikeOpenClawGlobalInstall(argv: readonly string[]): boolean {
+  const commandName = normalizeCommandBaseName(argv[0]);
+  if (commandName !== "npm" && commandName !== "pnpm" && commandName !== "bun") {
+    return false;
+  }
+  const subcommand = argv[1];
+  if (
+    subcommand !== "install" &&
+    subcommand !== "i" &&
+    subcommand !== "add" &&
+    subcommand !== "update" &&
+    subcommand !== "up"
+  ) {
+    return false;
+  }
+  const global = parsePackageManagerGlobalFlag(argv, 2);
+  if (!global) {
+    return false;
+  }
+  return argv.slice(2).some(isOpenClawPackageSpec);
+}
+
+function parseYarnOpenClawGlobalInstall(argv: readonly string[]): boolean {
+  if (normalizeCommandBaseName(argv[0]) !== "yarn") {
+    return false;
+  }
+  if (argv[1] === "global" && argv[2] === "add") {
+    return argv.slice(3).some(isOpenClawPackageSpec);
+  }
+  if (argv[1] === "add" && parsePackageManagerGlobalFlag(argv, 2)) {
+    return argv.slice(2).some(isOpenClawPackageSpec);
+  }
+  return false;
+}
+
+function parseOpenClawRawPackageUpgradeShellCommand(raw: string): boolean {
+  const argv = splitShellArgs(raw);
+  if (!argv) {
+    return false;
+  }
+  return parseNpmLikeOpenClawGlobalInstall(argv) || parseYarnOpenClawGlobalInstall(argv);
+}
+
 function rejectUnsafeControlShellCommand(command: string): void {
   const rawCommand = command.trim();
   const analysis = analyzeShellCommand({ command: rawCommand });
@@ -1212,6 +1281,14 @@ function rejectUnsafeControlShellCommand(command: string): void {
         [
           "exec cannot run interactive OpenClaw channel login commands.",
           "Run `openclaw channels login` in a terminal on the gateway host, or use the channel-specific login agent tool when available (for WhatsApp: `whatsapp_login`).",
+        ].join(" "),
+      );
+    }
+    if (parseOpenClawRawPackageUpgradeShellCommand(candidate)) {
+      throw new Error(
+        [
+          "exec cannot run raw package-manager upgrades of OpenClaw.",
+          "Use `update.run` when available, or run `openclaw update` so the supported update path can restart the gateway and avoid stale runtime chunks.",
         ].join(" "),
       );
     }
@@ -1738,5 +1815,6 @@ export const execTool = createExecTool();
 
 export const __testing = {
   parseOpenClawChannelsLoginShellCommand,
+  parseOpenClawRawPackageUpgradeShellCommand,
   validateScriptFileForShellBleed,
 };
