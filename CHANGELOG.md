@@ -39,6 +39,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram: deliver generated media completions back into forum topics by preserving topic IDs across requester-agent handoff. (#83556) Thanks @fuller-stack-dev.
 - Gateway: defer update-check startup until after readiness so package update checks no longer block sidecar-ready startup, while preserving update broadcasts and shutdown cleanup. (#83520) Thanks @samzong.
 - Agents/video: hide `video_generate` reference-audio parameters unless a registered video provider supports audio inputs.
 - Plugins/xAI: echo PKCE challenge fields during OAuth authorization-code token exchange for xAI token-endpoint compatibility. (#83499) Thanks @fuller-stack-dev.
