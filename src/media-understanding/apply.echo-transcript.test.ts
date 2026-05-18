@@ -29,7 +29,7 @@ const hasAvailableAuthForProviderMock = vi.hoisted(() =>
 const getApiKeyForModelMock = vi.hoisted(() =>
   vi.fn(async () => ({ apiKey: "test-key", source: "test", mode: "api-key" })),
 );
-const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 const mockDeliverOutboundPayloads = vi.hoisted(() => vi.fn());
@@ -177,15 +177,15 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       resolveAuthProfileOrder: vi.fn(() => []),
     }));
     vi.doMock("../media/fetch.js", () => ({
-      fetchRemoteMedia: fetchRemoteMediaMock,
+      readRemoteMediaBuffer: readRemoteMediaBufferMock,
       MediaFetchError: MediaFetchErrorMock,
     }));
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
       runCommandWithTimeout: runCommandWithTimeoutMock,
     }));
-    vi.doMock("../infra/outbound/deliver-runtime.js", () => ({
-      deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
+    vi.doMock("../channels/message/runtime.js", () => ({
+      sendDurableMessageBatch: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
     }));
     vi.doMock("../utils/message-channel.js", () => ({
       isDeliverableMessageChannel: (channel: string) => channel === "voicechat",
@@ -232,11 +232,15 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     resolveApiKeyForProviderMock.mockClear();
     hasAvailableAuthForProviderMock.mockClear();
     getApiKeyForModelMock.mockClear();
-    fetchRemoteMediaMock.mockClear();
+    readRemoteMediaBufferMock.mockClear();
     runExecMock.mockReset();
     runCommandWithTimeoutMock.mockReset();
     mockDeliverOutboundPayloads.mockClear();
-    mockDeliverOutboundPayloads.mockResolvedValue([{ channel: "voicechat", messageId: "echo-1" }]);
+    mockDeliverOutboundPayloads.mockResolvedValue({
+      status: "sent",
+      results: [{ channel: "voicechat", messageId: "echo-1" }],
+      receipt: { platformMessageIds: ["echo-1"], parts: [], sentAt: 1 },
+    });
   });
 
   afterAll(async () => {

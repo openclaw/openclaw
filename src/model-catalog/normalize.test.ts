@@ -53,6 +53,7 @@ describe("model catalog normalization", () => {
                 compat: {
                   supportsTools: true,
                   supportsStore: "yes",
+                  thinkingFormat: "together",
                   unknownFlag: true,
                 },
                 status: "preview",
@@ -137,6 +138,7 @@ describe("model catalog normalization", () => {
               },
               compat: {
                 supportsTools: true,
+                thinkingFormat: "together",
               },
               status: "preview",
               statusReason: "rolling out",

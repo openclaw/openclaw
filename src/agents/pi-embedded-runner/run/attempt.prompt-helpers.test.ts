@@ -2,16 +2,37 @@ import { describe, expect, it, vi } from "vitest";
 
 const musicGenerationTaskStatusMocks = vi.hoisted(() => ({
   buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(),
+  buildMusicGenerationTaskStatusDetails: vi.fn(() => ({})),
+  buildMusicGenerationTaskStatusText: vi.fn(() => "Music generation task status"),
+  findActiveMusicGenerationTaskForSession: vi.fn(),
+  MUSIC_GENERATION_TASK_KIND: "music_generation",
+}));
+
+const imageGenerationTaskStatusMocks = vi.hoisted(() => ({
+  buildActiveImageGenerationTaskPromptContextForSession: vi.fn(),
+  buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
+  buildImageGenerationTaskStatusText: vi.fn(() => "Image generation task status"),
+  findActiveImageGenerationTaskForSession: vi.fn(),
+  getImageGenerationTaskProviderId: vi.fn(),
+  isActiveImageGenerationTask: vi.fn(() => false),
+  IMAGE_GENERATION_TASK_KIND: "image_generation",
 }));
 
 const videoGenerationTaskStatusMocks = vi.hoisted(() => ({
   buildActiveVideoGenerationTaskPromptContextForSession: vi.fn(),
+  buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
+  buildVideoGenerationTaskStatusText: vi.fn(() => "Video generation task status"),
+  findActiveVideoGenerationTaskForSession: vi.fn(),
+  getVideoGenerationTaskProviderId: vi.fn(),
+  isActiveVideoGenerationTask: vi.fn(() => false),
+  VIDEO_GENERATION_TASK_KIND: "video_generation",
 }));
 
 const hostHookStateMocks = vi.hoisted(() => ({
   drainPluginNextTurnInjectionContext: vi.fn(),
 }));
 
+vi.mock("../../image-generation-task-status.js", () => imageGenerationTaskStatusMocks);
 vi.mock("../../music-generation-task-status.js", () => musicGenerationTaskStatusMocks);
 vi.mock("../../video-generation-task-status.js", () => videoGenerationTaskStatusMocks);
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
@@ -25,6 +46,9 @@ import {
 
 describe("resolveAttemptPrependSystemContext", () => {
   it("prepends active video task guidance ahead of hook system context", () => {
+    imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
+      "Image task hint",
+    );
     videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
       "Active task hint",
     );
@@ -39,15 +63,24 @@ describe("resolveAttemptPrependSystemContext", () => {
     });
 
     expect(
+      imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession,
+    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
+    expect(
       videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession,
     ).toHaveBeenCalledWith("agent:main:discord:direct:123");
     expect(
       musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
     ).toHaveBeenCalledWith("agent:main:discord:direct:123");
-    expect(result).toBe("Active task hint\n\nMusic task hint\n\nHook system context");
+    expect(result).toBe(
+      "Image task hint\n\nActive task hint\n\nMusic task hint\n\nHook system context",
+    );
   });
 
   it("skips active video task guidance for non-user triggers", () => {
+    imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReset();
+    imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
+      "Should not be used",
+    );
     videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession.mockReset();
     videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
       "Should not be used",
@@ -63,6 +96,9 @@ describe("resolveAttemptPrependSystemContext", () => {
       hookPrependSystemContext: "Hook system context",
     });
 
+    expect(
+      imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession,
+    ).not.toHaveBeenCalled();
     expect(
       videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession,
     ).not.toHaveBeenCalled();

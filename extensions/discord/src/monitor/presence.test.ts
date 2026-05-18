@@ -6,10 +6,10 @@ type DiscordPresenceUpdate = NonNullable<ReturnType<typeof resolveDiscordPresenc
 function expectPresenceUpdate(
   result: ReturnType<typeof resolveDiscordPresenceUpdate>,
 ): DiscordPresenceUpdate {
-  expect(result).toEqual(expect.objectContaining({ activities: expect.any(Array) }));
   if (result === null) {
     throw new Error("Expected Discord presence update");
   }
+  expect(Array.isArray(result.activities)).toBe(true);
   return result;
 }
 
@@ -17,7 +17,7 @@ describe("resolveDiscordPresenceUpdate", () => {
   it("returns online presence when no config is provided", () => {
     const result = expectPresenceUpdate(resolveDiscordPresenceUpdate({}));
     expect(result.status).toBe("online");
-    expect(result.activities).toEqual([]);
+    expect(result.activities).toStrictEqual([]);
   });
 
   it("uses configured status", () => {

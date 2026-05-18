@@ -32,10 +32,18 @@ describe("zalouser setup wizard", () => {
     dmPolicy?: "pairing" | "allowlist",
   ) {
     expect(result.accountId).toBe("default");
-    expect(result.cfg.channels?.zalouser?.enabled).toBe(true);
-    expect(result.cfg.plugins?.entries?.zalouser?.enabled).toBe(true);
+    const channelConfig = result.cfg.channels?.zalouser;
+    if (!channelConfig) {
+      throw new Error("expected Zalo Personal channel config");
+    }
+    const pluginEntry = result.cfg.plugins?.entries?.zalouser;
+    if (!pluginEntry) {
+      throw new Error("expected Zalo Personal plugin entry");
+    }
+    expect(channelConfig.enabled).toBe(true);
+    expect(pluginEntry.enabled).toBe(true);
     if (dmPolicy) {
-      expect(result.cfg.channels?.zalouser?.dmPolicy).toBe(dmPolicy);
+      expect(channelConfig.dmPolicy).toBe(dmPolicy);
     }
   }
 
@@ -98,9 +106,7 @@ describe("zalouser setup wizard", () => {
 
     const result = await runSetup({ prompter });
 
-    expect(result.accountId).toBe("default");
-    expect(result.cfg.channels?.zalouser?.enabled).toBe(true);
-    expect(result.cfg.plugins?.entries?.zalouser?.enabled).toBe(true);
+    expectEnabledDefaultSetup(result);
   });
 
   it("prompts DM policy before group access in quickstart", async () => {
@@ -136,7 +142,7 @@ describe("zalouser setup wizard", () => {
     });
 
     expectEnabledDefaultSetup(result, "allowlist");
-    expect(result.cfg.channels?.zalouser?.allowFrom).toEqual([]);
+    expect(result.cfg.channels?.zalouser?.allowFrom).toStrictEqual([]);
     expect(
       note.mock.calls.some(([message]) => message.includes("No DM allowlist entries added yet.")),
     ).toBe(true);
@@ -156,7 +162,7 @@ describe("zalouser setup wizard", () => {
     const result = await runSetup({ prompter });
 
     expect(result.cfg.channels?.zalouser?.groupPolicy).toBe("allowlist");
-    expect(result.cfg.channels?.zalouser?.groups).toEqual({});
+    expect(result.cfg.channels?.zalouser?.groups).toStrictEqual({});
     expect(
       note.mock.calls.some(([message]) =>
         message.includes("No group allowlist entries added yet."),
@@ -208,7 +214,7 @@ describe("zalouser setup wizard", () => {
     const result = await runSetup({ prompter, forceAllowFrom: true });
 
     expect(result.cfg.channels?.zalouser?.dmPolicy).toBe("allowlist");
-    expect(result.cfg.channels?.zalouser?.allowFrom).toEqual([]);
+    expect(result.cfg.channels?.zalouser?.allowFrom).toStrictEqual([]);
     expect(seen).not.toContain("Zalo Personal DM policy");
     expect(seen).toContain("Zalouser allowFrom (name or user id)");
     expect(

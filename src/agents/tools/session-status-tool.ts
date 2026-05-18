@@ -14,6 +14,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
 import {
   buildAgentMainSessionKey,
@@ -23,26 +24,24 @@ import {
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
-  buildAllowedModelSet,
-  buildConfiguredModelCatalog,
   buildModelAliasIndex,
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
-  resolveThinkingDefault,
+  resolveThinkingDefaultWithRuntimeCatalog,
 } from "../model-selection.js";
+import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import {
   describeSessionStatusTool,
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { readStringParam } from "./common.js";
+import { normalizeToolModelOverride, readStringParam } from "./common.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
@@ -272,11 +271,8 @@ async function resolveModelOverride(params: {
       isDefault: boolean;
     }
 > {
-  const raw = params.raw.trim();
+  const raw = normalizeToolModelOverride(params.raw);
   if (!raw) {
-    return { kind: "reset" };
-  }
-  if (normalizeOptionalLowercaseString(raw) === "default") {
     return { kind: "reset" };
   }
 
@@ -292,7 +288,7 @@ async function resolveModelOverride(params: {
     defaultProvider: currentProvider,
   });
   const catalog = await loadModelCatalog({ config: params.cfg });
-  const allowed = buildAllowedModelSet({
+  const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
     catalog,
     defaultProvider: currentProvider,
@@ -309,7 +305,7 @@ async function resolveModelOverride(params: {
     throw new Error(`Unrecognized model "${raw}".`);
   }
   const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (allowed.allowedKeys.size > 0 && !allowed.allowedKeys.has(key)) {
+  if (!policy.allowsKey(key)) {
     throw new Error(`Model "${key}" is not allowed.`);
   }
   const isDefault =
@@ -401,12 +397,20 @@ export function createSessionStatusTool(opts?: {
       });
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
+      const isImplicitRunSessionStatus =
+        requestedKeyParam === undefined && Boolean(opts?.runSessionKey?.trim());
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
+
+      // No-arg status should prefer the live run session when available (#82669).
+      if (isImplicitRunSessionStatus) {
+        requestedKeyRaw = opts?.runSessionKey;
+      }
 
       // Track whether this is a semantic-current request (literal "current" or a
       // current-client alias) BEFORE any rewrite, so visibility treats it as self.
       const isSemanticCurrentRequest =
         requestedKeyRaw === "current" ||
+        isImplicitRunSessionStatus ||
         Boolean(
           resolveCurrentSessionClientAlias({
             key: requestedKeyRaw ?? "",
@@ -562,7 +566,7 @@ export function createSessionStatusTool(opts?: {
         const fallback = resolveImplicitCurrentSessionFallback({
           allowFallback: isSemanticCurrentRequest || requestedKeyParam === undefined,
           fallbackKey:
-            isSemanticCurrentRequest && opts?.runSessionKey
+            (isSemanticCurrentRequest || isImplicitRunSessionStatus) && opts?.runSessionKey
               ? opts.runSessionKey
               : storeScopedRequesterKey,
         });
@@ -635,6 +639,15 @@ export function createSessionStatusTool(opts?: {
             nextStore[resolved.key] = persistedEntry;
           });
           resolved.entry = persistedEntry;
+          triggerSessionPatchHook({
+            cfg,
+            sessionEntry: persistedEntry,
+            sessionKey: resolved.key,
+            patch: {
+              key: resolved.key,
+              model: selection.kind === "reset" ? null : `${selection.provider}/${selection.model}`,
+            },
+          });
           changedModel = true;
         }
       }
@@ -717,32 +730,13 @@ export function createSessionStatusTool(opts?: {
         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
         resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
         resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
-        resolveDefaultThinkingLevel: async () => {
-          const configuredCatalog = buildConfiguredModelCatalog({ cfg });
-          const configuredSelectedEntry = configuredCatalog.find(
-            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
-          );
-          const shouldHydrateRuntimeCatalog =
-            configuredCatalog.length === 0 ||
-            !configuredSelectedEntry ||
-            configuredSelectedEntry.reasoning === undefined;
-          const runtimeCatalog = shouldHydrateRuntimeCatalog
-            ? await loadModelCatalog({ config: cfg })
-            : undefined;
-          const runtimeSelectedEntry = runtimeCatalog?.find(
-            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
-          );
-          const catalog =
-            runtimeSelectedEntry || configuredCatalog.length === 0
-              ? (runtimeCatalog ?? configuredCatalog)
-              : configuredCatalog;
-          return resolveThinkingDefault({
+        resolveDefaultThinkingLevel: () =>
+          resolveThinkingDefaultWithRuntimeCatalog({
             cfg,
             provider: providerForCard,
             model: defaultModelForCard,
-            catalog,
-          });
-        },
+            loadModelCatalog: () => loadModelCatalog({ config: cfg }),
+          }),
         isGroup,
         defaultGroupActivation: () => "mention",
         taskLineOverride: taskLine,
@@ -753,6 +747,16 @@ export function createSessionStatusTool(opts?: {
       });
       const fullStatusText =
         taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
+      const resultOverrideProvider = statusSessionEntry.providerOverride?.trim();
+      const resultOverrideModel = statusSessionEntry.modelOverride?.trim();
+      const modelOverrideForResult =
+        modelRaw === undefined
+          ? undefined
+          : resultOverrideModel
+            ? resultOverrideProvider
+              ? `${resultOverrideProvider}/${resultOverrideModel}`
+              : resultOverrideModel
+            : null;
 
       return {
         content: [{ type: "text", text: fullStatusText }],
@@ -760,6 +764,15 @@ export function createSessionStatusTool(opts?: {
           ok: true,
           sessionKey: resolved.key,
           changedModel,
+          ...(modelRaw !== undefined
+            ? {
+                model: resultOverrideModel ?? defaultModelForCard,
+                ...((resultOverrideProvider ?? providerForCard)
+                  ? { modelProvider: resultOverrideProvider ?? providerForCard }
+                  : {}),
+                modelOverride: modelOverrideForResult,
+              }
+            : {}),
           statusText: fullStatusText,
         },
       };

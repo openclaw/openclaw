@@ -12,7 +12,7 @@ vi.mock("./ddg-client.js", () => ({
 
 describe("duckduckgo web search provider", () => {
   let createDuckDuckGoWebSearchProvider: typeof import("./ddg-search-provider.js").createDuckDuckGoWebSearchProvider;
-  let ddgClientTesting: typeof import("./ddg-client.js").__testing;
+  let ddgClientTesting: typeof import("./ddg-client.js").testing;
 
   afterAll(() => {
     vi.doUnmock("./ddg-client.js");
@@ -21,7 +21,7 @@ describe("duckduckgo web search provider", () => {
 
   beforeAll(async () => {
     ({ createDuckDuckGoWebSearchProvider } = await import("./ddg-search-provider.js"));
-    ({ __testing: ddgClientTesting } =
+    ({ testing: ddgClientTesting } =
       await vi.importActual<typeof import("./ddg-client.js")>("./ddg-client.js"));
     await import("../index.js");
   });
@@ -47,7 +47,6 @@ describe("duckduckgo web search provider", () => {
     expect(provider.requiresCredential).toBe(false);
     expect(provider.credentialPath).toBe("");
     const pluginEntry = applied.plugins?.entries?.duckduckgo;
-    expect(pluginEntry).toBeDefined();
     if (!pluginEntry) {
       throw new Error("expected DuckDuckGo plugin entry");
     }
@@ -209,7 +208,7 @@ describe("duckduckgo web search provider", () => {
     `;
 
     expect(ddgClientTesting.isBotChallenge(challengeHtml)).toBe(true);
-    expect(ddgClientTesting.parseDuckDuckGoHtml(challengeHtml)).toEqual([]);
+    expect(ddgClientTesting.parseDuckDuckGoHtml(challengeHtml)).toStrictEqual([]);
     expect(ddgClientTesting.isBotChallenge(normalHtml)).toBe(false);
     expect(ddgClientTesting.parseDuckDuckGoHtml(normalHtml)).toEqual([
       {

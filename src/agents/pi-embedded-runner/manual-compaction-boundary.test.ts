@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 
@@ -58,14 +58,13 @@ function messageText(message: AgentMessage): string {
   if (!Array.isArray(content)) {
     return "";
   }
-  return content
-    .map((block) =>
-      block && typeof block === "object" && "text" in block && typeof block.text === "string"
-        ? block.text
-        : "",
-    )
-    .filter(Boolean)
-    .join(" ");
+  const textBlocks: string[] = [];
+  for (const block of content) {
+    if (block && typeof block === "object" && "text" in block && typeof block.text === "string") {
+      textBlocks.push(block.text);
+    }
+  }
+  return textBlocks.join(" ");
 }
 
 function requireString(value: string | undefined, label: string): string {

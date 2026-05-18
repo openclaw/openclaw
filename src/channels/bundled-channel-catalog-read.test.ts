@@ -14,6 +14,12 @@ vi.mock("../plugins/bundled-dir.js", () => ({
   resolveSourceCheckoutDependencyDiagnostic: vi.fn(() => null),
 }));
 
+vi.mock("../plugins/channel-catalog-registry.js", () => ({
+  listChannelCatalogEntries: vi.fn(() => {
+    throw new Error("bundled channel catalog read must not run full plugin discovery");
+  }),
+}));
+
 // The channel-catalog.json fallback still walks package roots via
 // resolveOpenClawPackageRootSync. Isolate from the real repo by mocking
 // moduleUrl/argv1 resolution to null and deriving only from the tmp cwd.
@@ -109,8 +115,9 @@ describe("listBundledChannelCatalogEntries", () => {
 
     const entries = listBundledChannelCatalogEntries();
 
-    const ids = entries.map((entry) => entry.id);
-    expect(ids).toEqual(expect.arrayContaining(["imessage", "telegram"]));
+    const ids = new Set(entries.map((entry) => entry.id));
+    expect(ids.has("imessage")).toBe(true);
+    expect(ids.has("telegram")).toBe(true);
     const telegram = entries.find((entry) => entry.id === "telegram");
     expect(telegram?.channel.docsPath).toBe("/channels/telegram");
     expect(telegram?.channel.label).toBe("Telegram");
@@ -142,7 +149,9 @@ describe("listBundledChannelCatalogEntries", () => {
     useBundledPluginsDir(extensionsRoot);
 
     const entries = listBundledChannelCatalogEntries();
-    expect(entries.map((entry) => entry.id)).toEqual(expect.arrayContaining(["qqbot", "telegram"]));
+    const ids = new Set(entries.map((entry) => entry.id));
+    expect(ids.has("qqbot")).toBe(true);
+    expect(ids.has("telegram")).toBe(true);
   });
 
   it("falls back to dist/channel-catalog.json when the resolver returns undefined", () => {

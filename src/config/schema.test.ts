@@ -109,14 +109,19 @@ describe("config schema", () => {
     expect(gatewayPortSchema?.description).toContain("TCP port used by the gateway listener");
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
-    expect(res.uiHints["channels.defaults.groupPolicy"]?.label).toEqual(
-      expect.stringMatching(/\S/),
-    );
+    const groupPolicyLabel = res.uiHints["channels.defaults.groupPolicy"]?.label;
+    expect(groupPolicyLabel).toBeTypeOf("string");
+    expect(groupPolicyLabel?.trim().length).toBeGreaterThan(0);
     expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
     expect(res.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["models.providers.*.baseUrl"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
-    expect(res.version).toEqual(expect.stringMatching(/\S/));
-    expect(res.generatedAt).toEqual(expect.stringMatching(/\S/));
+    expect(res.uiHints["proxy.tls.caFile"]?.tags).toEqual(
+      expect.arrayContaining(["security", "network", "storage"]),
+    );
+    expect(res.version).toBeTypeOf("string");
+    expect(res.version.trim().length).toBeGreaterThan(0);
+    expect(res.generatedAt).toBeTypeOf("string");
+    expect(res.generatedAt.trim().length).toBeGreaterThan(0);
   });
 
   it("includes MCP SSE header schema under mcp.servers entries", () => {
@@ -137,6 +142,49 @@ describe("config schema", () => {
       | undefined;
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("headers");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("transport");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("codex");
+  });
+
+  it("rejects empty Codex MCP agent scopes", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            scoped: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              codex: { agents: [] },
+            },
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            scoped: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              codex: { agents: ["  "] },
+            },
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            scoped: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              codex: { agents: ["!!!"] },
+            },
+          },
+        },
+      }),
+    ).toThrow();
   });
 
   it("merges plugin ui hints", () => {
@@ -213,11 +261,9 @@ describe("config schema", () => {
     const serialized = JSON.stringify(res);
     expect(serialized).not.toContain("oversized-marker");
     const lookup = lookupConfigSchema(res, "plugins.entries.huge.config");
-    expect(lookup?.schema).toMatchObject({
-      type: "object",
-      additionalProperties: true,
-      description: expect.stringContaining("omitted"),
-    });
+    expect(lookup?.schema?.type).toBe("object");
+    expect(lookup?.schema?.additionalProperties).toBe(true);
+    expect(lookup?.schema?.description).toContain("omitted");
   });
 
   it("omits later plugin schemas after the aggregate extension schema budget is exhausted", () => {
@@ -239,12 +285,10 @@ describe("config schema", () => {
 
     const first = lookupConfigSchema(res, "plugins.entries.plugin-0.config.value");
     const last = lookupConfigSchema(res, "plugins.entries.plugin-39.config");
-    expect(first?.schema).toMatchObject({ type: "string" });
-    expect(last?.schema).toMatchObject({
-      type: "object",
-      additionalProperties: true,
-      description: expect.stringContaining("omitted"),
-    });
+    expect(first?.schema?.type).toBe("string");
+    expect(last?.schema?.type).toBe("object");
+    expect(last?.schema?.additionalProperties).toBe(true);
+    expect(last?.schema?.description).toContain("omitted");
   });
 
   it("looks up plugin config paths for slash-delimited plugin ids", () => {
@@ -266,11 +310,10 @@ describe("config schema", () => {
     const lookup = lookupConfigSchema(res, "plugins.entries.pack/one.config");
     expect(lookup?.path).toBe("plugins.entries.pack/one.config");
     expect(lookup?.hintPath).toBe("plugins.entries.pack/one.config");
-    expect(lookup?.children.find((child) => child.key === "provider")).toMatchObject({
-      key: "provider",
-      path: "plugins.entries.pack/one.config.provider",
-      type: "string",
-    });
+    const providerChild = lookup?.children.find((child) => child.key === "provider");
+    expect(providerChild?.key).toBe("provider");
+    expect(providerChild?.path).toBe("plugins.entries.pack/one.config.provider");
+    expect(providerChild?.type).toBe("string");
   });
 
   it("adds heartbeat target hints with dynamic channels", () => {
@@ -298,6 +341,13 @@ describe("config schema", () => {
     expect(tags).toContain("auth");
   });
 
+  it("classifies managed proxy CA files as security-relevant config", () => {
+    const tags = deriveTagsForPath("proxy.tls.caFile");
+    expect(tags).toContain("security");
+    expect(tags).toContain("network");
+    expect(tags).toContain("storage");
+  });
+
   it("derives tools/performance tags for web fetch timeout paths", () => {
     const tags = deriveTagsForPath("tools.web.fetch.timeoutSeconds");
     expect(tags).toContain("tools");
@@ -322,16 +372,47 @@ describe("config schema", () => {
     });
 
     expect(parsed?.web?.fetch?.readability).toBe(true);
-    expect(parsed?.web?.fetch).toMatchObject({
-      firecrawl: {
-        enabled: true,
-        apiKey: "firecrawl-test-key",
-        baseUrl: "https://api.firecrawl.dev",
-        onlyMainContent: true,
-        maxAgeMs: 60_000,
-        timeoutSeconds: 15,
+    expect(parsed?.web?.fetch?.firecrawl).toEqual({
+      enabled: true,
+      apiKey: "firecrawl-test-key",
+      baseUrl: "https://api.firecrawl.dev",
+      onlyMainContent: true,
+      maxAgeMs: 60_000,
+      timeoutSeconds: 15,
+    });
+  });
+
+  it("keeps top-level subagent tools schema limited to tool policy", () => {
+    expect(
+      ToolsSchema.safeParse({
+        subagents: { model: { primary: "openai/gpt-5.5" } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts exec command highlighting config in global and agent scopes", () => {
+    const tools = ToolsSchema.parse({
+      exec: {
+        commandHighlighting: false,
       },
     });
+    expect(tools?.exec?.commandHighlighting).toBe(false);
+
+    const config = OpenClawSchema.parse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              exec: {
+                commandHighlighting: false,
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(config.agents?.list?.[0]?.tools?.exec?.commandHighlighting).toBe(false);
   });
 
   it("accepts experimental tool flags in the runtime zod schema", () => {
@@ -345,6 +426,78 @@ describe("config schema", () => {
     }
 
     expect(parsed?.experimental?.planTool).toBe(true);
+  });
+
+  it("accepts simplified Tool Search config in the runtime zod schema", () => {
+    expect(ToolsSchema.parse({ toolSearch: true })?.toolSearch).toBe(true);
+    expect(
+      ToolsSchema.parse({
+        toolSearch: {
+          enabled: true,
+          mode: "tools",
+          codeTimeoutMs: 5000,
+          searchDefaultLimit: 4,
+          maxSearchLimit: 12,
+        },
+      })?.toolSearch,
+    ).toEqual({
+      enabled: true,
+      mode: "tools",
+      codeTimeoutMs: 5000,
+      searchDefaultLimit: 4,
+      maxSearchLimit: 12,
+    });
+    expect(
+      ToolsSchema.safeParse({
+        toolSearch: {
+          enabled: true,
+          mode: "both",
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts Code Mode config in the runtime zod schema", () => {
+    expect(ToolsSchema.parse({ codeMode: true })?.codeMode).toBe(true);
+    expect(
+      ToolsSchema.parse({
+        codeMode: {
+          enabled: true,
+          runtime: "quickjs-wasi",
+          mode: "only",
+          languages: ["javascript", "typescript"],
+          timeoutMs: 5000,
+          memoryLimitBytes: 67_108_864,
+          maxOutputBytes: 65_536,
+          maxSnapshotBytes: 10_485_760,
+          maxPendingToolCalls: 8,
+          snapshotTtlSeconds: 900,
+          searchDefaultLimit: 4,
+          maxSearchLimit: 12,
+        },
+      })?.codeMode,
+    ).toEqual({
+      enabled: true,
+      runtime: "quickjs-wasi",
+      mode: "only",
+      languages: ["javascript", "typescript"],
+      timeoutMs: 5000,
+      memoryLimitBytes: 67_108_864,
+      maxOutputBytes: 65_536,
+      maxSnapshotBytes: 10_485_760,
+      maxPendingToolCalls: 8,
+      snapshotTtlSeconds: 900,
+      searchDefaultLimit: 4,
+      maxSearchLimit: 12,
+    });
+    expect(
+      ToolsSchema.safeParse({
+        codeMode: {
+          enabled: true,
+          runtime: "node",
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts web fetch maxResponseBytes in the runtime zod schema", () => {
@@ -408,38 +561,55 @@ describe("config schema", () => {
   });
 
   it("rejects allowPrivateNetwork on media-understanding request config", () => {
-    expect(() =>
-      ToolsSchema.parse({
-        media: {
-          image: {
-            models: [
-              {
-                provider: "openai",
-                model: "gpt-4.1-mini",
-                request: {
-                  allowPrivateNetwork: true,
-                },
+    const result = ToolsSchema.safeParse({
+      media: {
+        image: {
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-4.1-mini",
+              request: {
+                allowPrivateNetwork: true,
               },
-            ],
-          },
+            },
+          ],
         },
-      }),
-    ).toThrow();
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const requestIssue = result.error.issues.find(
+        (issue) =>
+          JSON.stringify(issue.path) === JSON.stringify(["media", "image", "models", 0, "request"]),
+      );
+      expect(requestIssue?.path).toEqual(["media", "image", "models", 0, "request"]);
+      const requestKeys = (requestIssue as { keys?: unknown } | undefined)?.keys;
+      expect(requestKeys).toEqual(["allowPrivateNetwork"]);
+    }
   });
 
   it("rejects unknown keys inside web fetch firecrawl config", () => {
-    expect(() =>
-      ToolsSchema.parse({
-        web: {
-          fetch: {
-            firecrawl: {
-              enabled: true,
-              nope: true,
-            },
+    const result = ToolsSchema.safeParse({
+      web: {
+        fetch: {
+          firecrawl: {
+            enabled: true,
+            nope: true,
           },
         },
-      }),
-    ).toThrow();
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const firecrawlIssue = result.error.issues.find(
+        (issue) => JSON.stringify(issue.path) === JSON.stringify(["web", "fetch", "firecrawl"]),
+      );
+      expect(firecrawlIssue?.path).toEqual(["web", "fetch", "firecrawl"]);
+      const firecrawlKeys = (firecrawlIssue as { keys?: unknown } | undefined)?.keys;
+      expect(firecrawlKeys).toEqual(["nope"]);
+    }
   });
 
   it("keeps tags in the allowed taxonomy", () => {
@@ -484,17 +654,73 @@ describe("config schema", () => {
     expect(schema?.properties).toBeUndefined();
   });
 
+  it("looks up root config schema children without returning the full schema tree", () => {
+    const lookup = lookupConfigSchema(baseSchema, ".");
+    expect(lookup?.path).toBe(".");
+    expect(lookup?.children.map((child) => child.key)).toContain("gateway");
+    expect(lookup?.children.find((child) => child.key === "gateway")?.path).toBe("gateway");
+    const schema = lookup?.schema as { properties?: unknown } | undefined;
+    expect(schema?.properties).toBeUndefined();
+  });
+
+  it("includes reload metadata when a resolver is provided", () => {
+    const lookup = lookupConfigSchema(baseSchema, "gateway", (path) => {
+      if (path === "gateway.channelHealthCheckMinutes") {
+        return { kind: "hot" };
+      }
+      if (path.startsWith("gateway")) {
+        return { kind: "restart" };
+      }
+      return { kind: "none" };
+    });
+
+    expect(lookup?.reloadKind).toBe("restart");
+    expect(
+      lookup?.children.find((child) => child.path === "gateway.handshakeTimeoutMs")?.reloadKind,
+    ).toBe("restart");
+    expect(
+      lookup?.children.find((child) => child.path === "gateway.channelHealthCheckMinutes")
+        ?.reloadKind,
+    ).toBe("hot");
+  });
+
   it("returns a shallow lookup schema without nested composition keywords", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.list.0.runtime");
     expect(lookup?.path).toBe("agents.list.0.runtime");
     expect(lookup?.hintPath).toBe("agents.list[].runtime");
-    // The shallow lookup schema carries field docs, but should not expose
-    // nested composition keywords (allOf, oneOf, etc.).
     expect(lookup?.schema).not.toHaveProperty("allOf");
     expect(lookup?.schema).not.toHaveProperty("oneOf");
-    expect(lookup?.schema).not.toHaveProperty("anyOf");
+    const schema = lookup?.schema as { anyOf?: Array<{ properties?: Record<string, unknown> }> };
+    expect(schema.anyOf?.some((variant) => variant.properties?.type)).toBe(true);
     expect(lookup?.schema).toHaveProperty("title", "Agent Runtime");
     expect(lookup?.schema).toHaveProperty("description");
+  });
+
+  it("keeps scoped collection item schemas for form editing", () => {
+    const lookup = lookupConfigSchema(baseSchema, "agents.list");
+    expect(lookup?.schema).toHaveProperty("items");
+    const schema = lookup?.schema as
+      | {
+          items?: {
+            properties?: Record<
+              string,
+              { anyOf?: Array<{ properties?: Record<string, unknown> }> }
+            >;
+          };
+        }
+      | undefined;
+    expect(schema?.items?.properties).toHaveProperty("runtime");
+    const runtimeVariants = schema?.items?.properties?.runtime?.anyOf ?? [];
+    expect(runtimeVariants.length).toBeGreaterThan(0);
+    expect(runtimeVariants.some((variant) => variant.properties?.type)).toBe(true);
+  });
+
+  it("keeps scoped map properties for form editing", () => {
+    const lookup = lookupConfigSchema(baseSchema, "env");
+    expect(lookup?.children.map((child) => child.key)).toEqual(["shellEnv", "vars", "*"]);
+    const schema = lookup?.schema as { properties?: Record<string, unknown> } | undefined;
+    expect(schema?.properties).toHaveProperty("shellEnv");
+    expect(schema?.properties).toHaveProperty("vars");
   });
 
   it("matches wildcard ui hints for concrete lookup paths", () => {
@@ -502,10 +728,8 @@ describe("config schema", () => {
     expect(lookup?.path).toBe("agents.list.0.identity.avatar");
     expect(lookup?.hintPath).toBe("agents.list.*.identity.avatar");
     expect(lookup?.hint?.help).toContain("workspace-relative path");
-    expect(lookup?.schema).toMatchObject({
-      title: "Identity Avatar",
-      description: expect.stringContaining("Agent avatar"),
-    });
+    expect(lookup?.schema?.title).toBe("Identity Avatar");
+    expect(lookup?.schema?.description).toContain("Agent avatar");
   });
 
   it("normalizes bracketed lookup paths", () => {
@@ -539,7 +763,7 @@ describe("config schema", () => {
 
     const lookup = lookupConfigSchema(tupleSchema, "pair.1");
     expect(lookup?.path).toBe("pair.1");
-    expect(lookup?.schema).toMatchObject({ type: "number" });
+    expect(lookup?.schema?.type).toBe("number");
     expect((lookup?.schema as { items?: unknown } | undefined)?.items).toBeUndefined();
   });
 

@@ -1,3 +1,4 @@
+import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-state.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -9,7 +10,6 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import { loadExecApprovals, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
-import { resolveDmAllowState } from "../security/dm-policy-shared.js";
 import { collectExecFilesystemPolicyDriftHits } from "../security/exec-filesystem-policy.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
@@ -42,7 +42,8 @@ function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): stri
     pathHint: "agents.defaults.heartbeat.directPolicy",
   });
 
-  for (const agent of cfg.agents?.list ?? []) {
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const agent of agents) {
     maybeWarn({
       label: `Heartbeat agent "${agent.id}"`,
       heartbeat: agent.heartbeat,
@@ -149,7 +150,8 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
     scopeExecConfig: cfg.tools?.exec,
   });
 
-  for (const agent of cfg.agents?.list ?? []) {
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const agent of agents) {
     maybeWarn({
       scopeLabel: `agents.list.${agent.id}.tools.exec`,
       scopeExecConfig: agent.tools?.exec,
@@ -178,9 +180,11 @@ function collectExecFilesystemPolicyWarnings(cfg: OpenClawConfig): string[] {
   );
 }
 
-export async function noteSecurityWarnings(cfg: OpenClawConfig) {
+export async function collectSecurityWarnings(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string[]> {
   const warnings: string[] = [];
-  const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
 
   if (cfg.approvals?.exec?.enabled === false) {
     warnings.push(
@@ -215,7 +219,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
 
   const resolvedAuth = resolveGatewayAuth({
     authConfig: cfg.gateway?.auth,
-    env: process.env,
+    env,
     tailscaleMode,
   });
   const authToken = normalizeOptionalString(resolvedAuth.token) ?? "";
@@ -267,7 +271,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     }
   }
 
-  const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg, env: process.env });
+  const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg, env });
   if (tokenConflict) {
     warnings.push(...tokenConflict.warningLines);
   }
@@ -285,7 +289,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   }) => {
     const dmPolicy = params.dmPolicy;
     const policyPath = params.policyPath ?? `${params.allowFromPath}policy`;
-    const { hasWildcard, allowCount, isMultiUserDm } = await resolveDmAllowState({
+    const { hasWildcard, allowCount, isMultiUserDm } = await resolveDmAllowAuditState({
       provider: params.provider,
       accountId: params.accountId,
       allowFrom: params.allowFrom,
@@ -375,6 +379,12 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
       }
     }
   }
+  return warnings;
+}
+
+export async function noteSecurityWarnings(cfg: OpenClawConfig) {
+  const warnings = await collectSecurityWarnings(cfg);
+  const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
 
   const lines = warnings.length > 0 ? warnings : ["- No channel security warnings detected."];
   lines.push(auditHint);

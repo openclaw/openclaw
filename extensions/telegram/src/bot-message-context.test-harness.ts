@@ -1,5 +1,5 @@
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
-import { finalizeTelegramInboundContextForTest } from "./bot-message-context.session-runtime-test-support.js";
 
 export const baseTelegramMessageContextConfig = {
   agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
@@ -8,9 +8,6 @@ export const baseTelegramMessageContextConfig = {
 } as never;
 
 type TelegramTestSessionRuntime = NonNullable<BuildTelegramMessageContextParams["sessionRuntime"]>;
-const finalizeInboundContextForTest = finalizeTelegramInboundContextForTest as NonNullable<
-  TelegramTestSessionRuntime["finalizeInboundContext"]
->;
 
 type BuildTelegramMessageContextForTestParams = {
   message: Record<string, unknown>;
@@ -18,6 +15,8 @@ type BuildTelegramMessageContextForTestParams = {
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
   accountId?: string;
+  historyLimit?: number;
+  groupHistories?: Map<string, import("openclaw/plugin-sdk/reply-history").HistoryEntry[]>;
   ackReactionScope?: BuildTelegramMessageContextParams["ackReactionScope"];
   botApi?: Record<string, unknown>;
   runtime?: BuildTelegramMessageContextParams["runtime"];
@@ -28,7 +27,7 @@ type BuildTelegramMessageContextForTestParams = {
 };
 
 const telegramMessageContextSessionRuntimeForTest = {
-  finalizeInboundContext: finalizeInboundContextForTest,
+  buildChannelInboundEventContext,
   readSessionUpdatedAt: () => undefined,
   recordInboundSession: async () => undefined,
   resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
@@ -80,8 +79,8 @@ export async function buildTelegramMessageContextForTest(
     },
     sessionRuntime,
     account: { accountId: params.accountId ?? "default" } as never,
-    historyLimit: 0,
-    groupHistories: new Map(),
+    historyLimit: params.historyLimit ?? 0,
+    groupHistories: params.groupHistories ?? new Map(),
     dmPolicy: "open",
     allowFrom: ["*"],
     groupAllowFrom: [],

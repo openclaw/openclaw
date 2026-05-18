@@ -4,7 +4,8 @@ import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
 } from "openclaw/plugin-sdk/memory-host-core";
-import { beforeEach, describe, expect, it } from "vitest";
+import { readMemoryHostEvents } from "openclaw/plugin-sdk/memory-host-events";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemorySearchManagerMockCalls,
   getReadAgentMemoryFileMockCalls,
@@ -27,23 +28,25 @@ import {
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 
-async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
-  const startedAt = Date.now();
-  let lastError: unknown;
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      return await task();
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => {
-        setTimeout(resolve, 20);
-      });
+function collectWikiResultPaths(results: readonly { corpus: string; path: string }[]): string[] {
+  const paths: string[] = [];
+  for (const result of results) {
+    if (result.corpus === "wiki") {
+      paths.push(result.path);
     }
   }
-  if (lastError instanceof Error) {
-    throw lastError;
-  }
-  throw new Error("Timed out waiting for async test condition");
+  return paths;
+}
+
+async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
+  let value: T | undefined;
+  await vi.waitFor(
+    async () => {
+      value = await task();
+    },
+    { interval: 1, timeout: timeoutMs },
+  );
+  return value as T;
 }
 
 beforeEach(() => {
@@ -254,10 +257,20 @@ describe("memory tools", () => {
       };
       const entries = Object.values(store.entries ?? {});
       expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({
-        path: "memory/2026-04-03.md",
-        recallCount: 1,
+      const entry = entries[0];
+      expect(entry?.path).toBe("memory/2026-04-03.md");
+      expect(entry?.recallCount).toBe(1);
+      const events = await waitFor(async () => {
+        const memoryEvents = await readMemoryHostEvents({ workspaceDir });
+        expect(memoryEvents).toHaveLength(1);
+        return memoryEvents;
       });
+      const event = events[0];
+      expect(event?.type).toBe("memory.recall.recorded");
+      if (!event || event.type !== "memory.recall.recorded") {
+        throw new Error("expected memory recall recorded event");
+      }
+      expect(event.query).toBe("glacier backup");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -281,7 +294,7 @@ describe("memory tools", () => {
     const tool = createMemorySearchToolOrThrow();
     const result = await tool.execute("call_wiki_only", { query: "alpha", corpus: "wiki" });
 
-    expect(result.details).toMatchObject({
+    expect(result.details).toStrictEqual({
       results: [
         {
           corpus: "wiki",
@@ -292,6 +305,12 @@ describe("memory tools", () => {
           snippet: "Alpha wiki entry",
         },
       ],
+      citations: "auto",
+      debug: undefined,
+      fallback: undefined,
+      mode: undefined,
+      model: undefined,
+      provider: undefined,
     });
     expect(getMemorySearchManagerMockCalls()).toBe(0);
   });
@@ -369,9 +388,7 @@ describe("memory tools", () => {
     expect(corpora).toContain("memory");
     expect(corpora).toContain("wiki");
     expect(details.results).toHaveLength(5);
-    expect(
-      details.results.filter((entry) => entry.corpus === "wiki").map((entry) => entry.path),
-    ).toEqual(["w1.md", "w2.md", "w3.md", "w4.md"]);
+    expect(collectWikiResultPaths(details.results)).toEqual(["w1.md", "w2.md", "w3.md", "w4.md"]);
   });
 
   it("merges memory and wiki corpus search results for corpus=all", async () => {

@@ -1,5 +1,5 @@
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-types";
-import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-types";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createSubsystemLogger,
   danger,
@@ -14,6 +14,7 @@ import {
   type TelegramMediaRef,
 } from "./bot-message-context.js";
 import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
+import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
@@ -71,6 +72,29 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     telegramDeps,
     opts,
   } = deps;
+  const sessionRuntime = {
+    ...(telegramDeps.buildChannelInboundEventContext
+      ? { buildChannelInboundEventContext: telegramDeps.buildChannelInboundEventContext }
+      : {}),
+    ...(telegramDeps.readSessionUpdatedAt
+      ? { readSessionUpdatedAt: telegramDeps.readSessionUpdatedAt }
+      : {}),
+    ...(telegramDeps.recordInboundSession
+      ? { recordInboundSession: telegramDeps.recordInboundSession }
+      : {}),
+    ...(telegramDeps.resolveInboundLastRouteSessionKey
+      ? { resolveInboundLastRouteSessionKey: telegramDeps.resolveInboundLastRouteSessionKey }
+      : {}),
+    ...(telegramDeps.resolvePinnedMainDmOwnerFromAllowlist
+      ? {
+          resolvePinnedMainDmOwnerFromAllowlist: telegramDeps.resolvePinnedMainDmOwnerFromAllowlist,
+        }
+      : {}),
+    resolveStorePath: telegramDeps.resolveStorePath,
+  };
+  const contextRuntime = telegramDeps.recordChannelActivity
+    ? { recordChannelActivity: telegramDeps.recordChannelActivity }
+    : undefined;
 
   return async (
     primaryCtx: TelegramContext,
@@ -79,6 +103,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     options?: TelegramMessageContextOptions,
     replyMedia?: TelegramMediaRef[],
     replyChain?: TelegramReplyChainEntry[],
+    promptContext?: TelegramPromptContextEntry[],
   ) => {
     const ingressReceivedAtMs =
       typeof options?.receivedAtMs === "number" && Number.isFinite(options.receivedAtMs)
@@ -92,6 +117,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       allMedia,
       replyMedia,
       replyChain,
+      promptContext,
       storeAllowFrom,
       options,
       bot,
@@ -109,6 +135,8 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       resolveTelegramGroupConfig,
       sendChatActionHandler,
       loadFreshConfig,
+      runtime: contextRuntime,
+      sessionRuntime,
       upsertPairingRequest: telegramDeps.upsertChannelPairingRequest,
     });
     if (!context) {
@@ -127,9 +155,11 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
       );
     }
-    void context.sendTyping().catch((err) => {
-      logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
-    });
+    if (context.ctxPayload.InboundEventKind !== "room_event") {
+      void context.sendTyping().catch((err) => {
+        logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
+      });
+    }
     telegramInboundLog.info(
       formatTelegramInboundLogLine({
         from: context.ctxPayload.From,

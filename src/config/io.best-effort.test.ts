@@ -8,6 +8,23 @@ import {
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
 describe("readBestEffortConfig", () => {
+  it("can read snapshots without updating config observation state", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        gateway: { mode: "local" },
+      });
+
+      await readConfigFileSnapshot({ observe: false });
+
+      const healthPath = `${home}/.openclaw/logs/config-health.json`;
+      await expect(fs.stat(healthPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+      await readConfigFileSnapshot();
+
+      await expect(fs.stat(healthPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
+    });
+  });
+
   it("does not restore suspicious direct edits from .bak during ordinary reads", async () => {
     await withTempHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {
@@ -24,7 +41,7 @@ describe("readBestEffortConfig", () => {
       expect(snapshot.sourceConfig).toEqual({ update: { channel: "beta" } });
       expect(await fs.readFile(configPath, "utf-8")).toBe(directEditRaw);
       const entries = await fs.readdir(`${home}/.openclaw`);
-      expect(entries.filter((entry) => entry.startsWith("openclaw.json.clobbered."))).toEqual([]);
+      expect(entries.some((entry) => entry.startsWith("openclaw.json.clobbered."))).toBe(false);
     });
   });
 

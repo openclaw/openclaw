@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { PluginHttpRouteRegistration } from "./registry.js";
 import {
@@ -69,12 +70,19 @@ function expectRouteRegistryState(params: { setup: () => void; assert: () => voi
 }
 
 async function waitForCleanupSignal(signal: Promise<void>, label: string): Promise<void> {
-  await Promise.race([
-    signal,
-    new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 500);
-    }),
-  ]);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      signal,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 500);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 describe("plugin runtime route registry", () => {
@@ -122,6 +130,22 @@ describe("plugin runtime route registry", () => {
       setup: () => {},
       assert: run,
     });
+  });
+
+  it("keeps pinned route registries live until they are released", () => {
+    const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginHttpRouteRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(startupRegistry);
+    expect(isPluginRegistryRetired(startupRegistry)).toBe(false);
+
+    releasePinnedPluginHttpRouteRegistry(startupRegistry);
+
+    expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(laterRegistry);
+    expect(isPluginRegistryRetired(startupRegistry)).toBe(true);
   });
 
   it.each([

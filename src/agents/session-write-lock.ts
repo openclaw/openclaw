@@ -3,6 +3,7 @@ import type fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createFileLockManager } from "../infra/file-lock-manager.js";
+import { readGatewayProcessArgsSync as readProcessArgsSync } from "../infra/gateway-processes.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
@@ -28,13 +29,15 @@ export type SessionLockInspection = {
   removed: boolean;
 };
 
+export type SessionLockOwnerProcessArgsReader = (pid: number) => string[] | null;
+
 const CLEANUP_SIGNALS = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
 type CleanupSignal = (typeof CLEANUP_SIGNALS)[number];
 const CLEANUP_STATE_KEY = Symbol.for("openclaw.sessionWriteLockCleanupState");
 const WATCHDOG_STATE_KEY = Symbol.for("openclaw.sessionWriteLockWatchdogState");
 
-const DEFAULT_STALE_MS = 30 * 60 * 1000;
-const DEFAULT_MAX_HOLD_MS = 5 * 60 * 1000;
+export const DEFAULT_SESSION_WRITE_LOCK_STALE_MS = 30 * 60 * 1000;
+export const DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS = 5 * 60 * 1000;
 export const DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS = 60_000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
@@ -71,18 +74,113 @@ export type SessionWriteLockAcquireTimeoutConfig = {
   session?: {
     writeLock?: {
       acquireTimeoutMs?: number;
+      staleMs?: number;
+      maxHoldMs?: number;
     };
   };
 };
 
+type SessionWriteLockMsKey = "acquireTimeoutMs" | "staleMs" | "maxHoldMs";
+
+const SESSION_WRITE_LOCK_ENV: Record<SessionWriteLockMsKey, string> = {
+  acquireTimeoutMs: "OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS",
+  staleMs: "OPENCLAW_SESSION_WRITE_LOCK_STALE_MS",
+  maxHoldMs: "OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS",
+};
+
+function readPositiveMsEnv(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  opts: { allowInfinity?: boolean } = {},
+): number | undefined {
+  const raw = env[key]?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const value = Number(raw);
+  return parsePositiveMs(value, opts);
+}
+
+function parsePositiveMs(
+  value: number | undefined,
+  opts: { allowInfinity?: boolean } = {},
+): number | undefined {
+  if (typeof value !== "number" || Number.isNaN(value) || value <= 0) {
+    return undefined;
+  }
+  if (value === Number.POSITIVE_INFINITY) {
+    return opts.allowInfinity ? value : undefined;
+  }
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  return value;
+}
+
+function resolveSessionWriteLockMs(params: {
+  config?: SessionWriteLockAcquireTimeoutConfig;
+  env?: NodeJS.ProcessEnv;
+  key: SessionWriteLockMsKey;
+  fallback: number;
+  allowInfinity?: boolean;
+}): number {
+  const opts = { allowInfinity: params.allowInfinity };
+  return (
+    readPositiveMsEnv(params.env ?? process.env, SESSION_WRITE_LOCK_ENV[params.key], opts) ??
+    parsePositiveMs(params.config?.session?.writeLock?.[params.key], opts) ??
+    params.fallback
+  );
+}
+
 export function resolveSessionWriteLockAcquireTimeoutMs(
   config?: SessionWriteLockAcquireTimeoutConfig,
+  env?: NodeJS.ProcessEnv,
 ): number {
-  return resolvePositiveMs(
-    config?.session?.writeLock?.acquireTimeoutMs,
-    DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS,
-    { allowInfinity: true },
-  );
+  return resolveSessionWriteLockMs({
+    config,
+    env,
+    key: "acquireTimeoutMs",
+    fallback: DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS,
+    allowInfinity: true,
+  });
+}
+
+export function resolveSessionWriteLockStaleMs(
+  config?: SessionWriteLockAcquireTimeoutConfig,
+  env?: NodeJS.ProcessEnv,
+): number {
+  return resolveSessionWriteLockMs({
+    config,
+    env,
+    key: "staleMs",
+    fallback: DEFAULT_SESSION_WRITE_LOCK_STALE_MS,
+  });
+}
+
+export function resolveSessionWriteLockMaxHoldMs(
+  config?: SessionWriteLockAcquireTimeoutConfig,
+  params: { env?: NodeJS.ProcessEnv; fallback?: number } = {},
+): number {
+  return resolveSessionWriteLockMs({
+    config,
+    env: params.env,
+    key: "maxHoldMs",
+    fallback: params.fallback ?? DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS,
+  });
+}
+
+export function resolveSessionWriteLockOptions(
+  config?: SessionWriteLockAcquireTimeoutConfig,
+  params: { env?: NodeJS.ProcessEnv; maxHoldMsFallback?: number } = {},
+): { timeoutMs: number; staleMs: number; maxHoldMs: number } {
+  return {
+    timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(config, params.env),
+    staleMs: resolveSessionWriteLockStaleMs(config, params.env),
+    maxHoldMs: resolveSessionWriteLockMaxHoldMs(config, {
+      env: params.env,
+      fallback: params.maxHoldMsFallback,
+    }),
+  };
 }
 
 function resolveCleanupState(): CleanupState {
@@ -134,7 +232,7 @@ export function resolveSessionLockMaxHoldFromTimeout(params: {
   graceMs?: number;
   minMs?: number;
 }): number {
-  const minMs = resolvePositiveMs(params.minMs, DEFAULT_MAX_HOLD_MS);
+  const minMs = resolvePositiveMs(params.minMs, DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS);
   const timeoutMs = resolvePositiveMs(params.timeoutMs, minMs, { allowInfinity: true });
   if (timeoutMs === Number.POSITIVE_INFINITY) {
     return MAX_LOCK_HOLD_MS;
@@ -156,7 +254,9 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
   let released = 0;
   for (const held of SESSION_LOCKS.heldEntries()) {
     const maxHoldMs =
-      typeof held.metadata.maxHoldMs === "number" ? held.metadata.maxHoldMs : DEFAULT_MAX_HOLD_MS;
+      typeof held.metadata.maxHoldMs === "number"
+        ? held.metadata.maxHoldMs
+        : DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS;
     const heldForMs = nowMs - held.acquiredAt;
     if (heldForMs <= maxHoldMs) {
       continue;
@@ -295,6 +395,56 @@ async function resolveNormalizedSessionFile(sessionFile: string): Promise<string
   }
 }
 
+function normalizeOwnerProcessArg(arg: string): string {
+  return arg.trim().replaceAll("\\", "/").toLowerCase();
+}
+
+function isOpenClawSessionOwnerArgv(args: string[]): boolean {
+  const normalized = args.map(normalizeOwnerProcessArg).filter(Boolean);
+  if (normalized.length === 0) {
+    return false;
+  }
+  const exe = (normalized[0] ?? "").replace(/\.(bat|cmd|exe)$/i, "");
+  if (exe === "openclaw" || exe.endsWith("/openclaw") || exe.endsWith("/openclaw-gateway")) {
+    return true;
+  }
+  if (
+    normalized.some(
+      (arg) =>
+        arg === "openclaw" ||
+        arg.endsWith("/openclaw") ||
+        arg === "openclaw.mjs" ||
+        arg.endsWith("/openclaw.mjs"),
+    )
+  ) {
+    return true;
+  }
+
+  const entryCandidates = [
+    "dist/index.js",
+    "dist/entry.js",
+    "scripts/run-node.mjs",
+    "src/entry.ts",
+    "src/index.ts",
+  ];
+  const hasOpenClawCommandToken = normalized.some((arg) => arg === "gateway" || arg === "agent");
+  return normalized.some(
+    (arg) => entryCandidates.some((entry) => arg.endsWith(entry)) && hasOpenClawCommandToken,
+  );
+}
+
+function readOwnerProcessArgs(
+  reader: SessionLockOwnerProcessArgsReader,
+  pid: number,
+): string[] | null {
+  try {
+    const args = reader(pid);
+    return Array.isArray(args) ? args : null;
+  } catch {
+    return null;
+  }
+}
+
 function inspectLockPayload(
   payload: LockFilePayload | null,
   staleMs: number,
@@ -342,6 +492,29 @@ function inspectLockPayload(
   };
 }
 
+function shouldTreatAsNonOpenClawOwner(params: {
+  payload: LockFilePayload | null;
+  inspected: LockInspectionDetails;
+  heldByThisProcess: boolean;
+  readOwnerProcessArgs: SessionLockOwnerProcessArgsReader;
+}): boolean {
+  if (params.inspected.stale || params.inspected.pid === null || !params.inspected.pidAlive) {
+    return false;
+  }
+  if (params.inspected.pid === process.pid && params.heldByThisProcess) {
+    return false;
+  }
+  if (!isValidLockNumber(params.payload?.pid) || params.payload.pid <= 0) {
+    return false;
+  }
+
+  const args = readOwnerProcessArgs(params.readOwnerProcessArgs, params.payload.pid);
+  if (!args || args.every((arg) => !arg.trim())) {
+    return false;
+  }
+  return !isOpenClawSessionOwnerArgv(args);
+}
+
 function lockInspectionNeedsMtimeStaleFallback(details: LockInspectionDetails): boolean {
   return (
     details.stale &&
@@ -383,6 +556,7 @@ async function removeReportedStaleLockIfStillStale(params: {
   lockPath: string;
   normalizedSessionFile: string;
   staleMs: number;
+  readOwnerProcessArgs?: SessionLockOwnerProcessArgsReader;
 }): Promise<boolean> {
   const nowMs = Date.now();
   const payload = await readLockPayload(params.lockPath);
@@ -392,6 +566,7 @@ async function removeReportedStaleLockIfStillStale(params: {
     nowMs,
     heldByThisProcess: sessionLockHeldByThisProcess(params.normalizedSessionFile),
     reclaimLockWithoutStarttime: true,
+    readOwnerProcessArgs: params.readOwnerProcessArgs ?? readProcessArgsSync,
   });
   if (!(await shouldReclaimContendedLockFile(params.lockPath, inspected, params.staleMs, nowMs))) {
     return false;
@@ -430,40 +605,64 @@ function inspectLockPayloadForSession(params: {
   nowMs: number;
   heldByThisProcess: boolean;
   reclaimLockWithoutStarttime: boolean;
+  readOwnerProcessArgs: SessionLockOwnerProcessArgsReader;
 }): LockInspectionDetails {
   const inspected = inspectLockPayload(params.payload, params.staleMs, params.nowMs);
   if (
-    !shouldTreatAsOrphanSelfLock({
+    shouldTreatAsOrphanSelfLock({
       payload: params.payload,
       heldByThisProcess: params.heldByThisProcess,
       reclaimLockWithoutStarttime: params.reclaimLockWithoutStarttime,
     })
   ) {
-    return inspected;
+    return {
+      ...inspected,
+      stale: true,
+      staleReasons: inspected.staleReasons.includes("orphan-self-pid")
+        ? inspected.staleReasons
+        : [...inspected.staleReasons, "orphan-self-pid"],
+    };
   }
-  return {
-    ...inspected,
-    stale: true,
-    staleReasons: inspected.staleReasons.includes("orphan-self-pid")
-      ? inspected.staleReasons
-      : [...inspected.staleReasons, "orphan-self-pid"],
-  };
+
+  if (
+    shouldTreatAsNonOpenClawOwner({
+      payload: params.payload,
+      inspected,
+      heldByThisProcess: params.heldByThisProcess,
+      readOwnerProcessArgs: params.readOwnerProcessArgs,
+    })
+  ) {
+    return {
+      ...inspected,
+      stale: true,
+      staleReasons: [...inspected.staleReasons, "non-openclaw-owner"],
+    };
+  }
+
+  return inspected;
 }
 
 export async function cleanStaleLockFiles(params: {
   sessionsDir: string;
+  config?: SessionWriteLockAcquireTimeoutConfig;
+  env?: NodeJS.ProcessEnv;
   staleMs?: number;
   removeStale?: boolean;
   nowMs?: number;
+  readOwnerProcessArgs?: SessionLockOwnerProcessArgsReader;
   log?: {
     warn?: (message: string) => void;
     info?: (message: string) => void;
   };
 }): Promise<{ locks: SessionLockInspection[]; cleaned: SessionLockInspection[] }> {
   const sessionsDir = path.resolve(params.sessionsDir);
-  const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS);
+  const staleMs = resolvePositiveMs(
+    params.staleMs,
+    resolveSessionWriteLockStaleMs(params.config, params.env),
+  );
   const removeStale = params.removeStale !== false;
   const nowMs = params.nowMs ?? Date.now();
+  const ownerProcessArgsReader = params.readOwnerProcessArgs ?? readProcessArgsSync;
 
   let entries: fsSync.Dirent[] = [];
   try {
@@ -491,6 +690,7 @@ export async function cleanStaleLockFiles(params: {
       nowMs,
       heldByThisProcess: false,
       reclaimLockWithoutStarttime: false,
+      readOwnerProcessArgs: ownerProcessArgsReader,
     });
     const lockInfo: SessionLockInspection = {
       lockPath,
@@ -524,11 +724,12 @@ export async function acquireSessionWriteLock(params: {
 }> {
   registerCleanupHandlers();
   const allowReentrant = params.allowReentrant ?? false;
-  const timeoutMs = resolvePositiveMs(params.timeoutMs, resolveSessionWriteLockAcquireTimeoutMs(), {
+  const defaultOptions = resolveSessionWriteLockOptions();
+  const timeoutMs = resolvePositiveMs(params.timeoutMs, defaultOptions.timeoutMs, {
     allowInfinity: true,
   });
-  const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS);
-  const maxHoldMs = resolvePositiveMs(params.maxHoldMs, DEFAULT_MAX_HOLD_MS);
+  const staleMs = resolvePositiveMs(params.staleMs, defaultOptions.staleMs);
+  const maxHoldMs = resolvePositiveMs(params.maxHoldMs, defaultOptions.maxHoldMs);
   const sessionFile = path.resolve(params.sessionFile);
   const sessionDir = path.dirname(sessionFile);
   const normalizedSessionFile = await resolveNormalizedSessionFile(sessionFile);
@@ -558,6 +759,7 @@ export async function acquireSessionWriteLock(params: {
             nowMs,
             heldByThisProcess,
             reclaimLockWithoutStarttime: true,
+            readOwnerProcessArgs: readProcessArgsSync,
           });
           return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
         },
@@ -587,7 +789,7 @@ export async function acquireSessionWriteLock(params: {
   }
 }
 
-export const __testing = {
+export const testing = {
   cleanupSignals: [...CLEANUP_SIGNALS],
   handleTerminationSignal,
   releaseAllLocksSync,
@@ -609,3 +811,4 @@ export function resetSessionWriteLockStateForTest(): void {
   unregisterCleanupHandlers();
   resolveProcessStartTimeForLock = getProcessStartTime;
 }
+export { testing as __testing };

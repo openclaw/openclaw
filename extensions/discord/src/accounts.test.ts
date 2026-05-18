@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordActionGate,
   isDiscordAccountEnabledForRuntime,
+  listDiscordAccountIds,
   listEnabledDiscordAccounts,
+  resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
   resolveDiscordAccountDisabledReason,
   resolveDiscordMaxLinesPerMessage,
@@ -72,6 +74,28 @@ describe("Discord defaultAccount omission contract", () => {
       assert();
     },
   );
+
+  it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token-default",
+          accounts: {
+            work: {
+              enabled: false,
+              token: "token-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listDiscordAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultDiscordAccountId(cfg)).toBe("default");
+    expect(listEnabledDiscordAccounts(cfg).map((account) => account.accountId)).toEqual([
+      "default",
+    ]);
+  });
 });
 
 describe("resolveDiscordAccount allowFrom precedence", () => {
@@ -127,6 +151,39 @@ describe("resolveDiscordAccount allowFrom precedence", () => {
     });
 
     expect(resolved.config.allowFrom).toBeUndefined();
+  });
+});
+
+describe("resolveDiscordAccount botLoopProtection precedence", () => {
+  it("merges account overrides over Discord channel defaults field-by-field", () => {
+    const resolved = resolveDiscordAccount({
+      cfg: {
+        channels: {
+          discord: {
+            botLoopProtection: {
+              maxEventsPerWindow: 4,
+              windowSeconds: 60,
+              cooldownSeconds: 30,
+            },
+            accounts: {
+              work: {
+                token: "token-work",
+                botLoopProtection: {
+                  windowSeconds: 10,
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.botLoopProtection).toEqual({
+      maxEventsPerWindow: 4,
+      windowSeconds: 10,
+      cooldownSeconds: 30,
+    });
   });
 });
 

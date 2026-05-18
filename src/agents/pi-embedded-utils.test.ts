@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
@@ -460,6 +460,28 @@ File contents here`,
         {
           type: "text",
           text: 'Prefix\n<tool_result> {"output": "file contents"} </tool_result>\nSuffix',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("Prefix\n\nSuffix");
+  });
+
+  it("strips raw <function_response> workflow blocks from assistant text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: [
+            "Prefix",
+            "<function_response>",
+            'Searching for: "what skills matter most in the age of AI"',
+            "...",
+            "</function_response>",
+            "Suffix",
+          ].join("\n"),
         },
       ],
       timestamp: Date.now(),

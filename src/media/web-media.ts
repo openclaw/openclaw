@@ -7,13 +7,8 @@ import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { maxBytesForKind, type MediaKind } from "./constants.js";
-import { fetchRemoteMedia } from "./fetch.js";
-import {
-  convertHeicToJpeg,
-  hasAlphaChannel,
-  optimizeImageToPng,
-  resizeToJpeg,
-} from "./image-ops.js";
+import { readRemoteMediaBuffer } from "./fetch.js";
+import { basenameFromAnyPath, extnameFromAnyPath } from "./file-name.js";
 import {
   assertLocalMediaAllowed,
   getDefaultLocalRoots,
@@ -21,6 +16,13 @@ import {
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
+import {
+  convertHeicToJpeg,
+  hasAlphaChannel,
+  isImageProcessorUnavailableError,
+  optimizeImageToPng,
+  resizeToJpeg,
+} from "./media-services.js";
 import {
   detectMime,
   extensionForMime,
@@ -123,6 +125,10 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/gzip",
+  "application/x-7z-compressed",
+  "application/x-tar",
+  "application/zip",
   "text/csv",
   "text/markdown",
 ]);
@@ -224,23 +230,6 @@ function formatCapReduce(label: string, cap: number, size: number): string {
   return `${label} could not be reduced below ${formatMb(cap, 0)}MB (got ${formatMb(size)}MB)`;
 }
 
-function isOptionalImageOptimizerUnavailable(err: unknown): boolean {
-  const messages: string[] = [];
-  let current: unknown = err;
-  while (current instanceof Error) {
-    messages.push(current.message);
-    current = current.cause;
-  }
-  const detail = messages.join("\n").toLowerCase();
-  return (
-    detail.includes("optional dependency sharp is required") ||
-    detail.includes("cannot find package 'sharp'") ||
-    detail.includes('cannot find package "sharp"') ||
-    detail.includes("cannot find module 'sharp'") ||
-    detail.includes('cannot find module "sharp"')
-  );
-}
-
 function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
   if (opts.contentType && HEIC_MIME_RE.test(opts.contentType.trim())) {
     return true;
@@ -317,7 +306,7 @@ function assertHostReadMediaAllowed(params: {
   }
   throw new LocalMediaAccessError(
     "path-not-allowed",
-    `Host-local media sends only allow buffer-verified images, audio, video, PDF, and Office documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
+    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, archives, CSV, and Markdown (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 
@@ -325,7 +314,7 @@ function toJpegFileName(fileName?: string): string | undefined {
   if (!fileName) {
     return undefined;
   }
-  const trimmed = fileName.trim();
+  const trimmed = basenameFromAnyPath(fileName.trim());
   if (!trimmed) {
     return fileName;
   }
@@ -433,7 +422,7 @@ async function loadWebMediaInternal(
       optimized = await optimizeImageWithFallback({ buffer, cap, meta });
     } catch (err) {
       if (
-        isOptionalImageOptimizerUnavailable(err) &&
+        isImageProcessorUnavailableError(err) &&
         !isHeicSource(meta ?? {}) &&
         buffer.length <= cap
       ) {
@@ -528,7 +517,7 @@ async function loadWebMediaInternal(
           allowPrivateProxy: true,
         }
       : undefined;
-    const fetched = await fetchRemoteMedia({
+    const fetched = await readRemoteMediaBuffer({
       url: mediaUrl,
       fetchImpl,
       requestInit,
@@ -611,8 +600,8 @@ async function loadWebMediaInternal(
       buffer: data,
     });
   }
-  let fileName = path.basename(mediaUrl) || undefined;
-  if (fileName && !path.extname(fileName) && mime) {
+  let fileName = basenameFromAnyPath(mediaUrl) || undefined;
+  if (fileName && !extnameFromAnyPath(fileName) && mime) {
     const ext = extensionForMime(mime);
     if (ext) {
       fileName = `${fileName}${ext}`;
@@ -717,6 +706,10 @@ export async function optimizeImageToJpeg(
       resizeSide: smallest.resizeSide,
       quality: smallest.quality,
     };
+  }
+
+  if (isImageProcessorUnavailableError(firstResizeError)) {
+    throw firstResizeError;
   }
 
   const detail = errors.length > 0 ? `: ${errors.slice(0, 3).join("; ")}` : "";

@@ -111,8 +111,13 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  clearInternalHooks,
+  registerInternalHook,
+  type InternalHookEvent,
+} from "../../hooks/internal-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -199,6 +204,18 @@ function baseConfig(): OpenClawConfig {
   } as unknown as OpenClawConfig;
 }
 
+function modelDefinition(id: string, name: string): ModelDefinitionConfig {
+  return {
+    id,
+    name,
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  };
+}
+
 function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
   return {
     sessionId: "s1",
@@ -231,11 +248,13 @@ beforeEach(() => {
   vi.mocked(enqueueSystemEvent).mockClear();
   liveModelSwitchMocks.requestLiveSessionModelSwitch.mockReset().mockReturnValue(false);
   queueMocks.refreshQueuedFollowupSession.mockReset();
+  clearInternalHooks();
 });
 
 afterEach(() => {
   setDirectiveTestProviders([]);
   clearRuntimeAuthProfileStoreSnapshots();
+  clearInternalHooks();
 });
 
 function setAuthProfiles(profiles: Record<string, AuthProfileForTest>) {
@@ -461,7 +480,7 @@ describe("/model chat UX", () => {
             cfg: {
               ...baseConfig(),
               plugins: { allow: ["workspace-model-list"] },
-            } as OpenClawConfig,
+            } as unknown as OpenClawConfig,
           });
 
           expect(reply?.text).toContain("- anthropic");
@@ -503,7 +522,7 @@ describe("/model chat UX", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       allowedModelCatalog: [
         { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
         { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
@@ -515,6 +534,78 @@ describe("/model chat UX", () => {
     expect(reply?.text).not.toContain("claude-sonnet-4-1");
     expect(reply?.text).toContain("auth:");
     expect(reply?.text).not.toContain("missing (missing)");
+  });
+
+  it("hides missing-auth direct provider rows covered by OpenRouter nested model ids", async () => {
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model status"),
+      provider: "openrouter",
+      model: "google/gemini-3-flash-preview",
+      defaultProvider: "openrouter",
+      defaultModel: "google/gemini-3-flash-preview",
+      cfg: {
+        commands: { text: true },
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.example.test/api/v1",
+              models: [modelDefinition("google/gemini-3-flash-preview", "Gemini via OpenRouter")],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      allowedModelCatalog: [
+        { provider: "google", id: "gemini-3-flash-preview", name: "Gemini 3 Flash" },
+        {
+          provider: "openrouter",
+          id: "google/gemini-3-flash-preview",
+          name: "Gemini via OpenRouter",
+        },
+      ],
+    });
+
+    expect(reply?.text).toContain("[openrouter]");
+    expect(reply?.text).toContain("openrouter/google/gemini-3-flash-preview");
+    expect(reply?.text).not.toContain("\n[google]");
+    expect(reply?.text).not.toContain("\n  • google/gemini-3-flash-preview");
+  });
+
+  it("keeps explicitly configured direct provider rows next to OpenRouter nested ids", async () => {
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model status"),
+      provider: "openrouter",
+      model: "google/gemini-3-flash-preview",
+      defaultProvider: "openrouter",
+      defaultModel: "google/gemini-3-flash-preview",
+      cfg: {
+        commands: { text: true },
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://google.example.test/v1",
+              models: [modelDefinition("gemini-3-flash-preview", "Gemini 3 Flash")],
+            },
+            openrouter: {
+              baseUrl: "https://openrouter.example.test/api/v1",
+              models: [modelDefinition("google/gemini-3-flash-preview", "Gemini via OpenRouter")],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      allowedModelCatalog: [
+        { provider: "google", id: "gemini-3-flash-preview", name: "Gemini 3 Flash" },
+        {
+          provider: "openrouter",
+          id: "google/gemini-3-flash-preview",
+          name: "Gemini via OpenRouter",
+        },
+      ],
+    });
+
+    expect(reply?.text).toContain("[google]");
+    expect(reply?.text).toContain("google/gemini-3-flash-preview");
+    expect(reply?.text).toContain("[openrouter]");
+    expect(reply?.text).toContain("openrouter/google/gemini-3-flash-preview");
   });
 
   it("reports Codex runtime auth for OpenAI status rows", async () => {
@@ -546,7 +637,7 @@ describe("/model chat UX", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
     });
 
@@ -589,7 +680,7 @@ describe("/model chat UX", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
     });
 
@@ -627,7 +718,7 @@ describe("/model chat UX", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
     });
 
@@ -695,7 +786,7 @@ describe("/model chat UX", () => {
                   },
                 },
               },
-            } as OpenClawConfig,
+            } as unknown as OpenClawConfig,
             allowedModelCatalog: [
               { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
             ],
@@ -957,7 +1048,7 @@ describe("/model chat UX", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
     });
 
     expect(persisted.provider).toBe("openai");
@@ -1036,9 +1127,9 @@ describe("/model chat UX", () => {
 
     expect(resolveSessionAgentId).toHaveBeenCalledWith({
       sessionKey: "agent:main:dm:1",
-      config: expect.any(Object),
+      config: baseConfig(),
     });
-    expect(resolveAgentDir).toHaveBeenCalledWith(expect.any(Object), "target");
+    expect(resolveAgentDir).toHaveBeenCalledWith(baseConfig(), "target");
   });
 
   it("persists explicit auth profiles after @YYYYMMDD version suffixes in mixed-content messages", async () => {
@@ -1180,6 +1271,34 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       to: "medium",
       provider: "openai",
       model: "gpt-4o",
+    });
+  });
+
+  it("fires session:patch when /model changes the persisted session model", async () => {
+    const events: InternalHookEvent[] = [];
+    registerInternalHook("session:patch", async (event) => {
+      events.push(event);
+    });
+    const sessionEntry = createSessionEntry();
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model openai/gpt-4o"),
+        sessionEntry,
+      }),
+    );
+
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const event = events[0];
+    expect(event.type).toBe("session");
+    expect(event.action).toBe("patch");
+    expect(event.sessionKey).toBe(sessionKey);
+    const context = event.context;
+    expect(context.patch).toMatchObject({ key: sessionKey, model: "openai/gpt-4o" });
+    expect(context.sessionEntry).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+      liveModelSwitchPending: true,
     });
   });
 
@@ -1331,6 +1450,22 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
   });
 
+  it("clears thinking override for default directives", async () => {
+    const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/think default"),
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Thinking level reset to default.");
+    expect(sessionEntry.thinkingLevel).toBeUndefined();
+    expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBeUndefined();
+  });
+
   it("reports current thinking status", async () => {
     setDirectiveTestProviders([
       {
@@ -1358,7 +1493,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     expect(result?.text).toContain("Current thinking level: low");
-    expect(result?.text).toContain("Options: off, minimal, low, medium, adaptive, high.");
+    expect(result?.text).toContain("Options: default, off, minimal, low, medium, adaptive, high.");
   });
 
   it("uses catalog reasoning metadata for provider-owned thinking levels", async () => {
@@ -1407,6 +1542,55 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     expect(result?.text).toContain("Thinking level set to medium.");
     expect(sessionEntry.thinkingLevel).toBe("medium");
+  });
+
+  it.each([
+    ["openai", "gpt-5.5"],
+    ["openai-codex", "gpt-5.5"],
+  ])("accepts xhigh for %s/%s when catalog marks reasoning support", async (provider, model) => {
+    setDirectiveTestProviders([
+      {
+        id: provider,
+        label: provider,
+        auth: [],
+        resolveThinkingProfile: ({ modelId }) => ({
+          levels:
+            modelId === "gpt-5.5"
+              ? [
+                  { id: "off" },
+                  { id: "minimal" },
+                  { id: "low" },
+                  { id: "medium" },
+                  { id: "high" },
+                  { id: "xhigh" },
+                ]
+              : [{ id: "off" }],
+        }),
+      },
+    ]);
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const catalogEntry = {
+      provider,
+      id: model,
+      name: model,
+      reasoning: true,
+    };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/think xhigh"),
+        provider,
+        model,
+        allowedModelCatalog: [catalogEntry],
+        thinkingCatalog: [catalogEntry],
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Thinking level set to xhigh.");
+    expect(sessionEntry.thinkingLevel).toBe("xhigh");
   });
 
   it("persists verbose on and off directives", async () => {
@@ -1468,6 +1652,17 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
     expect(offReply?.text).toContain("Fast mode disabled");
     expect(sessionEntry.fastMode).toBe(false);
+
+    const defaultReply = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/fast default"),
+        sessionEntry,
+        sessionStore,
+        currentFastMode: sessionEntry.fastMode,
+      }),
+    );
+    expect(defaultReply?.text).toContain("Fast mode reset to default");
+    expect(sessionEntry.fastMode).toBeUndefined();
   });
 
   it("persists and reports elevated-mode directives when allowed", async () => {

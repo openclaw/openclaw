@@ -110,6 +110,17 @@ function createGoogleSearchProvider(
   });
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function mockCallParam(mock: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
+  return requireRecord(mock.mock.calls[index]?.[0]);
+}
+
 function createDuckDuckGoSearchProvider(
   overrides: Partial<WebSearchTestProviderParams> = {},
 ): PluginWebSearchProviderEntry {
@@ -127,11 +138,13 @@ describe("web search runtime", () => {
   let runWebSearch: typeof import("./runtime.js").runWebSearch;
   let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
+  let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 
   beforeAll(async () => {
     ({ runWebSearch } = await import("./runtime.js"));
     ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
       await import("../secrets/runtime.js"));
+    ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
   });
 
   beforeEach(() => {
@@ -312,6 +325,45 @@ describe("web search runtime", () => {
       provider: "custom",
       result: {
         query: "runtime-source",
+        apiKey: "resolved-custom-key",
+      },
+    });
+  });
+
+  it("can prefer an explicitly resolved input config over a pinned config snapshot", async () => {
+    const provider = createCustomSearchProvider({
+      createTool: ({ config }) => ({
+        description: "custom",
+        parameters: {},
+        execute: async (args) => ({
+          ...args,
+          apiKey: getCustomSearchApiKey(config),
+        }),
+      }),
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+
+    setRuntimeConfigSnapshot(
+      createCustomSearchConfig({
+        source: "env",
+        provider: "default",
+        id: "CUSTOM_SEARCH_API_KEY",
+      }),
+    );
+
+    await expect(
+      runWebSearch({
+        config: createCustomSearchConfig("resolved-custom-key"),
+        preferInputConfig: true,
+        providerId: "custom",
+        preferRuntimeProviders: false,
+        args: { query: "resolved-input" },
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: {
+        query: "resolved-input",
         apiKey: "resolved-custom-key",
       },
     });
@@ -568,35 +620,27 @@ describe("web search runtime", () => {
     );
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([createDuckDuckGoSearchProvider()]);
 
-    await expect(
-      runWebSearch({
-        config: {
-          tools: {
-            web: {
-              search: {
-                provider: "duckduckgo",
-              },
+    const result = await runWebSearch({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "duckduckgo",
             },
           },
         },
-        args: { query: "configured-duck" },
-      }),
-    ).resolves.toMatchObject({
-      provider: "duckduckgo",
+      },
+      args: { query: "configured-duck" },
     });
+    expect(result.provider).toBe("duckduckgo");
 
-    expect(resolveManifestContractOwnerPluginIdMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contract: "webSearchProviders",
-        origin: "bundled",
-        value: "duckduckgo",
-      }),
-    );
-    expect(resolveRuntimeWebSearchProvidersMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["duckduckgo"],
-      }),
-    );
+    const ownerCall = mockCallParam(resolveManifestContractOwnerPluginIdMock);
+    expect(ownerCall.contract).toBe("webSearchProviders");
+    expect(ownerCall.value).toBe("duckduckgo");
+    expect(ownerCall).not.toHaveProperty("origin");
+    expect(mockCallParam(resolveRuntimeWebSearchProvidersMock).onlyPluginIds).toEqual([
+      "duckduckgo",
+    ]);
   });
 
   it("scopes runtime provider loading through manifest ownership when provider id differs from plugin id", async () => {
@@ -610,24 +654,49 @@ describe("web search runtime", () => {
       }),
     ]);
 
+    const result = await runWebSearch({
+      config: {},
+      runtimeWebSearch: {
+        providerConfigured: "gemini",
+        selectedProvider: "gemini",
+        providerSource: "configured",
+        diagnostics: [],
+      },
+      args: { query: "configured-gemini" },
+    });
+    expect(result.provider).toBe("gemini");
+
+    expect(mockCallParam(resolveRuntimeWebSearchProvidersMock).onlyPluginIds).toEqual(["google"]);
+  });
+
+  it("scopes configured global web_search providers when runtime providers are not preferred", async () => {
+    resolveManifestContractOwnerPluginIdMock.mockImplementation(({ value }) =>
+      value === "custom" ? "custom-search" : undefined,
+    );
+    resolvePluginWebSearchProvidersMock.mockReturnValue([createCustomSearchProvider()]);
+
     await expect(
       runWebSearch({
-        config: {},
-        runtimeWebSearch: {
-          providerConfigured: "gemini",
-          selectedProvider: "gemini",
-          providerSource: "configured",
-          diagnostics: [],
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "custom",
+              },
+            },
+          },
+          ...createCustomSearchConfig("custom-key"),
         },
-        args: { query: "configured-gemini" },
+        preferRuntimeProviders: false,
+        args: { query: "configured-custom" },
       }),
     ).resolves.toMatchObject({
-      provider: "gemini",
+      provider: "custom",
     });
 
-    expect(resolveRuntimeWebSearchProvidersMock).toHaveBeenCalledWith(
+    expect(resolvePluginWebSearchProvidersMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        onlyPluginIds: ["google"],
+        onlyPluginIds: ["custom-search"],
       }),
     );
   });
@@ -642,28 +711,21 @@ describe("web search runtime", () => {
       }),
     ]);
 
-    await expect(
-      runWebSearch({
-        config: {
-          tools: {
-            web: {
-              search: {
-                provider: "external-search",
-              },
+    const result = await runWebSearch({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "external-search",
             },
           },
         },
-        args: { query: "external-provider" },
-      }),
-    ).resolves.toMatchObject({
-      provider: "external-search",
+      },
+      args: { query: "external-provider" },
     });
+    expect(result.provider).toBe("external-search");
 
-    expect(resolveRuntimeWebSearchProvidersMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        onlyPluginIds: expect.anything(),
-      }),
-    );
+    expect(mockCallParam(resolveRuntimeWebSearchProvidersMock).onlyPluginIds).toBeUndefined();
   });
 
   it("does not fall back when the caller explicitly selects a provider", async () => {
@@ -731,26 +793,22 @@ describe("web search runtime", () => {
       createDuckDuckGoSearchProvider(),
     ]);
 
-    await expect(
-      runWebSearch({
-        config: {
-          tools: {
-            web: {
-              search: {
-                provider: "missing-id",
-              },
+    const result = await runWebSearch({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "missing-id",
             },
           },
         },
-        args: { query: "config-typo" },
-      }),
-    ).resolves.toMatchObject({
-      provider: "duckduckgo",
-      result: expect.objectContaining({
-        provider: "duckduckgo",
-        query: "config-typo",
-      }),
+      },
+      args: { query: "config-typo" },
     });
+    expect(result.provider).toBe("duckduckgo");
+    const searchResult = requireRecord(result.result);
+    expect(searchResult.provider).toBe("duckduckgo");
+    expect(searchResult.query).toBe("config-typo");
   });
 
   it("honors preferRuntimeProviders during execution", async () => {

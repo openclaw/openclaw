@@ -5,8 +5,13 @@ import {
   createHeartbeatToolResponsePayload,
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
+import {
+  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+} from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -21,6 +26,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    resetHeartbeatEventsForTest();
   });
 
   function createConfig(params: {
@@ -63,6 +69,56 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     };
   }
 
+  function expectTelegramSend(
+    sendTelegram: ReturnType<typeof vi.fn>,
+    params: { text: string; cfg: OpenClawConfig },
+  ) {
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    expect(sendTelegram.mock.calls).toEqual([
+      [
+        TELEGRAM_GROUP,
+        params.text,
+        {
+          verbose: false,
+          cfg: params.cfg,
+          accountId: undefined,
+        },
+      ],
+    ]);
+  }
+
+  function replyCall(replySpy: ReturnType<typeof vi.fn>): unknown[] {
+    const call = replySpy.mock.calls[0];
+    if (!call) {
+      throw new Error("Expected reply call");
+    }
+    return call;
+  }
+
+  function replyContext(replySpy: ReturnType<typeof vi.fn>): { Body?: string } {
+    const context = replyCall(replySpy)[0];
+    if (!context || typeof context !== "object") {
+      throw new Error("Expected reply context");
+    }
+    return context as { Body?: string };
+  }
+
+  function replyOptions(replySpy: ReturnType<typeof vi.fn>): {
+    enableHeartbeatTool?: boolean;
+    forceHeartbeatTool?: boolean;
+    sourceReplyDeliveryMode?: string;
+  } {
+    const options = replyCall(replySpy)[1];
+    if (!options || typeof options !== "object") {
+      throw new Error("Expected reply options");
+    }
+    return options as {
+      enableHeartbeatTool?: boolean;
+      forceHeartbeatTool?: boolean;
+      sourceReplyDeliveryMode?: string;
+    };
+  }
+
   async function runWithToolResponse(response: HeartbeatToolResponse) {
     return await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig({ tmpDir, storePath });
@@ -79,7 +135,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
       });
 
-      return { result, sendTelegram, replySpy };
+      return { result, sendTelegram, replySpy, cfg };
     });
   }
 
@@ -118,12 +174,8 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       });
 
       return {
-        calledCtx: replySpy.mock.calls[0]?.[0] as { Body?: string },
-        calledOpts: replySpy.mock.calls[0]?.[1] as {
-          enableHeartbeatTool?: boolean;
-          forceHeartbeatTool?: boolean;
-          sourceReplyDeliveryMode?: string;
-        },
+        calledCtx: replyContext(replySpy),
+        calledOpts: replyOptions(replySpy),
       };
     });
   }
@@ -154,7 +206,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   });
 
   it("delivers notificationText when notify=true", async () => {
-    const { sendTelegram } = await runWithToolResponse({
+    const { sendTelegram, cfg } = await runWithToolResponse({
       outcome: "needs_attention",
       notify: true,
       summary: "Build is blocked.",
@@ -162,12 +214,10 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       priority: "high",
     });
 
-    expect(sendTelegram).toHaveBeenCalledTimes(1);
-    expect(sendTelegram).toHaveBeenCalledWith(
-      TELEGRAM_GROUP,
-      "Build is blocked on missing credentials.",
-      expect.any(Object),
-    );
+    expectTelegramSend(sendTelegram, {
+      text: "Build is blocked on missing credentials.",
+      cfg,
+    });
   });
 
   it("uses the heartbeat response tool prompt in message-tool mode", async () => {
@@ -210,17 +260,48 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
       });
 
-      const calledOpts = replySpy.mock.calls[0]?.[1] as {
-        sourceReplyDeliveryMode?: string;
-      };
+      const calledOpts = replyOptions(replySpy);
       expect(result.status).toBe("ran");
       expect(calledOpts.sourceReplyDeliveryMode).toBe("message_tool_only");
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        TELEGRAM_GROUP,
-        usageLimitMessage,
-        expect.any(Object),
+      expectTelegramSend(sendTelegram, {
+        text: usageLimitMessage,
+        cfg,
+      });
+    });
+  });
+
+  it("rewrites foreground generic runner failure payloads before heartbeat delivery", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+        }),
       );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expectTelegramSend(sendTelegram, {
+        text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+        cfg,
+      });
+      expect(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT).not.toContain("/new");
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "failed",
+        reason: "agent-runner-failure",
+        preview: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+        channel: "telegram",
+      });
     });
   });
 
@@ -288,12 +369,8 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
       });
 
-      const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
-      const calledOpts = replySpy.mock.calls[0]?.[1] as {
-        enableHeartbeatTool?: boolean;
-        forceHeartbeatTool?: boolean;
-        sourceReplyDeliveryMode?: string;
-      };
+      const calledCtx = replyContext(replySpy);
+      const calledOpts = replyOptions(replySpy);
       expect(calledCtx.Body).toContain("HEARTBEAT_OK");
       expect(calledCtx.Body).not.toContain("heartbeat_respond");
       expect(calledOpts.enableHeartbeatTool).toBeUndefined();

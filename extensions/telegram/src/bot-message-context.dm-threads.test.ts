@@ -208,11 +208,13 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
       from: { id: 42, first_name: "Alice" },
     });
 
-    expect(ctx).not.toBeNull();
+    if (!ctx) {
+      throw new Error("expected Telegram non-forum group context");
+    }
     // Session key should NOT include :topic:42
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:group:-1001234567890");
+    expect(ctx.ctxPayload.SessionKey).toBe("agent:main:telegram:group:-1001234567890");
     // MessageThreadId should be undefined (not a forum)
-    expect(ctx?.ctxPayload?.MessageThreadId).toBeUndefined();
+    expect(ctx.ctxPayload.MessageThreadId).toBeUndefined();
   });
 
   it("keeps same session for regular group with and without message_thread_id", async () => {
@@ -272,6 +274,7 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
     // Session key SHOULD include :topic:99 for forums
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:99");
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(99);
+    expect(ctx?.ctxPayload?.OriginatingTo).toBe("telegram:-1001234567890:topic:99");
   });
 
   it("surfaces topic name from reply_to_message forum metadata", async () => {

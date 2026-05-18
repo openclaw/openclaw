@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildTelegramInboundOriginTarget,
   buildTelegramRoutingTarget,
   buildTelegramThreadParams,
   buildTypingThreadParams,
@@ -175,6 +176,37 @@ describe("buildTelegramRoutingTarget", () => {
     },
   ])("$name", ({ chatId, thread, expected }) => {
     expect(buildTelegramRoutingTarget(chatId, thread)).toBe(expected);
+  });
+});
+
+describe("buildTelegramInboundOriginTarget", () => {
+  it.each([
+    {
+      name: "keeps DM topic thread ids out of the origin target",
+      chatId: 42,
+      thread: { id: 77, scope: "dm" as const },
+      expected: "telegram:42",
+    },
+    {
+      name: "keeps regular groups chat-scoped",
+      chatId: -100123,
+      thread: { scope: "none" as const },
+      expected: "telegram:-100123",
+    },
+    {
+      name: "keeps General forum topic chat-scoped",
+      chatId: -100123,
+      thread: { id: 1, scope: "forum" as const },
+      expected: "telegram:-100123",
+    },
+    {
+      name: "includes real forum topic ids",
+      chatId: -100123,
+      thread: { id: 42, scope: "forum" as const },
+      expected: "telegram:-100123:topic:42",
+    },
+  ])("$name", ({ chatId, thread, expected }) => {
+    expect(buildTelegramInboundOriginTarget(chatId, thread)).toBe(expected);
   });
 });
 
@@ -487,12 +519,10 @@ describe("describeReplyTarget", () => {
     } as any);
     expect(result?.body).toBe("This is the forwarded content");
     expect(result?.id).toBe("2");
-    expect(result?.forwardedFrom).toMatchObject({
-      from: "Bob Smith (@bobsmith)",
-      fromType: "user",
-      fromId: "999",
-      date: 500,
-    });
+    expect(result?.forwardedFrom?.from).toBe("Bob Smith (@bobsmith)");
+    expect(result?.forwardedFrom?.fromType).toBe("user");
+    expect(result?.forwardedFrom?.fromId).toBe("999");
+    expect(result?.forwardedFrom?.date).toBe(500);
   });
 
   it("extracts forwarded context from channel forward in reply_to_message", () => {
@@ -515,11 +545,9 @@ describe("describeReplyTarget", () => {
         },
       },
     } as any);
-    expect(result?.forwardedFrom).toMatchObject({
-      from: "Tech News (Editor)",
-      fromType: "channel",
-      fromMessageId: 456,
-    });
+    expect(result?.forwardedFrom?.from).toBe("Tech News (Editor)");
+    expect(result?.forwardedFrom?.fromType).toBe("channel");
+    expect(result?.forwardedFrom?.fromMessageId).toBe(456);
   });
 
   it("marks top-level quote metadata on external replies as external targets", () => {
@@ -616,7 +644,7 @@ describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
       message_id: 1,
     } as any);
     expect(result.text).toBe("");
-    expect(result.entities).toEqual([]);
+    expect(result.entities).toStrictEqual([]);
   });
 
   it("preserves normal caption text", () => {
@@ -639,7 +667,7 @@ describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
       message_id: 1,
     } as any);
     expect(result.text).toBe("");
-    expect(result.entities).toEqual([]);
+    expect(result.entities).toStrictEqual([]);
   });
 });
 

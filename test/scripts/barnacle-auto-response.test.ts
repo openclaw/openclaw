@@ -6,6 +6,7 @@ import {
   runBarnacleAutoResponse,
 } from "../../scripts/github/barnacle-auto-response.mjs";
 import {
+  PROOF_OVERRIDE_LABEL,
   PROOF_SUFFICIENT_LABEL,
   PROOF_SUPPLIED_LABEL,
 } from "../../scripts/github/real-behavior-proof-policy.mjs";
@@ -135,6 +136,11 @@ function barnacleGithub(
     maintainerLogins?: string[];
     removeLabelNotFound?: string[];
     repositoryRoles?: Record<string, string>;
+    comments?: Array<{
+      body: string;
+      performed_via_github_app?: { slug: string };
+      user?: { login: string; type: string };
+    }>;
   } = {},
 ) {
   const maintainerLogins = new Set(
@@ -154,8 +160,10 @@ function barnacleGithub(
     removeLabel: [] as Array<{ issue_number: number; name: string }>,
     update: [] as Array<{ issue_number: number; state?: string }>,
   };
+  const listFiles = async () => files;
+  const listComments = async () => options.comments ?? [];
   const github = {
-    paginate: async () => files,
+    paginate: async (fn: unknown) => (fn === listComments ? (options.comments ?? []) : files),
     rest: {
       issues: {
         addLabels: async (params: { issue_number: number; labels: string[] }) => {
@@ -173,6 +181,7 @@ function barnacleGithub(
               managedLabelSpecs[params.name as keyof typeof managedLabelSpecs]?.description ?? "",
           },
         }),
+        listComments,
         lock: async (params: { issue_number: number; lock_reason?: string }) => {
           calls.lock.push(params);
         },
@@ -190,7 +199,7 @@ function barnacleGithub(
         updateLabel: async () => undefined,
       },
       pulls: {
-        listFiles: async () => files,
+        listFiles,
       },
       repos: {
         getCollaboratorPermissionLevel: async ({ username }: { username: string }) => {
@@ -222,6 +231,33 @@ function barnacleGithub(
   return { calls, github };
 }
 
+function expectedIssueUpdate(issue_number: number, state: string) {
+  return {
+    owner: "openclaw",
+    repo: "openclaw",
+    issue_number,
+    state,
+  };
+}
+
+function expectedRemoveLabel(issue_number: number, name: string) {
+  return {
+    owner: "openclaw",
+    repo: "openclaw",
+    issue_number,
+    name,
+  };
+}
+
+function expectedAddLabels(issue_number: number, labels: string[]) {
+  return {
+    owner: "openclaw",
+    repo: "openclaw",
+    issue_number,
+    labels,
+  };
+}
+
 describe("barnacle-auto-response", () => {
   it("keeps Barnacle-owned labels documented and ClawHub spelled correctly", () => {
     expect(managedLabelSpecs["r: skill"].description).toContain("ClawHub");
@@ -246,13 +282,12 @@ describe("barnacle-auto-response", () => {
       file("README.md"),
     ]);
 
-    expect(labels).toEqual(
-      expect.arrayContaining([
-        candidateLabels.blankTemplate,
-        candidateLabels.lowSignalDocs,
-        candidateLabels.docsDiscoverability,
-      ]),
-    );
+    expect(labels).toEqual([
+      candidateLabels.blankTemplate,
+      candidateLabels.needsRealBehaviorProof,
+      candidateLabels.lowSignalDocs,
+      candidateLabels.docsDiscoverability,
+    ]);
   });
 
   it("does not treat template boilerplate as behavior evidence for test-only churn", () => {
@@ -260,9 +295,11 @@ describe("barnacle-auto-response", () => {
       file("src/gateway/foo.test.ts"),
     ]);
 
-    expect(labels).toEqual(
-      expect.arrayContaining([candidateLabels.blankTemplate, candidateLabels.testOnlyNoBug]),
-    );
+    expect(labels).toEqual([
+      candidateLabels.blankTemplate,
+      candidateLabels.needsRealBehaviorProof,
+      candidateLabels.testOnlyNoBug,
+    ]);
   });
 
   it("labels external PRs that are missing real behavior proof", () => {
@@ -403,10 +440,10 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.addLabels).toEqual([]);
-    expect(calls.createComment).toEqual([]);
-    expect(calls.removeLabel).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.addLabels).toStrictEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.removeLabel).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("leaves stale Barnacle labels alone on maintainer-authored PRs", async () => {
@@ -433,10 +470,10 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.addLabels).toEqual([]);
-    expect(calls.createComment).toEqual([]);
-    expect(calls.removeLabel).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.addLabels).toStrictEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.removeLabel).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("does not mutate maintainer-authored issues", async () => {
@@ -456,9 +493,9 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.addLabels).toEqual([]);
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.addLabels).toStrictEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("does not action close labels on maintainer-authored issues", async () => {
@@ -485,8 +522,8 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("closes issues tagged as false positives", async () => {
@@ -504,12 +541,10 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.createComment).toContainEqual(
-      expect.objectContaining({
-        body: expect.stringContaining("false positive"),
-      }),
-    );
-    expect(calls.update).toContainEqual(expect.objectContaining({ state: "closed" }));
+    expect(calls.createComment).toHaveLength(1);
+    expect(calls.createComment[0]?.issue_number).toBe(456);
+    expect(calls.createComment[0]?.body).toContain("false positive");
+    expect(calls.update).toStrictEqual([expectedIssueUpdate(456, "closed")]);
   });
 
   it("does not respond to maintainer comments on contributor items", async () => {
@@ -541,8 +576,8 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("does not close automation PRs for the active PR limit", async () => {
@@ -574,15 +609,11 @@ describe("barnacle-auto-response", () => {
         },
       });
 
-      expect(calls.removeLabel).toContainEqual(
-        expect.objectContaining({ name: "r: too-many-prs" }),
-      );
-      expect(calls.createComment).not.toContainEqual(
-        expect.objectContaining({
-          body: expect.stringContaining("more than 20 active PRs"),
-        }),
-      );
-      expect(calls.update).not.toContainEqual(expect.objectContaining({ state: "closed" }));
+      expect(calls.removeLabel).toStrictEqual([expectedRemoveLabel(123, "r: too-many-prs")]);
+      expect(
+        calls.createComment.every((call) => !call.body.includes("more than 20 active PRs")),
+      ).toBe(true);
+      expect(calls.update).toStrictEqual([]);
     }
   });
 
@@ -605,9 +636,9 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.removeLabel).toContainEqual(expect.objectContaining({ name: "r: too-many-prs" }));
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.removeLabel).toStrictEqual([expectedRemoveLabel(123, "r: too-many-prs")]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("does not close GitHub App-authored PRs when stale PR-limit label removal returns 404", async () => {
@@ -631,9 +662,9 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.removeLabel).toContainEqual(expect.objectContaining({ name: "r: too-many-prs" }));
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.removeLabel).toStrictEqual([expectedRemoveLabel(123, "r: too-many-prs")]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("still adds candidate labels to broad contributor PRs", async () => {
@@ -652,13 +683,16 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.addLabels).toContainEqual(
-      expect.objectContaining({
-        labels: expect.arrayContaining([candidateLabels.dirtyCandidate]),
-      }),
-    );
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.addLabels).toStrictEqual([
+      expectedAddLabels(123, [
+        candidateLabels.blankTemplate,
+        candidateLabels.needsRealBehaviorProof,
+        candidateLabels.refactorOnly,
+        candidateLabels.dirtyCandidate,
+      ]),
+    ]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("adds proof labels to external PRs without auto-closing by default", async () => {
@@ -672,16 +706,18 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.addLabels).toContainEqual(
-      expect.objectContaining({
-        labels: expect.arrayContaining([candidateLabels.needsRealBehaviorProof]),
-      }),
-    );
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.addLabels).toStrictEqual([
+      expectedAddLabels(123, [
+        candidateLabels.blankTemplate,
+        candidateLabels.needsRealBehaviorProof,
+        candidateLabels.refactorOnly,
+      ]),
+    ]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
-  it("removes stale proof labels when override is present", async () => {
+  it("removes stale structural proof labels but preserves sufficient proof when override is present", async () => {
     const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
 
     await runBarnacleAutoResponse({
@@ -691,21 +727,46 @@ describe("barnacle-auto-response", () => {
         candidateLabels.mockOnlyProof,
         PROOF_SUPPLIED_LABEL,
         PROOF_SUFFICIENT_LABEL,
-        "proof: override",
+        PROOF_OVERRIDE_LABEL,
       ]),
       core: {
         info: () => undefined,
       },
     });
 
-    expect(calls.removeLabel.map((call) => call.name)).toEqual(
-      expect.arrayContaining([
-        candidateLabels.needsRealBehaviorProof,
-        candidateLabels.mockOnlyProof,
-        PROOF_SUPPLIED_LABEL,
-        PROOF_SUFFICIENT_LABEL,
-      ]),
-    );
+    expect(calls.removeLabel).toStrictEqual([
+      expectedRemoveLabel(123, candidateLabels.needsRealBehaviorProof),
+      expectedRemoveLabel(123, candidateLabels.mockOnlyProof),
+      expectedRemoveLabel(123, PROOF_SUPPLIED_LABEL),
+    ]);
+    expect(calls.update).toStrictEqual([]);
+  });
+
+  it("preserves manually applied sufficient proof label when override is added", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          body: realBehaviorProofBody(
+            "![after](https://github.com/user-attachments/assets/gateway-ready)",
+          ),
+        },
+        [PROOF_OVERRIDE_LABEL, PROOF_SUFFICIENT_LABEL],
+        {
+          action: "labeled",
+          label: { name: PROOF_OVERRIDE_LABEL },
+          sender: { login: "maintainer", type: "User" },
+        },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([]);
+    expect(calls.addLabels).toEqual([]);
     expect(calls.update).toEqual([]);
   });
 
@@ -727,17 +788,11 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.removeLabel.map((call) => call.name)).toEqual(
-      expect.arrayContaining([
-        candidateLabels.needsRealBehaviorProof,
-        candidateLabels.mockOnlyProof,
-      ]),
-    );
-    expect(calls.addLabels).toContainEqual(
-      expect.objectContaining({
-        labels: expect.arrayContaining([PROOF_SUPPLIED_LABEL]),
-      }),
-    );
+    expect(calls.removeLabel).toStrictEqual([
+      expectedRemoveLabel(123, candidateLabels.needsRealBehaviorProof),
+      expectedRemoveLabel(123, candidateLabels.mockOnlyProof),
+    ]);
+    expect(calls.addLabels).toStrictEqual([expectedAddLabels(123, [PROOF_SUPPLIED_LABEL])]);
   });
 
   it.each(["edited", "synchronize"])(
@@ -761,11 +816,78 @@ describe("barnacle-auto-response", () => {
         },
       });
 
-      expect(calls.removeLabel).toContainEqual(
-        expect.objectContaining({ name: PROOF_SUFFICIENT_LABEL }),
-      );
+      expect(calls.removeLabel).toEqual([expectedRemoveLabel(123, PROOF_SUFFICIENT_LABEL)]);
     },
   );
+
+  it("preserves sufficient proof on synchronize when ClawSweeper passed the exact head", async () => {
+    const headSha = "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f";
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")], {
+      comments: [
+        {
+          user: {
+            login: "clawsweeper[bot]",
+            type: "Bot",
+          },
+          performed_via_github_app: {
+            slug: "clawsweeper",
+          },
+          body: `<!-- clawsweeper-verdict:pass item=123 sha=${headSha} confidence=high -->`,
+        },
+      ],
+    });
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          body: blankTemplateBody,
+          head: { sha: headSha },
+        },
+        [PROOF_SUFFICIENT_LABEL],
+        { action: "synchronize" },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).not.toContainEqual(
+      expect.objectContaining({ name: PROOF_SUFFICIENT_LABEL }),
+    );
+  });
+
+  it("removes sufficient proof on synchronize when the matching marker is forged", async () => {
+    const headSha = "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f";
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")], {
+      comments: [
+        {
+          user: {
+            login: "external-contributor",
+            type: "User",
+          },
+          body: `<!-- clawsweeper-verdict:pass item=123 sha=${headSha} confidence=high -->`,
+        },
+      ],
+    });
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          body: blankTemplateBody,
+          head: { sha: headSha },
+        },
+        [PROOF_SUFFICIENT_LABEL],
+        { action: "synchronize" },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([expectedRemoveLabel(123, PROOF_SUFFICIENT_LABEL)]);
+  });
 
   it("preserves ClawSweeper's sufficient proof label on ordinary label events", async () => {
     const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
@@ -790,9 +912,45 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.removeLabel).not.toContainEqual(
-      expect.objectContaining({ name: PROOF_SUFFICIENT_LABEL }),
-    );
+    expect(calls.removeLabel).toEqual([]);
+  });
+
+  it("preserves sufficient proof on unrelated label events even without body proof", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext({}, [PROOF_SUFFICIENT_LABEL], {
+        action: "labeled",
+        label: { name: "status: ready for maintainer look" },
+        sender: { login: "openclaw-clawsweeper[bot]", type: "Bot" },
+      }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([]);
+  });
+
+  it("does not let Barnacle veto ClawSweeper's sufficient proof label add", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext({}, [PROOF_SUFFICIENT_LABEL], {
+        action: "labeled",
+        label: { name: PROOF_SUFFICIENT_LABEL },
+        sender: { login: "openclaw-clawsweeper[bot]", type: "Bot" },
+      }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([]);
+    expect(calls.addLabels).toEqual([]);
+    expect(calls.update).toEqual([]);
   });
 
   it("actions manually applied candidate labels", async () => {
@@ -810,12 +968,10 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.createComment).toContainEqual(
-      expect.objectContaining({
-        body: expect.stringContaining("ClawHub"),
-      }),
-    );
-    expect(calls.update).toContainEqual(expect.objectContaining({ state: "closed" }));
+    expect(calls.createComment).toHaveLength(1);
+    expect(calls.createComment[0]?.issue_number).toBe(123);
+    expect(calls.createComment[0]?.body).toContain("ClawHub");
+    expect(calls.update).toStrictEqual([expectedIssueUpdate(123, "closed")]);
   });
 
   it("closes manually labeled BlueBubbles requests with imsg migration guidance", async () => {
@@ -833,12 +989,10 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.createComment).toContainEqual(
-      expect.objectContaining({
-        body: expect.stringContaining("/channels/imessage"),
-      }),
-    );
-    expect(calls.update).toContainEqual(expect.objectContaining({ state: "closed" }));
+    expect(calls.createComment).toHaveLength(1);
+    expect(calls.createComment[0]?.issue_number).toBe(456);
+    expect(calls.createComment[0]?.body).toContain("/channels/imessage");
+    expect(calls.update).toStrictEqual([expectedIssueUpdate(456, "closed")]);
   });
 
   it("keeps bot-applied candidate labels passive", async () => {
@@ -856,8 +1010,8 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.createComment).toEqual([]);
-    expect(calls.update).toEqual([]);
+    expect(calls.createComment).toStrictEqual([]);
+    expect(calls.update).toStrictEqual([]);
   });
 
   it("actions existing candidate labels when a maintainer adds trigger-response", async () => {
@@ -875,12 +1029,10 @@ describe("barnacle-auto-response", () => {
       },
     });
 
-    expect(calls.removeLabel).toContainEqual(expect.objectContaining({ name: "trigger-response" }));
-    expect(calls.createComment).toContainEqual(
-      expect.objectContaining({
-        body: expect.stringContaining("does not include real behavior proof"),
-      }),
-    );
-    expect(calls.update).toContainEqual(expect.objectContaining({ state: "closed" }));
+    expect(calls.removeLabel).toStrictEqual([expectedRemoveLabel(123, "trigger-response")]);
+    expect(calls.createComment).toHaveLength(1);
+    expect(calls.createComment[0]?.issue_number).toBe(123);
+    expect(calls.createComment[0]?.body).toContain("does not include real behavior proof");
+    expect(calls.update).toStrictEqual([expectedIssueUpdate(123, "closed")]);
   });
 });
