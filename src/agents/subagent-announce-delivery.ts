@@ -901,7 +901,7 @@ export async function deliverSubagentAnnouncement(params: {
   });
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides?: Partial<SubagentAnnounceDeliveryDeps> & {
       callGateway?: typeof callGateway;
@@ -930,3 +930,4 @@ export const __testing = {
       : defaultSubagentAnnounceDeliveryDeps;
   },
 };
+export { testing as __testing };

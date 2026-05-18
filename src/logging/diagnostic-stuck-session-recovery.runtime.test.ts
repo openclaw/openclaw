@@ -61,12 +61,12 @@ vi.mock("./diagnostic-runtime.js", () => ({
 }));
 
 import {
-  __testing,
+  testing,
   recoverStuckDiagnosticSession,
 } from "./diagnostic-stuck-session-recovery.runtime.js";
 
 function resetMocks() {
-  __testing.resetRecoveriesInFlight();
+  testing.resetRecoveriesInFlight();
   mocks.abortEmbeddedPiRun.mockReset();
   mocks.forceClearEmbeddedPiRun.mockReset();
   mocks.isEmbeddedPiRunActive.mockReset();

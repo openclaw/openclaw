@@ -875,7 +875,7 @@ async function verifyCodexSubagentProbe(params: {
     });
   });
   try {
-    const { __testing: subagentSpawnTesting, spawnSubagentDirect } =
+    const { testing: subagentSpawnTesting, spawnSubagentDirect } =
       await import("../agents/subagent-spawn.js");
     const noOpContextEngine: ContextEngine = {
       info: { id: "codex-harness-subagent-smoke", name: "Codex harness subagent smoke" },
@@ -952,7 +952,7 @@ async function verifyCodexSubagentProbe(params: {
     });
     expect(childRow?.key).toBe(childSessionKey);
   } finally {
-    const { __testing: subagentSpawnTesting } = await import("../agents/subagent-spawn.js");
+    const { testing: subagentSpawnTesting } = await import("../agents/subagent-spawn.js");
     subagentSpawnTesting.setDepsForTest();
     unsubscribe();
   }

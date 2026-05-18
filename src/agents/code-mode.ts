@@ -928,7 +928,7 @@ export function addClientToolsToCodeModeCatalog(params: {
   });
 }
 
-export const __testing = {
+export const testing = {
   activeRuns,
   resumingRunIds,
   codeModeWorkerUrl,
@@ -936,3 +936,4 @@ export const __testing = {
   resolveCodeModeConfig,
   getTypescriptRuntimePromise: () => typescriptRuntimePromise,
 };
+export { testing as __testing };
