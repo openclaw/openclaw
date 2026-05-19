@@ -86,6 +86,9 @@ export function createSerpApiScholarTool(api: OpenClawPluginApi, ctx?: SerpApiTo
       if (!query && !cites && !cluster) {
         throw new Error("serpapi_scholar: at least one of query, cites, or cluster is required");
       }
+      if (cluster && (query || cites)) {
+        throw new Error("serpapi_scholar: cluster cannot be used together with query or cites");
+      }
       const count = readNumberParam(args, "count", { integer: true }) ?? 5;
       const raw = await callSerpApi({
         cfg,

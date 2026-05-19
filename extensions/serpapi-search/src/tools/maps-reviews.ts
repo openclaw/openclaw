@@ -112,6 +112,13 @@ export function createSerpApiMapsReviewsTool(api: OpenClawPluginApi, ctx?: SerpA
       if (topicId && query) {
         throw new Error("serpapi_maps_reviews: topic_id and query are mutually exclusive");
       }
+      const nextPageToken = readStringParam(args, "next_page_token");
+      const num = readNumberParam(args, "num", { integer: true }) ?? undefined;
+      if (num !== undefined && !nextPageToken && !topicId && !query) {
+        throw new Error(
+          "serpapi_maps_reviews: num cannot be used on the initial page without next_page_token, topic_id, or query",
+        );
+      }
       const raw = await callSerpApi({
         cfg,
         engine: "google_maps_reviews",
@@ -123,8 +130,8 @@ export function createSerpApiMapsReviewsTool(api: OpenClawPluginApi, ctx?: SerpA
           sort_by: readStringParam(args, "sort_by") ?? undefined,
           topic_id: topicId ?? undefined,
           query: query ?? undefined,
-          num: readNumberParam(args, "num", { integer: true }) ?? undefined,
-          next_page_token: readStringParam(args, "next_page_token") ?? undefined,
+          num,
+          next_page_token: nextPageToken ?? undefined,
         },
         signal,
       });
