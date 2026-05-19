@@ -301,6 +301,31 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
+  it("rejects deprecated pi runtime package scopes even when declared", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {
+          "@mariozechner/pi-ai": "0.74.0",
+        },
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "oauth-runtime.js"),
+        'import { getOAuthApiKey } from "@mariozechner/pi-ai/oauth";\nexport { getOAuthApiKey };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root dist imports deprecated runtime package '@mariozechner/pi-ai' via: oauth-runtime.js. Rebuild so published artifacts use '@earendil-works/pi-ai'.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
   it("accepts optional or externalized runtime imports", () => {
     const packageRoot = makeInstalledPackageRoot();
 
