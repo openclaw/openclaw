@@ -27,6 +27,7 @@ const hoisted = vi.hoisted(() => {
     },
   };
   return {
+    closeActiveMemorySearchManager: vi.fn(async () => {}),
     sessionStore,
     updateSessionStore: vi.fn(
       async (_storePath: string, updater: (store: Record<string, unknown>) => void) => {
@@ -35,6 +36,10 @@ const hoisted = vi.hoisted(() => {
     ),
   };
 });
+
+vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
+  closeActiveMemorySearchManager: hoisted.closeActiveMemorySearchManager,
+}));
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
@@ -2809,6 +2814,37 @@ describe("active-memory plugin", () => {
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
     expectLinesNotToContain(infoLines, " cached ");
+  });
+
+  it("releases memory search managers after active-memory timeouts", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 1,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    runEmbeddedPiAgent.mockImplementationOnce(() => new Promise<never>(() => {}));
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? cleanup timeout", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:cleanup-timeout",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalledTimes(1);
+    });
+    expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalledWith({
+      cfg: configFile,
+      agentId: "main",
+    });
   });
 
   it("does not share cached recall results across session-id-only contexts", async () => {
