@@ -105,7 +105,16 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     writeErr: (str) => {
       process.stderr.write(formatHelpOutput(str));
     },
-    outputError: (str, write) => write(formatCliParseErrorOutput(str, { argv: process.argv })),
+    outputError: (str, write) =>
+      write(
+        formatCliParseErrorOutput(str, {
+          argv: process.argv,
+          // Surface every registered root + sub-CLI root name so the
+          // "Did you mean this?" suggester (#83999) can score the unknown
+          // command against the same catalog `openclaw --help` would list.
+          knownCommands: program.commands.map((cmd) => cmd.name()),
+        }),
+      ),
   });
 
   if (
