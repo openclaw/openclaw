@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -175,12 +176,12 @@ private fun V2SessionRow(
   Surface(onClick = onClick, color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
     Column {
       Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp).padding(vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(7.dp),
       ) {
         Surface(
-          modifier = Modifier.size(21.dp),
+          modifier = Modifier.size(30.dp),
           shape = CircleShape,
           color = Color.Transparent,
           border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
@@ -189,7 +190,7 @@ private fun V2SessionRow(
             Icon(
               imageVector = if (active) Icons.Default.StarBorder else Icons.Outlined.ChatBubbleOutline,
               contentDescription = null,
-              modifier = Modifier.size(10.dp),
+              modifier = Modifier.size(15.dp),
               tint = ClawTheme.colors.text,
             )
           }
@@ -232,7 +233,7 @@ private fun V2SessionPlainIconButton(
   contentDescription: String,
   onClick: () -> Unit,
 ) {
-  Surface(onClick = onClick, modifier = Modifier.size(30.dp), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+  Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Box(contentAlignment = Alignment.Center) {
       Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
     }
@@ -247,7 +248,7 @@ private fun V2SessionOutlineIconButton(
 ) {
   Surface(
     onClick = onClick,
-    modifier = Modifier.size(width = 34.dp, height = 26.dp),
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget),
     shape = RoundedCornerShape(7.dp),
     color = Color.Transparent,
     contentColor = ClawTheme.colors.text,

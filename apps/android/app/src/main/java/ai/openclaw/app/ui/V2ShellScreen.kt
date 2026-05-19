@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -193,12 +194,25 @@ private fun V2OverviewScreen(
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val models by viewModel.modelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
+  val agents by viewModel.gatewayAgents.collectAsState()
+  val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
+  val cronStatus by viewModel.cronStatus.collectAsState()
+  val usageSummary by viewModel.usageSummary.collectAsState()
+  val skillsSummary by viewModel.skillsSummary.collectAsState()
+  val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
+  val channelsSummary by viewModel.channelsSummary.collectAsState()
   val readyProviderCount = providers.count { modelProviderReady(it.status) }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
       viewModel.refreshChatSessions(limit = 20)
       viewModel.refreshModelCatalog()
+      viewModel.refreshAgents()
+      viewModel.refreshCronJobs()
+      viewModel.refreshUsage()
+      viewModel.refreshSkills()
+      viewModel.refreshNodesDevices()
+      viewModel.refreshChannels()
     }
   }
 
@@ -213,7 +227,7 @@ private fun V2OverviewScreen(
           ) {
             Text(
               text = "O P E N C L A W",
-              style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
+              style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp),
               color = ClawTheme.colors.text,
               modifier = Modifier.weight(1f),
             )
@@ -231,8 +245,8 @@ private fun V2OverviewScreen(
             rows =
               listOf(
                 V2ModuleRow("Chat", null, null, Icons.Outlined.ChatBubbleOutline, V2Tab.Chat),
-                V2ModuleRow("Sessions", null, null, Icons.Outlined.AccessTime, V2Tab.Sessions),
-                V2ModuleRow("Voice", null, null, Icons.Outlined.MicNone, V2Tab.Voice),
+                V2ModuleRow("Sessions", null, if (sessions.isEmpty()) "Empty" else "${sessions.size} recent", Icons.Outlined.AccessTime, V2Tab.Sessions),
+                V2ModuleRow("Voice", null, if (isConnected) "Ready" else "Offline", Icons.Outlined.MicNone, V2Tab.Voice),
                 V2ModuleRow(
                   title = "Providers & Models",
                   subtitle = null,
@@ -246,6 +260,13 @@ private fun V2OverviewScreen(
                   icon = Icons.Outlined.Inventory2,
                   tab = V2Tab.ProvidersModels,
                 ),
+                V2ModuleRow("Channels", null, channelsSummaryText(channelsSummary), Icons.Default.Notifications, V2Tab.Settings),
+                V2ModuleRow("Agents", null, if (agents.isEmpty()) "Load" else "${agents.size} ready", Icons.Default.Person, V2Tab.Settings),
+                V2ModuleRow("Approvals", null, approvalsSummary(pendingToolCalls.size), Icons.Default.Lock, V2Tab.Settings),
+                V2ModuleRow("Cron Jobs", null, cronJobsSummary(cronStatus.jobs), Icons.Outlined.AccessTime, V2Tab.Settings),
+                V2ModuleRow("Skills", null, skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, V2Tab.Settings),
+                V2ModuleRow("Nodes & Devices", null, nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, V2Tab.Settings),
+                V2ModuleRow("Usage", null, usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, V2Tab.Settings),
                 V2ModuleRow("Settings", null, null, Icons.Outlined.Settings, V2Tab.Settings),
               ),
             onSelectTab = onSelectTab,
@@ -273,7 +294,7 @@ private fun V2OverviewScreen(
           item {
             V2RecentSessionList(
               rows =
-                sessions.take(5).map { session ->
+                sessions.take(7).map { session ->
                   V2RecentSessionListItem(
                     key = session.key,
                     title = displaySessionTitle(session.displayName),
@@ -309,18 +330,18 @@ private fun V2OverviewChatButton(
 ) {
   Surface(
     onClick = onClick,
-    modifier = modifier.height(34.dp),
+    modifier = modifier.height(ClawTheme.spacing.touchTarget),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = ClawTheme.colors.primary,
     contentColor = ClawTheme.colors.primaryText,
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 13.dp),
+      modifier = Modifier.padding(horizontal = 18.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-      Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(14.dp))
-      Text(text = "Chat", style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp))
+      Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+      Text(text = "Chat", style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 22.sp))
     }
   }
 }
@@ -328,7 +349,7 @@ private fun V2OverviewChatButton(
 @Composable
 private fun V2OverviewAvatar(text: String) {
   Surface(
-    modifier = Modifier.size(28.dp),
+    modifier = Modifier.size(34.dp),
     shape = CircleShape,
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,
@@ -360,7 +381,7 @@ private fun V2ModuleList(
   rows: List<V2ModuleRow>,
   onSelectTab: (V2Tab) -> Unit,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 1.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
       rows.forEachIndexed { index, row ->
         V2ModuleListRow(row = row, onClick = { onSelectTab(row.tab) })
@@ -382,13 +403,14 @@ private fun V2ModuleListRow(
       modifier =
         Modifier
           .fillMaxWidth()
+          .heightIn(min = 50.dp)
           .clip(RoundedCornerShape(ClawTheme.radii.row))
           .clickable(onClick = onClick)
-          .padding(vertical = 4.dp),
+          .padding(horizontal = 2.dp, vertical = 5.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.text)
+      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(19.dp), tint = ClawTheme.colors.text)
       Text(
         text = row.title,
         style = ClawTheme.type.body,
@@ -398,7 +420,7 @@ private fun V2ModuleListRow(
         overflow = TextOverflow.Ellipsis,
       )
       row.metadata?.let {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
           Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(statusDotColor(it)))
           Text(text = it, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
         }
@@ -406,7 +428,7 @@ private fun V2ModuleListRow(
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open ${row.title}",
-        modifier = Modifier.size(14.dp),
+        modifier = Modifier.size(17.dp),
         tint = ClawTheme.colors.textMuted,
       )
     }
@@ -464,20 +486,21 @@ private fun V2RecentSessionRowContent(
       modifier =
         Modifier
           .fillMaxWidth()
+          .heightIn(min = 58.dp)
           .clip(RoundedCornerShape(ClawTheme.radii.row))
           .clickable(onClick = onClick)
-          .padding(vertical = 5.dp),
+          .padding(horizontal = 2.dp, vertical = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       Surface(
-        modifier = Modifier.size(24.dp),
+        modifier = Modifier.size(30.dp),
         shape = CircleShape,
         color = ClawTheme.colors.canvas,
         border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.text)
+          Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.text)
         }
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
@@ -794,13 +817,14 @@ private fun V2SettingsListRow(
     modifier =
       Modifier
         .fillMaxWidth()
+        .heightIn(min = 52.dp)
         .clip(RoundedCornerShape(ClawTheme.radii.row))
         .clickable(onClick = onClick)
-        .padding(horizontal = 10.dp, vertical = 5.dp),
+        .padding(horizontal = 10.dp, vertical = 6.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.text)
+    Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(19.dp), tint = ClawTheme.colors.text)
     Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
       Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
@@ -810,7 +834,7 @@ private fun V2SettingsListRow(
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open ${row.title}",
-        modifier = Modifier.size(14.dp),
+        modifier = Modifier.size(17.dp),
         tint = ClawTheme.colors.text,
       )
     }
@@ -819,7 +843,7 @@ private fun V2SettingsListRow(
 
 @Composable
 private fun V2SettingsSearchButton(onClick: () -> Unit) {
-  Surface(onClick = onClick, modifier = Modifier.size(30.dp), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+  Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Box(contentAlignment = Alignment.Center) {
       Icon(imageVector = Icons.Default.Search, contentDescription = "Search settings", modifier = Modifier.size(18.dp))
     }
@@ -832,7 +856,7 @@ private fun V2PlainIconButton(
   contentDescription: String,
   onClick: () -> Unit,
 ) {
-  Surface(onClick = onClick, modifier = Modifier.size(30.dp), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+  Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Box(contentAlignment = Alignment.Center) {
       Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
     }
