@@ -849,6 +849,13 @@ describe("config help copy quality", () => {
     expect(/cooldown|backoff|retry/i.test(authCooldowns)).toBe(true);
   });
 
+  it("documents host node home-relative denied path behavior", () => {
+    const deniedPaths = FIELD_HELP["tools.exec.deniedPaths"];
+    expect(deniedPaths).toContain("host=node");
+    expect(deniedPaths).toMatch(/~|HOME/);
+    expect(deniedPaths).toMatch(/fail closed|trusted HOME/i);
+  });
+
   it("documents agent compaction safeguards and memory flush behavior", () => {
     const mode = FIELD_HELP["agents.defaults.compaction.mode"];
     expect(mode.includes('"default"')).toBe(true);
