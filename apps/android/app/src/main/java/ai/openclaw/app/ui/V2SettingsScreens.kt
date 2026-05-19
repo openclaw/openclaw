@@ -36,6 +36,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -1067,7 +1068,12 @@ private fun V2SettingsTogglePanel(rows: List<V2SettingsToggleRow>) {
 @Composable
 private fun V2SettingsToggleListRow(row: V2SettingsToggleRow) {
   Row(
-    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 10.dp, vertical = 6.dp),
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .heightIn(min = 56.dp)
+        .clickable { row.onCheckedChange(!row.checked) }
+        .padding(horizontal = 10.dp, vertical = 6.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(9.dp),
   ) {
