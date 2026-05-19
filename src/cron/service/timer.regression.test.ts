@@ -37,15 +37,20 @@ import type {
   CronAgentExecutionStarted,
   CronJob,
 } from "../types.js";
-import { computeJobNextRunAtMs } from "./jobs.js";
-import { run as runManualCronJob } from "./ops.js";
-import { createCronServiceState, type CronEvent } from "./state.js";
 import {
-  DEFAULT_JOB_TIMEOUT_MS,
+  computeJobNextRunAtMs,
+  recomputeNextRunsForMaintenance,
+  resolveJobErrorBackoffUntilMs,
+} from "./jobs.js";
+import { run as runManualCronJob } from "./ops.js";
+import { type CronEvent, createCronServiceState } from "./state.js";
+import {
   applyJobResult,
+  DEFAULT_JOB_TIMEOUT_MS,
   executeJob,
   executeJobCore,
   executeJobCoreWithTimeout,
+  isRunnableJob,
   onTimer,
   runMissedJobs,
 } from "./timer.js";
@@ -332,7 +337,10 @@ describe("cron service timer regressions", () => {
     let now = scheduledAt;
     const runIsolatedAgentJob = vi
       .fn()
-      .mockResolvedValueOnce({ status: "error", error: "FailoverError: HTTP 529" })
+      .mockResolvedValueOnce({
+        status: "error",
+        error: "FailoverError: HTTP 529",
+      })
       .mockResolvedValueOnce({ status: "ok", summary: "done" });
     const state = createCronServiceState({
       cronEnabled: true,
@@ -504,7 +512,11 @@ describe("cron service timer regressions", () => {
       id: "recurring-rate-limit-retry",
       name: "Clawsweeper 6h closure report",
       scheduledAt,
-      schedule: { kind: "every", everyMs: everySixHoursMs, anchorMs: scheduledAt },
+      schedule: {
+        kind: "every",
+        everyMs: everySixHoursMs,
+        anchorMs: scheduledAt,
+      },
       payload: { kind: "agentTurn", message: "closure report" },
       state: { nextRunAtMs: scheduledAt },
     });
@@ -559,7 +571,11 @@ describe("cron service timer regressions", () => {
       id: "recurring-rate-limit-exhausted",
       name: "Clawsweeper 6h closure report",
       scheduledAt,
-      schedule: { kind: "every", everyMs: everySixHoursMs, anchorMs: scheduledAt },
+      schedule: {
+        kind: "every",
+        everyMs: everySixHoursMs,
+        anchorMs: scheduledAt,
+      },
       payload: { kind: "agentTurn", message: "closure report" },
       state: { nextRunAtMs: scheduledAt },
     });
@@ -606,7 +622,11 @@ describe("cron service timer regressions", () => {
       id: "recurring-rate-limit-edited",
       name: "edited recurring report",
       scheduledAt: retryStartedAt,
-      schedule: { kind: "every", everyMs: everyTwelveHoursMs, anchorMs: scheduledAt },
+      schedule: {
+        kind: "every",
+        everyMs: everyTwelveHoursMs,
+        anchorMs: scheduledAt,
+      },
       payload: { kind: "agentTurn", message: "closure report" },
       state: {
         nextRunAtMs: retryStartedAt,
@@ -915,7 +935,11 @@ describe("cron service timer regressions", () => {
         name: "abort timeout",
         scheduledAt,
         schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-        payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
+        payload: {
+          kind: "agentTurn",
+          message: "work",
+          timeoutSeconds: FAST_TIMEOUT_SECONDS,
+        },
         state: { nextRunAtMs: scheduledAt },
       });
       await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
@@ -1107,7 +1131,11 @@ describe("cron service timer regressions", () => {
         name: "timeout after lane start",
         scheduledAt,
         schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-        payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
+        payload: {
+          kind: "agentTurn",
+          message: "work",
+          timeoutSeconds: FAST_TIMEOUT_SECONDS,
+        },
         state: { nextRunAtMs: scheduledAt },
       });
       await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
@@ -1137,7 +1165,9 @@ describe("cron service timer regressions", () => {
               resolve();
               return;
             }
-            abortSignal.addEventListener("abort", () => resolve(), { once: true });
+            abortSignal.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
           });
           now += 5;
           return { status: "ok" as const, summary: "late" };
@@ -1177,7 +1207,11 @@ describe("cron service timer regressions", () => {
         name: "timeout side effects",
         scheduledAt,
         schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt },
-        payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
+        payload: {
+          kind: "agentTurn",
+          message: "work",
+          timeoutSeconds: FAST_TIMEOUT_SECONDS,
+        },
         state: { nextRunAtMs: scheduledAt },
       });
       await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
@@ -1224,7 +1258,11 @@ describe("cron service timer regressions", () => {
         name: "startup timeout",
         scheduledAt,
         schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-        payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
+        payload: {
+          kind: "agentTurn",
+          message: "work",
+          timeoutSeconds: FAST_TIMEOUT_SECONDS,
+        },
         state: { nextRunAtMs: scheduledAt },
       });
       await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
@@ -1702,7 +1740,10 @@ describe("cron service timer regressions", () => {
     };
     const runHeartbeatOnce = vi
       .fn<() => Promise<HeartbeatRunResult>>()
-      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY })
+      .mockResolvedValueOnce({
+        status: "skipped",
+        reason: HEARTBEAT_SKIP_LANES_BUSY,
+      })
       .mockResolvedValueOnce({ status: "ran", durationMs: 12 });
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
@@ -1819,7 +1860,11 @@ describe("cron service timer regressions", () => {
     vi.useRealTimers();
     const store = timerRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
-    const first = createDueIsolatedJob({ id: "parallel-first", nowMs: dueAt, nextRunAtMs: dueAt });
+    const first = createDueIsolatedJob({
+      id: "parallel-first",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
     const second = createDueIsolatedJob({
       id: "parallel-second",
       nowMs: dueAt,
@@ -3387,7 +3432,11 @@ describe("cron service timer regressions", () => {
       enabled: true,
       createdAtMs: lastScheduledRunMs - everyMs,
       updatedAtMs: lastScheduledRunMs,
-      schedule: { kind: "every", everyMs, anchorMs: lastScheduledRunMs - everyMs },
+      schedule: {
+        kind: "every",
+        everyMs,
+        anchorMs: lastScheduledRunMs - everyMs,
+      },
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "daily check-in" },
@@ -3424,7 +3473,11 @@ describe("cron service timer regressions", () => {
       enabled: true,
       createdAtMs: lastScheduledRunMs - everyMs,
       updatedAtMs: lastScheduledRunMs,
-      schedule: { kind: "every", everyMs, anchorMs: lastScheduledRunMs - everyMs },
+      schedule: {
+        kind: "every",
+        everyMs,
+        anchorMs: lastScheduledRunMs - everyMs,
+      },
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "daily check-in" },
@@ -3517,4 +3570,589 @@ describe("cron service timer regressions", () => {
       "cron: job run returned error status",
     );
   });
+
+  it("#83538: manual run with deleteAfterRun:true does NOT delete the job", () => {
+    const startedAt = Date.parse("2026-05-19T10:00:00.000Z");
+    const endedAt = startedAt + 100;
+    const log = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    } as never;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-83538-manual-no-delete.json",
+      log,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "manual-no-delete",
+      name: "one-shot reminder",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: startedAt },
+    });
+    job.deleteAfterRun = true;
+
+    const shouldDelete = applyJobResult(
+      state,
+      job,
+      { status: "ok", delivered: true, startedAt, endedAt },
+      { isManual: true },
+    );
+
+    expect(shouldDelete).toBe(false);
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.enabled).toBe(true);
+    expect(job.state.nextRunAtMs).toBeDefined();
+    expect((log as { info: ReturnType<typeof vi.fn> }).info).toHaveBeenCalledWith(
+      { jobId: "manual-no-delete", jobName: "one-shot reminder" },
+      "cron: skipping deleteAfterRun for manual run — job preserved for scheduled execution",
+    );
+  });
+
+  it("#83538: scheduled run with deleteAfterRun:true DOES delete the job", () => {
+    const startedAt = Date.parse("2026-05-19T10:00:00.000Z");
+    const endedAt = startedAt + 100;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-83538-scheduled-deletes.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "scheduled-deletes",
+      name: "one-shot reminder",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: startedAt },
+    });
+    job.deleteAfterRun = true;
+
+    const shouldDelete = applyJobResult(state, job, {
+      status: "ok",
+      delivered: true,
+      startedAt,
+      endedAt,
+    });
+
+    expect(shouldDelete).toBe(true);
+  });
+
+  it("#83538: manual run with deleteAfterRun:true and error status does NOT delete", () => {
+    const startedAt = Date.parse("2026-05-19T10:05:00.000Z");
+    const endedAt = startedAt + 50;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-83538-manual-error.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "manual-error-no-delete",
+      name: "one-shot reminder",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: startedAt },
+    });
+    job.deleteAfterRun = true;
+
+    const shouldDelete = applyJobResult(
+      state,
+      job,
+      { status: "error", error: "timeout", startedAt, endedAt },
+      { isManual: true },
+    );
+
+    expect(shouldDelete).toBe(false);
+  });
+
+  it("#83538: manual run with deleteAfterRun:false does NOT delete", () => {
+    const startedAt = Date.parse("2026-05-19T10:10:00.000Z");
+    const endedAt = startedAt + 75;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-83538-manual-no-flag.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "manual-no-flag",
+      name: "recurring job",
+      scheduledAt: startedAt,
+      schedule: {
+        kind: "every",
+        everyMs: 60_000,
+        anchorMs: startedAt - 60_000,
+      },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: startedAt },
+    });
+
+    const shouldDelete = applyJobResult(
+      state,
+      job,
+      { status: "ok", delivered: true, startedAt, endedAt },
+      { isManual: true },
+    );
+
+    expect(shouldDelete).toBe(false);
+  });
+
+  it("manual error run does not increment consecutiveErrors (#83933)", () => {
+    const startedAt = Date.parse("2026-05-20T10:00:00.000Z");
+    const endedAt = startedAt + 100;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-manual-error-83933.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "manual-error-83933",
+      name: "manual-error-83933",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "agentTurn", message: "test" },
+      state: { runningAtMs: startedAt, consecutiveErrors: 3 },
+    });
+
+    applyJobResult(
+      state,
+      job,
+      { status: "error", error: "manual failure", startedAt, endedAt },
+      { isManual: true },
+    );
+
+    expect(job.state.consecutiveErrors).toBe(3);
+  });
+
+  it("manual success run does not reset consecutiveErrors (#83933)", () => {
+    const startedAt = Date.parse("2026-05-20T10:05:00.000Z");
+    const endedAt = startedAt + 100;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-manual-success-83933.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "manual-success-83933",
+      name: "manual-success-83933",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "agentTurn", message: "test" },
+      state: { runningAtMs: startedAt, consecutiveErrors: 3 },
+    });
+
+    applyJobResult(state, job, { status: "ok", startedAt, endedAt }, { isManual: true });
+
+    expect(job.state.consecutiveErrors).toBe(3);
+  });
+
+  it("#83933: manual terminal status does not block restart catch-up for at-job", () => {
+    const startedAt = Date.parse("2026-05-20T10:10:00.000Z");
+    const endedAt = startedAt + 100;
+    const nextRunAtMs = startedAt + 60_000;
+    const state = createCronServiceState({
+      storePath: "/tmp/cron-83933-manual-catchup.json",
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job: CronJob = {
+      id: "manual-catchup-83933",
+      name: "manual-catchup-83933",
+      enabled: true,
+      createdAtMs: startedAt - 120_000,
+      updatedAtMs: startedAt - 120_000,
+      schedule: { kind: "at", at: new Date(nextRunAtMs).toISOString() },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      deleteAfterRun: true,
+      payload: { kind: "systemEvent", text: "reminder" },
+      state: { nextRunAtMs },
+    };
+
+    applyJobResult(state, job, { status: "ok", startedAt, endedAt }, { isManual: true });
+
+    expect(job.state.lastRunWasManual).toBe(true);
+    expect(job.enabled).toBe(true);
+    expect(job.state.nextRunAtMs).toBe(nextRunAtMs);
+
+    const runnable = isRunnableJob({
+      state,
+      job,
+      nowMs: nextRunAtMs + 1_000,
+      skipAtIfAlreadyRan: true,
+    });
+    expect(runnable).toBe(true);
+  });
+});
+
+it("#83933: manual error run does NOT trigger failure alert", () => {
+  const startedAt = Date.parse("2026-05-21T10:00:00.000Z");
+  const endedAt = startedAt + 100;
+  const sendCronFailureAlert = vi.fn(async () => undefined);
+  const log = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  } as never;
+  const state = createCronServiceState({
+    cronEnabled: true,
+    storePath: "/tmp/cron-83933-manual-no-alert.json",
+    log,
+    nowMs: () => endedAt,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    sendCronFailureAlert,
+    cronConfig: {
+      failureAlert: {
+        enabled: true,
+        after: 1,
+      },
+    },
+  });
+  const job = createIsolatedRegressionJob({
+    id: "manual-no-alert",
+    name: "alert test job",
+    scheduledAt: startedAt,
+    schedule: { kind: "every", everyMs: 60_000 },
+    payload: { kind: "agentTurn", message: "ping" },
+    state: { nextRunAtMs: startedAt },
+  });
+
+  // Manual error run — should NOT trigger alert
+  applyJobResult(
+    state,
+    job,
+    { status: "error", error: "test error", startedAt, endedAt },
+    { isManual: true },
+  );
+
+  expect(sendCronFailureAlert).not.toHaveBeenCalled();
+  expect(job.state.consecutiveErrors ?? 0).toBe(0);
+
+  // Scheduled error run — SHOULD trigger alert (after: 1)
+  applyJobResult(state, job, {
+    status: "error",
+    error: "test error",
+    startedAt,
+    endedAt,
+  });
+
+  expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+  expect(job.state.consecutiveErrors).toBe(1);
+});
+
+it("#83933: manual at-job error does NOT disable job or clear nextRunAtMs", () => {
+  const startedAt = Date.parse("2026-05-21T10:00:00.000Z");
+  const endedAt = startedAt + 100;
+  const scheduledAt = startedAt + 300_000; // 5 minutes from now
+  const log = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  } as never;
+  const state = createCronServiceState({
+    cronEnabled: true,
+    storePath: "/tmp/cron-83933-manual-atjob-error.json",
+    log,
+    nowMs: () => endedAt,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: createDefaultIsolatedRunner(),
+  });
+  const job = createIsolatedRegressionJob({
+    id: "manual-atjob-error",
+    name: "one-shot reminder",
+    scheduledAt,
+    schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+    payload: { kind: "agentTurn", message: "ping" },
+    state: { nextRunAtMs: scheduledAt },
+  });
+  job.deleteAfterRun = true;
+
+  // Manual error on at-job — must NOT disable or clear nextRunAtMs
+  const shouldDelete = applyJobResult(
+    state,
+    job,
+    { status: "error", error: "temporary timeout", startedAt, endedAt },
+    { isManual: true },
+  );
+
+  expect(shouldDelete).toBe(false);
+  expect(job.enabled).toBe(true);
+  expect(job.state.nextRunAtMs).toBe(scheduledAt);
+  expect(job.state.consecutiveErrors ?? 0).toBe(0);
+  expect((log as { info: ReturnType<typeof vi.fn> }).info).toHaveBeenCalledWith(
+    { jobId: "manual-atjob-error", jobName: "one-shot reminder" },
+    "cron: skipping at-job error handling for manual run — job preserved for scheduled execution",
+  );
+});
+
+it("#83933: manual success does NOT clear lastFailureAlertAtMs cooldown", () => {
+  const startedAt = Date.parse("2026-05-21T10:00:00.000Z");
+  const endedAt = startedAt + 100;
+  const cooldownMs = startedAt - 30_000; // set 30s ago
+  const log = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  } as never;
+  const state = createCronServiceState({
+    cronEnabled: true,
+    storePath: "/tmp/cron-83933-manual-cooldown.json",
+    log,
+    nowMs: () => endedAt,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: createDefaultIsolatedRunner(),
+  });
+  const job = createIsolatedRegressionJob({
+    id: "manual-cooldown-test",
+    name: "daily report",
+    scheduledAt: startedAt,
+    schedule: { kind: "every", everyMs: 60_000 },
+    payload: { kind: "agentTurn", message: "report" },
+    state: {
+      nextRunAtMs: startedAt + 60_000,
+      consecutiveErrors: 3,
+      lastFailureAlertAtMs: cooldownMs,
+    },
+  });
+
+  // Manual success — must NOT clear lastFailureAlertAtMs or reset counters
+  applyJobResult(
+    state,
+    job,
+    { status: "ok", delivered: true, startedAt, endedAt },
+    { isManual: true },
+  );
+
+  expect(job.state.consecutiveErrors).toBe(3);
+  expect(job.state.lastFailureAlertAtMs).toBe(cooldownMs);
+});
+
+it("#83933: scheduled success DOES clear lastFailureAlertAtMs (control)", () => {
+  const startedAt = Date.parse("2026-05-21T10:00:00.000Z");
+  const endedAt = startedAt + 100;
+  const cooldownMs = startedAt - 30_000;
+  const log = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  } as never;
+  const state = createCronServiceState({
+    cronEnabled: true,
+    storePath: "/tmp/cron-83933-scheduled-cooldown.json",
+    log,
+    nowMs: () => endedAt,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: createDefaultIsolatedRunner(),
+  });
+  const job = createIsolatedRegressionJob({
+    id: "scheduled-cooldown-test",
+    name: "daily report",
+    scheduledAt: startedAt,
+    schedule: { kind: "every", everyMs: 60_000 },
+    payload: { kind: "agentTurn", message: "report" },
+    state: {
+      nextRunAtMs: startedAt + 60_000,
+      consecutiveErrors: 3,
+      lastFailureAlertAtMs: cooldownMs,
+    },
+  });
+
+  // Scheduled success — SHOULD clear lastFailureAlertAtMs and reset counters
+  applyJobResult(state, job, {
+    status: "ok",
+    delivered: true,
+    startedAt,
+    endedAt,
+  });
+
+  expect(job.state.consecutiveErrors).toBe(0);
+  expect(job.state.lastFailureAlertAtMs).toBeUndefined();
+});
+
+it("#83933: manual error on every-job does NOT rewrite nextRunAtMs", () => {
+  const startedAt = Date.parse("2026-05-21T10:00:00.000Z");
+  const endedAt = startedAt + 100;
+  const originalNextRun = startedAt + 60_000;
+  const log = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  } as never;
+  const state = createCronServiceState({
+    cronEnabled: true,
+    storePath: "/tmp/cron-83933-manual-every-error.json",
+    log,
+    nowMs: () => endedAt,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: createDefaultIsolatedRunner(),
+  });
+  const job = createIsolatedRegressionJob({
+    id: "manual-every-error",
+    name: "recurring report",
+    scheduledAt: startedAt,
+    schedule: { kind: "every", everyMs: 60_000 },
+    payload: { kind: "agentTurn", message: "report" },
+    state: { nextRunAtMs: originalNextRun, consecutiveErrors: 2 },
+  });
+
+  applyJobResult(
+    state,
+    job,
+    { status: "error", error: "timeout", startedAt, endedAt },
+    { isManual: true },
+  );
+
+  expect(job.state.nextRunAtMs).toBe(originalNextRun);
+  expect(job.state.consecutiveErrors).toBe(2);
+  expect(job.enabled).toBe(true);
+  expect((log as { info: ReturnType<typeof vi.fn> }).info).toHaveBeenCalledWith(
+    { jobId: "manual-every-error", jobName: "recurring report" },
+    "cron: skipping recurring-job error backoff for manual run — nextRunAtMs preserved",
+  );
+});
+
+it("#83933: scheduled error on every-job DOES apply backoff (control)", () => {
+  const startedAt = Date.parse("2026-05-21T10:00:00.000Z");
+  const endedAt = startedAt + 100;
+  const originalNextRun = startedAt + 60_000;
+  const log = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  } as never;
+  const state = createCronServiceState({
+    cronEnabled: true,
+    storePath: "/tmp/cron-83933-scheduled-every-error.json",
+    log,
+    nowMs: () => endedAt,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: createDefaultIsolatedRunner(),
+  });
+  const job = createIsolatedRegressionJob({
+    id: "scheduled-every-error",
+    name: "recurring report",
+    scheduledAt: startedAt,
+    schedule: { kind: "every", everyMs: 60_000 },
+    payload: { kind: "agentTurn", message: "report" },
+    state: { nextRunAtMs: originalNextRun, consecutiveErrors: 2 },
+  });
+
+  applyJobResult(state, job, {
+    status: "error",
+    error: "timeout",
+    startedAt,
+    endedAt,
+  });
+
+  // Scheduled error should apply backoff — nextRunAtMs should change
+  expect(job.state.nextRunAtMs).not.toBe(originalNextRun);
+  expect(job.state.consecutiveErrors).toBe(3);
+});
+
+it("#83933: manual error on recurring job does not block scheduled fire via backoff", () => {
+  const startedAt = Date.parse("2026-06-01T09:00:00.000Z");
+  const endedAt = startedAt + 100;
+  // everyMs shorter than the first backoff step (30 s) so a backoff floor, if
+  // applied, would visibly push the next fire past the natural cadence slot.
+  const everyMs = 5_000;
+  const naturalNextMs = startedAt + everyMs;
+
+  const makeJob = (id: string): CronJob =>
+    createIsolatedRegressionJob({
+      id,
+      name: id,
+      scheduledAt: startedAt,
+      schedule: { kind: "every", everyMs, anchorMs: startedAt },
+      payload: { kind: "agentTurn", message: "manual run" },
+      state: { nextRunAtMs: startedAt },
+    });
+
+  const manualJob = makeJob("manual-error-no-backoff");
+  const scheduledJob = makeJob("scheduled-error-backoff");
+  const state = createRunningCronServiceState({
+    storePath: "/tmp/cron-manual-error-no-backoff.json",
+    log: noopLogger,
+    nowMs: () => endedAt,
+    jobs: [manualJob, scheduledJob],
+  });
+
+  applyJobResult(
+    state,
+    manualJob,
+    { status: "error", error: "boom", startedAt, endedAt },
+    { isManual: true },
+  );
+
+  expect(manualJob.state.lastRunWasManual).toBe(true);
+  expect(manualJob.state.lastRunStatus).toBe("error");
+  // The manual error must not open a backoff window for the timer gate.
+  expect(resolveJobErrorBackoffUntilMs(manualJob)).toBeUndefined();
+  // Manual path preserves the original nextRunAtMs — it must not be pushed
+  // forward to a backoff floor.
+  expect(manualJob.state.nextRunAtMs).toBe(startedAt);
+
+  // isRunnableJob should allow the preserved scheduled fire.
+  const runnable = isRunnableJob({
+    state,
+    job: manualJob,
+    nowMs: startedAt + 1_000,
+  });
+  expect(runnable).toBe(true);
+
+  // Maintenance recompute of a cleared slot must also avoid the backoff floor.
+  manualJob.state.nextRunAtMs = undefined;
+  recomputeNextRunsForMaintenance(state, { nowMs: endedAt });
+  expect(manualJob.state.nextRunAtMs).toBe(naturalNextMs);
+
+  // Control: a timer-triggered error on the same schedule still backs off.
+  applyJobResult(state, scheduledJob, { status: "error", error: "boom", startedAt, endedAt });
+
+  expect(scheduledJob.state.lastRunWasManual).toBe(false);
+  const backoffUntilMs = resolveJobErrorBackoffUntilMs(scheduledJob);
+  expect(backoffUntilMs).toBeDefined();
+  expect(scheduledJob.state.nextRunAtMs).toBe(backoffUntilMs);
+  expect(scheduledJob.state.nextRunAtMs!).toBeGreaterThan(naturalNextMs);
 });
