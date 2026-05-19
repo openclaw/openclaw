@@ -59,6 +59,8 @@ export class CodexAppInventoryCache {
   private readonly ttlMs: number;
   private readonly entries = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, Promise<CodexAppInventorySnapshot>>();
+  // Per-key refresh generation. Each refresh attempt claims the next token so
+  // an older request that finishes late cannot overwrite a newer snapshot.
   private readonly refreshTokens = new Map<string, number>();
   private readonly diagnostics = new Map<string, CodexAppInventoryCacheDiagnostic>();
   private revision = 0;
@@ -202,6 +204,8 @@ export class CodexAppInventoryCache {
         expiresAtMs: nowMs + this.ttlMs,
         revision: this.revision,
       };
+      // Only publish this snapshot if no newer refresh started for the same key
+      // while this request was in flight.
       if (this.refreshTokens.get(params.key) === refreshToken) {
         this.entries.set(params.key, { ...snapshot, invalidated: false });
         this.diagnostics.delete(params.key);

@@ -320,7 +320,6 @@ export function buildHelp(): string {
     "- /codex account",
     "- /codex mcp",
     "- /codex skills",
-    "- /codex plugins [list|enable|disable]",
   ].join("\n");
 }
 
