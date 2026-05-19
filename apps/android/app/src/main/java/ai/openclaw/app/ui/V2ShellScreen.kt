@@ -7,10 +7,8 @@ import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.providerDisplayName
 import ai.openclaw.app.ui.chat.V2ChatScreen
-import ai.openclaw.app.ui.design.ClawAvatarMark
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawEmptyState
-import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
@@ -18,6 +16,7 @@ import ai.openclaw.app.ui.design.ClawTheme
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -172,23 +171,23 @@ private fun V2OverviewScreen(
     }
   }
 
-  ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 24.dp)) {
+  ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 20.dp)) {
     Box(modifier = Modifier.fillMaxSize()) {
-      LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 96.dp)) {
+      LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 82.dp)) {
         item {
           Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
           ) {
             Text(
               text = "O P E N C L A W",
-              style = ClawTheme.type.title.copy(fontSize = 13.2.sp, lineHeight = 17.sp),
+              style = ClawTheme.type.title.copy(fontSize = 11.4.sp, lineHeight = 14.sp),
               color = ClawTheme.colors.text,
               modifier = Modifier.weight(1f),
             )
             V2PlainIconButton(icon = Icons.Default.Search, contentDescription = "Search", onClick = {})
-            ClawAvatarMark(text = "OC")
+            V2OverviewAvatar(text = "OC")
           }
         }
 
@@ -259,7 +258,7 @@ private fun V2OverviewScreen(
           }
         }
       }
-      V2OverviewChatButton(onClick = { onSelectTab(V2Tab.Chat) }, modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 10.dp))
+      V2OverviewChatButton(onClick = { onSelectTab(V2Tab.Chat) }, modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 8.dp))
     }
   }
 }
@@ -279,18 +278,33 @@ private fun V2OverviewChatButton(
 ) {
   Surface(
     onClick = onClick,
-    modifier = modifier.height(42.dp),
+    modifier = modifier.height(34.dp),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = ClawTheme.colors.primary,
     contentColor = ClawTheme.colors.primaryText,
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 15.dp),
+      modifier = Modifier.padding(horizontal = 13.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-      Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(16.dp))
-      Text(text = "Chat", style = ClawTheme.type.title.copy(fontSize = 12.8.sp, lineHeight = 16.sp))
+      Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(14.dp))
+      Text(text = "Chat", style = ClawTheme.type.title.copy(fontSize = 10.8.sp, lineHeight = 13.sp))
+    }
+  }
+}
+
+@Composable
+private fun V2OverviewAvatar(text: String) {
+  Surface(
+    modifier = Modifier.size(28.dp),
+    shape = CircleShape,
+    color = ClawTheme.colors.surfaceRaised,
+    contentColor = ClawTheme.colors.text,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      Text(text = text.take(2).uppercase(), style = ClawTheme.type.label.copy(fontSize = 9.4.sp, lineHeight = 12.sp))
     }
   }
 }
@@ -305,7 +319,7 @@ private fun V2SectionLabel(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.SpaceBetween,
   ) {
-    Text(text = title.uppercase(), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+    Text(text = title.uppercase(), style = ClawTheme.type.caption.copy(fontSize = 8.6.sp, lineHeight = 11.sp), color = ClawTheme.colors.textMuted)
     action?.invoke()
   }
 }
@@ -315,7 +329,7 @@ private fun V2ModuleList(
   rows: List<V2ModuleRow>,
   onSelectTab: (V2Tab) -> Unit,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 1.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
       rows.forEachIndexed { index, row ->
         V2ModuleListRow(row = row, onClick = { onSelectTab(row.tab) })
@@ -332,30 +346,40 @@ private fun V2ModuleListRow(
   row: V2ModuleRow,
   onClick: () -> Unit,
 ) {
-  ClawListItem(
-    title = row.title,
-    subtitle = row.subtitle,
-    leading = {
-      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = ClawTheme.colors.text)
-    },
-    trailing = {
-      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        row.metadata?.let {
-          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(statusDotColor(it)))
-            Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
-          }
+  Surface(color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .clip(RoundedCornerShape(ClawTheme.radii.row))
+          .clickable(onClick = onClick)
+          .padding(vertical = 4.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.text)
+      Text(
+        text = row.title,
+        style = ClawTheme.type.body.copy(fontSize = 9.4.sp, lineHeight = 12.sp),
+        color = ClawTheme.colors.text,
+        modifier = Modifier.weight(1f),
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+      row.metadata?.let {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+          Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(statusDotColor(it)))
+          Text(text = it, style = ClawTheme.type.caption.copy(fontSize = 8.1.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
         }
-        Icon(
-          imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-          contentDescription = "Open ${row.title}",
-          modifier = Modifier.size(18.dp),
-          tint = ClawTheme.colors.textMuted,
-        )
       }
-    },
-    onClick = onClick,
-  )
+      Icon(
+        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+        contentDescription = "Open ${row.title}",
+        modifier = Modifier.size(14.dp),
+        tint = ClawTheme.colors.textMuted,
+      )
+    }
+  }
 }
 
 @Composable
@@ -380,7 +404,7 @@ private fun V2RecentSessionList(
   rows: List<V2RecentSessionListItem>,
   onOpen: (String) -> Unit,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 1.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
     Column {
       rows.forEachIndexed { index, row ->
         V2RecentSessionRowContent(
@@ -404,31 +428,36 @@ private fun V2RecentSessionRowContent(
   metadata: String,
   onClick: () -> Unit,
 ) {
-  Surface(onClick = onClick, color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
+  Surface(color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .clip(RoundedCornerShape(ClawTheme.radii.row))
+          .clickable(onClick = onClick)
+          .padding(vertical = 5.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       Surface(
-        modifier = Modifier.size(31.dp),
+        modifier = Modifier.size(24.dp),
         shape = CircleShape,
         color = ClawTheme.colors.canvas,
         border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.text)
+          Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.text)
         }
       }
-      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
-        Text(text = subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1)
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Text(text = title, style = ClawTheme.type.body.copy(fontSize = 9.3.sp, lineHeight = 12.sp), color = ClawTheme.colors.text, maxLines = 1)
+        Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 7.9.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textSubtle, maxLines = 1)
       }
-      Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 8.1.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textMuted)
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open session",
-        modifier = Modifier.size(18.dp),
+        modifier = Modifier.size(14.dp),
         tint = ClawTheme.colors.textMuted,
       )
     }
