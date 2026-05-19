@@ -297,6 +297,14 @@ class NodeRuntime(
 
   private val _seamColorArgb = MutableStateFlow(DEFAULT_SEAM_COLOR_ARGB)
   val seamColorArgb: StateFlow<Long> = _seamColorArgb.asStateFlow()
+  private val _modelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
+  val modelCatalog: StateFlow<List<GatewayModelSummary>> = _modelCatalog.asStateFlow()
+  private val _modelAuthProviders = MutableStateFlow<List<GatewayModelProviderSummary>>(emptyList())
+  val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = _modelAuthProviders.asStateFlow()
+  private val _modelCatalogRefreshing = MutableStateFlow(false)
+  val modelCatalogRefreshing: StateFlow<Boolean> = _modelCatalogRefreshing.asStateFlow()
+  private val _modelCatalogErrorText = MutableStateFlow<String?>(null)
+  val modelCatalogErrorText: StateFlow<String?> = _modelCatalogErrorText.asStateFlow()
 
   private val _isForeground = MutableStateFlow(true)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
@@ -338,6 +346,8 @@ class NodeRuntime(
         _serverName.value = null
         _remoteAddress.value = null
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
+        _modelCatalog.value = emptyList()
+        _modelAuthProviders.value = emptyList()
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
         updateStatus()
@@ -603,6 +613,13 @@ class NodeRuntime(
     scope.launch {
       refreshBrandingFromGateway()
       refreshAgentsFromGateway()
+      refreshModelCatalogFromGateway()
+    }
+  }
+
+  fun refreshModelCatalog() {
+    scope.launch {
+      refreshModelCatalogFromGateway()
     }
   }
 
@@ -1525,6 +1542,64 @@ class NodeRuntime(
     }
   }
 
+  private suspend fun refreshModelCatalogFromGateway() {
+    _modelCatalogRefreshing.value = true
+    _modelCatalogErrorText.value = null
+    if (!operatorConnected) {
+      _modelCatalog.value = emptyList()
+      _modelAuthProviders.value = emptyList()
+      _modelCatalogRefreshing.value = false
+      return
+    }
+    try {
+      val modelsRes = operatorSession.request("models.list", """{"view":"all"}""")
+      val modelsRoot = json.parseToJsonElement(modelsRes).asObjectOrNull()
+      _modelCatalog.value = parseGatewayModels(modelsRoot?.get("models") as? JsonArray)
+
+      val authRes = operatorSession.request("models.authStatus", "{}")
+      val authRoot = json.parseToJsonElement(authRes).asObjectOrNull()
+      _modelAuthProviders.value = parseGatewayModelProviders(authRoot?.get("providers") as? JsonArray)
+    } catch (_: Throwable) {
+      _modelCatalogErrorText.value = "Could not load provider catalog."
+    } finally {
+      _modelCatalogRefreshing.value = false
+    }
+  }
+
+  private fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
+    models
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val id = obj["id"].asStringOrNull()?.trim().orEmpty()
+        if (id.isEmpty()) return@mapNotNull null
+        val provider = obj["provider"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id.substringBefore('/', "default")
+        val inputTypes = (obj["input"] as? JsonArray)?.mapNotNull { it.asStringOrNull()?.trim()?.lowercase() }?.toSet().orEmpty()
+        GatewayModelSummary(
+          id = id,
+          name = obj["name"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id,
+          provider = provider,
+          supportsVision = "image" in inputTypes,
+          supportsAudio = "audio" in inputTypes,
+          supportsDocuments = "document" in inputTypes,
+          supportsReasoning = obj["reasoning"].toString().trim() == "true",
+          contextTokens = obj["contextWindow"].toString().toLongOrNull() ?: obj["contextTokens"].toString().toLongOrNull(),
+        )
+      }.orEmpty()
+
+  private fun parseGatewayModelProviders(providers: JsonArray?): List<GatewayModelProviderSummary> =
+    providers
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val id = obj["provider"].asStringOrNull()?.trim().orEmpty()
+        if (id.isEmpty()) return@mapNotNull null
+        GatewayModelProviderSummary(
+          id = id,
+          displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: providerDisplayName(id),
+          status = obj["status"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "unknown",
+          profileCount = ((obj["profiles"] as? JsonArray)?.size ?: 0),
+        )
+      }.orEmpty()
+
   private fun updateHomeCanvasState() {
     val payload =
       try {
@@ -1746,6 +1821,41 @@ private data class GatewayAgentSummary(
   val name: String?,
   val emoji: String?,
 )
+
+data class GatewayModelSummary(
+  val id: String,
+  val name: String,
+  val provider: String,
+  val supportsVision: Boolean,
+  val supportsAudio: Boolean,
+  val supportsDocuments: Boolean,
+  val supportsReasoning: Boolean,
+  val contextTokens: Long?,
+)
+
+data class GatewayModelProviderSummary(
+  val id: String,
+  val displayName: String,
+  val status: String,
+  val profileCount: Int,
+)
+
+fun providerDisplayName(provider: String): String =
+  when (provider.trim().lowercase()) {
+    "openai" -> "OpenAI"
+    "openrouter" -> "OpenRouter"
+    "openai-codex", "codex" -> "Codex"
+    "ollama", "ollama-local" -> "Ollama Local"
+    else ->
+      provider
+        .replace('-', ' ')
+        .replace('_', ' ')
+        .split(' ')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
+        .replace(" Ai", " AI")
+        .ifBlank { "Provider" }
+  }
 
 @Serializable
 private data class HomeCanvasPayload(
