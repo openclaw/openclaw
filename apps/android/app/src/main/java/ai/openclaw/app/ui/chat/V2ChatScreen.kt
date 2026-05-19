@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -141,6 +142,7 @@ fun V2ChatScreen(
       pendingToolCalls = pendingToolCalls,
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
+      onStarterPrompt = { prompt -> input = prompt },
       modifier = Modifier.weight(1f),
     )
 
@@ -268,6 +270,7 @@ private fun V2ChatMessageList(
   pendingToolCalls: List<ChatPendingToolCall>,
   streamingAssistantText: String?,
   healthOk: Boolean,
+  onStarterPrompt: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val listState = rememberLazyListState()
@@ -315,7 +318,7 @@ private fun V2ChatMessageList(
     }
 
     if (messages.isEmpty() && pendingRunCount == 0 && pendingToolCalls.isEmpty() && stream.isNullOrBlank()) {
-      V2EmptyChatHint(healthOk = healthOk, modifier = Modifier.align(Alignment.Center))
+      V2EmptyChatHint(healthOk = healthOk, onStarterPrompt = onStarterPrompt, modifier = Modifier.align(Alignment.Center))
     }
   }
 }
@@ -323,23 +326,89 @@ private fun V2ChatMessageList(
 @Composable
 private fun V2EmptyChatHint(
   healthOk: Boolean,
+  onStarterPrompt: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  Column(modifier = modifier.padding(horizontal = 32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(7.dp)) {
-    Text(text = "No messages yet", style = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 18.sp), color = ClawTheme.colors.text)
-    Text(
-      text =
-        if (healthOk) {
-          "Ask OpenClaw anything."
-        } else {
-          "Reconnect your Gateway from Settings."
-        },
-      style = ClawTheme.type.body,
-      color = ClawTheme.colors.textMuted,
-      textAlign = TextAlign.Center,
-    )
+  Column(
+    modifier = modifier.fillMaxWidth().padding(horizontal = 2.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.spacedBy(12.dp),
+  ) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+      Text(text = if (healthOk) "Ready when you are" else "Gateway offline", style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp), color = ClawTheme.colors.text)
+      Text(
+        text =
+          if (healthOk) {
+            "Start with a prompt, or use voice."
+          } else {
+            "Reconnect from Settings to send messages."
+          },
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.textMuted,
+        textAlign = TextAlign.Center,
+      )
+    }
+    if (healthOk) {
+      V2StarterPromptList(onStarterPrompt = onStarterPrompt)
+    }
   }
 }
+
+@Composable
+private fun V2StarterPromptList(onStarterPrompt: (String) -> Unit) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+    Column {
+      starterPrompts.forEachIndexed { index, prompt ->
+        V2StarterPromptRow(prompt = prompt, onClick = { onStarterPrompt(prompt.message) })
+        if (index != starterPrompts.lastIndex) {
+          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun V2StarterPromptRow(
+  prompt: V2StarterPrompt,
+  onClick: () -> Unit,
+) {
+  Surface(onClick = onClick, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+    Row(
+      modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).padding(horizontal = 10.dp, vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Box(
+        modifier =
+          Modifier
+            .size(30.dp)
+            .background(ClawTheme.colors.surfacePressed, RoundedCornerShape(ClawTheme.radii.row)),
+        contentAlignment = Alignment.Center,
+      ) {
+        Text(text = prompt.mark, style = ClawTheme.type.label, color = ClawTheme.colors.text)
+      }
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Text(text = prompt.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
+        Text(text = prompt.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
+    }
+  }
+}
+
+private data class V2StarterPrompt(
+  val mark: String,
+  val title: String,
+  val subtitle: String,
+  val message: String,
+)
+
+private val starterPrompts =
+  listOf(
+    V2StarterPrompt(mark = "1", title = "Catch me up", subtitle = "Summarize recent sessions and next steps.", message = "Catch me up on my recent OpenClaw sessions and suggest next steps."),
+    V2StarterPrompt(mark = "2", title = "Plan the work", subtitle = "Turn a goal into an actionable checklist.", message = "Help me turn this goal into a practical checklist: "),
+    V2StarterPrompt(mark = "3", title = "Use this phone", subtitle = "Ask OpenClaw to use Android capabilities.", message = "What can you help me do from this phone right now?"),
+  )
 
 @Composable
 private fun V2ChatBubble(
