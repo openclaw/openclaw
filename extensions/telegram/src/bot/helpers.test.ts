@@ -13,9 +13,30 @@ import {
   resolveTelegramDirectPeerId,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
+  resolveTelegramMessageThreadId,
   resetTelegramForumFlagCacheForTest,
   shouldUseTelegramDmThreadSession,
 } from "./helpers.js";
+
+describe("resolveTelegramMessageThreadId", () => {
+  it("prefers message_thread_id when present", () => {
+    expect(
+      resolveTelegramMessageThreadId({
+        message_thread_id: 42,
+        direct_messages_topic: { topic_id: 43 },
+      }),
+    ).toBe(42);
+  });
+
+  it("falls back to direct_messages_topic.topic_id for private DM topics", () => {
+    expect(resolveTelegramMessageThreadId({ direct_messages_topic: { topic_id: 43 } })).toBe(43);
+  });
+
+  it("returns undefined when no Telegram thread id is present", () => {
+    expect(resolveTelegramMessageThreadId({})).toBeUndefined();
+    expect(resolveTelegramMessageThreadId(null)).toBeUndefined();
+  });
+});
 
 describe("resolveTelegramForumThreadId", () => {
   it.each([

@@ -83,6 +83,25 @@ export type TelegramThreadSpec = {
   scope: "dm" | "forum" | "none";
 };
 
+type TelegramDirectMessagesTopicCarrier = {
+  message_thread_id?: number;
+  direct_messages_topic?: {
+    topic_id?: number;
+  };
+};
+
+export function resolveTelegramMessageThreadId(msg: unknown): number | undefined {
+  if (!msg || typeof msg !== "object") {
+    return undefined;
+  }
+  const candidate = msg as TelegramDirectMessagesTopicCarrier;
+  if (typeof candidate.message_thread_id === "number") {
+    return candidate.message_thread_id;
+  }
+  const dmTopicId = candidate.direct_messages_topic?.topic_id;
+  return typeof dmTopicId === "number" ? dmTopicId : undefined;
+}
+
 function normalizeTelegramDmThreadReplies(value: unknown): TelegramDmThreadReplies | undefined {
   return value === "off" || value === "inbound" || value === "always" ? value : undefined;
 }
