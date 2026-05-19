@@ -1017,7 +1017,7 @@ struct OnboardingWizardView: View {
 
     private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
         if problem.suggestsOnboardingReset { return "Scan QR again" }
-        problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
+        return problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
     }
 
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
