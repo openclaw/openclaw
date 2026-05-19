@@ -39,9 +39,7 @@ import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
@@ -54,15 +52,9 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.outlined.AccessTime
-import androidx.compose.material.icons.outlined.Apps
-import androidx.compose.material.icons.outlined.BarChart
-import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Code
-import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
-import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material3.HorizontalDivider
@@ -161,13 +153,16 @@ private fun V2OverviewScreen(
   onSelectTab: (V2Tab) -> Unit,
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
-  val statusText by viewModel.statusText.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
+  val models by viewModel.modelCatalog.collectAsState()
+  val providers by viewModel.modelAuthProviders.collectAsState()
+  val readyProviderCount = providers.count { modelProviderReady(it.status) }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
       viewModel.refreshChatSessions(limit = 20)
+      viewModel.refreshModelCatalog()
     }
   }
 
@@ -202,19 +197,19 @@ private fun V2OverviewScreen(
                 V2ModuleRow("Chat", null, null, Icons.Outlined.ChatBubbleOutline, V2Tab.Chat),
                 V2ModuleRow("Sessions", null, null, Icons.Outlined.AccessTime, V2Tab.Sessions),
                 V2ModuleRow("Voice", null, null, Icons.Outlined.MicNone, V2Tab.Voice),
-                V2ModuleRow("Channels", null, null, Icons.Outlined.Apps, V2Tab.Settings),
                 V2ModuleRow(
                   title = "Providers & Models",
                   subtitle = null,
-                  metadata = if (isConnected) "5 active" else "Offline",
+                  metadata =
+                    when {
+                      !isConnected -> "Offline"
+                      readyProviderCount > 0 -> "$readyProviderCount ready"
+                      models.isNotEmpty() -> "${models.size} models"
+                      else -> "Setup"
+                    },
                   icon = Icons.Outlined.Inventory2,
                   tab = V2Tab.ProvidersModels,
                 ),
-                V2ModuleRow("Agents", null, if (isConnected) "3 active" else null, Icons.Outlined.PersonOutline, V2Tab.Settings),
-                V2ModuleRow("Skills", null, if (isConnected) "24 ready" else null, Icons.Outlined.Code, V2Tab.Settings),
-                V2ModuleRow("Nodes", null, if (isConnected) "7 online" else null, Icons.Outlined.Hub, V2Tab.Settings),
-                V2ModuleRow("Cron Jobs", null, if (isConnected) "8 scheduled" else null, Icons.Outlined.CalendarMonth, V2Tab.Settings),
-                V2ModuleRow("Usage", null, null, Icons.Outlined.BarChart, V2Tab.Settings),
                 V2ModuleRow("Settings", null, null, Icons.Outlined.Settings, V2Tab.Settings),
               ),
             onSelectTab = onSelectTab,
