@@ -501,7 +501,8 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     };
     expect(harnessParams?.runtimePlan).toBe(runtimePlan);
     expect(harnessParams.authProfileStore).toBe(codexAuthStore);
-    const authProfiles = expectRecordFields(harnessParams.authProfileStore.profiles, {});
+    const forwardedAuthStore = expectRecordFields(harnessParams.authProfileStore, {});
+    const authProfiles = expectRecordFields(forwardedAuthStore.profiles, {});
     expect(Object.keys(authProfiles)).toEqual([
       "openai-codex:work",
       "openai-codex:other",
@@ -854,7 +855,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       toolAuthProfileStore?: unknown;
     };
     expect(harnessParams.authProfileStore).toBe(codexAuthStore);
-    expectRecordFields(harnessParams.authProfileStore.profiles?.["xai:work"], {
+    const forwardedAuthStore = expectRecordFields(harnessParams.authProfileStore, {});
+    const authProfiles = expectRecordFields(forwardedAuthStore.profiles, {});
+    expectRecordFields(authProfiles["xai:work"], {
       provider: "xai",
     });
     expect(harnessParams.toolAuthProfileStore).toBe(codexAuthStore);
