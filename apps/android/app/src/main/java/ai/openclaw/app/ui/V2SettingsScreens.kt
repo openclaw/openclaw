@@ -22,6 +22,7 @@ import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,13 +36,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
@@ -49,6 +53,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -389,18 +394,136 @@ private fun V2VoiceSettingsScreen(
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
   val micEnabled by viewModel.micEnabled.collectAsState()
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
-  val micStatusText by viewModel.micStatusText.collectAsState()
-  val talkModeStatusText by viewModel.talkModeStatusText.collectAsState()
 
-  V2SettingsDetailFrame(title = "Voice", subtitle = "Control talk, dictation, and playback.", icon = Icons.Default.Mic, onBack = onBack) {
-    V2SettingsTogglePanel(
-      rows =
-        listOf(
-          V2SettingsToggleRow("Speaker", if (speakerEnabled) "Assistant replies play aloud." else "Assistant speech is muted.", Icons.AutoMirrored.Filled.VolumeUp, speakerEnabled, viewModel::setSpeakerEnabled),
-          V2SettingsToggleRow("Dictation", micStatusText, Icons.Default.Mic, micEnabled, viewModel::setMicEnabled),
-          V2SettingsToggleRow("Realtime Talk", talkModeStatusText, Icons.Default.Bolt, talkModeEnabled, viewModel::setTalkModeEnabled),
-        ),
+  V2SettingsDetailFrame(title = "Talk Provider Setup", subtitle = "Configure voice, transport, and playback.", icon = Icons.Default.Mic, onBack = onBack) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      V2VoiceSetupPanel(
+        voiceActive = micEnabled || talkModeEnabled,
+      )
+      Text(text = "Audio Test", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = "Check that OpenClaw can speak clearly on this phone.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      V2SettingsWaveformPanel(active = speakerEnabled)
+      V2VoiceSetupActionRow(
+        title = if (speakerEnabled) "Mute speaker" else "Enable speaker",
+        subtitle = if (speakerEnabled) "Replies play aloud" else "Assistant speech muted",
+        icon = Icons.AutoMirrored.Filled.VolumeUp,
+        statusText = if (speakerEnabled) "On" else "Muted",
+        ready = speakerEnabled,
+        onClick = { viewModel.setSpeakerEnabled(!speakerEnabled) },
+      )
+      ClawPrimaryButton(text = "Save Voice Setup", onClick = onBack, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.GraphicEq)
+    }
+  }
+}
+
+@Composable
+private fun V2VoiceSetupPanel(
+  voiceActive: Boolean,
+) {
+  Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+    V2VoiceSetupActionRow(
+      title = "Realtime Provider",
+      subtitle = "Gateway voice relay",
+      icon = Icons.Default.GraphicEq,
+      statusText = if (voiceActive) "Live" else "Ready",
+      ready = true,
     )
+    V2VoiceSetupActionRow(
+      title = "Voice",
+      subtitle = "Voice input",
+      icon = Icons.Default.Mic,
+      statusText = "Configured",
+      ready = true,
+    )
+    V2VoiceSetupActionRow(
+      title = "Transport",
+      subtitle = "Socket relay",
+      icon = Icons.Default.Bolt,
+      statusText = "Configured",
+      ready = true,
+    )
+  }
+}
+
+@Composable
+private fun V2VoiceSetupActionRow(
+  title: String,
+  subtitle: String,
+  icon: ImageVector,
+  statusText: String,
+  ready: Boolean,
+  onClick: (() -> Unit)? = null,
+) {
+  val rowModifier = Modifier.fillMaxWidth().heightIn(min = 68.dp)
+  Surface(
+    onClick = onClick ?: {},
+    enabled = onClick != null,
+    modifier = rowModifier,
+    shape = RoundedCornerShape(ClawTheme.radii.panel),
+    color = ClawTheme.colors.surface,
+    contentColor = ClawTheme.colors.text,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(11.dp),
+    ) {
+      Surface(
+        modifier = Modifier.size(38.dp),
+        shape = CircleShape,
+        color = ClawTheme.colors.canvas,
+        contentColor = ClawTheme.colors.text,
+        border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(19.dp))
+        }
+      }
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = subtitle, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        Box(
+          modifier =
+            Modifier
+              .size(7.dp)
+              .background(if (ready) ClawTheme.colors.success else ClawTheme.colors.textSubtle, CircleShape),
+        )
+        Text(text = statusText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, maxLines = 1)
+        Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.textMuted)
+      }
+    }
+  }
+}
+
+@Composable
+private fun V2SettingsWaveformPanel(active: Boolean) {
+  Surface(
+    modifier = Modifier.fillMaxWidth().height(76.dp),
+    shape = RoundedCornerShape(ClawTheme.radii.panel),
+    color = ClawTheme.colors.surface,
+    contentColor = ClawTheme.colors.text,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+      Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(24.dp), tint = ClawTheme.colors.text)
+      Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+        listOf(6, 12, 18, 11, 28, 34, 18, 10, 8, 24, 38, 31, 12, 8, 18, 30, 40, 22, 12, 8, 20, 29, 16, 8).forEachIndexed { index, height ->
+          Box(
+            modifier =
+              Modifier
+                .size(width = 2.dp, height = (if (active) height else 7 + index % 4 * 4).dp)
+                .background(if (active) ClawTheme.colors.text else ClawTheme.colors.textSubtle, RoundedCornerShape(999.dp)),
+          )
+        }
+      }
+    }
   }
 }
 

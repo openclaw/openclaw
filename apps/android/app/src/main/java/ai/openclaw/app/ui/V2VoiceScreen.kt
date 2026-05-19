@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -160,6 +161,7 @@ fun V2VoiceScreen(viewModel: MainViewModel) {
     )
 
     V2VoiceHero(
+      gatewayStatus = gatewayStatus,
       voiceCaptureMode = voiceCaptureMode,
       micEnabled = micEnabled,
       talkModeEnabled = talkModeEnabled,
@@ -563,6 +565,7 @@ private fun V2VoicePlainIconButton(
 
 @Composable
 private fun V2VoiceHero(
+  gatewayStatus: String,
   voiceCaptureMode: VoiceCaptureMode,
   micEnabled: Boolean,
   talkModeEnabled: Boolean,
@@ -572,7 +575,7 @@ private fun V2VoiceHero(
   onStartTalk: () -> Unit,
   onStartDictation: () -> Unit,
 ) {
-  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
     V2VoiceOrb(
       active = micEnabled || talkModeEnabled,
       listening = talkModeListening || voiceCaptureMode == VoiceCaptureMode.ManualMic,
@@ -633,6 +636,8 @@ private fun V2VoiceHero(
       )
     }
 
+    V2VoiceProviderCard(gatewayStatus = gatewayStatus)
+
     V2VoicePrimaryAction(
       text = if (talkModeEnabled) "End Talk" else "Start Talk",
       icon = if (talkModeEnabled) Icons.Default.PhoneDisabled else Icons.Default.Phone,
@@ -650,12 +655,12 @@ private fun V2VoiceModeRow(
 ) {
   Surface(onClick = onClick, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Row(
-      modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 9.dp, vertical = 6.dp),
+      modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(horizontal = 10.dp, vertical = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Surface(
-        modifier = Modifier.size(30.dp),
+        modifier = Modifier.size(34.dp),
         shape = CircleShape,
         color = ClawTheme.colors.surface,
         contentColor = ClawTheme.colors.text,
@@ -668,6 +673,51 @@ private fun V2VoiceModeRow(
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
         Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+      }
+      Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(21.dp), tint = ClawTheme.colors.textMuted)
+    }
+  }
+}
+
+@Composable
+private fun V2VoiceProviderCard(gatewayStatus: String) {
+  val ready = gatewayStatus.isVoiceGatewayReady()
+  Surface(
+    modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp),
+    shape = RoundedCornerShape(ClawTheme.radii.panel),
+    color = ClawTheme.colors.surface,
+    contentColor = ClawTheme.colors.text,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Surface(
+        modifier = Modifier.size(34.dp),
+        shape = CircleShape,
+        color = ClawTheme.colors.canvas,
+        contentColor = ClawTheme.colors.text,
+        border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(imageVector = Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(17.dp))
+        }
+      }
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(text = "Provider", style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
+        Text(text = gatewayStatus.voiceGatewayLabel(), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        Box(
+          modifier =
+            Modifier
+              .size(7.dp)
+              .clip(CircleShape)
+              .background(if (ready) ClawTheme.colors.success else ClawTheme.colors.textSubtle),
+        )
+        Text(text = if (ready) "Ready" else "Offline", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
       }
     }
   }
@@ -704,7 +754,7 @@ private fun V2VoiceOrb(
   speaking: Boolean,
 ) {
   Surface(
-    modifier = Modifier.size(86.dp),
+    modifier = Modifier.size(132.dp),
     shape = CircleShape,
     color = if (active) ClawTheme.colors.surfacePressed else ClawTheme.colors.surface,
     border = BorderStroke(1.dp, if (active) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
@@ -719,7 +769,7 @@ private fun V2VoiceOrb(
               else -> Icons.Default.Mic
             },
           contentDescription = null,
-          modifier = Modifier.size(26.dp),
+          modifier = Modifier.size(38.dp),
           tint = ClawTheme.colors.text,
         )
         V2Waveform(active = active)
