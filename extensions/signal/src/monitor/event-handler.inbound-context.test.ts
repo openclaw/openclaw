@@ -219,6 +219,72 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.UntrustedContext).toBeUndefined();
   });
 
+  it("marks direct slash text as a text command source", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
+        } as any,
+        allowFrom: ["+15550001111"],
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "/status",
+          attachments: [],
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.CommandBody).toBe("/status");
+    expect(context.CommandAuthorized).toBe(true);
+    expect(context.CommandSource).toBe("text");
+    expect(context.CommandTurn).toMatchObject({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+      commandName: "status",
+      body: "/status",
+    });
+  });
+
+  it("does not mark ordinary direct text as a command source", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
+        } as any,
+        allowFrom: ["+15550001111"],
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "status please",
+          attachments: [],
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.CommandBody).toBe("status please");
+    expect(context.CommandSource).toBeUndefined();
+    expect(context.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+      body: "status please",
+    });
+  });
+
   it("keeps pending group history structured while current text stays command-clean", async () => {
     const groupHistories = new Map([
       [
@@ -477,6 +543,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     expect(requireCapturedContext().CommandAuthorized).toBe(true);
+    expect(requireCapturedContext().CommandSource).toBe("text");
   });
 
   it("allows reaction-only group events when groupAllowFrom matches the reaction group id", async () => {
