@@ -427,6 +427,17 @@ lnSfn(tarPath, currentTgz);
 // Install globally
 const prefix = getGlobalPrefix();
 banner(logStream, `Installing globally into prefix: ${prefix}`);
+// Safety: move aside any existing global install dir to avoid partial/dirty trees after crashes
+  {
+    const npmRoot = sh("npm", ["root", "-g", "--prefix", prefix]);
+    const installedRoot = path.join(npmRoot, "openclaw");
+    if (fs.existsSync(installedRoot)) {
+      const bak = `${installedRoot}.bak-${timestampForFilename()}`;
+      banner(logStream, `Moving aside existing global install: ${installedRoot} -> ${bak}`);
+      fs.renameSync(installedRoot, bak);
+    }
+  }
+
 await shTee(logStream, "npm", ["install", "-g", "--prefix", prefix, currentTgz]);
 
 // Run bundled deps helper
