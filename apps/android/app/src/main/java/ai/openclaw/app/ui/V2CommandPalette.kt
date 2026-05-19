@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -188,13 +189,14 @@ private fun V2CommandActionRow(row: V2CommandItem) {
       modifier =
         Modifier
           .fillMaxWidth()
+          .heightIn(min = 52.dp)
           .clip(RoundedCornerShape(ClawTheme.radii.row))
           .clickable(onClick = row.onClick)
-          .padding(vertical = 5.dp),
+          .padding(horizontal = 2.dp, vertical = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.text)
+      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(19.dp), tint = ClawTheme.colors.text)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -202,7 +204,7 @@ private fun V2CommandActionRow(row: V2CommandItem) {
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open ${row.title}",
-        modifier = Modifier.size(14.dp),
+        modifier = Modifier.size(17.dp),
         tint = ClawTheme.colors.textMuted,
       )
     }
@@ -236,20 +238,21 @@ private fun V2CommandSessionListRow(
       modifier =
         Modifier
           .fillMaxWidth()
+          .heightIn(min = 58.dp)
           .clip(RoundedCornerShape(ClawTheme.radii.row))
           .clickable(onClick = onClick)
-          .padding(vertical = 5.dp),
+          .padding(horizontal = 2.dp, vertical = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       Surface(
-        modifier = Modifier.size(24.dp),
+        modifier = Modifier.size(30.dp),
         shape = CircleShape,
         color = ClawTheme.colors.canvas,
         border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.text)
+          Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.text)
         }
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
@@ -260,7 +263,7 @@ private fun V2CommandSessionListRow(
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open session",
-        modifier = Modifier.size(14.dp),
+        modifier = Modifier.size(17.dp),
         tint = ClawTheme.colors.textMuted,
       )
     }
@@ -273,7 +276,7 @@ private fun V2CommandIconButton(
   contentDescription: String,
   onClick: () -> Unit,
 ) {
-  Surface(onClick = onClick, modifier = Modifier.size(30.dp), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+  Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Box(contentAlignment = Alignment.Center) {
       Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
     }
@@ -283,7 +286,7 @@ private fun V2CommandIconButton(
 @Composable
 private fun V2CommandAvatar(text: String) {
   Surface(
-    modifier = Modifier.size(28.dp),
+    modifier = Modifier.size(34.dp),
     shape = CircleShape,
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,
