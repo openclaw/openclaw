@@ -112,6 +112,12 @@ export async function runPluginPayloadSmokeCheck(params: {
             : "package.json openclaw.extensions is empty"
         }`,
       });
+      // Skip the trailing main-entry check so a plugin that is *also* missing
+      // its declared main does not emit a second failure entry for the same
+      // pluginId — mirrors the `continue` already used by the
+      // `missing-package-dir` and `invalid-package-json` branches above.
+      // See #83891.
+      continue;
     } else if (extensionResolution.status === "ok") {
       const extensionValidation = await validatePackageExtensionEntriesForInstall({
         packageDir: installPath,

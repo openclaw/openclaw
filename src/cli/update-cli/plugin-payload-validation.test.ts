@@ -287,4 +287,33 @@ describe("runPluginPayloadSmokeCheck", () => {
     });
     expect(result.checked).toEqual(["npm"]);
   });
+
+  it("emits exactly one failure when openclaw.extensions is empty AND the declared main file is missing (#83891)", async () => {
+    // Both conditions hold simultaneously: extensions is an empty object
+    // (triggers missing-extension-entry) AND main points to a path that
+    // doesn't exist on disk (would have also triggered missing-main-entry
+    // without the continue; in the empty/invalid branch).
+    const dir = path.join(tmpRoot, "pkg");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "package.json"),
+      JSON.stringify({
+        name: "pkg",
+        main: "dist/index.js",
+        openclaw: { extensions: {} },
+      }),
+      "utf8",
+    );
+    const result = await runPluginPayloadSmokeCheck({
+      records: { pkg: { source: "npm", installPath: dir } },
+      env: {},
+    });
+    const pkgFailures = result.failures.filter((f) => f.pluginId === "pkg");
+    expect(pkgFailures).toHaveLength(1);
+    expect(pkgFailures[0]).toMatchObject({
+      pluginId: "pkg",
+      installPath: dir,
+      reason: "missing-extension-entry",
+    });
+  });
 });
