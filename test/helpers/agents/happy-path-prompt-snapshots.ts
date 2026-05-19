@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { createJiti } from "jiti";
 import { resolveHeartbeatPromptForResponseTool } from "../../../src/auto-reply/heartbeat.js";
 import {
   buildDirectChatContext,
@@ -22,7 +21,7 @@ import type {
 } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { normalizeAgentRuntimeTools } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { createOpenClawCodingTools } from "../../../src/plugin-sdk/agent-harness.js";
-import { resolveBundledPluginPublicModulePath } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { loadBundledPluginPublicSurfaceSourceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
@@ -115,22 +114,10 @@ type PromptScenario = {
   toolSnapshotFile: string;
 };
 
-function loadCodexPromptSnapshotApi(): CodexPromptSnapshotApi {
-  const publicModulePath = resolveBundledPluginPublicModulePath({
-    pluginId: "codex",
-    artifactBasename: "test-api.js",
-  });
-  // Prompt snapshots are source drift guards; stale built plugin output must not mask TS changes.
-  const sourceModulePath = publicModulePath.replace(/\.js$/u, ".ts");
-  const modulePath = fs.existsSync(sourceModulePath) ? sourceModulePath : publicModulePath;
-  const load = createJiti(import.meta.url, {
-    fsCache: false,
-    moduleCache: false,
-  });
-  return load(modulePath) as CodexPromptSnapshotApi;
-}
-
-const codexApi = loadCodexPromptSnapshotApi();
+const codexApi = loadBundledPluginPublicSurfaceSourceSync({
+  pluginId: "codex",
+  artifactBasename: "test-api.js",
+}) as CodexPromptSnapshotApi;
 
 const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
   {

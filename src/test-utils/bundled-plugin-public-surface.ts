@@ -10,6 +10,10 @@ import {
   findBundledPluginMetadataById,
   type BundledPluginMetadata,
 } from "../plugins/bundled-plugin-metadata.js";
+import {
+  getCachedPluginSourceModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../plugins/plugin-module-loader-cache.js";
 import { normalizeBundledPluginArtifactSubpath } from "../plugins/public-surface-runtime.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 
@@ -20,6 +24,7 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 
 type BundledPluginPublicSurfaceMetadata = Pick<BundledPluginMetadata, "dirName">;
+const sourceModuleLoaders: PluginModuleLoaderCache = new Map();
 
 function isSafeBundledPluginDirName(pluginId: string): boolean {
   return /^[a-z0-9][a-z0-9._-]*$/u.test(pluginId);
@@ -125,6 +130,27 @@ export const loadBundledPluginPublicSurfaceSync: BundledPluginPublicSurfaceLoade
     dirName: metadata.dirName,
     artifactBasename: normalizeBundledPluginArtifactSubpath(params.artifactBasename),
   });
+};
+
+export const loadBundledPluginPublicSurfaceSourceSync: BundledPluginPublicSurfaceLoader = <
+  T extends object,
+>(
+  params,
+): T => {
+  const modulePath = resolveVitestSourceModulePath(
+    resolveBundledPluginPublicModulePath({
+      pluginId: params.pluginId,
+      artifactBasename: params.artifactBasename,
+    }),
+  );
+  const loader = getCachedPluginSourceModuleLoader({
+    cache: sourceModuleLoaders,
+    modulePath,
+    importerUrl: import.meta.url,
+    loaderFilename: import.meta.url,
+    pluginSdkResolution: "src",
+  });
+  return loader(modulePath) as T;
 };
 
 export const loadBundledPluginPublicSurface: AsyncBundledPluginPublicSurfaceLoader = (params) => {
