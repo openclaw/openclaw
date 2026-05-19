@@ -101,7 +101,7 @@ function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
-  return level === "on" || level === "full";
+  return level === "full";
 }
 
 function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefined): string {
