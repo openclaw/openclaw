@@ -97,7 +97,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 | Cron jobs (all types)  | `cron`       | Every cron execution (main-session and isolated)                       | `silent`              |
 | CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway                 | `silent`              |
 | Agent media jobs       | `cli`        | Session-backed `image_generate`/`music_generate`/`video_generate` runs | `silent`              |
-| Plugin-owned jobs      | `cli`        | Plugin lifecycle API creates a task record             | `done_only`           |
+| Plugin-owned jobs      | `cli`        | Plugin lifecycle API creates a task record                             | `done_only`           |
 
 <AccordionGroup>
   <Accordion title="Notify defaults for cron and media">

@@ -1941,6 +1941,49 @@ describe("task-registry", () => {
     });
   });
 
+  it("keeps taskKind in create identity for matching owner run title and label", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryMemoryForTest();
+
+      const first = createTaskRecord({
+        runtime: "cli",
+        taskKind: "plugin-a.session",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-plugin-kind-collision",
+        task: "Plugin task",
+        label: "Plugin task",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      const second = createTaskRecord({
+        runtime: "cli",
+        taskKind: "plugin-b.session",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-plugin-kind-collision",
+        task: "Plugin task",
+        label: "Plugin task",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 120,
+      });
+
+      expect(second.taskId).not.toBe(first.taskId);
+      expect(
+        listTaskRecords()
+          .filter((task) => task.runId === "run-plugin-kind-collision")
+          .map((task) => task.taskKind)
+          .toSorted((left, right) => String(left).localeCompare(String(right))),
+      ).toEqual(["plugin-a.session", "plugin-b.session"]);
+    });
+  });
+
   it("scopes shared-run lifecycle events to the matching session", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
