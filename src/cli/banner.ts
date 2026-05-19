@@ -192,13 +192,15 @@ export function hasEmittedCliBanner(): boolean {
   return bannerEmitted;
 }
 
-// Mirrors the `__testing` pattern in `src/cli/channel-options.ts`: the
+// Mirrors the `testing`/`__testing` pattern in `src/cli/channel-options.ts`: the
 // module-level `bannerEmitted` guard latches once per process, which is the
 // intended production behavior but blocks multi-scenario vitest specs in the
 // same worker. Exporting a reset hook keeps the production emit-once contract
 // intact while letting tests reset between specs. See #83903.
-export const __testing = {
+export const testing = {
   resetBannerEmittedForTests(): void {
     bannerEmitted = false;
   },
 };
+
+export { testing as __testing };
