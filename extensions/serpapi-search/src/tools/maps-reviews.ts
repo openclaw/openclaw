@@ -1,5 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
+  jsonResult,
   readNumberParam,
   readStringParam,
   wrapWebContent,
@@ -135,7 +136,7 @@ export function createSerpApiMapsReviewsTool(api: OpenClawPluginApi, ctx?: SerpA
         },
         signal,
       });
-      return extract(raw);
+      return jsonResult(extract(raw));
     },
   };
 }

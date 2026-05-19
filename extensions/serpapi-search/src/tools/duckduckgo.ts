@@ -1,5 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
+  jsonResult,
   readNumberParam,
   readStringParam,
   wrapWebContent,
@@ -122,7 +123,7 @@ export function createSerpApiDuckDuckGoTool(api: OpenClawPluginApi, ctx?: SerpAp
         },
         signal,
       });
-      return extract(raw);
+      return jsonResult(extract(raw));
     },
   };
 }

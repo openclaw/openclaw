@@ -1,9 +1,24 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  jsonResult,
+  readNumberParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
-const ALLOWED_PARAMS = ["q", "geo", "date", "data_type", "hl", "cat", "gprop", "region", "tz", "zero_trace"] as const;
+const ALLOWED_PARAMS = [
+  "q",
+  "geo",
+  "date",
+  "data_type",
+  "hl",
+  "cat",
+  "gprop",
+  "region",
+  "tz",
+  "zero_trace",
+] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -28,7 +43,7 @@ export function createSerpApiTrendsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
         query: {
           type: "string",
           description:
-            "Search term(s). Up to 5 comma-separated for TIMESERIES/GEO_MAP (e.g. \"coffee,tea,juice\").",
+            'Search term(s). Up to 5 comma-separated for TIMESERIES/GEO_MAP (e.g. "coffee,tea,juice").',
         },
         geo: { type: "string", description: "Region code (e.g. US, DE, UA). Omit for worldwide." },
         date: {
@@ -53,11 +68,13 @@ export function createSerpApiTrendsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
         gprop: {
           type: "string",
           enum: ["", "images", "news", "froogle", "youtube"],
-          description: "Property filter: empty=Web (default), images, news, froogle=Shopping, youtube.",
+          description:
+            "Property filter: empty=Web (default), images, news, froogle=Shopping, youtube.",
         },
         tz: {
           type: "number",
-          description: "Timezone offset in minutes (e.g. -540 for Tokyo, 420 for PDT). Default: 420.",
+          description:
+            "Timezone offset in minutes (e.g. -540 for Tokyo, 420 for PDT). Default: 420.",
         },
       },
       required: ["query"],
@@ -81,7 +98,7 @@ export function createSerpApiTrendsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
         },
         signal,
       });
-      return extract(raw);
+      return jsonResult(extract(raw));
     },
   };
 }

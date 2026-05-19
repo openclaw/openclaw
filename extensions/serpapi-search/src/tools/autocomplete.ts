@@ -1,5 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  jsonResult,
+  readNumberParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
@@ -38,8 +42,7 @@ export function createSerpApiAutocompleteTool(api: OpenClawPluginApi, ctx?: Serp
         },
         cp: {
           type: "number",
-          description:
-            "Cursor position in the query string (0-based). Defaults to end of query.",
+          description: "Cursor position in the query string (0-based). Defaults to end of query.",
           minimum: 0,
         },
         client: {
@@ -66,7 +69,7 @@ export function createSerpApiAutocompleteTool(api: OpenClawPluginApi, ctx?: Serp
         },
         signal,
       });
-      return extract(raw);
+      return jsonResult(extract(raw));
     },
   };
 }

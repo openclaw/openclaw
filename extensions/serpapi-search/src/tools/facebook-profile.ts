@@ -1,5 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
@@ -48,7 +48,7 @@ export function createSerpApiFacebookProfileTool(api: OpenClawPluginApi, ctx?: S
         },
         signal,
       });
-      return extract(raw);
+      return jsonResult(extract(raw));
     },
   };
 }

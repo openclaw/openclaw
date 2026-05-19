@@ -1,14 +1,16 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  jsonResult,
+  readNumberParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = ["q", "gl", "hl", "location", "htichips", "start", "zero_trace"] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
-  const events = Array.isArray(raw.events_results)
-    ? (raw.events_results as unknown[])
-    : [];
+  const events = Array.isArray(raw.events_results) ? (raw.events_results as unknown[]) : [];
   return { engine: "google_events", events };
 }
 
@@ -52,7 +54,7 @@ export function createSerpApiEventsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
         },
         signal,
       });
-      return extract(raw);
+      return jsonResult(extract(raw));
     },
   };
 }

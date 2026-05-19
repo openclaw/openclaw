@@ -1,9 +1,22 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  jsonResult,
+  readNumberParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
-const ALLOWED_PARAMS = ["q", "gl", "hl", "location", "lrad", "uds", "next_page_token", "zero_trace"] as const;
+const ALLOWED_PARAMS = [
+  "q",
+  "gl",
+  "hl",
+  "location",
+  "lrad",
+  "uds",
+  "next_page_token",
+  "zero_trace",
+] as const;
 
 function extract(raw: Record<string, unknown>, maxCount: number): Record<string, unknown> {
   const results = Array.isArray(raw.jobs_results)
@@ -27,8 +40,16 @@ export function createSerpApiJobsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string", description: 'Job search query, e.g. "software engineer remote".' },
-        count: { type: "number", description: "Number of results (1-10).", minimum: 1, maximum: 10 },
+        query: {
+          type: "string",
+          description: 'Job search query, e.g. "software engineer remote".',
+        },
+        count: {
+          type: "number",
+          description: "Number of results (1-10).",
+          minimum: 1,
+          maximum: 10,
+        },
         location: { type: "string", description: 'Location string, e.g. "New York, NY".' },
         lrad: { type: "number", description: "Search radius in kilometers." },
         uds: {
@@ -56,7 +77,7 @@ export function createSerpApiJobsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
         },
         signal,
       });
-      return extract(raw, count);
+      return jsonResult(extract(raw, count));
     },
   };
 }

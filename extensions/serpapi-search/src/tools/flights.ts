@@ -1,11 +1,19 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
-  "departure_id", "arrival_id", "outbound_date", "return_date",
-  "type", "adults", "currency", "gl", "hl", "zero_trace",
+  "departure_id",
+  "arrival_id",
+  "outbound_date",
+  "return_date",
+  "type",
+  "adults",
+  "currency",
+  "gl",
+  "hl",
+  "zero_trace",
 ] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
@@ -62,7 +70,7 @@ export function createSerpApiFlightsTool(api: OpenClawPluginApi, ctx?: SerpApiTo
         },
         signal,
       });
-      return extract(raw);
+      return jsonResult(extract(raw));
     },
   };
 }

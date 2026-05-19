@@ -1,9 +1,23 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  jsonResult,
+  readNumberParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
-const ALLOWED_PARAMS = ["q", "gl", "hl", "ll", "location", "type", "nearby", "start", "zero_trace"] as const;
+const ALLOWED_PARAMS = [
+  "q",
+  "gl",
+  "hl",
+  "ll",
+  "location",
+  "type",
+  "nearby",
+  "start",
+  "zero_trace",
+] as const;
 
 function extract(raw: Record<string, unknown>, maxCount: number): Record<string, unknown> {
   const results = Array.isArray(raw.local_results)
@@ -32,11 +46,17 @@ export function createSerpApiMapsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
           description: 'GPS coordinates @lat,lng,zoom (e.g. "@40.7128,-74.006,14z").',
         },
         location: { type: "string", description: "City or area string (e.g. 'Austin, Texas')." },
-        count: { type: "number", description: "Number of results (1-20).", minimum: 1, maximum: 20 },
+        count: {
+          type: "number",
+          description: "Number of results (1-20).",
+          minimum: 1,
+          maximum: 20,
+        },
         gl: { type: "string", description: "Country code (e.g. us, de, ua)." },
         nearby: {
           type: "string",
-          description: "Force results near this location. Recommended when query contains 'near me'.",
+          description:
+            "Force results near this location. Recommended when query contains 'near me'.",
         },
         start: { type: "number", description: "Result offset for pagination (0, 20, 40...)." },
       },
@@ -63,7 +83,7 @@ export function createSerpApiMapsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
         },
         signal,
       });
-      return extract(raw, count);
+      return jsonResult(extract(raw, count));
     },
   };
 }

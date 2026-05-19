@@ -1,10 +1,15 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
-  "product_id", "ebay_domain", "locale", "lang", "shipping_country", "zero_trace",
+  "product_id",
+  "ebay_domain",
+  "locale",
+  "lang",
+  "shipping_country",
+  "zero_trace",
 ] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
@@ -68,7 +73,7 @@ export function createSerpApiEbayProductTool(api: OpenClawPluginApi, ctx?: SerpA
         },
         signal,
       });
-      return extract(raw);
+      return jsonResult(extract(raw));
     },
   };
 }

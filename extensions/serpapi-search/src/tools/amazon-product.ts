@@ -1,21 +1,32 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
-  "asin", "amazon_domain", "language", "delivery_zip", "shipping_location", "other_sellers", "zero_trace",
+  "asin",
+  "amazon_domain",
+  "language",
+  "delivery_zip",
+  "shipping_location",
+  "other_sellers",
+  "zero_trace",
 ] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
-  const { purchase_options, related_products, bought_together, reviews_information, product_results } =
-    raw as {
-      purchase_options?: unknown;
-      related_products?: unknown;
-      bought_together?: unknown;
-      reviews_information?: unknown;
-      product_results?: Record<string, unknown>;
-    };
+  const {
+    purchase_options,
+    related_products,
+    bought_together,
+    reviews_information,
+    product_results,
+  } = raw as {
+    purchase_options?: unknown;
+    related_products?: unknown;
+    bought_together?: unknown;
+    reviews_information?: unknown;
+    product_results?: Record<string, unknown>;
+  };
   return {
     engine: "amazon_product",
     product: product_results ?? null,
@@ -45,12 +56,12 @@ export function createSerpApiAmazonProductTool(api: OpenClawPluginApi, ctx?: Ser
         },
         amazon_domain: {
           type: "string",
-          description: "Amazon domain to use (e.g. amazon.co.uk, amazon.de). Defaults to amazon.com.",
+          description:
+            "Amazon domain to use (e.g. amazon.co.uk, amazon.de). Defaults to amazon.com.",
         },
         language: {
           type: "string",
-          description:
-            "Language locale for the product page (e.g. en_US, es_US, ja_JP).",
+          description: "Language locale for the product page (e.g. en_US, es_US, ja_JP).",
         },
         delivery_zip: {
           type: "string",
@@ -79,7 +90,7 @@ export function createSerpApiAmazonProductTool(api: OpenClawPluginApi, ctx?: Ser
         },
         signal,
       });
-      return extract(raw);
+      return jsonResult(extract(raw));
     },
   };
 }

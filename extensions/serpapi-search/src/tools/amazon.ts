@@ -1,10 +1,21 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  jsonResult,
+  readNumberParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
-  "k", "amazon_domain", "language", "s", "node", "rh", "page", "zero_trace",
+  "k",
+  "amazon_domain",
+  "language",
+  "s",
+  "node",
+  "rh",
+  "page",
+  "zero_trace",
 ] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
@@ -29,7 +40,8 @@ export function createSerpApiAmazonTool(api: OpenClawPluginApi, ctx?: SerpApiToo
         query: { type: "string", description: "Product search query." },
         amazon_domain: {
           type: "string",
-          description: "Amazon marketplace domain (e.g. amazon.com, amazon.de, amazon.co.uk, amazon.co.jp).",
+          description:
+            "Amazon marketplace domain (e.g. amazon.com, amazon.de, amazon.co.uk, amazon.co.jp).",
         },
         language: {
           type: "string",
@@ -56,7 +68,11 @@ export function createSerpApiAmazonTool(api: OpenClawPluginApi, ctx?: SerpApiToo
           type: "string",
           description: "Attribute filter string from filters[].rh in a previous response.",
         },
-        page: { type: "number", description: "Page number for pagination (default: 1).", minimum: 1 },
+        page: {
+          type: "number",
+          description: "Page number for pagination (default: 1).",
+          minimum: 1,
+        },
       },
       required: ["query"],
       additionalProperties: false,
@@ -78,7 +94,7 @@ export function createSerpApiAmazonTool(api: OpenClawPluginApi, ctx?: SerpApiToo
         },
         signal,
       });
-      return extract(raw);
+      return jsonResult(extract(raw));
     },
   };
 }
