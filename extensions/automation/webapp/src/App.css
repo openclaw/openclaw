@@ -1,0 +1,32 @@
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  background: var(--tgui--bg_color, #ffffff);
+  color: var(--tgui--text_color, #111827);
+}
+
+.app-body {
+  padding: 16px 16px 88px;
+  box-sizing: border-box;
+}
+
+.page-shell {
+  border: 1px solid var(--tgui--section_separator_color, #e5e7eb);
+  border-radius: 8px;
+  background: var(--tgui--secondary_bg_color, #f8fafc);
+  padding: 16px;
+}
+
+.page-shell h1 {
+  margin: 0 0 12px;
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.page-shell p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--tgui--subtitle_text_color, #6b7280);
+}

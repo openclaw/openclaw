@@ -1,0 +1,87 @@
+.agent-control {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-panel {
+  border: 1px solid var(--tgui--section_separator_color, #e5e7eb);
+  border-radius: 8px;
+  background: var(--tgui--secondary_bg_color, #f8fafc);
+  padding: 12px;
+}
+
+.agent-panel h1,
+.agent-panel h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.agent-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.agent-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.agent-dot-online {
+  background: #10b981;
+}
+
+.agent-dot-busy {
+  background: #f59e0b;
+}
+
+.agent-dot-offline {
+  background: #ef4444;
+}
+
+.agent-meta {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.agent-actions {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.agent-btn-primary,
+.agent-btn-secondary {
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.agent-btn-primary {
+  border: 1px solid var(--tgui--button_color, #3b82f6);
+  background: var(--tgui--button_color, #3b82f6);
+  color: var(--tgui--button_text_color, #ffffff);
+}
+
+.agent-btn-secondary {
+  border: 1px solid var(--tgui--hint_color, #94a3b8);
+  background: var(--tgui--bg_color, #ffffff);
+  color: var(--tgui--text_color, #111827);
+}
+
+.agent-message {
+  margin: 0;
+  font-size: 13px;
+  color: var(--tgui--hint_color, #64748b);
+}

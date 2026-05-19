@@ -1,0 +1,62 @@
+{
+  "$comment": "OpenClaw Automation Gateway — 複製相關欄位到你的 openclaw.json",
+
+  "agents": {
+    "list": [
+      {
+        "id": "main",
+        "default": true,
+        "name": "Claude (Brain)",
+        "tools": {
+          "exec": { "security": "full", "ask": "off" }
+        }
+      },
+      {
+        "id": "coder",
+        "name": "Codex (Hands)"
+      }
+    ]
+  },
+
+  "bindings": [
+    {
+      "type": "route",
+      "agentId": "main",
+      "comment": "所有 Telegram 訊息預設走 Claude CLI (主腦)",
+      "match": { "channel": "telegram" }
+    }
+  ],
+
+  "plugins": {
+    "entries": {
+      "automation": { "enabled": true }
+    }
+  },
+
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "allowFrom": ["YOUR_TELEGRAM_USER_ID"]
+    }
+  },
+
+  "tools": {
+    "exec": {
+      "security": "full",
+      "ask": "off"
+    }
+  },
+
+  "cron": {
+    "jobs": [
+      {
+        "id": "daily-pr-scan",
+        "agentId": "main",
+        "enabled": false,
+        "schedule": { "kind": "cron", "expr": "0 9 * * *", "tz": "Asia/Taipei" },
+        "payload": { "kind": "agentTurn", "message": "執行 daily-scan workflow：檢查所有 open PR 的 CI 狀態，有失敗的通知我，超過 3 天沒合的提醒我 review。" },
+        "delivery": { "mode": "announce", "channel": "telegram" }
+      }
+    ]
+  }
+}

@@ -26,12 +26,12 @@ concurrent model loading, context cache, and validation work.
 
 ## Roles
 
-| Role | Responsibility | First model | Future model class |
-| --- | --- | --- | --- |
-| Hermes planner | Split requests, classify risk, emit task packages, choose next task | `ollama/qwen3:14b` | Strong reasoning model |
-| Worker coder | Apply the smallest bounded patch and produce a validation report | `ollama/qwen3:14b` | Coding-specialized 7B/14B model |
-| Verifier | Check reports, validation output, rollback risk, and promotion status | `ollama/qwen3:14b` | Conservative 7B/8B model |
-| Memory summarizer | Compress outcomes into success/failure patterns and next-task context | `ollama/qwen3:14b` | Small 3B/7B summary model |
+| Role              | Responsibility                                                        | First model        | Future model class              |
+| ----------------- | --------------------------------------------------------------------- | ------------------ | ------------------------------- |
+| Hermes planner    | Split requests, classify risk, emit task packages, choose next task   | `ollama/qwen3:14b` | Strong reasoning model          |
+| Worker coder      | Apply the smallest bounded patch and produce a validation report      | `ollama/qwen3:14b` | Coding-specialized 7B/14B model |
+| Verifier          | Check reports, validation output, rollback risk, and promotion status | `ollama/qwen3:14b` | Conservative 7B/8B model        |
+| Memory summarizer | Compress outcomes into success/failure patterns and next-task context | `ollama/qwen3:14b` | Small 3B/7B summary model       |
 
 This keeps the current installation stable while leaving a clean path to bind
 different local models later.
@@ -77,6 +77,9 @@ A task can move forward only when all are true:
 The current stable state is:
 
 - One local model: `ollama/qwen3:14b`.
+- Optional override for all Hermes role plans:
+  `OPENCLAW_HERMES_DEFAULT_MODEL=<provider/model-or-alias>`.
+  Example: `OPENCLAW_HERMES_DEFAULT_MODEL=FARA-7B`.
 - Hermes acts as planner and reviewer, not an independent second runtime.
 - OpenClaw remains the execution and model/provider control plane.
 - Role reports create the path to future multi-model routing without immediate

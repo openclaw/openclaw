@@ -1,0 +1,115 @@
+.dashboard {
+  display: grid;
+  gap: 12px;
+}
+
+.dashboard-card {
+  border: 1px solid var(--tgui--section_separator_color, #e5e7eb);
+  border-radius: 8px;
+  background: var(--tgui--secondary_bg_color, #f8fafc);
+  padding: 12px;
+}
+
+.dashboard-card h1,
+.dashboard-card h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.dashboard-phase {
+  margin: 0 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dashboard-button {
+  border: 1px solid var(--tgui--button_color, #3b82f6);
+  background: var(--tgui--button_color, #3b82f6);
+  color: var(--tgui--button_text_color, #ffffff);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.task-title,
+.task-progress,
+.task-empty {
+  margin: 0;
+  font-size: 13px;
+}
+
+.task-title {
+  margin-bottom: 8px;
+}
+
+.task-progress {
+  margin-top: 6px;
+}
+
+.progress-track {
+  width: 100%;
+  height: 8px;
+  background: var(--tgui--bg_color, #ffffff);
+  border: 1px solid var(--tgui--section_separator_color, #e5e7eb);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--tgui--button_color, #3b82f6);
+}
+
+.attention-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.attention-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.urgency-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.urgency-high {
+  background: #ef4444;
+}
+
+.urgency-medium {
+  background: #f59e0b;
+}
+
+.urgency-low {
+  background: #10b981;
+}
+
+.quick-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dashboard-stats {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dashboard-stats p {
+  margin: 0;
+  font-size: 13px;
+}

@@ -1,0 +1,102 @@
+{
+  "id": "automation",
+  "name": "SuperClaw Automation",
+  "description": "Telegram 智能操控介面 — Dashboard, Workflow, Agent 管理, Cron 排程, DevOps 整合",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": true,
+  "commandAliases": [
+    {
+      "name": "menu",
+      "kind": "runtime-slash",
+      "cliCommand": "plugins"
+    },
+    {
+      "name": "dashboard",
+      "kind": "runtime-slash",
+      "cliCommand": "plugins"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "telegramAdminIds": {
+        "type": "array",
+        "items": { "type": "number" },
+        "default": [],
+        "description": "Telegram user IDs allowed to use admin functions"
+      },
+      "notificationLevel": {
+        "type": "string",
+        "enum": ["silent", "quiet", "loud"],
+        "default": "quiet",
+        "description": "Default notification tier for events"
+      },
+      "dashboardAutoRefreshMs": {
+        "type": "number",
+        "minimum": 5000,
+        "default": 30000,
+        "description": "Dashboard auto-refresh interval in milliseconds"
+      },
+      "rateLimit": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "maxActionsPerMinute": {
+            "type": "number",
+            "minimum": 1,
+            "default": 30
+          },
+          "maxDangerousPerHour": {
+            "type": "number",
+            "minimum": 0,
+            "default": 5
+          }
+        }
+      },
+      "security": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "autoApprovePatterns": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": ["read", "list", "status", "help"]
+          },
+          "requireConfirmPatterns": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": ["delete", "deploy", "push", "merge", "reset"]
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "telegramAdminIds": {
+      "label": "Admin User IDs",
+      "help": "Telegram numeric user IDs that can access admin-only functions (agent switch, reset, deploy)."
+    },
+    "notificationLevel": {
+      "label": "Notification Level",
+      "help": "Controls how aggressively the bot sends notifications. silent = edit dashboard only, quiet = new message no sound, loud = with sound."
+    },
+    "dashboardAutoRefreshMs": {
+      "label": "Dashboard Refresh",
+      "help": "How often the living dashboard auto-refreshes in milliseconds.",
+      "advanced": true
+    },
+    "rateLimit": {
+      "label": "Rate Limiting",
+      "help": "Action rate limits to prevent accidental spam.",
+      "advanced": true
+    },
+    "security": {
+      "label": "Security Patterns",
+      "help": "Keyword patterns for auto-approve and require-confirm actions.",
+      "advanced": true
+    }
+  }
+}
