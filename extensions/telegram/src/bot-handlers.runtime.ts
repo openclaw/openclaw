@@ -1421,17 +1421,19 @@ export const registerTelegramHandlers = ({
           },
         },
         respond: {
-          reply: async ({ text, buttons }) => {
-            await replyToCallbackChat(
-              text,
-              buttons ? { reply_markup: buildInlineKeyboard(buttons) } : undefined,
-            );
+          reply: async ({ text, buttons, textMode }) => {
+            const parseMode = textMode === "html" ? ("HTML" as const) : undefined;
+            await replyToCallbackChat(text, {
+              ...(buttons ? { reply_markup: buildInlineKeyboard(buttons) } : {}),
+              ...(parseMode ? { parse_mode: parseMode } : {}),
+            });
           },
-          editMessage: async ({ text, buttons }) => {
-            await editCallbackMessage(
-              text,
-              buttons ? { reply_markup: buildInlineKeyboard(buttons) } : undefined,
-            );
+          editMessage: async ({ text, buttons, textMode }) => {
+            const parseMode = textMode === "html" ? ("HTML" as const) : undefined;
+            await editCallbackMessage(text, {
+              ...(buttons ? { reply_markup: buildInlineKeyboard(buttons) } : {}),
+              ...(parseMode ? { parse_mode: parseMode } : {}),
+            });
           },
           editButtons: async ({ buttons }) => {
             await editCallbackButtons(buttons);

@@ -46,7 +46,7 @@ export function registerSuperClawInteractiveHandler(api: OpenClawPluginApi) {
             callback_data: btn.value,
           })),
         );
-        await respond.editMessage({ text, buttons });
+        await respond.editMessage({ text, buttons, textMode: "html" });
       };
 
       try {
@@ -64,6 +64,7 @@ export function registerSuperClawInteractiveHandler(api: OpenClawPluginApi) {
             await respond.editMessage({
               text:
                 "💬 <b>對話模式</b>\n\n直接打字，Claude 會回覆。\n語音、圖片、檔案都能處理。\n\n<i>輸入任何訊息開始...</i>",
+              textMode: "html",
             });
             break;
           }
@@ -76,6 +77,7 @@ export function registerSuperClawInteractiveHandler(api: OpenClawPluginApi) {
                 "<i>→ 重構 auth module 改用 JWT</i>\n" +
                 "<i>→ 修復 login 頁面的 bug</i>\n" +
                 "<i>→ 幫我寫測試</i>",
+              textMode: "html",
             });
             break;
           }
@@ -95,6 +97,7 @@ export function registerSuperClawInteractiveHandler(api: OpenClawPluginApi) {
                   `進度: ${t.stepCurrent}/${t.stepTotal}\n` +
                   `耗時: ${(elapsed / 1000).toFixed(0)}s\n` +
                   `動作: ${t.currentAction}`,
+                textMode: "html",
               });
             }
             break;
@@ -138,6 +141,7 @@ export function registerSuperClawInteractiveHandler(api: OpenClawPluginApi) {
           case "errlog": {
             await respond.reply({
               text: "📋 <b>錯誤日誌</b>\n\n<code>(錯誤詳情將在此顯示)</code>",
+              textMode: "html",
             });
             break;
           }
@@ -175,7 +179,7 @@ export function registerSuperClawInteractiveHandler(api: OpenClawPluginApi) {
               await editPanel(buildWorkflowList());
             } else if (sub === "run" && param) {
               trackAction(userId, `▶️ ${param}`, `sc:wf:run:${param}`);
-              await respond.editMessage({ text: `🔄 啟動工作流 <b>${param}</b>...` });
+              await respond.editMessage({ text: `🔄 啟動工作流 <b>${param}</b>...`, textMode: "html" });
             } else if (sub === "stop" && param) {
               await respond.editMessage({ text: "⏹ 工作流已取消" });
             }
@@ -227,7 +231,7 @@ export function registerSuperClawInteractiveHandler(api: OpenClawPluginApi) {
             break;
 
           case "history":
-            await respond.reply({ text: "📜 <b>對話歷史</b>\n\n(最近 10 輪)" });
+            await respond.reply({ text: "📜 <b>對話歷史</b>\n\n(最近 10 輪)", textMode: "html" });
             break;
 
           case "reset":
@@ -250,6 +254,7 @@ export function registerSuperClawInteractiveHandler(api: OpenClawPluginApi) {
                 (status.nextTask ? `\n下一個: <code>${escapeHtml(status.nextTask.slice(0, 100))}</code>` : "");
               await respond.editMessage({
                 text,
+                textMode: "html",
                 buttons: [
                   [
                     { text: "▶️ 執行下一個", callback_data: "sc:buildrun" },
@@ -261,6 +266,7 @@ export function registerSuperClawInteractiveHandler(api: OpenClawPluginApi) {
             } catch {
               await respond.editMessage({
                 text: "🔨 <b>Codex 建置</b>\n\n無法取得狀態",
+                textMode: "html",
                 buttons: [[{ text: "← 返回", callback_data: "sc:home" }]],
               });
             }
@@ -293,6 +299,7 @@ export function registerSuperClawInteractiveHandler(api: OpenClawPluginApi) {
         const msg = err?.message ?? String(err);
         await respond.editMessage({
           text: `❌ <b>操作失敗</b>\n\n<code>${escapeHtml(msg.slice(0, 200))}</code>`,
+          textMode: "html",
           buttons: [
             [
               { text: "🔄 重試", callback_data: `sc:${payload}` },
@@ -331,7 +338,7 @@ async function handleCron(
     case "run":
       if (param) {
         trackAction(userId, `執行 ${param}`, `sc:cr:run:${param}`);
-        await respond.editMessage({ text: `▶️ 執行 <b>${param}</b> 中...` });
+        await respond.editMessage({ text: `▶️ 執行 <b>${param}</b> 中...`, textMode: "html" });
       }
       break;
   }
@@ -381,7 +388,7 @@ async function handleDevOps(
     case "rv":
       if (param) {
         trackAction(userId, `Review #${param}`, `sc:dv:rv:${param}`);
-        await respond.editMessage({ text: `🔍 啟動 Code Review — PR #${param}...` });
+        await respond.editMessage({ text: `🔍 啟動 Code Review — PR #${param}...`, textMode: "html" });
       }
       break;
     case "dep":

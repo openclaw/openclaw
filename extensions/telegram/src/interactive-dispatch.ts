@@ -34,8 +34,8 @@ export type TelegramInteractiveHandlerContext = {
     messageText?: string;
   };
   respond: {
-    reply: (params: { text: string; buttons?: TelegramInteractiveButtons }) => Promise<void>;
-    editMessage: (params: { text: string; buttons?: TelegramInteractiveButtons }) => Promise<void>;
+    reply: (params: { text: string; buttons?: TelegramInteractiveButtons; textMode?: "html" | "markdown" }) => Promise<void>;
+    editMessage: (params: { text: string; buttons?: TelegramInteractiveButtons; textMode?: "html" | "markdown" }) => Promise<void>;
     editButtons: (params: { buttons: TelegramInteractiveButtons }) => Promise<void>;
     clearButtons: () => Promise<void>;
     deleteMessage: () => Promise<void>;
@@ -73,8 +73,8 @@ export async function dispatchTelegramPluginInteractiveHandler(params: {
   callbackId: string;
   ctx: TelegramInteractiveDispatchContext;
   respond: {
-    reply: (params: { text: string; buttons?: TelegramInteractiveButtons }) => Promise<void>;
-    editMessage: (params: { text: string; buttons?: TelegramInteractiveButtons }) => Promise<void>;
+    reply: (params: { text: string; buttons?: TelegramInteractiveButtons; textMode?: "html" | "markdown" }) => Promise<void>;
+    editMessage: (params: { text: string; buttons?: TelegramInteractiveButtons; textMode?: "html" | "markdown" }) => Promise<void>;
     editButtons: (params: { buttons: TelegramInteractiveButtons }) => Promise<void>;
     clearButtons: () => Promise<void>;
     deleteMessage: () => Promise<void>;
