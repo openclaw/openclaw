@@ -334,10 +334,12 @@ private fun V2WelcomeScreen(
       Spacer(modifier = Modifier.height(30.dp))
       Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         V2HeroPrimaryAction(title = "Connect Gateway", onClick = onConnect)
-        V2OutlinedAction(title = "Explore Demo", icon = Icons.AutoMirrored.Filled.KeyboardArrowRight, onClick = onConnect)
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-          Text(text = "Already have a setup?  ", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-          Text(text = "Sign in", style = ClawTheme.type.body.copy(fontWeight = FontWeight.SemiBold), color = ClawTheme.colors.text)
+        V2OutlinedAction(title = "Enter setup code", icon = Icons.AutoMirrored.Filled.KeyboardArrowRight, onClick = onConnect)
+        Surface(onClick = onConnect, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+            Text(text = "Already have a setup?  ", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+            Text(text = "Sign in", style = ClawTheme.type.body.copy(fontWeight = FontWeight.SemiBold), color = ClawTheme.colors.text)
+          }
         }
       }
       Spacer(modifier = Modifier.height(104.dp))
