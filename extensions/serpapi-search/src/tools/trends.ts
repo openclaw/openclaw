@@ -67,9 +67,9 @@ export function createSerpApiTrendsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
         },
         gprop: {
           type: "string",
-          enum: ["", "images", "news", "froogle", "youtube"],
+          enum: ["images", "news", "froogle", "youtube"],
           description:
-            "Property filter: empty=Web (default), images, news, froogle=Shopping, youtube.",
+            "Property filter: images, news, froogle=Shopping, youtube. Omit for Web (default).",
         },
         tz: {
           type: "number",
