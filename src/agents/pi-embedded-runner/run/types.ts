@@ -36,6 +36,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   initialReplayState?: EmbeddedRunReplayState;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
+  /** Context-engine-only session identity. Defaults to sessionKey. */
+  contextEngineSessionKey?: string;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
   contextTokenBudget?: number;
   /** Source metadata for the resolved model context budget. */

@@ -1203,6 +1203,31 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expectCalledWithSessionKey(afterTurn, sessionKey);
   });
 
+  it("prefers contextEngineSessionKey over sessionKey for lifecycle hooks", async () => {
+    const contextEngineSessionKey = `${sessionKey}:heartbeat-run:test-session`;
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+    const afterTurn = vi.fn(async (_params: { sessionKey?: string }) => {});
+    const contextEngine = createTestContextEngine({
+      bootstrap,
+      assemble,
+      afterTurn,
+    });
+
+    await runBootstrap(sessionKey, contextEngine, { contextEngineSessionKey });
+    await runAssemble(sessionKey, contextEngine, { contextEngineSessionKey });
+    await finalizeTurn(sessionKey, contextEngine, { contextEngineSessionKey });
+
+    expectCalledWithSessionKey(bootstrap, contextEngineSessionKey);
+    expectCalledWithSessionKey(assemble, contextEngineSessionKey);
+    expectCalledWithSessionKey(afterTurn, contextEngineSessionKey);
+    expect(
+      hoisted.runContextEngineMaintenanceMock.mock.calls.every(
+        ([params]) =>
+          requireRecord(params, "maintenance params").sessionKey === contextEngineSessionKey,
+      ),
+    ).toBe(true);
+  });
+
   it("resolves bootstrap context before acquiring the session write lock", async () => {
     const events: string[] = [];
     hoisted.resolveBootstrapContextForRunMock.mockImplementation(async () => {
@@ -1301,6 +1326,28 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expectCalledWithSessionKey(ingestBatch, sessionKey);
   });
 
+  it("prefers contextEngineSessionKey for ingestBatch fallback and maintenance", async () => {
+    const contextEngineSessionKey = `${sessionKey}:heartbeat-run:test-session`;
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+    const ingestBatch = vi.fn(
+      async (_params: { sessionKey?: string; messages: AgentMessage[] }) => ({ ingestedCount: 1 }),
+    );
+
+    await finalizeTurn(sessionKey, createTestContextEngine({ bootstrap, assemble, ingestBatch }), {
+      contextEngineSessionKey,
+      messagesSnapshot: [seedMessage, doneMessage],
+      prePromptMessageCount: 1,
+    });
+
+    expectCalledWithSessionKey(ingestBatch, contextEngineSessionKey);
+    expect(
+      hoisted.runContextEngineMaintenanceMock.mock.calls.every(
+        ([params]) =>
+          requireRecord(params, "maintenance params").sessionKey === contextEngineSessionKey,
+      ),
+    ).toBe(true);
+  });
+
   it("forwards sessionKey to per-message ingest when ingestBatch is absent", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const ingest = vi.fn(async (_params: { sessionKey?: string; message: AgentMessage }) => ({
@@ -1317,6 +1364,27 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       message: doneMessage,
       sessionId: embeddedSessionId,
       sessionKey,
+    });
+  });
+
+  it("prefers contextEngineSessionKey for per-message ingest fallback", async () => {
+    const contextEngineSessionKey = `${sessionKey}:heartbeat-run:test-session`;
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+    const ingest = vi.fn(async (_params: { sessionKey?: string; message: AgentMessage }) => ({
+      ingested: true,
+    }));
+
+    await finalizeTurn(sessionKey, createTestContextEngine({ bootstrap, assemble, ingest }), {
+      contextEngineSessionKey,
+      messagesSnapshot: [seedMessage, doneMessage],
+      prePromptMessageCount: 1,
+    });
+
+    expect(ingest).toHaveBeenCalledTimes(1);
+    expect(ingest).toHaveBeenCalledWith({
+      message: doneMessage,
+      sessionId: embeddedSessionId,
+      sessionKey: contextEngineSessionKey,
     });
   });
 

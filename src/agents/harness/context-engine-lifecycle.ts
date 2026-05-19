@@ -19,6 +19,7 @@ export async function bootstrapHarnessContextEngine(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
+  contextEngineSessionKey?: string;
   sessionFile: string;
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
@@ -36,14 +37,14 @@ export async function bootstrapHarnessContextEngine(params: {
     if (typeof params.contextEngine?.bootstrap === "function") {
       await params.contextEngine.bootstrap({
         sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
+        sessionKey: params.contextEngineSessionKey ?? params.sessionKey,
         sessionFile: params.sessionFile,
       });
     }
     await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
+      sessionKey: params.contextEngineSessionKey ?? params.sessionKey,
       sessionFile: params.sessionFile,
       reason: "bootstrap",
       sessionManager: params.sessionManager,
@@ -62,6 +63,7 @@ export async function assembleHarnessContextEngine(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
+  contextEngineSessionKey?: string;
   messages: AgentMessage[];
   tokenBudget?: number;
   availableTools?: Set<string>;
@@ -75,7 +77,7 @@ export async function assembleHarnessContextEngine(params: {
   const messages = stripRuntimeContextCustomMessages(params.messages);
   return await params.contextEngine.assemble({
     sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
+    sessionKey: params.contextEngineSessionKey ?? params.sessionKey,
     messages,
     tokenBudget: params.tokenBudget,
     ...(params.availableTools ? { availableTools: params.availableTools } : {}),
@@ -95,6 +97,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
   yieldAborted: boolean;
   sessionIdUsed: string;
   sessionKey?: string;
+  contextEngineSessionKey?: string;
   sessionFile: string;
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
@@ -119,7 +122,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
     try {
       await params.contextEngine.afterTurn({
         sessionId: params.sessionIdUsed,
-        sessionKey: params.sessionKey,
+        sessionKey: params.contextEngineSessionKey ?? params.sessionKey,
         sessionFile: params.sessionFile,
         messages: conversationSnapshot.messages,
         prePromptMessageCount: conversationSnapshot.prePromptMessageCount,
@@ -139,7 +142,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
         try {
           await params.contextEngine.ingestBatch({
             sessionId: params.sessionIdUsed,
-            sessionKey: params.sessionKey,
+            sessionKey: params.contextEngineSessionKey ?? params.sessionKey,
             messages: newMessages,
           });
         } catch (ingestErr) {
@@ -151,7 +154,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
           try {
             await params.contextEngine.ingest?.({
               sessionId: params.sessionIdUsed,
-              sessionKey: params.sessionKey,
+              sessionKey: params.contextEngineSessionKey ?? params.sessionKey,
               message: msg,
             });
           } catch (ingestErr) {
@@ -172,7 +175,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
     await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({
       contextEngine: params.contextEngine,
       sessionId: params.sessionIdUsed,
-      sessionKey: params.sessionKey,
+      sessionKey: params.contextEngineSessionKey ?? params.sessionKey,
       sessionFile: params.sessionFile,
       reason: "turn",
       sessionManager: params.sessionManager,

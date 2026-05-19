@@ -485,12 +485,14 @@ describe("installContextEngineLoopHook", () => {
       prePromptMessageCount: number;
     }) => Record<string, unknown> | undefined,
     onAfterTurnCheckpoint?: (messageCount: number) => void,
+    contextEngineSessionKey?: string,
   ): () => void {
     return installContextEngineLoopHook({
       agent,
       contextEngine: engine,
       sessionId,
       sessionKey,
+      ...(contextEngineSessionKey ? { contextEngineSessionKey } : {}),
       sessionFile,
       tokenBudget,
       modelId,
@@ -544,6 +546,19 @@ describe("installContextEngineLoopHook", () => {
     expect(afterTurnParams?.prePromptMessageCount).toBe(1);
     expect(afterTurnParams?.messages).toBe(messages);
     expect(engine.assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers contextEngineSessionKey for loop-hook afterTurn and assemble calls", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    const contextEngineSessionKey = `${sessionKey}:heartbeat-run:test-session`;
+    installHook(agent, engine, 1, undefined, undefined, contextEngineSessionKey);
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    expect(recordMockArg(engine.afterTurn).sessionKey).toBe(contextEngineSessionKey);
+    expect(recordMockArg(engine.assemble).sessionKey).toBe(contextEngineSessionKey);
   });
 
   it("passes runtimeContext through loop-hook afterTurn calls", async () => {
@@ -839,6 +854,26 @@ describe("installContextEngineLoopHook", () => {
     expect(ingestParams?.sessionKey).toBe(sessionKey);
     expect(ingestParams?.message).toBe(toolResult);
     expect(engine.assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers contextEngineSessionKey for ingestBatch and per-message loop-hook fallbacks", async () => {
+    const contextEngineSessionKey = `${sessionKey}:heartbeat-run:test-session`;
+
+    const batchAgent = makeGuardableAgent();
+    const batchEngine = makeMockEngine({ omitAfterTurn: true });
+    installHook(batchAgent, batchEngine, 1, undefined, undefined, contextEngineSessionKey);
+    await callTransform(batchAgent, [makeUser("first"), makeToolResult("call_1", "r1")]);
+    expect(recordMockArg(batchEngine.ingestBatch ?? vi.fn()).sessionKey).toBe(
+      contextEngineSessionKey,
+    );
+    expect(recordMockArg(batchEngine.assemble).sessionKey).toBe(contextEngineSessionKey);
+
+    const singleAgent = makeGuardableAgent();
+    const singleEngine = makeMockEngine({ omitAfterTurn: true, omitIngestBatch: true });
+    installHook(singleAgent, singleEngine, 1, undefined, undefined, contextEngineSessionKey);
+    await callTransform(singleAgent, [makeUser("first"), makeToolResult("call_2", "r2")]);
+    expect(recordMockArg(singleEngine.ingest).sessionKey).toBe(contextEngineSessionKey);
+    expect(recordMockArg(singleEngine.assemble).sessionKey).toBe(contextEngineSessionKey);
   });
 
   it("falls through to source messages when engine.afterTurn throws", async () => {

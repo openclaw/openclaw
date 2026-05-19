@@ -1830,6 +1830,7 @@ export async function runAgentTurnWithFallback(params: {
                 enableHeartbeatTool: params.opts?.enableHeartbeatTool,
                 forceHeartbeatTool: params.opts?.forceHeartbeatTool,
                 bootstrapContextMode: params.opts?.bootstrapContextMode,
+                contextEngineSessionKey: params.opts?.contextEngineSessionKey,
                 bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
                 images: currentTurnImages.images,
                 imageOrder: currentTurnImages.imageOrder,

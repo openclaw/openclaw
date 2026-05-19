@@ -193,7 +193,7 @@ export async function compactEmbeddedPiSession(
             contextEngine,
             {
               sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
+              sessionKey: params.contextEngineSessionKey ?? params.sessionKey,
               sessionFile: params.sessionFile,
               tokenBudget: contextTokenBudget,
               currentTokenCount: params.currentTokenCount,
@@ -276,7 +276,7 @@ export async function compactEmbeddedPiSession(
           await runContextEngineMaintenance({
             contextEngine,
             sessionId: postCompactionSessionId,
-            sessionKey: params.sessionKey,
+            sessionKey: params.contextEngineSessionKey ?? params.sessionKey,
             sessionFile: postCompactionSessionFile,
             reason: "compaction",
             runtimeContext,
@@ -385,7 +385,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
     }),
     ...resolveContextEngineCapabilities({
       config: params.params.config,
-      sessionKey: params.params.sessionKey,
+      sessionKey: params.params.contextEngineSessionKey ?? params.params.sessionKey,
       agentId: sessionAgentId,
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.compaction",

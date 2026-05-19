@@ -11,6 +11,8 @@ export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
   runId?: string;
   sessionKey?: string;
+  /** Optional context-engine-only identity. Defaults to sessionKey. */
+  contextEngineSessionKey?: string;
   /** Session key used only for runtime policy/sandbox resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
   messageChannel?: string;

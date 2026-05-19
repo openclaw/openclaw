@@ -73,6 +73,12 @@ export type GetReplyOptions = {
   fastModeOverride?: boolean;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
+  /**
+   * Optional session identity forwarded only to context-engine lifecycle hooks.
+   * This lets callers preserve a stable routing/session key while isolating
+   * context-engine state for runs that must not replay prior context.
+   */
+  contextEngineSessionKey?: string;
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
   /** If true, run the model without OpenClaw tools for this turn. */

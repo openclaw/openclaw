@@ -1057,6 +1057,13 @@ export function resolveAttemptToolPolicyMessageProvider(params: {
   return params.messageProvider ?? params.messageChannel;
 }
 
+function resolveContextEngineSessionKey(params: {
+  sessionKey?: string;
+  contextEngineSessionKey?: string;
+}): string | undefined {
+  return params.contextEngineSessionKey?.trim() || params.sessionKey?.trim() || undefined;
+}
+
 function collectAttemptExplicitToolAllowlistSources(params: {
   config?: EmbeddedRunAttemptParams["config"];
   sessionKey?: string;
@@ -2122,6 +2129,7 @@ export async function runEmbeddedAttempt(
         contextEngine: activeContextEngine,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        contextEngineSessionKey: resolveContextEngineSessionKey(params),
         sessionFile: params.sessionFile,
         sessionManager,
         runtimeContext: buildAfterTurnRuntimeContext({
@@ -2479,6 +2487,7 @@ export async function runEmbeddedAttempt(
           contextEngine: activeContextEngine,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
+          contextEngineSessionKey: resolveContextEngineSessionKey(params),
           sessionFile: params.sessionFile,
           tokenBudget: params.contextTokenBudget,
           modelId: params.modelId,
@@ -3068,6 +3077,7 @@ export async function runEmbeddedAttempt(
               contextEngine: activeContextEngine,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
+              contextEngineSessionKey: resolveContextEngineSessionKey(params),
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
               availableTools: new Set(effectiveTools.map((tool) => tool.name)),
@@ -4335,6 +4345,7 @@ export async function runEmbeddedAttempt(
             yieldAborted,
             sessionIdUsed,
             sessionKey: params.sessionKey,
+            contextEngineSessionKey: resolveContextEngineSessionKey(params),
             sessionFile: params.sessionFile,
             messagesSnapshot,
             prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,

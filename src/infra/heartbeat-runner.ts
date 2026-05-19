@@ -693,6 +693,13 @@ function resolveStaleHeartbeatIsolatedSessionKey(params: {
   return undefined;
 }
 
+function buildIsolatedHeartbeatContextEngineSessionKey(params: {
+  isolatedBaseSessionKey: string;
+  sessionId: string;
+}) {
+  return `${params.isolatedBaseSessionKey}:heartbeat-run:${params.sessionId}`;
+}
+
 function resolveHeartbeatReasoningPayloads(
   replyResult: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload[] {
@@ -1496,6 +1503,7 @@ export async function runHeartbeatOnce(opts: {
   }
 
   let runSessionKey = sessionKey;
+  let contextEngineSessionKey: string | undefined;
   if (useIsolatedSession) {
     const configuredSession = resolveHeartbeatSession(cfg, agentId, heartbeat);
     // Collapse only the repeated `:heartbeat` suffixes introduced by wake-triggered
@@ -1534,6 +1542,10 @@ export async function runHeartbeatOnce(opts: {
         ...cronSession.sessionEntry,
         heartbeatIsolatedBaseSessionKey: isolatedBaseSessionKey,
       };
+      contextEngineSessionKey = buildIsolatedHeartbeatContextEngineSessionKey({
+        isolatedBaseSessionKey,
+        sessionId: cronSession.sessionEntry.sessionId,
+      });
       referencedSessionIds = new Set(
         Object.values(store)
           .map((sessionEntry) => sessionEntry?.sessionId)
@@ -1734,6 +1746,7 @@ export async function runHeartbeatOnce(opts: {
       // Heartbeat timeout is a per-run override so user turns keep the global default.
       timeoutOverrideSeconds,
       bootstrapContextMode,
+      ...(contextEngineSessionKey ? { contextEngineSessionKey } : {}),
       onModelSelected: replyPrefix.onModelSelected,
     };
     const getReplyFromConfig =
