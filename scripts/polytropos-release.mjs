@@ -212,6 +212,7 @@ function usage() {
 
 Usage:
   node scripts/polytropos-release.mjs release --run <run-id> [--repo <owner/repo>] [--artifact <name>] [--log <path>]
+  node scripts/polytropos-release.mjs release --run-url <actions-run-url> [--repo <owner/repo>] [--artifact <name>] [--log <path>]
 
 Behavior:
   - Downloads the CI-built release artifact from GitHub Actions (no local build, no git tagging)
