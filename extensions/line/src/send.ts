@@ -3,6 +3,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { validateLineMediaUrl } from "./outbound-media.js";
@@ -26,6 +27,8 @@ const userProfileCache = new Map<
   { displayName: string; pictureUrl?: string; fetchedAt: number }
 >();
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
+const LINE_PUSH_TIMEOUT_MS = 10_000;
+const LINE_REPLY_TIMEOUT_MS = 8_000;
 
 interface LineSendOpts {
   cfg: OpenClawConfig;
@@ -218,10 +221,13 @@ async function pushLineMessages(
   }
 
   const { account, client, chatId } = createLinePushContext(to, opts);
-  const pushRequest = client.pushMessage({
-    to: chatId,
-    messages,
-  });
+  const pushRequest = withTimeout(
+    client.pushMessage({
+      to: chatId,
+      messages,
+    }),
+    LINE_PUSH_TIMEOUT_MS,
+  );
 
   if (behavior.errorContext) {
     await pushRequest.catch((err) => {
@@ -261,10 +267,13 @@ async function replyLineMessages(
 ): Promise<void> {
   const { account, client } = createLineMessagingClient(opts);
 
-  await client.replyMessage({
-    replyToken,
-    messages,
-  });
+  await withTimeout(
+    client.replyMessage({
+      replyToken,
+      messages,
+    }),
+    LINE_REPLY_TIMEOUT_MS,
+  );
 
   recordLineOutboundActivity(account.accountId);
 

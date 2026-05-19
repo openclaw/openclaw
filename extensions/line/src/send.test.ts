@@ -450,4 +450,121 @@ describe("LINE send helpers", () => {
     ];
     expect(firstCall[0].messages[0].quickReply?.items).toHaveLength(13);
   });
+
+  it("rejects push with timeout when SDK call hangs (exactly one SDK call)", async () => {
+    vi.useFakeTimers();
+    pushMessageMock.mockImplementation(() => new Promise(() => {}));
+
+    const pending = sendModule.pushMessagesLine("U-hang", [{ type: "text", text: "hi" }], {
+      cfg: LINE_TEST_CFG,
+    });
+    const settled = pending.catch((err: Error) => err);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const result = await settled;
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toMatch(/timeout/i);
+    expect(pushMessageMock).toHaveBeenCalledTimes(1);
+    expect(recordChannelActivityMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects reply with timeout when SDK call hangs (exactly one SDK call)", async () => {
+    vi.useFakeTimers();
+    replyMessageMock.mockImplementation(() => new Promise(() => {}));
+
+    const pending = sendModule.replyMessageLine("reply-token", [{ type: "text", text: "hi" }], {
+      cfg: LINE_TEST_CFG,
+    });
+    const settled = pending.catch((err: Error) => err);
+
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    const result = await settled;
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toMatch(/timeout/i);
+    expect(replyMessageMock).toHaveBeenCalledTimes(1);
+    expect(recordChannelActivityMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves push success path under the timeout wrapper", async () => {
+    pushMessageMock.mockResolvedValueOnce({});
+
+    const result = await sendModule.pushMessagesLine("U-ok", [{ type: "text", text: "ok" }], {
+      cfg: LINE_TEST_CFG,
+    });
+
+    expect(pushMessageMock).toHaveBeenCalledTimes(1);
+    expect(result.messageId).toBe("push");
+    expect(result.chatId).toBe("U-ok");
+    expect(recordChannelActivityMock).toHaveBeenCalledWith({
+      channel: "line",
+      accountId: "default",
+      direction: "outbound",
+    });
+  });
+
+  it("preserves reply success path under the timeout wrapper", async () => {
+    replyMessageMock.mockResolvedValueOnce({});
+
+    await expect(
+      sendModule.replyMessageLine("reply-token", [{ type: "text", text: "ok" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(replyMessageMock).toHaveBeenCalledTimes(1);
+    expect(recordChannelActivityMock).toHaveBeenCalledWith({
+      channel: "line",
+      accountId: "default",
+      direction: "outbound",
+    });
+  });
+
+  it("does not retry or duplicate the SDK call after a push timeout", async () => {
+    vi.useFakeTimers();
+    pushMessageMock.mockImplementation(() => new Promise(() => {}));
+
+    const pending = sendModule
+      .pushMessagesLine("U-anti-dup", [{ type: "text", text: "hi" }], {
+        cfg: LINE_TEST_CFG,
+      })
+      .catch((err: Error) => err);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await pending;
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(pushMessageMock).toHaveBeenCalledTimes(1);
+    expect(replyMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a timeout rejection from sendMessageLine so callers can fall back from reply to push", async () => {
+    vi.useFakeTimers();
+    replyMessageMock.mockImplementation(() => new Promise(() => {}));
+
+    const pending = sendModule
+      .sendMessageLine("line:user:U-fallback", "Hello", {
+        cfg: LINE_TEST_CFG,
+        replyToken: "reply-token",
+      })
+      .catch((err: Error) => err);
+
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    const result = await pending;
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).toMatch(/timeout/i);
+    expect(replyMessageMock).toHaveBeenCalledTimes(1);
+    expect(pushMessageMock).not.toHaveBeenCalled();
+
+    pushMessageMock.mockResolvedValueOnce({});
+    const fallback = await sendModule.pushMessagesLine(
+      "U-fallback",
+      [{ type: "text", text: "Hello" }],
+      { cfg: LINE_TEST_CFG },
+    );
+    expect(pushMessageMock).toHaveBeenCalledTimes(1);
+    expect(fallback.messageId).toBe("push");
+  });
 });
