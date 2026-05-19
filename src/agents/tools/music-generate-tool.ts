@@ -718,7 +718,7 @@ export function createMusicGenerateTool(options?: {
       });
       const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
 
-      if (shouldDetach) {
+      if (shouldDetach && taskHandle) {
         recordRecentMediaGenerationTaskStartForSession({
           sessionKey: options?.agentSessionKey,
           taskKind: "music_generation",

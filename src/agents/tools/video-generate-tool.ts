@@ -1152,7 +1152,7 @@ export function createVideoGenerateTool(options?: {
       });
       const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
 
-      if (shouldDetach) {
+      if (shouldDetach && taskHandle) {
         recordRecentMediaGenerationTaskStartForSession({
           sessionKey: options?.agentSessionKey,
           taskKind: "video_generation",

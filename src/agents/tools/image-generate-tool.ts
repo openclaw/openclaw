@@ -919,7 +919,7 @@ export function createImageGenerateTool(options?: {
       });
       const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
 
-      if (shouldDetach) {
+      if (shouldDetach && taskHandle) {
         recordRecentMediaGenerationTaskStartForSession({
           sessionKey: options?.agentSessionKey,
           taskKind: "image_generation",
