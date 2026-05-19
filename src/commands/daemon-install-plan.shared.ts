@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import {
@@ -50,4 +51,72 @@ export function resolveDaemonNodeBinDir(nodePath?: string): string[] | undefined
     return undefined;
   }
   return [path.dirname(trimmed)];
+}
+
+// Service PATH on macOS is intentionally narrow (system + homebrew only) — see
+// resolveSystemPathDirs / getMinimalServicePathParts in src/daemon/service-env.ts.
+// That excludes prefix-based installs like ~/.npm-global/bin, which silently breaks
+// child processes (agent shells, hooks) that try to invoke `openclaw` from PATH.
+// Detecting the install-time openclaw bin dir keeps the minimal-PATH security posture
+// while ensuring the gateway's own CLI is always reachable from its supervised env.
+export function resolveOpenclawBinDir(options?: {
+  env?: Record<string, string | undefined>;
+  platform?: NodeJS.Platform;
+  existsSync?: (candidate: string) => boolean;
+}): string[] | undefined {
+  const env = options?.env ?? process.env;
+  const platform = options?.platform ?? process.platform;
+  const existsSync = options?.existsSync ?? fs.existsSync;
+  const rawPath = env.PATH ?? env.Path ?? env.path;
+  if (!rawPath) {
+    return undefined;
+  }
+  const basenames =
+    platform === "win32"
+      ? ["openclaw.cmd", "openclaw.exe", "openclaw.bat", "openclaw"]
+      : ["openclaw"];
+  const pathPlatform = platform === "win32" ? path.win32 : path.posix;
+  for (const rawSegment of rawPath.split(pathPlatform.delimiter)) {
+    const segment = rawSegment.trim();
+    if (!segment || !pathPlatform.isAbsolute(segment)) {
+      continue;
+    }
+    for (const basename of basenames) {
+      if (existsSync(pathPlatform.join(segment, basename))) {
+        return [segment];
+      }
+    }
+  }
+  return undefined;
+}
+
+export function resolveDaemonExtraPathDirs(params: {
+  nodePath?: string;
+  env?: Record<string, string | undefined>;
+  platform?: NodeJS.Platform;
+  existsSync?: (candidate: string) => boolean;
+}): string[] | undefined {
+  const dirs: string[] = [];
+  const seen = new Set<string>();
+  const append = (entries: string[] | undefined) => {
+    if (!entries) {
+      return;
+    }
+    for (const entry of entries) {
+      if (seen.has(entry)) {
+        continue;
+      }
+      seen.add(entry);
+      dirs.push(entry);
+    }
+  };
+  append(
+    resolveOpenclawBinDir({
+      env: params.env,
+      platform: params.platform,
+      existsSync: params.existsSync,
+    }),
+  );
+  append(resolveDaemonNodeBinDir(params.nodePath));
+  return dirs.length > 0 ? dirs : undefined;
 }

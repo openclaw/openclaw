@@ -3,8 +3,8 @@ import { resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
 import {
   emitDaemonInstallRuntimeWarning,
+  resolveDaemonExtraPathDirs,
   resolveDaemonInstallRuntimeInputs,
-  resolveDaemonNodeBinDir,
 } from "./daemon-install-plan.shared.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { NodeDaemonRuntime } from "./node-daemon-runtime.js";
@@ -58,8 +58,9 @@ export async function buildNodeInstallPlan(params: {
   const environment = buildNodeServiceEnvironment({
     env: params.env,
     // Match the gateway install path so supervised node services keep the chosen
-    // node toolchain on PATH for sibling binaries like npm/pnpm when needed.
-    extraPathDirs: resolveDaemonNodeBinDir(nodePath),
+    // node toolchain on PATH for sibling binaries like npm/pnpm when needed, plus
+    // the install-time openclaw bin dir so the CLI stays reachable from supervised env.
+    extraPathDirs: resolveDaemonExtraPathDirs({ nodePath, env: params.env }),
   });
   const description = formatNodeServiceDescription({
     version: environment.OPENCLAW_SERVICE_VERSION,

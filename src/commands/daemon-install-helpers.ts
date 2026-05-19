@@ -34,8 +34,8 @@ import {
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import {
   emitDaemonInstallRuntimeWarning,
+  resolveDaemonExtraPathDirs,
   resolveDaemonInstallRuntimeInputs,
-  resolveDaemonNodeBinDir,
 } from "./daemon-install-plan.shared.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -547,7 +547,7 @@ export async function buildGatewayInstallPlan(params: {
         ? resolveGatewayLaunchAgentLabel(serviceInputEnv.OPENCLAW_PROFILE)
         : undefined,
     platform,
-    extraPathDirs: resolveDaemonNodeBinDir(nodePath),
+    extraPathDirs: resolveDaemonExtraPathDirs({ nodePath, env: serviceInputEnv, platform }),
   });
 
   const { environment, environmentValueSources } = await buildGatewayInstallEnvironment({
