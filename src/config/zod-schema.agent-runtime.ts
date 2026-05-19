@@ -968,6 +968,12 @@ export const AgentEntrySchema = z
       .optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
+    experimental: z
+      .object({
+        localModelLean: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
