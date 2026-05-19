@@ -308,6 +308,7 @@ jobs:
         run: |
           set -euo pipefail
           current_created="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .created_at)"
+          stale_before="$(date -u -d '8 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
           while true; do
             blockers="$(
               for workflow in mantis-telegram-desktop-proof.yml mantis-telegram-live.yml; do
@@ -316,7 +317,8 @@ jobs:
                     | jq -r \
                       --argjson current_id "$GITHUB_RUN_ID" \
                       --arg current_created "$current_created" \
-                      '.[] | select(.databaseId != $current_id) | select(.createdAt < $current_created or (.createdAt == $current_created and .databaseId < $current_id)) | "\(.createdAt)\t#\(.databaseId)\t\(.status)\t\(.url)"'
+                      --arg stale_before "$stale_before" \
+                      '.[] | select(.databaseId != $current_id) | select(.createdAt >= $stale_before) | select(.createdAt < $current_created or (.createdAt == $current_created and .databaseId < $current_id)) | "\(.createdAt)\t#\(.databaseId)\t\(.status)\t\(.url)"'
                 done
               done | sort -u
             )"
