@@ -203,6 +203,144 @@ describe("openclaw launcher", () => {
     expect(result.stderr).toContain("missing dist/entry.(m)js");
   });
 
+  it("uses precomputed root help when plugin config does not invalidate it", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ rootHelpText: "PRECOMPUTED help\n" }),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
+      cwd: fixtureRoot,
+      env: launcherEnv(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("PRECOMPUTED help\n");
+  });
+
+  it("defers root help to the runtime entry when plugin config can change help", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const configPath = path.join(fixtureRoot, "openclaw.json");
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ rootHelpText: "PRECOMPUTED memory help\n" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ plugins: { slots: { memory: "memory-lancedb" } } }),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
+      cwd: fixtureRoot,
+      env: launcherEnv({ OPENCLAW_CONFIG_PATH: configPath }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
+  });
+
+  it("checks the OPENCLAW_HOME default config path before using precomputed root help", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const openclawHome = path.join(fixtureRoot, "home");
+    const configDir = path.join(openclawHome, ".openclaw");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ rootHelpText: "PRECOMPUTED memory help\n" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(configDir, "openclaw.json"),
+      JSON.stringify({ plugins: { slots: { memory: "memory-lancedb" } } }),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
+      cwd: fixtureRoot,
+      env: launcherEnv({ OPENCLAW_HOME: openclawHome }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
+  });
+
+  it("checks legacy config candidates before using precomputed root help", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const home = path.join(fixtureRoot, "home");
+    const legacyConfigDir = path.join(home, ".clawdbot");
+    await fs.mkdir(legacyConfigDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ rootHelpText: "PRECOMPUTED memory help\n" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(legacyConfigDir, "clawdbot.json"),
+      JSON.stringify({ plugins: { slots: { memory: "memory-lancedb" } } }),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
+      cwd: fixtureRoot,
+      env: launcherEnv({ HOME: home, OPENCLAW_HOME: undefined }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
+  });
+
+  it("defers root help when the active config has includes", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const configPath = path.join(fixtureRoot, "openclaw.json");
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ rootHelpText: "PRECOMPUTED memory help\n" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+    await fs.writeFile(configPath, JSON.stringify({ $include: "memory.json" }), "utf8");
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
+      cwd: fixtureRoot,
+      env: launcherEnv({ OPENCLAW_CONFIG_PATH: configPath }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
+  });
+
   it("explains how to recover from an unbuilt source install", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await addSourceTreeMarker(fixtureRoot);

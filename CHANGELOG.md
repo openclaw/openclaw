@@ -137,6 +137,7 @@ Docs: https://docs.openclaw.ai
 - Mac app: render channel quick config as aligned Settings rows and hide schema-only variants that cannot be edited safely from the quick pane.
 - Gateway/webchat: hide internal runtime-context and other `display: false` transcript messages from Chat history and live message events. Fixes #83216. Thanks @EmpireCreator.
 - CLI/help: keep `gateway`, `doctor`, `status`, and `health` help registration out of action/runtime imports so subcommand `--help` stays lightweight in constrained terminals. Fixes #83228. Thanks @dfguerrerom.
+- CLI/help: show plugin-owned command help based on the active memory slot so LanceDB memory users see `ltm` instead of unavailable `memory` commands. Fixes #83745. (#83841) Thanks @joshavant.
 - Cron/Discord: keep explicit announce runs in message-tool-only source-reply mode so scheduled agent turns post once instead of also echoing through automatic visible replies. Fixes #83261. Thanks @Theralley.
 - Telegram: preserve forum-topic origin targets in inbound, audio-preflight, and skipped-message hook contexts so follow-up delivery stays bound to the originating topic. Fixes #83302. Thanks @M00zyx.
 - Telegram: retry HTTP 421 Misdirected Request send failures on a fresh fallback transport so transient edge-node routing errors no longer drop outbound replies. Fixes #48892. (#48908) Thanks @MarsDoge.
