@@ -1,11 +1,11 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing as replyRunTesting,
+  testing as replyRunTesting,
   createReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
-  __testing,
+  testing,
   abortAndDrainEmbeddedPiRun,
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
@@ -44,7 +44,7 @@ function createRunHandle(
 
 describe("pi-embedded runner run registry", () => {
   afterEach(() => {
-    __testing.resetActiveEmbeddedRuns();
+    testing.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
     vi.restoreAllMocks();
   });
@@ -324,8 +324,8 @@ describe("pi-embedded runner run registry", () => {
     );
     const handle = createRunHandle();
 
-    runsA.__testing.resetActiveEmbeddedRuns();
-    runsB.__testing.resetActiveEmbeddedRuns();
+    runsA.testing.resetActiveEmbeddedRuns();
+    runsB.testing.resetActiveEmbeddedRuns();
 
     try {
       runsA.setActiveEmbeddedRun("session-shared", handle);
@@ -334,8 +334,8 @@ describe("pi-embedded runner run registry", () => {
       runsB.clearActiveEmbeddedRun("session-shared", handle);
       expect(runsA.isEmbeddedPiRunActive("session-shared")).toBe(false);
     } finally {
-      runsA.__testing.resetActiveEmbeddedRuns();
-      runsB.__testing.resetActiveEmbeddedRuns();
+      runsA.testing.resetActiveEmbeddedRuns();
+      runsB.testing.resetActiveEmbeddedRuns();
     }
   });
 

@@ -1533,6 +1533,31 @@ describe("resolveModel", () => {
     expect(result.model?.input).toEqual(["text", "image"]);
   });
 
+  it("repairs stale text-only Anthropic fallback rows for Claude vision models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            api: "anthropic-messages",
+            models: [
+              {
+                ...makeModel("claude-sonnet-4-5"),
+                name: "claude-sonnet-4-5",
+                api: "anthropic-messages",
+                input: ["text"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("anthropic", "claude-sonnet-4-5", "/tmp/agent", cfg);
+
+    expect(result.model?.input).toEqual(["text", "image"]);
+  });
+
   it("repairs stale text-only Foundry discovered rows for GPT-family models", () => {
     const cfg = {
       models: {

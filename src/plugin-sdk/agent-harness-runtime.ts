@@ -171,6 +171,7 @@ export {
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
   runBeforeToolCallHook,
+  setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
 } from "../agents/pi-tools.before-tool-call.js";
 export {
@@ -204,7 +205,7 @@ export {
   buildNativeHookRelayCommand,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
-  __testing as nativeHookRelayTesting,
+  testing as nativeHookRelayTesting,
   registerNativeHookRelay,
 } from "../agents/harness/native-hook-relay.js";
 

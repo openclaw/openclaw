@@ -79,13 +79,13 @@ vi.mock("../../routing/session-key.js", () => ({
   resolveAgentIdFromSessionKey: resolveAgentIdFromSessionKeyMock,
 }));
 
-const { ensureSkillSnapshot, __testing_resetResolvedSkillsCache } =
+const { ensureSkillSnapshot, resetResolvedSkillsCacheForTests } =
   await import("./session-updates.js");
 
 describe("ensureSkillSnapshot", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    __testing_resetResolvedSkillsCache();
+    resetResolvedSkillsCacheForTests();
     buildWorkspaceSkillSnapshotMock.mockReturnValue({ prompt: "", skills: [], resolvedSkills: [] });
     getSkillsSnapshotVersionMock.mockReturnValue(0);
     shouldRefreshSnapshotForVersionMock.mockReturnValue(false);

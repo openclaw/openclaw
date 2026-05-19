@@ -223,7 +223,61 @@ describe("qa tool coverage report", () => {
     );
   });
 
-  it("fails untracked required OpenClaw dynamic tool drift", () => {
+  it("passes required OpenClaw dynamic tool coverage when both runtimes exercise the tool", () => {
+    const report = buildQaToolCoverageReport({
+      scenarios: [
+        makeScenario("tool-web-search", "web-search", {
+          toolName: "web_search",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+            capabilityLayer: "openclaw-dynamic-direct",
+            required: true,
+          },
+        }),
+      ],
+      summary: {
+        scenarios: [
+          {
+            name: "tool web_search",
+            status: "pass",
+            runtimeParity: {
+              scenarioId: "tool-web-search",
+              drift: "tool-result-shape",
+              driftDetails: "runtime envelopes differ",
+              cells: {
+                pi: {
+                  runtime: "pi",
+                  transcriptBytes: "",
+                  toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r1" }],
+                  finalText: "",
+                  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                  wallClockMs: 1,
+                  bootStateLines: [],
+                },
+                codex: {
+                  runtime: "codex",
+                  transcriptBytes: "",
+                  toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r2" }],
+                  finalText: "",
+                  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                  wallClockMs: 1,
+                  bootStateLines: [],
+                },
+              },
+            },
+          },
+        ],
+      },
+      generatedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.failures).toEqual([]);
+    expect(report.passingTools).toBe(1);
+  });
+
+  it("fails required OpenClaw dynamic tool coverage when a runtime skips the tool", () => {
     const report = buildQaToolCoverageReport({
       scenarios: [
         makeScenario("tool-web-search", "web-search", {
@@ -274,7 +328,62 @@ describe("qa tool coverage report", () => {
 
     expect(report.pass).toBe(false);
     expect(report.failures).toEqual([
-      "web-search drift=tool-call-shape (Codex emitted no web_search call)",
+      "web-search missing codex tool call web_search",
+    ]);
+  });
+
+  it("fails required OpenClaw dynamic tool coverage when the fixture failure mode is preserved", () => {
+    const report = buildQaToolCoverageReport({
+      scenarios: [
+        makeScenario("tool-web-search", "web-search", {
+          toolName: "web_search",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+            capabilityLayer: "openclaw-dynamic-direct",
+            required: true,
+          },
+        }),
+      ],
+      summary: {
+        scenarios: [
+          {
+            name: "tool web_search",
+            status: "fail",
+            runtimeParity: {
+              scenarioId: "tool-web-search",
+              drift: "failure-mode",
+              driftDetails: "at least one runtime failed",
+              cells: {
+                pi: {
+                  runtime: "pi",
+                  transcriptBytes: "",
+                  toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
+                  finalText: "",
+                  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                  wallClockMs: 1,
+                  bootStateLines: [],
+                },
+                codex: {
+                  runtime: "codex",
+                  transcriptBytes: "",
+                  toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
+                  finalText: "",
+                  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                  wallClockMs: 1,
+                  bootStateLines: [],
+                },
+              },
+            },
+          },
+        ],
+      },
+      generatedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.failures).toEqual([
+      "web-search drift=failure-mode (at least one runtime failed)",
     ]);
   });
 
