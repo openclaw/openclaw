@@ -39,27 +39,36 @@ export function rememberFollowupDrainCallback(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
+  // Plain callback registration. Do NOT sweep restoredPendingDrainKeys here:
+  // enqueueFollowupRun calls this during an active turn (passing
+  // restartIfIdle=false from agent-runner.ts), and scheduling a drain at that
+  // point would race the active turn it should wait behind. The pending-restore
+  // sweep lives in kickFollowupDrainIfIdle, which enqueue only calls once it
+  // has confirmed `restartIfIdle && !queue.draining` — the same active-run
+  // idle guard the rest of the drain pipeline uses.
   FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
-  // After a process restart, drain callbacks are initially empty and restored
-  // queues sit idle until a new message arrives for their channel route.
-  // Sweep the pending-restore set here: for any restored queue whose callback
-  // is now registered (including the one just set above), kick a drain
-  // immediately so delivery resumes without waiting for the next inbound message.
-  for (const restoredKey of peekRestoredPendingDrainKeys()) {
-    const cb = FOLLOWUP_RUN_CALLBACKS.get(restoredKey);
-    if (cb) {
-      clearRestoredPendingDrainKey(restoredKey);
-      scheduleFollowupDrain(restoredKey, cb);
-    }
-  }
 }
 
 export function clearFollowupDrainCallback(key: string): void {
   FOLLOWUP_RUN_CALLBACKS.delete(key);
 }
 
-/** Restart the drain for `key` if it is currently idle, using the stored callback. */
+/**
+ * Restart the drain for `key` if it is currently idle, using the stored callback.
+ * Also sweeps the pending-restore set: any restored queue whose callback is
+ * now registered gets its drain scheduled via the same idle-aware path. The
+ * caller (enqueue) has already confirmed `restartIfIdle && !queue.draining`
+ * before reaching this function, so the active turn for `key` is finished.
+ */
 export function kickFollowupDrainIfIdle(key: string): void {
+  for (const restoredKey of peekRestoredPendingDrainKeys()) {
+    const cb = FOLLOWUP_RUN_CALLBACKS.get(restoredKey);
+    if (!cb) {
+      continue;
+    }
+    clearRestoredPendingDrainKey(restoredKey);
+    scheduleFollowupDrain(restoredKey, cb);
+  }
   const cb = FOLLOWUP_RUN_CALLBACKS.get(key);
   if (!cb) {
     return;

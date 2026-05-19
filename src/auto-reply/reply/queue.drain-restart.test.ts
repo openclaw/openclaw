@@ -11,7 +11,7 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { rememberFollowupDrainCallback } from "./queue/drain.js";
+import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./queue/drain.js";
 import {
   clearFollowupQueuesRestoredFlagForTest,
   clearRestoredPendingDrainKeysForTest,
@@ -437,8 +437,74 @@ describe("followup queue drain restart after idle window", () => {
         expect(run.prompt).toBe("survived restart");
         drained.resolve();
       });
+      // Drain restored items only via the idle-aware path. Registering the
+      // callback alone (the previous trigger point) would have raced with any
+      // active turn for this route; the sweep now lives in kickFollowupDrainIfIdle,
+      // which enqueue only calls when restartIfIdle && !queue.draining holds.
+      kickFollowupDrainIfIdle(key);
 
       await drained.promise;
+    } finally {
+      FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not drain restored items just because a callback is registered (active-turn race)", async () => {
+    // Models the race the bot's [P1] flagged: when enqueueFollowupRun is called
+    // mid-turn with restartIfIdle=false, it still calls rememberFollowupDrainCallback.
+    // That registration must not, on its own, schedule a drain for a restored
+    // queue, or the restored items would be dispatched concurrently with the
+    // active turn they should wait behind.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-race-"));
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+
+    const key = `test-restored-race-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const drainCalls: FollowupRun[] = [];
+
+    try {
+      enqueueFollowupRun(
+        key,
+        createRun({ prompt: "survived restart" }),
+        settings,
+        "message-id",
+        undefined,
+        false,
+      );
+      FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      restoreFollowupQueues();
+
+      // Plain registration — simulates an enqueue mid-turn with restartIfIdle=false.
+      rememberFollowupDrainCallback(key, async (run) => {
+        drainCalls.push(run);
+      });
+
+      // Yield a few microtasks; nothing should have drained because the
+      // idle-aware kick was never invoked.
+      for (let i = 0; i < 5; i++) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(drainCalls).toHaveLength(0);
+
+      // Now the active turn would have finished and enqueue's idle-kick fires.
+      kickFollowupDrainIfIdle(key);
+      // Spin a few microtasks to let the scheduled drain complete.
+      for (let i = 0; i < 10 && drainCalls.length === 0; i++) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(drainCalls).toHaveLength(1);
+      expect(drainCalls[0]?.prompt).toBe("survived restart");
     } finally {
       FOLLOWUP_QUEUES.delete(key);
       clearRestoredPendingDrainKeysForTest();
