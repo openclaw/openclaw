@@ -75,6 +75,7 @@ internal enum class V2SettingsRoute {
   Approvals,
   CronJobs,
   Usage,
+  Skills,
   Notifications,
   PhoneCapabilities,
   Gateway,
@@ -97,6 +98,7 @@ internal fun V2SettingsDetailScreen(
     V2SettingsRoute.Approvals -> V2ApprovalsSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.CronJobs -> V2CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Usage -> V2UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
+    V2SettingsRoute.Skills -> V2SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Notifications -> V2NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.PhoneCapabilities -> V2PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Gateway -> V2GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -487,7 +489,7 @@ private fun V2AboutSettingsScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun V2SettingsDetailFrame(
+internal fun V2SettingsDetailFrame(
   title: String,
   subtitle: String,
   icon: ImageVector,
@@ -524,7 +526,7 @@ private data class V2SettingsToggleRow(
   val onCheckedChange: (Boolean) -> Unit,
 )
 
-private data class V2SettingsMetric(
+internal data class V2SettingsMetric(
   val title: String,
   val value: String,
 )
@@ -808,7 +810,7 @@ private fun V2SettingsToggleListRow(row: V2SettingsToggleRow) {
 }
 
 @Composable
-private fun V2SettingsMetricPanel(rows: List<V2SettingsMetric>) {
+internal fun V2SettingsMetricPanel(rows: List<V2SettingsMetric>) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     Column {
       rows.forEachIndexed { index, row ->
