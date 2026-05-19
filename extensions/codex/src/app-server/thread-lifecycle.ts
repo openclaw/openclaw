@@ -691,6 +691,7 @@ export function buildTurnStartParams(
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
     sandboxPolicy?: CodexSandboxPolicy;
+    heartbeatCollaborationInstructions?: string;
   },
 ): CodexTurnStartParams {
   return {
@@ -704,7 +705,9 @@ export function buildTurnStartParams(
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
-    collaborationMode: buildTurnCollaborationMode(params),
+    collaborationMode: buildTurnCollaborationMode(params, {
+      heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
+    }),
   };
 }
 
@@ -712,23 +715,30 @@ type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaboratio
 
 export function buildTurnCollaborationMode(
   params: EmbeddedRunAttemptParams,
+  options: { heartbeatCollaborationInstructions?: string } = {},
 ): CodexTurnCollaborationMode {
   return {
     mode: "default",
     settings: {
       model: params.modelId,
       reasoning_effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
-      developer_instructions: buildTurnScopedCollaborationInstructions(params),
+      developer_instructions: buildTurnScopedCollaborationInstructions(params, options),
     },
   };
 }
 
-function buildTurnScopedCollaborationInstructions(params: EmbeddedRunAttemptParams): string | null {
+function buildTurnScopedCollaborationInstructions(
+  params: EmbeddedRunAttemptParams,
+  options: { heartbeatCollaborationInstructions?: string } = {},
+): string | null {
   if (params.trigger === "cron") {
     return buildCronCollaborationInstructions();
   }
   if (params.trigger === "heartbeat") {
-    return buildHeartbeatCollaborationInstructions();
+    return joinPresentSections(
+      buildHeartbeatCollaborationInstructions(),
+      options.heartbeatCollaborationInstructions,
+    );
   }
   return null;
 }
@@ -748,6 +758,10 @@ function buildHeartbeatCollaborationInstructions(): string {
     "When you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.",
     CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
   ].join("\n\n");
+}
+
+function joinPresentSections(...sections: Array<string | undefined>): string {
+  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
 export function codexDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[]): string {

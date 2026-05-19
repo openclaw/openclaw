@@ -4687,13 +4687,17 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
-  it("passes SOUL.md as Codex developer instructions and other bootstrap files as turn context", async () => {
+  it("passes stable workspace files as Codex developer instructions and keeps MEMORY.md as turn context", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS guidance.");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
+    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "Identity guidance goes here.");
+    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), "Tool guidance goes here.");
     await fs.writeFile(path.join(workspaceDir, "USER.md"), "User profile goes here.");
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "Heartbeat checklist goes here.");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Memory summary goes here.");
     const harness = createStartedThreadHarness();
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -4711,9 +4715,14 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(threadStartParams.developerInstructions).toContain("OpenClaw Agent Soul");
     expect(threadStartParams.developerInstructions).toContain(
-      "A soul document defines who you are.",
+      "They define who you are, how you work",
     );
     expect(threadStartParams.developerInstructions).toContain("Soul voice goes here.");
+    expect(threadStartParams.developerInstructions).toContain("Identity guidance goes here.");
+    expect(threadStartParams.developerInstructions).toContain("Tool guidance goes here.");
+    expect(threadStartParams.developerInstructions).toContain("User profile goes here.");
+    expect(threadStartParams.developerInstructions).not.toContain("Heartbeat checklist goes here.");
+    expect(threadStartParams.developerInstructions).not.toContain("Memory summary goes here.");
     expect(threadStartParams.developerInstructions).not.toContain("Codex loads AGENTS.md natively");
     expect(threadStartParams.developerInstructions).not.toContain("Follow AGENTS guidance.");
     expect(config?.instructions).toBeUndefined();
@@ -4727,10 +4736,90 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).not.toContain("does not override Codex system/developer instructions");
     expect(inputText).not.toContain("not developer policy");
     expect(inputText).not.toContain("Soul voice goes here.");
-    expect(inputText).toContain("User profile goes here.");
+    expect(inputText).not.toContain("Identity guidance goes here.");
+    expect(inputText).not.toContain("Tool guidance goes here.");
+    expect(inputText).not.toContain("User profile goes here.");
+    expect(inputText).not.toContain("Heartbeat checklist goes here.");
+    expect(inputText).toContain("Memory summary goes here.");
     expect(inputText).toContain("Codex loads AGENTS.md natively");
     expect(inputText).not.toContain("Follow AGENTS guidance.");
     expect(inputText).toContain("Current user request:\nhello");
+  });
+
+  it("points heartbeat Codex turns at HEARTBEAT.md without injecting its contents", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const heartbeatPath = path.join(workspaceDir, "HEARTBEAT.md");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(heartbeatPath, "Heartbeat checklist goes here.");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.trigger = "heartbeat";
+    params.bootstrapContextMode = "lightweight";
+    params.bootstrapContextRunKind = "heartbeat";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const threadStartParams = threadStart?.params as {
+      developerInstructions?: string;
+    };
+    expect(threadStartParams.developerInstructions).not.toContain("Heartbeat checklist goes here.");
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      input?: Array<{ text?: string }>;
+      collaborationMode?: {
+        settings?: {
+          developer_instructions?: string | null;
+        };
+      };
+    };
+    const inputText = turnStartParams.input?.[0]?.text ?? "";
+    const collaborationInstructions =
+      turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
+
+    expect(inputText).not.toContain("Heartbeat checklist goes here.");
+    expect(collaborationInstructions).toContain("HEARTBEAT.md exists");
+    expect(collaborationInstructions).toContain("Read it before proceeding with this heartbeat");
+    expect(collaborationInstructions).toContain(heartbeatPath);
+    expect(collaborationInstructions).not.toContain("Heartbeat checklist goes here.");
+  });
+
+  it("omits heartbeat Codex workspace pointers for empty HEARTBEAT.md files", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "\n\n");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.trigger = "heartbeat";
+    params.bootstrapContextMode = "lightweight";
+    params.bootstrapContextRunKind = "heartbeat";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      collaborationMode?: {
+        settings?: {
+          developer_instructions?: string | null;
+        };
+      };
+    };
+    const collaborationInstructions =
+      turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
+
+    expect(collaborationInstructions).toContain("This is an OpenClaw heartbeat turn");
+    expect(collaborationInstructions).not.toContain("HEARTBEAT.md exists");
   });
 
   it("remaps Codex bootstrap files under dot-prefixed workspace directories", () => {
@@ -9387,7 +9476,10 @@ describe("runCodexAppServerAttempt", () => {
     const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
     params.trigger = "heartbeat";
 
-    const heartbeatCollaborationMode = buildTurnCollaborationMode(params);
+    const heartbeatCollaborationMode = buildTurnCollaborationMode(params, {
+      heartbeatCollaborationInstructions:
+        "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
+    });
     expect(heartbeatCollaborationMode.mode).toBe("default");
     expect(heartbeatCollaborationMode.settings.model).toBe("gpt-5.4-codex");
     expect(heartbeatCollaborationMode.settings.reasoning_effort).toBe("medium");
@@ -9400,9 +9492,17 @@ describe("runCodexAppServerAttempt", () => {
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
       "If `heartbeat_respond` is not already available and `tool_search` is available",
     );
+    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
+      "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
+    );
 
     params.trigger = "user";
-    expect(buildTurnCollaborationMode(params).settings.developer_instructions).toBeNull();
+    expect(
+      buildTurnCollaborationMode(params, {
+        heartbeatCollaborationInstructions:
+          "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
+      }).settings.developer_instructions,
+    ).toBeNull();
   });
 
   it("uses turn-scoped collaboration instructions for cron Codex turns", () => {

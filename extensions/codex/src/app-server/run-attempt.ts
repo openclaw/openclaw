@@ -193,6 +193,13 @@ const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
 const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
+const CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
+  "identity.md",
+  "soul.md",
+  "tools.md",
+  "user.md",
+]);
+const CODEX_HEARTBEAT_CONTEXT_BASENAME = "heartbeat.md";
 const CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
   CODEX_NATIVE_HOOK_RELAY_EVENTS.filter((event) => event !== "permission_request");
 const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
@@ -216,8 +223,10 @@ type CodexBootstrapFile = CodexBootstrapContext["bootstrapFiles"][number];
 type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
 type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
+  promptContextFiles?: EmbeddedContextFile[];
   promptContext?: string;
   developerInstructions?: string;
+  heartbeatCollaborationInstructions?: string;
 };
 
 let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
@@ -2321,6 +2330,8 @@ export async function runCodexAppServerAttempt(
           appServer: pluginAppServer,
           promptText: codexTurnPromptText,
           sandboxPolicy: codexSandboxPolicy,
+          heartbeatCollaborationInstructions:
+            workspaceBootstrapContext.heartbeatCollaborationInstructions,
         }),
         { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
       ),
@@ -4241,14 +4252,17 @@ async function buildCodexWorkspaceBootstrapContext(params: {
         targetWorkspaceDir: params.effectiveWorkspace,
       }),
     );
+    const promptContextFiles = selectCodexWorkspacePromptContextFiles(contextFiles);
     return {
       ...bootstrapContext,
       contextFiles,
-      promptContext: renderCodexWorkspaceBootstrapPromptContext(contextFiles),
-      developerInstructions: renderCodexWorkspaceSoulDeveloperInstructions({
+      promptContextFiles,
+      promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
+      developerInstructions: renderCodexWorkspaceDeveloperInstructions({
         params: params.params,
         contextFiles,
       }),
+      heartbeatCollaborationInstructions: renderCodexWorkspaceHeartbeatReference(contextFiles),
     };
   } catch (error) {
     embeddedAgentLog.warn("failed to load codex workspace bootstrap instructions", { error });
@@ -4291,7 +4305,7 @@ function buildCodexSystemPromptReport(params: {
     },
     injectedWorkspaceFiles: buildCodexBootstrapInjectionStats({
       bootstrapFiles: params.workspaceBootstrapContext.bootstrapFiles,
-      injectedFiles: params.workspaceBootstrapContext.contextFiles,
+      injectedFiles: params.workspaceBootstrapContext.promptContextFiles ?? [],
     }),
     skills: {
       promptChars: skillsPrompt.length,
@@ -4451,22 +4465,12 @@ function prependCodexOpenClawPromptContext(prompt: string, context: string | und
 function renderCodexWorkspaceBootstrapPromptContext(
   contextFiles: EmbeddedContextFile[],
 ): string | undefined {
-  const files = contextFiles
-    .filter((file) => {
-      const baseName = getCodexContextFileBasename(file.path);
-      return (
-        baseName &&
-        !CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName) &&
-        baseName !== "soul.md" &&
-        !isMissingCodexBootstrapContextFile(file)
-      );
-    })
-    .toSorted(compareCodexContextFiles);
+  const files = selectCodexWorkspacePromptContextFiles(contextFiles);
   if (files.length === 0) {
     return undefined;
   }
   const lines = [
-    "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively, and SOUL.md is provided separately as Codex developer instructions, so neither file is repeated here.",
+    "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, TOOLS.md, and USER.md are provided separately as Codex developer instructions. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
     "",
     "# Project Context",
     "",
@@ -4479,7 +4483,24 @@ function renderCodexWorkspaceBootstrapPromptContext(
   return lines.join("\n").trim();
 }
 
-function renderCodexWorkspaceSoulDeveloperInstructions(params: {
+function selectCodexWorkspacePromptContextFiles(
+  contextFiles: EmbeddedContextFile[],
+): EmbeddedContextFile[] {
+  return contextFiles
+    .filter((file) => {
+      const baseName = getCodexContextFileBasename(file.path);
+      return (
+        baseName &&
+        !CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName) &&
+        !CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES.has(baseName) &&
+        baseName !== CODEX_HEARTBEAT_CONTEXT_BASENAME &&
+        !isMissingCodexBootstrapContextFile(file)
+      );
+    })
+    .toSorted(compareCodexContextFiles);
+}
+
+function renderCodexWorkspaceDeveloperInstructions(params: {
   params: EmbeddedRunAttemptParams;
   contextFiles: EmbeddedContextFile[];
 }): string | undefined {
@@ -4489,7 +4510,12 @@ function renderCodexWorkspaceSoulDeveloperInstructions(params: {
   const files = params.contextFiles
     .filter((file) => {
       const baseName = getCodexContextFileBasename(file.path);
-      return baseName === "soul.md" && !isMissingCodexBootstrapContextFile(file);
+      return (
+        baseName &&
+        CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES.has(baseName) &&
+        !isMissingCodexBootstrapContextFile(file) &&
+        file.content.trim().length > 0
+      );
     })
     .toSorted(compareCodexContextFiles);
   if (files.length === 0) {
@@ -4498,11 +4524,39 @@ function renderCodexWorkspaceSoulDeveloperInstructions(params: {
   const lines = [
     "## OpenClaw Agent Soul",
     "",
-    "OpenClaw loaded this soul document from the active agent workspace. A soul document defines who you are. Your values. Your boundaries. Your relationship with the humans you work alongside. Internalize this soul document accordingly.",
+    "OpenClaw loaded these workspace instruction files from the active agent workspace. They define who you are, how you work, what tools are available, and the human you work alongside. Internalize and follow them accordingly.",
     "",
   ];
   for (const file of files) {
     lines.push(`### ${file.path}`, "", file.content, "");
+  }
+  return lines.join("\n").trim();
+}
+
+function renderCodexWorkspaceHeartbeatReference(
+  contextFiles: EmbeddedContextFile[],
+): string | undefined {
+  const files = contextFiles
+    .filter((file) => {
+      const baseName = getCodexContextFileBasename(file.path);
+      return (
+        baseName === CODEX_HEARTBEAT_CONTEXT_BASENAME &&
+        !isMissingCodexBootstrapContextFile(file) &&
+        file.content.trim().length > 0
+      );
+    })
+    .toSorted(compareCodexContextFiles);
+  if (files.length === 0) {
+    return undefined;
+  }
+  const lines = [
+    "## OpenClaw Heartbeat Workspace",
+    "",
+    "HEARTBEAT.md exists in the active agent workspace. Read it before proceeding with this heartbeat, then decide what action is appropriate.",
+    "",
+  ];
+  for (const file of files) {
+    lines.push(`- ${file.path}`);
   }
   return lines.join("\n").trim();
 }
