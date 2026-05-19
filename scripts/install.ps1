@@ -601,19 +601,24 @@ function Install-OpenClawFromGit {
     Remove-LegacySubmodule -RepoDir $RepoDir
 
     $prevPnpmScriptShell = $env:NPM_CONFIG_SCRIPT_SHELL
+    $prevCi = $env:CI
     $pnpmCommand = Get-PnpmCommandPath
     if (-not $pnpmCommand) {
         throw "pnpm not found after installation."
     }
     $env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"
+    if (-not $env:CI) {
+        $env:CI = "true"
+    }
     try {
-        & $pnpmCommand -C $RepoDir install
-        if (-not (& $pnpmCommand -C $RepoDir ui:build)) {
+        & $pnpmCommand -C $RepoDir --config.confirm-modules-purge=false install
+        if (-not (& $pnpmCommand -C $RepoDir --config.confirm-modules-purge=false ui:build)) {
             Write-Host "[!] UI build failed; continuing (CLI may still work)" -ForegroundColor Yellow
         }
         & $pnpmCommand -C $RepoDir build
     } finally {
         $env:NPM_CONFIG_SCRIPT_SHELL = $prevPnpmScriptShell
+        $env:CI = $prevCi
     }
 
     $binDir = Join-Path $env:USERPROFILE ".local\\bin"

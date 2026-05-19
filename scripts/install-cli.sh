@@ -364,6 +364,10 @@ run_pnpm() {
   "${PNPM_CMD[@]}" "$@"
 }
 
+run_pnpm_noninteractive() {
+  CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm --config.confirm-modules-purge=false "$@"
+}
+
 resolve_git_openclaw_ref() {
   local requested="${OPENCLAW_VERSION:-latest}"
   local resolved_version=""
@@ -750,9 +754,9 @@ install_openclaw_from_git() {
 
   local install_lockfile_flag
   install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
-  CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
+  run_pnpm_noninteractive -C "$repo_dir" install "$install_lockfile_flag"
 
-  if ! run_pnpm -C "$repo_dir" ui:build; then
+  if ! run_pnpm_noninteractive -C "$repo_dir" ui:build; then
     log "UI build failed; continuing (CLI may still work)"
   fi
   run_pnpm -C "$repo_dir" build

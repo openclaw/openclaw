@@ -81,8 +81,15 @@ describe("install-cli.sh", () => {
     expect(result.stdout).toContain("branch=--no-frozen-lockfile");
     expect(result.stdout).toContain("tag=--frozen-lockfile");
     expect(script).toContain(
-      'CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
+      'run_pnpm_noninteractive -C "$repo_dir" install "$install_lockfile_flag"',
     );
+  });
+
+  it("runs Control UI builds with noninteractive pnpm settings", () => {
+    expect(script).toContain(
+      'CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm --config.confirm-modules-purge=false "$@"',
+    );
+    expect(script).toContain('run_pnpm_noninteractive -C "$repo_dir" ui:build');
   });
 
   it("aligns pnpm to the checked-out repo packageManager before installing", () => {

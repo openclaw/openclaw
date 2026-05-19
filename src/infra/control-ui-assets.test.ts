@@ -7,6 +7,7 @@ type FakeFsEntry = { kind: "file"; content: string } | { kind: "dir" };
 const state = vi.hoisted(() => ({
   entries: new Map<string, FakeFsEntry>(),
   realpaths: new Map<string, string>(),
+  runCommandWithTimeout: vi.fn(),
 }));
 
 const abs = (p: string) => path.resolve(p);
@@ -69,9 +70,14 @@ vi.mock("./openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: vi.fn(() => null),
 }));
 
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: state.runCommandWithTimeout,
+}));
+
 let resolveControlUiRepoRoot: typeof import("./control-ui-assets.js").resolveControlUiRepoRoot;
 let resolveControlUiDistIndexPath: typeof import("./control-ui-assets.js").resolveControlUiDistIndexPath;
 let resolveControlUiDistIndexHealth: typeof import("./control-ui-assets.js").resolveControlUiDistIndexHealth;
+let ensureControlUiAssetsBuilt: typeof import("./control-ui-assets.js").ensureControlUiAssetsBuilt;
 let isPackageProvenControlUiRootSync: typeof import("./control-ui-assets.js").isPackageProvenControlUiRootSync;
 let resolveControlUiRootOverrideSync: typeof import("./control-ui-assets.js").resolveControlUiRootOverrideSync;
 let resolveControlUiRootSync: typeof import("./control-ui-assets.js").resolveControlUiRootSync;
@@ -83,6 +89,7 @@ describe("control UI assets helpers (fs-mocked)", () => {
       resolveControlUiRepoRoot,
       resolveControlUiDistIndexPath,
       resolveControlUiDistIndexHealth,
+      ensureControlUiAssetsBuilt,
       isPackageProvenControlUiRootSync,
       resolveControlUiRootOverrideSync,
       resolveControlUiRootSync,
@@ -93,6 +100,7 @@ describe("control UI assets helpers (fs-mocked)", () => {
   beforeEach(() => {
     state.entries.clear();
     state.realpaths.clear();
+    state.runCommandWithTimeout.mockReset();
     vi.clearAllMocks();
   });
 
@@ -246,6 +254,47 @@ describe("control UI assets helpers (fs-mocked)", () => {
         cwd: abs("fixtures/cwd"),
       }),
     ).toBe(true);
+  });
+
+  it("builds missing assets with CI enabled for noninteractive pnpm auto-install", async () => {
+    const root = abs("fixtures/auto-build");
+    const argv1 = path.join(root, "dist", "index.js");
+    const uiScript = path.join(root, "scripts", "ui.js");
+    const indexPath = path.join(root, "dist", "control-ui", "index.html");
+    const originalArgv = process.argv;
+    const originalCi = process.env.CI;
+
+    setFile(path.join(root, "package.json"), "{}\n");
+    setFile(path.join(root, "ui", "vite.config.ts"), "export {};\n");
+    setFile(uiScript, "export {};\n");
+    state.runCommandWithTimeout.mockImplementation(async () => {
+      setFile(indexPath, "<html></html>\n");
+      return { stdout: "", stderr: "", code: 0, signal: null, killed: false, termination: "exit" };
+    });
+
+    process.argv = [process.execPath, argv1];
+    delete process.env.CI;
+    try {
+      await expect(ensureControlUiAssetsBuilt()).resolves.toEqual({ ok: true, built: true });
+    } finally {
+      process.argv = originalArgv;
+      if (originalCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = originalCi;
+      }
+    }
+
+    expect(state.runCommandWithTimeout).toHaveBeenCalledWith(
+      [process.execPath, uiScript, "build"],
+      {
+        cwd: root,
+        timeoutMs: 10 * 60_000,
+        env: {
+          CI: "true",
+        },
+      },
+    );
   });
 
   it("does not treat fallback roots as package-proven", () => {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resolveSpawnCall, shouldUseCmdExeForCommand } from "../../scripts/ui.js";
+import {
+  AUTO_INSTALL_ARGS,
+  resolveAutoInstallEnv,
+  resolveSpawnCall,
+  shouldUseCmdExeForCommand,
+} from "../../scripts/ui.js";
 
 describe("scripts/ui windows spawn behavior", () => {
   it("wraps Windows command launchers with cmd.exe without enabling shell mode", () => {
@@ -86,6 +91,18 @@ describe("scripts/ui windows spawn behavior", () => {
         env: { PATH: "/bin" },
         shell: false,
       },
+    });
+  });
+
+  it("runs auto-install in noninteractive pnpm mode", () => {
+    expect(AUTO_INSTALL_ARGS).toEqual(["install", "--config.confirm-modules-purge=false"]);
+    expect(resolveAutoInstallEnv({ PATH: "/bin" })).toEqual({
+      PATH: "/bin",
+      CI: "true",
+    });
+    expect(resolveAutoInstallEnv({ PATH: "/bin", CI: "false" })).toEqual({
+      PATH: "/bin",
+      CI: "false",
     });
   });
 });

@@ -111,6 +111,19 @@ describe("install.ps1 failure handling", () => {
     expect(mainBody).not.toContain("Remove-LegacySubmodule");
   });
 
+  it("runs git checkout dependency and UI builds with noninteractive pnpm settings", () => {
+    const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
+    expect(gitInstallBody).toContain("$prevCi = $env:CI");
+    expect(gitInstallBody).toContain('$env:CI = "true"');
+    expect(gitInstallBody).toContain(
+      "& $pnpmCommand -C $RepoDir --config.confirm-modules-purge=false install",
+    );
+    expect(gitInstallBody).toContain(
+      "& $pnpmCommand -C $RepoDir --config.confirm-modules-purge=false ui:build",
+    );
+    expect(gitInstallBody).toContain("$env:CI = $prevCi");
+  });
+
   runIfPowerShell("exits non-zero when run as a script file", () => {
     const tempDir = harness.createTempDir("openclaw-install-ps1-");
     const scriptPath = join(tempDir, "install.ps1");
