@@ -740,7 +740,7 @@ describe("launchd install", () => {
     expect(state.dirModes.get(tmpDir)).toBe(0o700);
   });
 
-  it("writes KeepAlive=true policy with shutdown and throttle limits", async () => {
+  it("writes KeepAlive SuccessfulExit=false policy with shutdown and throttle limits", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
       env,
@@ -751,12 +751,12 @@ describe("launchd install", () => {
     const plistPath = resolveLaunchAgentPlistPath(env);
     const plist = state.files.get(plistPath) ?? "";
     expect(plist).toContain("<key>KeepAlive</key>");
-    expect(plist).toContain("<true/>");
+    expect(plist).toContain("<key>SuccessfulExit</key>");
+    expect(plist).toContain("<false/>");
     expect(plist).toContain("<key>StandardInPath</key>");
     expect(plist).toContain(`<string>${LAUNCH_AGENT_STDIN_PATH}</string>`);
     expect(plist).toContain("<key>StandardOutPath</key>");
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
-    expect(plist).not.toContain("<key>SuccessfulExit</key>");
     expect(plist).toContain("<key>ExitTimeOut</key>");
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS}</integer>`);
     expect(plist).toContain("<key>ProcessType</key>");
