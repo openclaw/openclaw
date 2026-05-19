@@ -210,17 +210,17 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $packages; \
     fi
 
-# Install any Python packages required by your claw installation
-# Example: docker build --build-arg OPENCLAW_DOCKER_PIP_PACKAGES="requests"
-ARG OPENCLAW_DOCKER_PIP_PACKAGES=""
+# Install additional Python packages needed by your skills or plugins.
+# Example: docker build --build-arg OPENCLAW_IMAGE_PIP_PACKAGES="requests humanize" .
+ARG OPENCLAW_IMAGE_PIP_PACKAGES=""
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
-    if [ -n "$OPENCLAW_DOCKER_PIP_PACKAGES" ]; then \
-      if ! command -v pip3 >/dev/null 2>&1; then \
+    if [ -n "$OPENCLAW_IMAGE_PIP_PACKAGES" ]; then \
+      if ! python3 -m pip --version >/dev/null 2>&1; then \
         apt-get update && \
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-pip; \
       fi && \
-      pip3 install --no-cache-dir --break-system-packages $OPENCLAW_DOCKER_PIP_PACKAGES; \
+      python3 -m pip install --no-cache-dir --break-system-packages $OPENCLAW_IMAGE_PIP_PACKAGES; \
     fi
 
 # Optionally install Chromium and Xvfb for browser automation.
