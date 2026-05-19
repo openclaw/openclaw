@@ -4,9 +4,21 @@ import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
-  "_nkw", "ebay_domain", "_salic", "_pgn", "_ipg",
-  "show_only", "buying_format", "_udlo", "_udhi", "_sop",
-  "category_id", "_stpos", "LH_ItemCondition", "LH_PrefLoc", "zero_trace",
+  "_nkw",
+  "ebay_domain",
+  "_salic",
+  "_pgn",
+  "_ipg",
+  "show_only",
+  "buying_format",
+  "_udlo",
+  "_udhi",
+  "_sop",
+  "category_id",
+  "_stpos",
+  "LH_ItemCondition",
+  "LH_PrefLoc",
+  "zero_trace",
 ] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
@@ -32,8 +44,7 @@ export function createSerpApiEbayTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
       properties: {
         query: {
           type: "string",
-          description:
-            "eBay search query. Optional when category_id is specified.",
+          description: "eBay search query. Optional when category_id is specified.",
         },
         ebay_domain: {
           type: "string",
@@ -42,7 +53,8 @@ export function createSerpApiEbayTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
         buying_format: {
           type: "string",
           enum: ["Auction", "BIN", "BO"],
-          description: "Filter by buying format: Auction, BIN (Buy It Now), or BO (Accepts Offers).",
+          description:
+            "Filter by buying format: Auction, BIN (Buy It Now), or BO (Accepts Offers).",
         },
         show_only: {
           type: "string",
@@ -65,7 +77,8 @@ export function createSerpApiEbayTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
         },
         category_id: {
           type: "string",
-          description: "Category ID to narrow search. Obtain from a previous results' categories array.",
+          description:
+            "Category ID to narrow search. Obtain from a previous results' categories array.",
         },
         condition: {
           type: "string",
@@ -92,19 +105,24 @@ export function createSerpApiEbayTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
     },
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
+      const query = readStringParam(args, "query");
+      const categoryId = readStringParam(args, "category_id");
+      if (!query && !categoryId) {
+        throw new Error("serpapi_ebay: either query or category_id is required");
+      }
       const raw = await callSerpApi({
         cfg,
         engine: "ebay",
         allowedParams: ALLOWED_PARAMS,
         params: {
-          _nkw: readStringParam(args, "query") ?? undefined,
+          _nkw: query ?? undefined,
           ebay_domain: readStringParam(args, "ebay_domain") ?? undefined,
           buying_format: readStringParam(args, "buying_format") ?? undefined,
           show_only: readStringParam(args, "show_only") ?? undefined,
           _udlo: readNumberParam(args, "min_price") ?? undefined,
           _udhi: readNumberParam(args, "max_price") ?? undefined,
           _sop: readNumberParam(args, "sort", { integer: true }) ?? undefined,
-          category_id: readStringParam(args, "category_id") ?? undefined,
+          category_id: categoryId ?? undefined,
           LH_ItemCondition: readStringParam(args, "condition") ?? undefined,
           _stpos: readStringParam(args, "zip") ?? undefined,
           _pgn: readNumberParam(args, "page", { integer: true }) ?? undefined,
