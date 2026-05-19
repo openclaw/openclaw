@@ -1,3 +1,4 @@
+import { getCliSessionBinding } from "../agents/cli-session.js";
 import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
 import {
   evaluateSessionFreshness,
@@ -7,8 +8,10 @@ import {
 } from "../config/sessions/reset.js";
 import { loadSessionStore } from "../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { performGatewaySessionReset } from "./session-reset-service.js";
 
 const DAILY_SESSION_RESET_INTERVAL_MS = 60_000;
@@ -24,6 +27,7 @@ export type DailySessionResetResult = {
 export async function resetStaleDailySessions(params: {
   cfg: OpenClawConfig;
   nowMs?: number;
+  activeSessionKeys?: ReadonlySet<string>;
   performReset?: (key: string) => Promise<{ ok: boolean }>;
 }): Promise<DailySessionResetResult> {
   const now = params.nowMs ?? Date.now();
@@ -45,6 +49,9 @@ export async function resetStaleDailySessions(params: {
       if (!entry?.sessionId || typeof entry.updatedAt !== "number") {
         continue;
       }
+      if (params.activeSessionKeys?.has(sessionKey)) {
+        continue;
+      }
       const resetType = resolveSessionResetType({ sessionKey });
       const resetPolicy = resolveSessionResetPolicy({
         sessionCfg: params.cfg.session,
@@ -55,6 +62,9 @@ export async function resetStaleDailySessions(params: {
         }),
       });
       if (resetPolicy.mode !== "daily") {
+        continue;
+      }
+      if (hasProviderOwnedSession(entry, resetPolicy.configured)) {
         continue;
       }
       checked += 1;
@@ -83,9 +93,18 @@ export async function resetStaleDailySessions(params: {
   return { checked, reset, errors };
 }
 
+function hasProviderOwnedSession(entry: SessionEntry | undefined, resetConfigured: boolean) {
+  if (resetConfigured) {
+    return false;
+  }
+  const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
+  return Boolean(provider && getCliSessionBinding(entry, provider));
+}
+
 export function startDailySessionResetScheduler(params: {
   cfg: OpenClawConfig;
   intervalMs?: number;
+  getActiveSessionKeys?: () => ReadonlySet<string>;
 }): ReturnType<typeof setInterval> {
   let inFlight = false;
   const run = () => {
@@ -93,7 +112,10 @@ export function startDailySessionResetScheduler(params: {
       return;
     }
     inFlight = true;
-    void resetStaleDailySessions({ cfg: params.cfg })
+    void resetStaleDailySessions({
+      cfg: params.cfg,
+      activeSessionKeys: params.getActiveSessionKeys?.(),
+    })
       .then((result) => {
         if (result.reset > 0 || result.errors > 0) {
           log.info("daily session reset sweep complete", result);

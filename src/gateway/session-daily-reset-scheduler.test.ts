@@ -79,4 +79,61 @@ describe("daily session reset scheduler", () => {
     expect(result).toEqual({ checked: 1, reset: 0, errors: 0 });
     expect(performReset).not.toHaveBeenCalled();
   });
+
+  it("preserves provider-owned CLI sessions when reset policy is implicit", async () => {
+    const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
+    const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
+    const sessionKey = "agent:main:main";
+    const { cfg } = await makeStore({
+      [sessionKey]: {
+        sessionId: "old-session",
+        updatedAt: beforeReset,
+        sessionStartedAt: beforeReset,
+        providerOverride: "claude-cli",
+        modelProvider: "claude-cli",
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "provider-session",
+          },
+        },
+      },
+    });
+    cfg.session = {
+      store: cfg.session?.store,
+    };
+    const performReset = vi.fn(async () => ({ ok: true }));
+
+    const result = await resetStaleDailySessions({
+      cfg,
+      nowMs: afterReset,
+      performReset,
+    });
+
+    expect(result).toEqual({ checked: 0, reset: 0, errors: 0 });
+    expect(performReset).not.toHaveBeenCalled();
+  });
+
+  it("skips sessions with active runs", async () => {
+    const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
+    const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
+    const sessionKey = "agent:main:telegram:direct:user-1";
+    const { cfg } = await makeStore({
+      [sessionKey]: {
+        sessionId: "old-session",
+        updatedAt: beforeReset,
+        sessionStartedAt: beforeReset,
+      },
+    });
+    const performReset = vi.fn(async () => ({ ok: true }));
+
+    const result = await resetStaleDailySessions({
+      cfg,
+      nowMs: afterReset,
+      activeSessionKeys: new Set([sessionKey]),
+      performReset,
+    });
+
+    expect(result).toEqual({ checked: 0, reset: 0, errors: 0 });
+    expect(performReset).not.toHaveBeenCalled();
+  });
 });

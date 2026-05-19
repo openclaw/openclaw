@@ -250,7 +250,15 @@ export function startGatewayMaintenanceTimers(params: {
   }, 60_000);
 
   const dailySessionReset = params.cfg
-    ? startDailySessionResetScheduler({ cfg: params.cfg })
+    ? startDailySessionResetScheduler({
+        cfg: params.cfg,
+        getActiveSessionKeys: () =>
+          new Set(
+            [...params.chatAbortControllers.values()]
+              .map((entry) => entry.sessionKey)
+              .filter((sessionKey) => sessionKey.trim()),
+          ),
+      })
     : null;
 
   if (typeof params.mediaCleanupTtlMs !== "number") {
