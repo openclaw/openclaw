@@ -513,6 +513,7 @@ export async function processDiscordMessage(
   const finalPreviewFlags =
     (discordConfig?.suppressEmbeds ?? true) ? MessageFlags.SuppressEmbeds : undefined;
   let finalReplyStartNotified = false;
+  let nonErrorFinalDeliveryStarted = false;
   const notifyFinalReplyStart = () => {
     if (finalReplyStartNotified) {
       return;
@@ -550,11 +551,16 @@ export async function processDiscordMessage(
             return;
           }
         }
-        if (
+        const followsNonErrorFinalDelivery = payload.isError && nonErrorFinalDeliveryStarted;
+        if (isFinal && !payload.isError) {
+          nonErrorFinalDeliveryStarted = true;
+        }
+        const shouldFinalizeDraftPreview =
           draftStream &&
           isFinal &&
-          (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted)
-        ) {
+          (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted) &&
+          !followsNonErrorFinalDelivery;
+        if (shouldFinalizeDraftPreview) {
           const reply = resolveSendableOutboundReplyParts(effectivePayload);
           const hasMedia = reply.hasMedia;
           const ttsSupplement = getReplyPayloadTtsSupplement(effectivePayload);

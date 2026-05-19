@@ -2061,6 +2061,37 @@ describe("processDiscordMessage draft streaming", () => {
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps finalized previews when later tool warning finals are delivered", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "delivery survived" });
+      await params?.dispatcher.sendFinalReply({
+        text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+        isError: true,
+      } as never);
+      return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expectPreviewEditContent("delivery survived");
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.messageId()).toBe("preview-1");
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [
+        {
+          text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+          isError: true,
+        },
+      ],
+    });
+  });
+
   it("suppresses reasoning payload delivery to Discord", async () => {
     mockDispatchSingleBlockReply({ text: "thinking...", isReasoning: true });
     await processStreamOffDiscordMessage();
