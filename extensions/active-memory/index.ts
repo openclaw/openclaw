@@ -3176,4 +3176,4 @@ const testing = {
   },
 };
 
-export { testing as __testing };
+export { testing, testing as __testing };

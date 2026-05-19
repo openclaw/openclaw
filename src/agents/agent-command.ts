@@ -1116,6 +1116,7 @@ async function agentCommandInternal(
         const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
           cfg,
           agentId: sessionAgentId,
+          sessionKey,
           hasSessionModelOverride:
             hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
           modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
@@ -1133,6 +1134,19 @@ async function agentCommandInternal(
           ...modelManifestContext,
           runId,
           agentDir,
+          agentId: sessionAgentId,
+          sessionKey: sessionKey ?? sessionId,
+          prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
+            await ensureSelectedAgentHarnessPlugin({
+              config: cfg,
+              provider,
+              modelId: model,
+              agentId: sessionAgentId,
+              sessionKey,
+              agentHarnessRuntimeOverride,
+              workspaceDir,
+            });
+          },
           fallbacksOverride: effectiveFallbacksOverride,
           onFallbackStep: (step) => {
             fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
@@ -1510,6 +1524,21 @@ async function agentCommandInternal(
     }
 
     const { deliverAgentCommandResult } = await loadDeliveryRuntime();
+    const resolveFreshSessionEntryForDelivery =
+      sessionStore && sessionKey
+        ? async (): Promise<SessionEntry | undefined> => {
+            const { loadSessionStore } = await loadSessionStoreRuntime();
+            const freshStore = loadSessionStore(storePath, {
+              skipCache: true,
+              clone: false,
+            });
+            const freshEntry = freshStore[sessionKey];
+            if (freshEntry) {
+              sessionStore[sessionKey] = freshEntry;
+            }
+            return freshEntry;
+          }
+        : undefined;
     const deliveryResult = await deliverAgentCommandResult({
       cfg,
       deps: resolvedDeps,
@@ -1517,6 +1546,7 @@ async function agentCommandInternal(
       opts,
       outboundSession,
       sessionEntry,
+      resolveFreshSessionEntryForDelivery,
       result,
       payloads,
     });
@@ -1603,7 +1633,10 @@ export async function agentCommandFromIngress(
   );
 }
 
-export const __testing = {
+export const testing = {
   resolveAgentRuntimeConfig,
   prepareAgentCommandExecution,
 };
+
+/** @deprecated Use `testing`. */
+export { testing as __testing };

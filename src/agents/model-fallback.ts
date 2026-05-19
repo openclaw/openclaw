@@ -19,6 +19,7 @@ import {
   coerceToFailoverError,
   describeFailoverError,
   isFailoverError,
+  isNonProviderRuntimeCoordinationError,
   isTimeoutError,
 } from "./failover-error.js";
 import {
@@ -26,6 +27,9 @@ import {
   shouldPreserveTransientCooldownProbeSlot,
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
+import { MissingAgentHarnessError, isMissingAgentHarnessError } from "./harness/errors.js";
+import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   isModelFallbackDecisionLogEnabled,
@@ -34,6 +38,8 @@ import {
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
+import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
+import { isCliProvider } from "./model-selection-cli.js";
 import {
   type ModelManifestNormalizationContext,
   modelKey,
@@ -89,6 +95,18 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+};
+
+type ModelFallbackRuntimeContext = {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
+  prepareAgentHarnessRuntime?: (params: {
+    provider: string;
+    model: string;
+    agentHarnessRuntimeOverride?: string;
+  }) => Promise<void> | void;
 };
 
 type ModelFallbackRunFn<T> = (
@@ -320,6 +338,55 @@ function resolveResultClassificationError(
 
 function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
   return a.provider === b.provider && a.model === b.model;
+}
+
+function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | undefined): boolean {
+  const normalized = normalizeOptionalString(runtime);
+  if (!normalized) {
+    return false;
+  }
+  return isCliRuntimeAlias(normalized) || isCliProvider(normalized, cfg);
+}
+
+async function assertModelFallbackCandidateHarnessAvailable(
+  params: ModelFallbackRuntimeContext & ModelCandidate,
+): Promise<void> {
+  if (!params.cfg) {
+    return;
+  }
+  const agentHarnessRuntimeOverride = params.resolveAgentHarnessRuntimeOverride?.(
+    params.provider,
+    params.model,
+  );
+  if (isCliProvider(params.provider, params.cfg)) {
+    return;
+  }
+  const agentRuntimeOverride = normalizeOptionalString(agentHarnessRuntimeOverride);
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const agentRuntime = agentRuntimeOverride ?? harnessPolicy.runtime;
+  const agentRuntimeSource = agentRuntimeOverride ? "model" : harnessPolicy.runtimeSource;
+  if (isCliAgentRuntime(agentRuntime, params.cfg)) {
+    return;
+  }
+  await params.prepareAgentHarnessRuntime?.({
+    provider: params.provider,
+    model: params.model,
+    agentHarnessRuntimeOverride,
+  });
+  if (
+    agentRuntime !== "auto" &&
+    agentRuntime !== "pi" &&
+    !(agentRuntime === "codex" && agentRuntimeSource === "implicit") &&
+    !getRegisteredAgentHarness(agentRuntime)
+  ) {
+    throw new MissingAgentHarnessError(agentRuntime);
+  }
 }
 
 function recordFailedCandidateAttempt(params: {
@@ -555,7 +622,7 @@ function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): s
   return DEFAULT_PROVIDER;
 }
 
-export const __testing = {
+export const testing = {
   resolveFallbackCandidates,
   resolveImageFallbackCandidates,
   resolveCooldownDecision,
@@ -732,7 +799,7 @@ function shouldProbePrimaryDuringCooldown(params: {
 }
 
 /** @internal – exposed for unit tests only */
-export const _probeThrottleInternals = {
+export const probeThrottleInternals = {
   lastProbeAttempt,
   MIN_PROBE_INTERVAL_MS,
   PROBE_MARGIN_MS,
@@ -842,6 +909,14 @@ export async function runWithModelFallback<T>(
     model: string;
     runId?: string;
     sessionId?: string;
+    agentId?: string;
+    sessionKey?: string;
+    resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
+    prepareAgentHarnessRuntime?: (params: {
+      provider: string;
+      model: string;
+      agentHarnessRuntimeOverride?: string;
+    }) => Promise<void> | void;
     lane?: string;
     agentDir?: string;
     /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
@@ -850,6 +925,7 @@ export async function runWithModelFallback<T>(
     onError?: ModelFallbackErrorHandler;
     onFallbackStep?: ModelFallbackStepHandler;
     classifyResult?: ModelFallbackResultClassifier<T>;
+    skipAuthProfileRuntime?: boolean;
   } & ModelManifestNormalizationContext,
 ): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
@@ -860,7 +936,7 @@ export async function runWithModelFallback<T>(
     manifestPlugins: params.manifestPlugins,
   });
   const authRuntime =
-    params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)
+    !params.skipAuthProfileRuntime && params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)
       ? await loadModelFallbackAuthRuntime()
       : null;
   const authStore = authRuntime
@@ -901,6 +977,14 @@ export async function runWithModelFallback<T>(
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    await assertModelFallbackCandidateHarnessAvailable({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      resolveAgentHarnessRuntimeOverride: params.resolveAgentHarnessRuntimeOverride,
+      prepareAgentHarnessRuntime: params.prepareAgentHarnessRuntime,
+      ...candidate,
+    });
     const isPrimary = i === 0;
     const requestedModel = requestedCandidate
       ? sameModelCandidate(candidate, requestedCandidate)
@@ -1114,6 +1198,14 @@ export async function runWithModelFallback<T>(
     }
     const err = attemptRun.error;
     {
+      // Local runtime coordination errors (session write-lock timeout, embedded
+      // attempt session takeover) are not provider/model failures. Aborting
+      // here prevents the fallback chain from consuming candidates retrying
+      // the same local condition and surfacing a misleading "All models
+      // failed" summary. See #83510.
+      if (isNonProviderRuntimeCoordinationError(err)) {
+        throw err;
+      }
       if (transientProbeProviderForAttempt) {
         const probeFailureReason = describeFailoverError(err).reason;
         if (!shouldPreserveTransientCooldownProbeSlot(probeFailureReason)) {
@@ -1126,6 +1218,9 @@ export async function runWithModelFallback<T>(
       // that may have a smaller context window and fail worse.
       const errMessage = formatErrorMessage(err);
       if (isLikelyContextOverflowError(errMessage)) {
+        throw err;
+      }
+      if (isMissingAgentHarnessError(err)) {
         throw err;
       }
       const normalized =
@@ -1296,3 +1391,4 @@ export async function runWithImageModelFallback<T>(params: {
     cfg: params.cfg,
   });
 }
+export { testing as __testing };

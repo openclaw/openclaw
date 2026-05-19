@@ -338,6 +338,7 @@ export async function deliverAgentCommandResult(params: {
   opts: AgentCommandOpts;
   outboundSession: OutboundSessionContext | undefined;
   sessionEntry: SessionEntry | undefined;
+  resolveFreshSessionEntryForDelivery?: () => Promise<SessionEntry | undefined>;
   result: RunResult;
   payloads: RunResult["payloads"];
 }): Promise<AgentCommandDeliveryResult> {
@@ -349,76 +350,144 @@ export async function deliverAgentCommandResult(params: {
   const turnSourceTo = opts.runContext?.currentChannelId ?? opts.to;
   const turnSourceAccountId = opts.runContext?.accountId ?? opts.accountId;
   const turnSourceThreadId = opts.runContext?.currentThreadTs ?? opts.threadId;
-  const deliveryPlan = resolveAgentDeliveryPlan({
-    sessionEntry,
-    requestedChannel: opts.replyChannel ?? opts.channel,
-    explicitTo: opts.replyTo ?? opts.to,
-    explicitThreadId: opts.threadId,
-    accountId: opts.replyAccountId ?? opts.accountId,
-    wantsDelivery: deliver,
-    turnSourceChannel,
-    turnSourceTo,
-    turnSourceAccountId,
-    turnSourceThreadId,
-  });
-  let deliveryChannel = deliveryPlan.resolvedChannel;
   const explicitChannelHint = (opts.replyChannel ?? opts.channel)?.trim();
-  if (deliver && isInternalMessageChannel(deliveryChannel) && !explicitChannelHint) {
-    try {
-      const selection = await resolveMessageChannelSelection({ cfg });
-      deliveryChannel = selection.channel;
-    } catch {
-      // Keep the internal channel marker; error handling below reports the failure.
+  const resolveDeliveryRouting = async (candidateSessionEntry: SessionEntry | undefined) => {
+    const deliveryPlan = resolveAgentDeliveryPlan({
+      sessionEntry: candidateSessionEntry,
+      requestedChannel: opts.replyChannel ?? opts.channel,
+      explicitTo: opts.replyTo ?? opts.to,
+      explicitThreadId: opts.threadId,
+      accountId: opts.replyAccountId ?? opts.accountId,
+      wantsDelivery: deliver,
+      turnSourceChannel,
+      turnSourceTo,
+      turnSourceAccountId,
+      turnSourceThreadId,
+    });
+    let deliveryChannel = deliveryPlan.resolvedChannel;
+    if (deliver && isInternalMessageChannel(deliveryChannel) && !explicitChannelHint) {
+      try {
+        const selection = await resolveMessageChannelSelection({ cfg });
+        deliveryChannel = selection.channel;
+      } catch {
+        // Keep the internal channel marker; error handling below reports the failure.
+      }
+    }
+    const effectiveDeliveryPlan =
+      deliveryChannel === deliveryPlan.resolvedChannel
+        ? deliveryPlan
+        : {
+            ...deliveryPlan,
+            resolvedChannel: deliveryChannel,
+          };
+    // Channel docking: delivery channels are resolved via plugin registry.
+    const deliveryPlugin =
+      deliver && !isInternalMessageChannel(deliveryChannel)
+        ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
+        : undefined;
+    const isDeliveryChannelKnown =
+      isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
+    const targetMode =
+      opts.deliveryTargetMode ??
+      effectiveDeliveryPlan.deliveryTargetMode ??
+      (opts.to ? "explicit" : "implicit");
+    const resolvedAccountId = effectiveDeliveryPlan.resolvedAccountId;
+    const resolved =
+      deliver && isDeliveryChannelKnown && deliveryChannel
+        ? resolveAgentOutboundTarget({
+            cfg,
+            plan: effectiveDeliveryPlan,
+            targetMode,
+            validateExplicitTarget: true,
+          })
+        : {
+            resolvedTarget: null,
+            resolvedTo: effectiveDeliveryPlan.resolvedTo,
+            targetMode,
+          };
+    const resolvedThreadId = deliveryPlan.resolvedThreadId ?? opts.threadId;
+    const replyTransport =
+      deliveryPlugin?.threading?.resolveReplyTransport?.({
+        cfg,
+        accountId: resolvedAccountId,
+        threadId: resolvedThreadId,
+      }) ?? null;
+    return {
+      deliveryPlan,
+      deliveryChannel,
+      effectiveDeliveryPlan,
+      deliveryPlugin,
+      isDeliveryChannelKnown,
+      targetMode,
+      resolvedAccountId,
+      resolved,
+      resolvedTarget: resolved.resolvedTarget,
+      deliveryTarget: resolved.resolvedTo,
+      resolvedThreadId,
+      resolvedReplyToId: replyTransport?.replyToId ?? undefined,
+      resolvedThreadTarget:
+        replyTransport && Object.hasOwn(replyTransport, "threadId")
+          ? (replyTransport.threadId ?? null)
+          : (resolvedThreadId ?? null),
+    };
+  };
+  const deliveryRoutingFailureReason = (
+    route: Awaited<ReturnType<typeof resolveDeliveryRouting>>,
+  ): string | undefined => {
+    if (!deliver) {
+      return undefined;
+    }
+    if (isInternalMessageChannel(route.deliveryChannel)) {
+      return "channel_resolved_to_internal";
+    }
+    if (!route.isDeliveryChannelKnown) {
+      return "unknown_channel";
+    }
+    if (route.resolvedTarget && !route.resolvedTarget.ok) {
+      return "invalid_delivery_target";
+    }
+    if (!route.deliveryTarget) {
+      return "no_delivery_target";
+    }
+    return undefined;
+  };
+  const isRetryableFreshSessionRoutingFailure = (
+    route: Awaited<ReturnType<typeof resolveDeliveryRouting>>,
+  ): boolean => {
+    const reason = deliveryRoutingFailureReason(route);
+    if (!reason) {
+      return false;
+    }
+    if (reason === "unknown_channel") {
+      return false;
+    }
+    return true;
+  };
+
+  let deliveryRouting = await resolveDeliveryRouting(sessionEntry);
+  if (isRetryableFreshSessionRoutingFailure(deliveryRouting)) {
+    const freshSessionEntry = await params.resolveFreshSessionEntryForDelivery?.();
+    if (freshSessionEntry && freshSessionEntry !== sessionEntry) {
+      const freshRouting = await resolveDeliveryRouting(freshSessionEntry);
+      if (!deliveryRoutingFailureReason(freshRouting)) {
+        if (!opts.json) {
+          runtime.log(
+            `[delivery] refreshed session routing before final delivery (session=${effectiveSessionKey ?? "unknown"} channel=${freshRouting.deliveryChannel})`,
+          );
+        }
+        deliveryRouting = freshRouting;
+      }
     }
   }
-  const effectiveDeliveryPlan =
-    deliveryChannel === deliveryPlan.resolvedChannel
-      ? deliveryPlan
-      : {
-          ...deliveryPlan,
-          resolvedChannel: deliveryChannel,
-        };
-  // Channel docking: delivery channels are resolved via plugin registry.
-  const deliveryPlugin =
-    deliver && !isInternalMessageChannel(deliveryChannel)
-      ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
-      : undefined;
-
-  const isDeliveryChannelKnown =
-    isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
-
-  const targetMode =
-    opts.deliveryTargetMode ??
-    effectiveDeliveryPlan.deliveryTargetMode ??
-    (opts.to ? "explicit" : "implicit");
-  const resolvedAccountId = effectiveDeliveryPlan.resolvedAccountId;
-  const resolved =
-    deliver && isDeliveryChannelKnown && deliveryChannel
-      ? resolveAgentOutboundTarget({
-          cfg,
-          plan: effectiveDeliveryPlan,
-          targetMode,
-          validateExplicitTarget: true,
-        })
-      : {
-          resolvedTarget: null,
-          resolvedTo: effectiveDeliveryPlan.resolvedTo,
-          targetMode,
-        };
-  const resolvedTarget = resolved.resolvedTarget;
-  const deliveryTarget = resolved.resolvedTo;
-  const resolvedThreadId = deliveryPlan.resolvedThreadId ?? opts.threadId;
-  const replyTransport =
-    deliveryPlugin?.threading?.resolveReplyTransport?.({
-      cfg,
-      accountId: resolvedAccountId,
-      threadId: resolvedThreadId,
-    }) ?? null;
-  const resolvedReplyToId = replyTransport?.replyToId ?? undefined;
-  const resolvedThreadTarget =
-    replyTransport && Object.hasOwn(replyTransport, "threadId")
-      ? (replyTransport.threadId ?? null)
-      : (resolvedThreadId ?? null);
+  const {
+    deliveryChannel,
+    isDeliveryChannelKnown,
+    resolvedAccountId,
+    resolvedTarget,
+    deliveryTarget,
+    resolvedReplyToId,
+    resolvedThreadTarget,
+  } = deliveryRouting;
 
   let deliveryLoggedError = false;
   const logDeliveryError = (err: unknown) => {

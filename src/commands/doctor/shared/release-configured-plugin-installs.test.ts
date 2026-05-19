@@ -202,6 +202,60 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toStrictEqual([]);
   });
 
+  it("collects provider plugins from channel-only model overrides", async () => {
+    mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
+      {
+        pluginId: "anthropic-provider",
+        providerId: "anthropic",
+      },
+    ]);
+
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        channels: {
+          modelByChannel: {
+            discord: {
+              default: "anthropic/claude-opus-4-7",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["anthropic-provider"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("collects provider plugins from provider-keyed channel model aliases", async () => {
+    mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
+      {
+        pluginId: "anthropic-provider",
+        providerId: "anthropic",
+      },
+    ]);
+
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        channels: {
+          modelByChannel: {
+            anthropic: {
+              discord: "claude-opus-4-7",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["anthropic-provider"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
   it("collects Codex from selectable OpenAI agent models even without integration discovery", async () => {
     const { collectReleaseConfiguredPluginIds } =
       await import("./release-configured-plugin-installs.js");
@@ -374,9 +428,11 @@ describe("configured plugin install release step", () => {
     });
   });
 
-  it("defers package-manager plugin repair when an older updater supports post-doctor config writes", async () => {
+  it("defers package-manager plugins for writable legacy parents without explicit deferral", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: [],
+      changes: [
+        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
+      ],
       warnings: [],
     });
 
@@ -403,7 +459,9 @@ describe("configured plugin install release step", () => {
       OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
     });
     expect(result).toEqual({
-      changes: [],
+      changes: [
+        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
+      ],
       warnings: [],
       completed: false,
       touchedConfig: false,

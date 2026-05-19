@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../command-format.js";
-import { ensureConfigReady, __test__ } from "./config-guard.js";
+import { ensureConfigReady, testApi } from "./config-guard.js";
 
 const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -52,7 +52,7 @@ async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
 }
 
 describe("ensureConfigReady", () => {
-  const resetConfigGuardStateForTests = __test__.resetConfigGuardStateForTests;
+  const resetConfigGuardStateForTests = testApi.resetConfigGuardStateForTests;
 
   async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
     const runtime = makeRuntime();

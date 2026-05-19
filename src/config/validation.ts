@@ -50,6 +50,12 @@ const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
+type ExplicitPluginReferences = {
+  entries: Set<string>;
+  allow: Set<string>;
+  deny: Set<string>;
+  slots: Map<string, string>;
+};
 type AllowedValuesCollection = {
   values: unknown[];
   incomplete: boolean;
@@ -225,6 +231,9 @@ function collectAllowedValuesFromBundledChannelSchemaPath(
   return collectAllowedValuesFromJsonSchemaNode(targetNode);
 }
 
+function formatRawChannelConfigIssueMessage(message: string): string {
+  return `invalid config: ${message}`;
+}
 function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigValidationIssue[] {
   if (!config.channels || !isRecord(config.channels)) {
     return [];
@@ -247,10 +256,11 @@ function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigVal
       const message = error.additionalProperty
         ? `${error.message}: "${error.additionalProperty}"`
         : error.message;
+      const path =
+        error.path === "<root>" ? `channels.${channelId}` : `channels.${channelId}.${error.path}`;
       issues.push({
-        path:
-          error.path === "<root>" ? `channels.${channelId}` : `channels.${channelId}.${error.path}`,
-        message: `invalid config: ${message}`,
+        path,
+        message: formatRawChannelConfigIssueMessage(message),
         allowedValues: error.allowedValues,
         allowedValuesHiddenCount: error.allowedValuesHiddenCount,
       });
@@ -567,7 +577,82 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   };
 }
 
-export const __testing = {
+function collectExplicitPluginReferences(raw: unknown): ExplicitPluginReferences {
+  const references: ExplicitPluginReferences = {
+    entries: new Set(),
+    allow: new Set(),
+    deny: new Set(),
+    slots: new Map(),
+  };
+  if (!isRecord(raw) || !isRecord(raw.plugins)) {
+    return references;
+  }
+  const { plugins } = raw;
+  if (isRecord(plugins.entries)) {
+    for (const pluginId of Object.keys(plugins.entries)) {
+      const normalized = normalizePluginId(pluginId);
+      if (normalized) {
+        references.entries.add(normalized);
+      }
+    }
+  }
+  for (const [key, target] of [
+    ["allow", references.allow],
+    ["deny", references.deny],
+  ] as const) {
+    const value = plugins[key];
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    for (const entry of value) {
+      if (typeof entry !== "string") {
+        continue;
+      }
+      const normalized = normalizePluginId(entry);
+      if (normalized) {
+        target.add(normalized);
+      }
+    }
+  }
+  if (isRecord(plugins.slots)) {
+    for (const [slotId, pluginId] of Object.entries(plugins.slots)) {
+      if (typeof pluginId !== "string") {
+        continue;
+      }
+      const normalized = normalizePluginId(pluginId);
+      if (normalized && normalized !== "none") {
+        references.slots.set(normalized, slotId);
+      }
+    }
+  }
+  return references;
+}
+
+function resolveExplicitPluginReferencePath(
+  references: ExplicitPluginReferences,
+  pluginId: string,
+): string | undefined {
+  const normalized = normalizePluginId(pluginId);
+  if (!normalized) {
+    return undefined;
+  }
+  if (references.entries.has(normalized)) {
+    return `plugins.entries.${normalized}`;
+  }
+  if (references.allow.has(normalized)) {
+    return "plugins.allow";
+  }
+  if (references.deny.has(normalized)) {
+    return "plugins.deny";
+  }
+  const slotId = references.slots.get(normalized);
+  if (slotId) {
+    return `plugins.slots.${slotId}`;
+  }
+  return undefined;
+}
+
+export const testing = {
   mapZodIssueToConfigIssue,
 };
 
@@ -830,6 +915,7 @@ function validateConfigObjectWithPluginsBase(
   const warnings: ConfigValidationIssue[] = [];
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
+  const explicitPluginReferences = collectExplicitPluginReferences(raw);
 
   const resolvePluginConfigIssuePath = (pluginId: string, errorPath: string): string => {
     const base = `plugins.entries.${pluginId}.config`;
@@ -863,13 +949,16 @@ function validateConfigObjectWithPluginsBase(
     }
     registryDiagnosticsPushed = true;
     for (const diag of registry.diagnostics) {
-      let path = diag.pluginId ? `plugins.entries.${diag.pluginId}` : "plugins";
+      const explicitPath = diag.pluginId
+        ? resolveExplicitPluginReferencePath(explicitPluginReferences, diag.pluginId)
+        : undefined;
+      let path = explicitPath ?? (diag.pluginId ? "plugins" : "plugins");
       if (!diag.pluginId && diag.message.includes("plugin path not found")) {
         path = "plugins.load.paths";
       }
       const pluginLabel = diag.pluginId ? `plugin ${diag.pluginId}` : "plugin";
       const message = `${pluginLabel}: ${diag.message}`;
-      if (diag.level === "error") {
+      if (diag.level === "error" && (explicitPath || !diag.pluginId)) {
         issues.push({ path, message });
       } else {
         warnings.push({ path, message });
@@ -1316,10 +1405,11 @@ function validateConfigObjectWithPluginsBase(
       });
       if (!result.ok) {
         for (const error of result.errors) {
+          const path =
+            error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`;
           issues.push({
-            path:
-              error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`,
-            message: `invalid config: ${error.message}`,
+            path,
+            message: formatRawChannelConfigIssueMessage(error.message),
             allowedValues: error.allowedValues,
             allowedValuesHiddenCount: error.allowedValuesHiddenCount,
           });
@@ -1689,3 +1779,4 @@ function validateConfigObjectWithPluginsBase(
 
   return { ok: true, config: mutatedConfig, warnings };
 }
+export { testing as __testing };
