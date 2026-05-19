@@ -758,6 +758,33 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
   `;
 }
 
+/**
+ * Persist the three sessions-page filter toggles through the standard
+ * settings layer. Extracted from app-render.ts so the wiring between
+ * the `onFiltersChange` / `onClearFilters` handlers and
+ * `applySettings({ sessionsFilter: ... })` can be exercised by a unit
+ * test independently of the lit-element render path. Without this,
+ * a regression that drops the `applySettings` call from the inline
+ * handler would not be caught by the storage-layer round-trip tests
+ * alone.
+ *
+ * `activeMinutes` and `limit` intentionally stay session-scoped — they
+ * reset to defaults on reload, so they are not threaded through here.
+ */
+export function persistSessionsFilter(
+  state: Pick<AppViewState, "settings" | "applySettings">,
+  next: { includeGlobal: boolean; includeUnknown: boolean; showArchived: boolean },
+): void {
+  state.applySettings({
+    ...state.settings,
+    sessionsFilter: {
+      includeGlobal: next.includeGlobal,
+      includeUnknown: next.includeUnknown,
+      showArchived: next.showArchived,
+    },
+  });
+}
+
 export function renderSidebarConnectionStatus(state: AppViewState) {
   const label = state.connected ? t("common.online") : t("common.offline");
   const toneClass = state.connected

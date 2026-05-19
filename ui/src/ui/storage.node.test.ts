@@ -625,4 +625,110 @@ describe("loadSettings default gateway URL derivation", () => {
     });
     expect(localStorage.getItem("openclaw.control.user.v1")).toBeNull();
   });
+
+  describe("sessionsFilter persistence (PR-D)", () => {
+    function fullDefaultSettings(gatewayUrl: string) {
+      return {
+        gatewayUrl,
+        token: "",
+        sessionKey: "main",
+        lastActiveSessionKey: "main",
+        theme: "claw" as const,
+        themeMode: "system" as const,
+        chatFocusMode: false,
+        chatShowThinking: true,
+        chatShowToolCalls: true,
+        splitRatio: 0.6,
+        navCollapsed: false,
+        navWidth: 220,
+        navGroupsCollapsed: {},
+        borderRadius: 50,
+      };
+    }
+
+    beforeEach(() => {
+      setTestLocation({
+        protocol: "https:",
+        host: "gateway.example:8443",
+        pathname: "/",
+      });
+    });
+
+    it("round-trips the sessionsFilter toggles through save/load", () => {
+      const gwUrl = expectedGatewayUrl("");
+      saveSettings({
+        ...fullDefaultSettings(gwUrl),
+        sessionsFilter: {
+          includeGlobal: true,
+          includeUnknown: true,
+          showArchived: false,
+        },
+      });
+      const loaded = loadSettings();
+      expect(loaded.sessionsFilter).toEqual({
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: false,
+      });
+    });
+
+    it("falls back to undefined when persisted settings lack sessionsFilter", () => {
+      const gwUrl = expectedGatewayUrl("");
+      saveSettings(fullDefaultSettings(gwUrl));
+      const loaded = loadSettings();
+      expect(loaded.sessionsFilter).toBeUndefined();
+    });
+
+    it("ignores malformed sessionsFilter payloads", () => {
+      // Non-boolean values must not be adopted as filter state — the UI
+      // should fall back to DEFAULT_SESSIONS_FILTERS instead of using a
+      // truthy string / number / null as a checkbox value.
+      const gwUrl = expectedGatewayUrl("");
+      const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+      localStorage.setItem(
+        scopedKey,
+        JSON.stringify({
+          gatewayUrl: gwUrl,
+          theme: "claw",
+          themeMode: "system",
+          chatFocusMode: false,
+          chatShowThinking: true,
+          chatShowToolCalls: true,
+          splitRatio: 0.6,
+          navCollapsed: false,
+          navWidth: 220,
+          navGroupsCollapsed: {},
+          borderRadius: 50,
+          sessionsFilter: {
+            includeGlobal: "yes",
+            includeUnknown: 1,
+            showArchived: null,
+          },
+        }),
+      );
+      const loaded = loadSettings();
+      expect(loaded.sessionsFilter).toBeUndefined();
+    });
+
+    it("persists 'clear filters' state (all booleans true) so the boolean toggles stay all-on", () => {
+      // Simulates the persistence path triggered by
+      // app-render.ts:onClearFilters — only the three booleans are
+      // persisted; activeMinutes / limit stay session-scoped by design.
+      const gwUrl = expectedGatewayUrl("");
+      saveSettings({
+        ...fullDefaultSettings(gwUrl),
+        sessionsFilter: {
+          includeGlobal: true,
+          includeUnknown: true,
+          showArchived: true,
+        },
+      });
+      const loaded = loadSettings();
+      expect(loaded.sessionsFilter).toEqual({
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: true,
+      });
+    });
+  });
 });

@@ -42,6 +42,7 @@ import {
   handleChatManualRefresh,
   isCronSessionKey,
   parseSessionKey,
+  persistSessionsFilter,
   resolveAssistantAttachmentAuthToken,
   resolveDashboardHeaderContext,
   resolveSessionOptionGroups,
@@ -1119,5 +1120,53 @@ describe("dismissChatError", () => {
     expect(state.realtimeTalkStatus).toBe("idle");
     expect(state.realtimeTalkDetail).toBeNull();
     expect(state.realtimeTalkTranscript).toBeNull();
+  });
+});
+
+describe("persistSessionsFilter", () => {
+  // This is the regression seam the storage-layer round-trip tests
+  // cannot cover on their own: if a future refactor drops the
+  // `state.applySettings(...sessionsFilter)` call from the
+  // app-render.ts inline handlers, the schema-level tests in
+  // storage.node.test.ts still pass while the wiring quietly breaks.
+  it("wraps the three boolean toggles in sessionsFilter and applies through state.applySettings", () => {
+    const applySettings = vi.fn();
+    const settings = createSettings();
+    persistSessionsFilter(
+      { settings, applySettings },
+      { includeGlobal: false, includeUnknown: true, showArchived: true },
+    );
+    expect(applySettings).toHaveBeenCalledTimes(1);
+    expect(applySettings).toHaveBeenCalledWith({
+      ...settings,
+      sessionsFilter: {
+        includeGlobal: false,
+        includeUnknown: true,
+        showArchived: true,
+      },
+    });
+  });
+
+  it("does not leak activeMinutes / limit into the persisted sessionsFilter payload", () => {
+    // activeMinutes / limit are intentionally session-scoped (clear on
+    // reload). A future regression that threaded numeric inputs through
+    // this helper would silently grow the persisted schema beyond
+    // PersistedSessionsFilter and confuse the loadSettings validator.
+    const applySettings = vi.fn();
+    const settings = createSettings();
+    persistSessionsFilter(
+      { settings, applySettings },
+      { includeGlobal: true, includeUnknown: true, showArchived: true },
+    );
+    const persistedSettings = applySettings.mock.calls[0]?.[0];
+    expect(persistedSettings).toBeDefined();
+    const persistedFilter = persistedSettings?.sessionsFilter as Record<string, unknown>;
+    expect(persistedFilter).toEqual({
+      includeGlobal: true,
+      includeUnknown: true,
+      showArchived: true,
+    });
+    expect(persistedFilter.activeMinutes).toBeUndefined();
+    expect(persistedFilter.limit).toBeUndefined();
   });
 });

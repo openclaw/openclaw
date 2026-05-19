@@ -409,6 +409,70 @@ describe("loadSessions", () => {
     });
   });
 
+  it("caps archived fetches when the limit input is cleared", async () => {
+    // `showArchived=true` zeroes activeMinutes on the gateway request, so an
+    // empty limit field would otherwise request every archived session every
+    // time the persisted toggle re-fires on boot. The controller must
+    // substitute the SESSIONS_ARCHIVED_FALLBACK_LIMIT cap instead.
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request, {
+      sessionsFilterActive: "",
+      sessionsFilterLimit: "",
+      sessionsShowArchived: true,
+    });
+
+    await loadSessions(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      limit: 500,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
+
+  it("keeps an explicit limit even when archived sessions are shown", async () => {
+    // Belt-and-suspenders: if the user typed a smaller limit themselves we
+    // never silently raise it to the archived fallback cap.
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request, {
+      sessionsFilterActive: "",
+      sessionsFilterLimit: "75",
+      sessionsShowArchived: true,
+    });
+
+    await loadSessions(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      limit: 75,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
+
   it("forwards scoped agent refreshes to sessions.list", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {

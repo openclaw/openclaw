@@ -50,6 +50,12 @@ function snapBorderRadius(value: number): BorderRadiusStop {
   return best;
 }
 
+export type PersistedSessionsFilter = {
+  includeGlobal: boolean;
+  includeUnknown: boolean;
+  showArchived: boolean;
+};
+
 export type UiSettings = {
   gatewayUrl: string;
   token: string;
@@ -67,6 +73,9 @@ export type UiSettings = {
   borderRadius: number; // Corner roundness (0–100, default 50)
   customTheme?: ImportedCustomTheme;
   locale?: string;
+  // Persisted Sessions tab filter toggles. Optional — when absent, the UI
+  // falls back to DEFAULT_SESSIONS_FILTERS.
+  sessionsFilter?: PersistedSessionsFilter;
 };
 
 export type { LocalUserIdentity } from "./user-identity.ts";
@@ -269,6 +278,7 @@ export function loadSettings(): UiSettings {
           : defaults.borderRadius,
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
+      sessionsFilter: parsePersistedSessionsFilter(parsed.sessionsFilter),
     };
     if ("token" in parsed) {
       persistSettings(settings);
@@ -277,6 +287,25 @@ export function loadSettings(): UiSettings {
   } catch {
     return defaults;
   }
+}
+
+function parsePersistedSessionsFilter(value: unknown): PersistedSessionsFilter | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = value as Partial<Record<keyof PersistedSessionsFilter, unknown>>;
+  if (
+    typeof raw.includeGlobal !== "boolean" ||
+    typeof raw.includeUnknown !== "boolean" ||
+    typeof raw.showArchived !== "boolean"
+  ) {
+    return undefined;
+  }
+  return {
+    includeGlobal: raw.includeGlobal,
+    includeUnknown: raw.includeUnknown,
+    showArchived: raw.showArchived,
+  };
 }
 
 export function saveSettings(next: UiSettings) {
@@ -389,6 +418,7 @@ function persistSettings(next: UiSettings) {
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),
+    ...(next.sessionsFilter ? { sessionsFilter: next.sessionsFilter } : {}),
   };
   const serialized = JSON.stringify(persisted);
   try {

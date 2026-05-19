@@ -1,3 +1,4 @@
+import { SESSIONS_ARCHIVED_FALLBACK_LIMIT } from "../app-defaults.ts";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
@@ -428,7 +429,13 @@ async function loadSessionsOnce(
     const activeMinutes = showArchived
       ? 0
       : (overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0));
-    const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
+    const requestedLimit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
+    // Archived sessions bypass the activeMinutes time bound. If the user also
+    // cleared the limit field, fall back to a fixed cap so a sticky
+    // `showArchived=true` from persisted settings cannot cause an unbounded
+    // fetch on every reload.
+    const limit =
+      showArchived && requestedLimit <= 0 ? SESSIONS_ARCHIVED_FALLBACK_LIMIT : requestedLimit;
     const configuredAgentsOnly = overrides?.configuredAgentsOnly ?? true;
     const params: Record<string, unknown> = {
       includeGlobal,

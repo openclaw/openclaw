@@ -311,9 +311,16 @@ function hasPositiveNumberFilter(value: string): boolean {
 }
 
 function hasActiveFilters(props: SessionsProps): boolean {
+  // When `showArchived` is on, the sessions controller forces
+  // `activeMinutes=0` for the gateway request regardless of the input value
+  // (see `controllers/sessions.ts:loadSessionsOnce`). The numeric input is
+  // effectively disabled in that mode, so exclude it from the active-filters
+  // count to avoid showing a misleading "filters active" indicator that the
+  // user cannot clear by editing the number.
+  const activeMinutesActive = !props.showArchived && hasPositiveNumberFilter(props.activeMinutes);
   return (
     normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
-    hasPositiveNumberFilter(props.activeMinutes) ||
+    activeMinutesActive ||
     hasPositiveNumberFilter(props.limit) ||
     !props.includeGlobal ||
     !props.includeUnknown ||

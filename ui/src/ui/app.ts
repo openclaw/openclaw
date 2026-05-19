@@ -400,9 +400,12 @@ export class OpenClawApp extends LitElement {
   @state() sessionsError: string | null = null;
   @state() sessionsFilterActive = DEFAULT_SESSIONS_FILTERS.activeMinutes;
   @state() sessionsFilterLimit = DEFAULT_SESSIONS_FILTERS.limit;
-  @state() sessionsIncludeGlobal = true;
-  @state() sessionsIncludeUnknown = false;
-  @state() sessionsShowArchived = false;
+  @state() sessionsIncludeGlobal: boolean =
+    this.settings.sessionsFilter?.includeGlobal ?? DEFAULT_SESSIONS_FILTERS.includeGlobal;
+  @state() sessionsIncludeUnknown: boolean =
+    this.settings.sessionsFilter?.includeUnknown ?? DEFAULT_SESSIONS_FILTERS.includeUnknown;
+  @state() sessionsShowArchived: boolean =
+    this.settings.sessionsFilter?.showArchived ?? DEFAULT_SESSIONS_FILTERS.showArchived;
   @state() sessionsFiltersCollapsed = false;
   @state() sessionsHideCron = true;
   @state() sessionsSearchQuery = "";

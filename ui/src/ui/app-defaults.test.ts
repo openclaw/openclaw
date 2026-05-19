@@ -6,6 +6,9 @@ describe("app defaults", () => {
     expect(DEFAULT_SESSIONS_FILTERS).toEqual({
       activeMinutes: "120",
       limit: "200",
+      includeGlobal: true,
+      includeUnknown: false,
+      showArchived: false,
     });
   });
 });
