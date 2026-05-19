@@ -56,7 +56,7 @@ function reportPersistentComponentRegistryError(error: unknown): void {
 
 function formatRegistryError(error: unknown): Record<string, unknown> {
   if (!(error instanceof Error)) {
-    return { error: String(error) };
+    return { error: formatRegistryErrorValue(error) };
   }
   const details: Record<string, unknown> = {
     error: String(error),
@@ -75,9 +75,31 @@ function formatRegistryError(error: unknown): Record<string, unknown> {
       details.errorCauseStack = cause.stack;
     }
   } else if (cause !== undefined) {
-    details.errorCause = String(cause);
+    details.errorCause = formatRegistryErrorValue(cause);
   }
   return details;
+}
+
+function formatRegistryErrorValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint" ||
+    typeof value === "symbol"
+  ) {
+    return String(value);
+  }
+  if (value === null) {
+    return "null";
+  }
+  try {
+    return JSON.stringify(value) ?? Object.prototype.toString.call(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
 }
 
 function disablePersistentComponentRegistry(error: unknown): void {
