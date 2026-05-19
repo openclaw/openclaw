@@ -9,7 +9,10 @@ import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../auto-reply/reply/agent-runner-failure-copy.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/types.js";
+import {
+  markReplyPayloadForMessageToolDelivery,
+  markReplyPayloadForSourceSuppressionDelivery,
+} from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
@@ -226,6 +229,37 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
 
     expectHeartbeatToolPrompt(result, ["notify=false"]);
+  });
+
+  it("suppresses heartbeat fallback text after message-tool delivery evidence", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "message_tool" });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue(
+        markReplyPayloadForMessageToolDelivery({
+          text: "Fallback narration that should not be sent after the message tool.",
+        }),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replyOptions(replySpy).sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "sent",
+        preview: "Fallback narration that should not be sent after the message tool.",
+        channel: "telegram",
+      });
+    });
   });
 
   it("uses the heartbeat response tool prompt for Codex harness sessions by default", async () => {

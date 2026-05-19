@@ -144,6 +144,12 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
   /**
+   * The agent completed a visible message-tool delivery during this turn. This
+   * is internal delivery evidence for callers that invoke getReplyFromConfig
+   * directly and must not be serialized into channelData.
+   */
+  messageToolDelivered?: boolean;
+  /**
    * Internal OpenClaw notices generated after a runtime/provider failure are
    * not assistant source replies. Dispatch may deliver them even when normal
    * assistant source replies are message-tool-only; sendPolicy deny still wins.
@@ -188,5 +194,11 @@ export function copyReplyPayloadMetadata<T extends object>(source: object, paylo
 export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(payload: T): T {
   return setReplyPayloadMetadata(payload, {
     deliverDespiteSourceReplySuppression: true,
+  });
+}
+
+export function markReplyPayloadForMessageToolDelivery<T extends object>(payload: T): T {
+  return setReplyPayloadMetadata(payload, {
+    messageToolDelivered: true,
   });
 }

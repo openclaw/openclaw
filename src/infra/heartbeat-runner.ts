@@ -17,7 +17,10 @@ import { resolveModelRefFromString, type ModelRef } from "../agents/model-select
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import { formatReasoningMessage } from "../agents/pi-embedded-utils.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
-import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
+import {
+  hasHeartbeatMessageToolDeliveryEvidence,
+  resolveHeartbeatReplyPayload,
+} from "../auto-reply/heartbeat-reply-payload.js";
 import {
   getHeartbeatToolNotificationText,
   resolveHeartbeatToolResponseFromReplyResult,
@@ -1741,6 +1744,8 @@ export async function runHeartbeatOnce(opts: {
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+    const messageToolDelivered =
+      usesHeartbeatResponseTool && hasHeartbeatMessageToolDeliveryEvidence(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
       ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
@@ -1770,6 +1775,27 @@ export async function runHeartbeatOnce(opts: {
         cfg,
         ids: dueCommitmentIds,
         status: "dismissed",
+        nowMs: startedAt,
+      });
+      await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    }
+
+    if (!heartbeatToolResponse && messageToolDelivered) {
+      emitHeartbeatEvent({
+        status: "sent",
+        reason: opts.reason,
+        preview: replyPayload?.text?.slice(0, 200),
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+      });
+      await markCommitmentsStatus({
+        cfg,
+        ids: dueCommitmentIds,
+        status: "sent",
         nowMs: startedAt,
       });
       await updateTaskTimestamps();

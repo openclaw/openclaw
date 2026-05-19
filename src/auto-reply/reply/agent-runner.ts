@@ -49,6 +49,7 @@ import {
 } from "../fallback-state.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import {
+  markReplyPayloadForMessageToolDelivery,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -179,6 +180,18 @@ function hasSuccessfulSideEffectDelivery(params: {
     hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets) ||
     (params.successfulCronAdds ?? 0) > 0 ||
     params.didSendDeterministicApprovalPrompt === true
+  );
+}
+
+function hasSuccessfulMessagingToolDelivery(params: {
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: unknown[];
+}): boolean {
+  return (
+    hasNonEmptyStringArray(params.messagingToolSentTexts) ||
+    hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
+    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
   );
 }
 
@@ -1635,6 +1648,11 @@ export async function runReplyAgent(params: {
       successfulCronAdds: runResult.successfulCronAdds,
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
     });
+    const successfulMessagingToolDelivery = hasSuccessfulMessagingToolDelivery({
+      messagingToolSentTexts: runResult.messagingToolSentTexts,
+      messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+      messagingToolSentTargets: runResult.messagingToolSentTargets,
+    });
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
       const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
         fallbackTransition,
@@ -2105,6 +2123,11 @@ export async function runReplyAgent(params: {
     }
     if (isHookBlockedRun) {
       finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);
+    }
+    if (opts?.sourceReplyDeliveryMode === "message_tool_only" && successfulMessagingToolDelivery) {
+      finalPayloads = finalPayloads.map((payload) =>
+        markReplyPayloadForMessageToolDelivery(payload),
+      );
     }
 
     // Capture only policy-visible final payloads in session store to support
