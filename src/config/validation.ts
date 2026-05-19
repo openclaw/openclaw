@@ -231,6 +231,9 @@ function collectAllowedValuesFromBundledChannelSchemaPath(
   return collectAllowedValuesFromJsonSchemaNode(targetNode);
 }
 
+function formatRawChannelConfigIssueMessage(message: string): string {
+  return `invalid config: ${message}`;
+}
 function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigValidationIssue[] {
   if (!config.channels || !isRecord(config.channels)) {
     return [];
@@ -253,10 +256,11 @@ function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigVal
       const message = error.additionalProperty
         ? `${error.message}: "${error.additionalProperty}"`
         : error.message;
+      const path =
+        error.path === "<root>" ? `channels.${channelId}` : `channels.${channelId}.${error.path}`;
       issues.push({
-        path:
-          error.path === "<root>" ? `channels.${channelId}` : `channels.${channelId}.${error.path}`,
-        message: `invalid config: ${message}`,
+        path,
+        message: formatRawChannelConfigIssueMessage(message),
         allowedValues: error.allowedValues,
         allowedValuesHiddenCount: error.allowedValuesHiddenCount,
       });
@@ -1401,10 +1405,11 @@ function validateConfigObjectWithPluginsBase(
       });
       if (!result.ok) {
         for (const error of result.errors) {
+          const path =
+            error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`;
           issues.push({
-            path:
-              error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`,
-            message: `invalid config: ${error.message}`,
+            path,
+            message: formatRawChannelConfigIssueMessage(error.message),
             allowedValues: error.allowedValues,
             allowedValuesHiddenCount: error.allowedValuesHiddenCount,
           });

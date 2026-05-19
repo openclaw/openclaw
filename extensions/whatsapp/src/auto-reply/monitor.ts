@@ -541,17 +541,40 @@ export async function monitorWebChannel(
         );
       });
 
+      const periodicDrainInterval = setInterval(() => {
+        void drainPendingDeliveries({
+          drainKey: `whatsapp:${normalizedAccountId}`,
+          logLabel: "WhatsApp periodic drain",
+          cfg,
+          log: reconnectLogger,
+          selectEntry: (entry) => ({
+            match:
+              entry.channel === "whatsapp" &&
+              normalizeReconnectAccountId(entry.accountId) === normalizedAccountId,
+            bypassBackoff: false,
+          }),
+        }).catch((err) => {
+          reconnectLogger.warn(
+            { connectionId: connection.connectionId, error: String(err) },
+            "periodic drain failed",
+          );
+        });
+      }, 30_000);
+
       whatsappLog.info("Listening for personal WhatsApp inbound messages.");
       if (process.stdout.isTTY || process.stderr.isTTY) {
         whatsappLog.raw("Ctrl+C to stop.");
       }
 
       if (!keepAlive) {
+        clearInterval(periodicDrainInterval);
         await controller.shutdown();
         return;
       }
 
-      const reason = await controller.waitForClose();
+      const reason = await controller
+        .waitForClose()
+        .finally(() => clearInterval(periodicDrainInterval));
       if (stopRequested() || sigintStop || reason === "aborted") {
         await controller.shutdown();
         break;
