@@ -106,9 +106,12 @@ type PersistedRunFields = Pick<
   | "workspaceDir"
   | "provider"
   | "model"
+  | "hasOneTurnModelOverride"
   | "hasSessionModelOverride"
   | "modelOverrideSource"
   | "hasAutoFallbackProvenance"
+  | "imageModelFallbacksOverride"
+  | "autoFallbackPrimaryProbe"
   | "authProfileId"
   | "authProfileIdSource"
   | "thinkLevel"
@@ -132,7 +135,7 @@ type PersistedRunFields = Pick<
 
 /**
  * Subset of FollowupRun that can be safely JSON-serialized across restarts.
- * Runtime-only fields (abortSignal, currentTurnContext, deliveryCorrelations,
+ * Runtime-only fields (abortSignal, currentInboundContext, deliveryCorrelations,
  * queuedLifecycle) are intentionally excluded.
  */
 type PersistedFollowupRun = Pick<
@@ -186,9 +189,12 @@ const PERSISTED_RUN_FIELDS = [
   "workspaceDir",
   "provider",
   "model",
+  "hasOneTurnModelOverride",
   "hasSessionModelOverride",
   "modelOverrideSource",
   "hasAutoFallbackProvenance",
+  "imageModelFallbacksOverride",
+  "autoFallbackPrimaryProbe",
   "authProfileId",
   "authProfileIdSource",
   "thinkLevel",
