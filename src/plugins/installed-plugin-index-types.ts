@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { PluginCompatCode } from "./compat/registry.js";
-import type { PluginCandidate } from "./discovery.js";
+import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -130,6 +130,13 @@ export type LoadInstalledPluginIndexParams = {
   installRecords?: Record<string, PluginInstallRecord>;
   candidates?: PluginCandidate[];
   diagnostics?: PluginDiagnostic[];
+  /**
+   * Pre-computed discovery result. When supplied (and `candidates` is not),
+   * the internal `discoverOpenClawPlugins` call is skipped. Callers sharing a
+   * discovery snapshot across registry helpers in the same flow should supply
+   * this to avoid redundant filesystem walks.
+   */
+  discovery?: PluginDiscoveryResult;
   now?: () => Date;
 };
 
