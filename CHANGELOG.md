@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Terminal/progress: sanitize OSC progress labels with one precompiled regex pass instead of multiple string scans while preserving the existing OSC terminator cleanup behavior.
 - Providers/xAI: add device-code OAuth login so remote and headless setups can authorize xAI without a localhost browser callback. (#84005) Thanks @fuller-stack-dev.
 
 ### Fixes
