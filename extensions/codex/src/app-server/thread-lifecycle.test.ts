@@ -68,6 +68,52 @@ describe("Codex app-server native code mode config", () => {
     );
   });
 
+  it("summarizes deferred dynamic tool names in developer instructions", () => {
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
+      dynamicTools: [
+        {
+          name: "message",
+          description: "Send a message",
+          inputSchema: { type: "object" },
+        },
+        {
+          name: "music_generate",
+          description: "Create music",
+          inputSchema: { type: "object" },
+          namespace: "openclaw",
+          deferLoading: true,
+        },
+        {
+          name: "image_generate",
+          description: "Create images",
+          inputSchema: { type: "object" },
+          namespace: "openclaw",
+          deferLoading: true,
+        },
+      ],
+    });
+
+    expect(instructions).toContain(
+      "Deferred searchable OpenClaw dynamic tools available: image_generate, music_generate.",
+    );
+    expect(instructions).toContain("Use `tool_search` to load exact callable specs before use.");
+    expect(instructions).not.toContain("message,");
+  });
+
+  it("keeps developer instructions compact when no dynamic tools are deferred", () => {
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
+      dynamicTools: [
+        {
+          name: "message",
+          description: "Send a message",
+          inputSchema: { type: "object" },
+        },
+      ],
+    });
+
+    expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
+  });
+
   it("keeps OpenClaw skill catalogs out of developer instructions", () => {
     const params = createAttemptParams({ provider: "openai" });
     params.skillsSnapshot = {
