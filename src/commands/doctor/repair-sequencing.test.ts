@@ -399,6 +399,7 @@ describe("doctor repair sequencing", () => {
       "Removed stale OAuth auth profile shadow openai-codex.",
     ]);
     expect(result.warningNotes).toEqual(["Sidecar warning"]);
+    expect(result.authProfilesRepaired).toBe(true);
   });
 
   it("emits Discord warnings when unsafe numeric ids block repair", async () => {

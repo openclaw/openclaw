@@ -120,6 +120,36 @@ describe("buildAuthHealthSummary", () => {
     ).toBe("expired");
   });
 
+  it("reports unresolved legacy Codex OAuth sidecars as missing auth", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
+          oauthRef: {
+            source: "openclaw-credentials" as const,
+            provider: "openai-codex" as const,
+            id: "0123456789abcdef0123456789abcdef",
+          },
+        } as unknown as OAuthCredential,
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+
+    expect(profileStatuses(summary)["openai-codex:default"]).toBe("missing");
+    expect(profileReasonCodes(summary)["openai-codex:default"]).toBe("unresolved_ref");
+    expect(summary.providers.find((entry) => entry.provider === "openai-codex")?.status).toBe(
+      "missing",
+    );
+  });
+
   it("uses ordered usable profiles for provider health while keeping stale inventory visible", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const store = {

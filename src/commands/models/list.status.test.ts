@@ -640,6 +640,101 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
+  it("reports unresolved Codex OAuth sidecars as missing for OpenAI Codex runtime routes", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalProfiles = { ...mocks.store.profiles };
+    const originalOrder = mocks.store.order ? { ...mocks.store.order } : undefined;
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    const originalHealthImpl = buildAuthHealthSummaryMock.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5", fallbacks: [] },
+          models: { "openai/gpt-5.5": {} },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: false } },
+    });
+    mocks.store.profiles = {
+      "openai-codex:default": {
+        type: "oauth",
+        provider: "openai-codex",
+        expires: Date.now() + 60_000,
+        oauthRef: {
+          source: "openclaw-credentials",
+          provider: "openai-codex",
+          id: "0123456789abcdef0123456789abcdef",
+        },
+      },
+    };
+    mocks.store.order = {
+      "openai-codex": ["openai-codex:default"],
+    };
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+    buildAuthHealthSummaryMock.mockReturnValue({
+      now: Date.now(),
+      warnAfterMs: 86_400_000,
+      profiles: [
+        {
+          profileId: "openai-codex:default",
+          provider: "openai-codex",
+          type: "oauth",
+          status: "missing",
+          reasonCode: "unresolved_ref",
+          source: "store",
+          label: "openai-codex:default",
+        },
+      ],
+      providers: [
+        {
+          provider: "openai-codex",
+          status: "missing",
+          profiles: [],
+        },
+      ],
+    });
+
+    try {
+      await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+      const payload = parseFirstJsonLog(localRuntime);
+      expect(payload.auth.missingProvidersInUse).toStrictEqual(["openai"]);
+      expect(payload.auth.runtimeAuthRoutes).toEqual([
+        {
+          provider: "openai",
+          runtime: "codex",
+          authProvider: "openai",
+          status: "missing",
+          effective: {
+            kind: "missing",
+            detail: "missing",
+          },
+        },
+      ]);
+      expect(requireProfile(payload.auth.oauth.profiles, "openai-codex:default").reasonCode).toBe(
+        "unresolved_ref",
+      );
+      expect(localRuntime.exit).toHaveBeenCalledWith(1);
+    } finally {
+      mocks.store.profiles = originalProfiles;
+      mocks.store.order = originalOrder;
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+      if (originalHealthImpl) {
+        buildAuthHealthSummaryMock.mockImplementation(originalHealthImpl);
+      }
+    }
+  });
+
   it("uses Codex synthetic auth for canonical OpenAI text routes", async () => {
     const localRuntime = createRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();

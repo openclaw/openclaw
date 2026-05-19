@@ -13,6 +13,7 @@ import {
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
+import { evaluateStoredCredentialEligibility } from "../../agents/auth-profiles/credential-state.js";
 import { resolveAuthProfileOrder } from "../../agents/auth-profiles/order.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
@@ -539,7 +540,11 @@ export async function modelsStatusCommand(
       });
       for (const candidate of candidates) {
         const direct = providerAuthMap.get(candidate)?.effective;
-        if (direct && direct.kind !== "missing") {
+        if (
+          direct &&
+          direct.kind !== "missing" &&
+          (direct.kind !== "profiles" || hasUsableProviderAuth(candidate))
+        ) {
           return direct;
         }
       }
@@ -552,6 +557,9 @@ export async function modelsStatusCommand(
         const profileId = orderedProfiles[0];
         const credential = profileId ? store.profiles[profileId] : undefined;
         if (profileId && credential) {
+          if (!evaluateStoredCredentialEligibility({ credential }).eligible) {
+            continue;
+          }
           const sourceProvider = resolveProviderAuthHealthId(credential.provider);
           const source = providerAuthMap.get(sourceProvider)?.effective;
           return source && source.kind !== "missing"
@@ -562,7 +570,10 @@ export async function modelsStatusCommand(
               };
         }
       }
-      return providerAuthMap.get(provider)?.effective ?? missingProviderAuthEffective;
+      const direct = providerAuthMap.get(provider)?.effective;
+      return direct?.kind === "profiles"
+        ? missingProviderAuthEffective
+        : (direct ?? missingProviderAuthEffective);
     };
     const hasUsableNonProfileAuth = (
       provider: string,
@@ -591,7 +602,13 @@ export async function modelsStatusCommand(
           store,
           provider: candidate,
         });
-        if (orderedProfiles.length > 0 || hasUsableNonProfileAuth(candidate)) {
+        const hasUsableProfile = orderedProfiles.some((profileId) => {
+          const credential = store.profiles[profileId];
+          return credential
+            ? evaluateStoredCredentialEligibility({ credential }).eligible
+            : false;
+        });
+        if (hasUsableProfile || hasUsableNonProfileAuth(candidate)) {
           return true;
         }
       }

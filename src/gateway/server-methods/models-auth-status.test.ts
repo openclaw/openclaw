@@ -311,6 +311,38 @@ describe("models.authStatus", () => {
     expect(result.providers[0].profiles[0].type).toBe("oauth");
   });
 
+  it("forwards unresolved auth reason codes to status clients", async () => {
+    const profile = {
+      profileId: "openai-codex:default",
+      provider: "openai-codex",
+      type: "oauth",
+      status: "missing",
+      reasonCode: "unresolved_ref",
+      source: "store",
+      label: "openai-codex:default",
+    } satisfies AuthHealthSummary["profiles"][number];
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [profile],
+      providers: [
+        {
+          provider: "openai-codex",
+          status: "missing",
+          profiles: [profile],
+        },
+      ],
+    });
+
+    const opts = createOptions();
+    await handler(opts);
+
+    const [, payload] = firstRespondCall(opts) ?? [];
+    const result = payload as ModelAuthStatusResult;
+    expect(result.providers[0]?.status).toBe("missing");
+    expect(result.providers[0]?.profiles[0]?.reasonCode).toBe("unresolved_ref");
+  });
+
   it("serves cached response within TTL and marks it as cached", async () => {
     const opts1 = createOptions();
     await handler(opts1);
@@ -869,7 +901,7 @@ describe("aggregateOAuthStatus", () => {
     expect(result.status).toBe("static");
   });
 
-  it("expired + missing both map to 'expired'", () => {
+  it("keeps missing distinct from expired", () => {
     const expiredResult = aggregateOAuthStatus(
       {
         provider: "openai",
@@ -888,7 +920,7 @@ describe("aggregateOAuthStatus", () => {
       },
       NOW,
     );
-    expect(missingResult.status).toBe("expired");
+    expect(missingResult.status).toBe("missing");
   });
 
   it("precedence: expired/missing > expiring > ok > static", () => {
