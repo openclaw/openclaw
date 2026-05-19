@@ -1,34 +1,21 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { withTrustedWebSearchEndpoint } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  buildSearchCacheKey,
+  readCachedSearchPayload,
+  withTrustedWebSearchEndpoint,
+  writeCachedSearchPayload,
+} from "openclaw/plugin-sdk/provider-web-search";
 import {
   DEFAULT_SERPAPI_TIMEOUT_SECONDS,
   SERPAPI_BASE_URL,
+  SERPAPI_CACHE_TTL_MS,
   resolveSerpApiKey,
   resolveSerpApiLanguage,
 } from "./config.js";
 
 // In-process result cache — aligns with SerpApi's 1-hour server-side cache window.
 // ZeroTrace requests bypass the cache (caching would defeat the privacy guarantee).
-type CacheEntry = { data: Record<string, unknown>; expiresAt: number };
-const RESULT_CACHE = new Map<string, CacheEntry>();
-// Slightly under SerpApi's 1-hour server-side window so we refresh before it expires.
-const CACHE_TTL_MS = 55 * 60_000;
-
-function buildCacheKey(params: Record<string, string>): string {
-  const excluded = new Set(["api_key", "zero_trace"]);
-  const entries = Object.entries(params)
-    .filter(([k]) => !excluded.has(k))
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([k, v]) => [k, v.trim()]);
-  return JSON.stringify(entries);
-}
-
-function sweepExpiredCache(): void {
-  const now = Date.now();
-  for (const [k, v] of RESULT_CACHE) {
-    if (v.expiresAt <= now) RESULT_CACHE.delete(k);
-  }
-}
+// Uses the shared SEARCH_CACHE (bounded LRU) from provider-web-search.
 
 export type SerpApiCallParams = {
   cfg?: OpenClawConfig;
@@ -66,13 +53,18 @@ export async function callSerpApi(opts: SerpApiCallParams): Promise<Record<strin
 
   const isZeroTrace = rawParams.zero_trace === "true";
 
-  sweepExpiredCache();
-  const cacheKey = buildCacheKey(filtered);
+  const cacheKey = buildSearchCacheKey([
+    "serpapi",
+    JSON.stringify(
+      Object.entries(filtered)
+        .filter(([k]) => k !== "api_key")
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([k, v]) => [k, v.trim()]),
+    ),
+  ]);
   if (!isZeroTrace) {
-    const cached = RESULT_CACHE.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.data;
-    }
+    const cached = readCachedSearchPayload(cacheKey);
+    if (cached) return cached;
   }
 
   const urlParams = new URLSearchParams({ ...filtered, api_key: apiKey });
@@ -111,7 +103,7 @@ export async function callSerpApi(opts: SerpApiCallParams): Promise<Record<strin
   );
 
   if (!isZeroTrace) {
-    RESULT_CACHE.set(cacheKey, { data: result, expiresAt: Date.now() + CACHE_TTL_MS });
+    writeCachedSearchPayload(cacheKey, result, SERPAPI_CACHE_TTL_MS);
   }
   return result;
 }

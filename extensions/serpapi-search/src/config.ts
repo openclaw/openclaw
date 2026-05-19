@@ -9,6 +9,8 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 export const SERPAPI_BASE_URL = "https://serpapi.com/search";
 export const SERPAPI_CREDENTIAL_PATH = "plugins.entries.serpapi-search.config.webSearch.apiKey";
 export const DEFAULT_SERPAPI_TIMEOUT_SECONDS = 30;
+// Slightly under SerpApi's 1-hour server-side cache window so we refresh before it expires.
+export const SERPAPI_CACHE_TTL_MS = 55 * 60_000;
 
 type SerpApiConfig = {
   apiKey?: unknown;
