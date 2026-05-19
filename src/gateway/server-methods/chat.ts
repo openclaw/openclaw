@@ -2731,7 +2731,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
         // Defer the transcript append until after the agent run ends to avoid
         // the gateway-injected message interfering with the active run lifecycle.
-        deferredMediaPayload = payload;
+        // Only capture the first media payload to preserve single-append semantics.
+        if (!deferredMediaPayload) {
+          deferredMediaPayload = payload;
+        }
       };
       const flushDeferredWebchatAgentMediaTranscript = async () => {
         const payload = deferredMediaPayload;
