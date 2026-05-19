@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun ClawPanel(
   modifier: Modifier = Modifier,
-  contentPadding: PaddingValues = PaddingValues(12.dp),
+  contentPadding: PaddingValues = PaddingValues(9.dp),
   content: @Composable () -> Unit,
 ) {
   Surface(
@@ -37,7 +37,7 @@ internal fun ClawPanel(
 @Composable
 internal fun ClawSheetSurface(
   modifier: Modifier = Modifier,
-  contentPadding: PaddingValues = PaddingValues(20.dp),
+  contentPadding: PaddingValues = PaddingValues(18.dp),
   content: @Composable () -> Unit,
 ) {
   Surface(

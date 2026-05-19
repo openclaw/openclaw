@@ -55,10 +55,10 @@ internal data class ClawSpacing(
 
 @Immutable
 internal data class ClawRadii(
-  val row: Dp = 10.dp,
-  val panel: Dp = 14.dp,
-  val control: Dp = 16.dp,
-  val sheet: Dp = 22.dp,
+  val row: Dp = 6.dp,
+  val panel: Dp = 8.dp,
+  val control: Dp = 9.dp,
+  val sheet: Dp = 14.dp,
   val pill: Dp = 999.dp,
 )
 
@@ -174,48 +174,48 @@ private fun clawTypography(fontFamily: FontFamily) =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.Bold,
-        fontSize = 27.sp,
-        lineHeight = 33.sp,
+        fontSize = 22.sp,
+        lineHeight = 27.sp,
         letterSpacing = 0.sp,
       ),
     title =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 19.sp,
-        lineHeight = 25.sp,
+        fontSize = 17.sp,
+        lineHeight = 22.sp,
         letterSpacing = 0.sp,
       ),
     section =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 14.sp,
-        lineHeight = 18.sp,
+        fontSize = 12.2.sp,
+        lineHeight = 16.sp,
         letterSpacing = 0.sp,
       ),
     body =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.Medium,
-        fontSize = 12.sp,
-        lineHeight = 17.sp,
+        fontSize = 10.8.sp,
+        lineHeight = 15.sp,
         letterSpacing = 0.sp,
       ),
     label =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 12.sp,
-        lineHeight = 16.sp,
+        fontSize = 11.2.sp,
+        lineHeight = 15.sp,
         letterSpacing = 0.sp,
       ),
     caption =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.Medium,
-        fontSize = 10.5.sp,
-        lineHeight = 14.sp,
+        fontSize = 9.6.sp,
+        lineHeight = 13.sp,
         letterSpacing = 0.sp,
       ),
     mono =

@@ -12,7 +12,7 @@ fun RootScreen(viewModel: MainViewModel) {
   val onboardingCompleted by viewModel.onboardingCompleted.collectAsState()
 
   if (!onboardingCompleted) {
-    OnboardingFlow(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+    V2OnboardingFlow(viewModel = viewModel, modifier = Modifier.fillMaxSize())
     return
   }
 
