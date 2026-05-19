@@ -18,6 +18,11 @@ export type CronPayloadOutcome = {
   deliveryPayloads: DeliveryPayload[];
   deliveryPayloadHasStructuredContent: boolean;
   hasFatalErrorPayload: boolean;
+  errorPayloadRecovery: {
+    hadErrorPayload: boolean;
+    recovered: boolean;
+    recoveredBy?: "laterPayload" | "terminalAssistantText" | "presentationWarning";
+  };
   embeddedRunError?: string;
   pendingPresentationWarningError?: string;
 };
@@ -274,29 +279,61 @@ export function resolveCronPayloadOutcome(params: {
   const normalizedFinalAssistantVisibleText = normalizeOptionalString(
     params.finalAssistantVisibleText,
   );
+  const failureSignal = normalizeCronFailureSignal(params.failureSignal);
+  const runLevelError = formatCronRunLevelError(params.runLevelError);
+  const hasStructuredDeliveryPayloads = selectedDeliveryPayloads.some((payload) =>
+    payloadHasStructuredDeliveryContent(payload),
+  );
   const hasSuccessfulPayloadAfterLastError =
-    !params.runLevelError &&
+    !runLevelError &&
     lastErrorPayloadIndex >= 0 &&
     params.payloads
       .slice(lastErrorPayloadIndex + 1)
       .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
   const hasSuccessfulPayloadBeforeLastError =
-    !params.runLevelError &&
+    !runLevelError &&
     lastErrorPayloadIndex > 0 &&
     params.payloads
       .slice(0, lastErrorPayloadIndex)
       .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
   const hasPendingPresentationWarning =
-    !params.runLevelError &&
-    params.failureSignal?.fatalForCron !== true &&
+    !runLevelError &&
+    failureSignal === undefined &&
     lastErrorPayloadIndex >= 0 &&
     isCronMessagePresentationWarning(lastErrorPayloadText) &&
     (normalizedFinalAssistantVisibleText !== undefined || hasSuccessfulPayloadBeforeLastError);
+  const hasTerminalAssistantRecovery =
+    !runLevelError &&
+    failureSignal === undefined &&
+    params.preferFinalAssistantVisibleText === true &&
+    normalizedFinalAssistantVisibleText !== undefined &&
+    detectCronDenialToken(normalizedFinalAssistantVisibleText) === undefined &&
+    !hasStructuredDeliveryPayloads &&
+    lastErrorPayloadIndex >= 0 &&
+    !hasSuccessfulPayloadAfterLastError &&
+    (!hasSuccessfulPayloadBeforeLastError ||
+      normalizedFinalAssistantVisibleText !== fallbackOutputText);
   const hasFatalStructuredErrorPayload =
-    hasErrorPayload && !hasSuccessfulPayloadAfterLastError && !hasPendingPresentationWarning;
-  const hasStructuredDeliveryPayloads = selectedDeliveryPayloads.some((payload) =>
-    payloadHasStructuredDeliveryContent(payload),
-  );
+    hasErrorPayload &&
+    !hasSuccessfulPayloadAfterLastError &&
+    !hasPendingPresentationWarning &&
+    !hasTerminalAssistantRecovery;
+  const errorPayloadRecoveredBy = hasSuccessfulPayloadAfterLastError
+    ? ("laterPayload" as const)
+    : hasPendingPresentationWarning
+      ? ("presentationWarning" as const)
+      : hasTerminalAssistantRecovery
+        ? ("terminalAssistantText" as const)
+        : undefined;
+  const errorPayloadRecovery = {
+    hadErrorPayload: hasErrorPayload,
+    recovered:
+      hasErrorPayload &&
+      (hasSuccessfulPayloadAfterLastError ||
+        hasPendingPresentationWarning ||
+        hasTerminalAssistantRecovery),
+    ...(errorPayloadRecoveredBy ? { recoveredBy: errorPayloadRecoveredBy } : {}),
+  };
   // Keep structured/media announce payloads intact. Only collapse purely textual
   // cron announce output to the final assistant-visible answer.
   const shouldUseFinalAssistantVisibleText =
@@ -329,8 +366,6 @@ export function resolveCronPayloadOutcome(params: {
       text: payload?.text,
     })),
   ]);
-  const failureSignal = normalizeCronFailureSignal(params.failureSignal);
-  const runLevelError = formatCronRunLevelError(params.runLevelError);
   const hasFatalErrorPayload =
     hasFatalStructuredErrorPayload ||
     failureSignal !== undefined ||
@@ -361,6 +396,7 @@ export function resolveCronPayloadOutcome(params: {
       ? false
       : deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
+    errorPayloadRecovery,
     embeddedRunError: structuredErrorText
       ? structuredErrorText
       : failureSignal

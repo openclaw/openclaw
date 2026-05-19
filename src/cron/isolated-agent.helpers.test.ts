@@ -62,6 +62,11 @@ describe("resolveCronPayloadOutcome", () => {
     });
 
     expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.errorPayloadRecovery).toEqual({
+      hadErrorPayload: true,
+      recovered: true,
+      recoveredBy: "laterPayload",
+    });
     expect(result.summary).toBe("Write completed successfully.");
   });
 
@@ -73,6 +78,11 @@ describe("resolveCronPayloadOutcome", () => {
     });
 
     expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.errorPayloadRecovery).toEqual({
+      hadErrorPayload: true,
+      recovered: true,
+      recoveredBy: "presentationWarning",
+    });
     expect(result.embeddedRunError).toBeUndefined();
     expect(result.pendingPresentationWarningError).toBe("⚠️ ✉️ Message failed");
     expect(result.summary).toBe("Final cron report");
@@ -281,7 +291,7 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayloadHasStructuredContent).toBe(true);
   });
 
-  it("returns only the last error payload when all payloads are errors", () => {
+  it("uses terminal assistant text when all error payloads were recovered", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
         { text: "first error", isError: true },
@@ -291,9 +301,31 @@ describe("resolveCronPayloadOutcome", () => {
       preferFinalAssistantVisibleText: true,
     });
 
-    expect(result.outputText).toBe("last error");
-    expect(result.deliveryPayloads).toEqual([{ text: "last error", isError: true }]);
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.errorPayloadRecovery).toEqual({
+      hadErrorPayload: true,
+      recovered: true,
+      recoveredBy: "terminalAssistantText",
+    });
+    expect(result.outputText).toBe("Recovered final answer");
+    expect(result.deliveryPayloads).toEqual([{ text: "Recovered final answer" }]);
     expect(result.deliveryPayload).toEqual({ text: "last error", isError: true });
+  });
+
+  it("keeps recovered error payloads fatal when final assistant text reports denial", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "tool error", isError: true }],
+      finalAssistantVisibleText: "I could not run the requested script.",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.errorPayloadRecovery).toEqual({
+      hadErrorPayload: true,
+      recovered: false,
+    });
+    expect(result.embeddedRunError).toBe("tool error");
+    expect(result.deliveryPayloads).toEqual([{ text: "tool error", isError: true }]);
   });
 
   it("keeps multi-payload direct delivery when finalAssistantVisibleText is not preferred", () => {
