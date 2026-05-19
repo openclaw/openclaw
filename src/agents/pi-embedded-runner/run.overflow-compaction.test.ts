@@ -500,9 +500,14 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       toolAuthProfileStore?: unknown;
     };
     expect(harnessParams?.runtimePlan).toBe(runtimePlan);
-    const authProfileStore = expectRecordFields(harnessParams.authProfileStore, {});
-    const authProfiles = expectRecordFields(authProfileStore.profiles, {});
-    expect(Object.keys(authProfiles)).toEqual(["openai-codex:work"]);
+    expect(harnessParams.authProfileStore).toBe(codexAuthStore);
+    const authProfiles = expectRecordFields(harnessParams.authProfileStore.profiles, {});
+    expect(Object.keys(authProfiles)).toEqual([
+      "openai-codex:work",
+      "openai-codex:other",
+      "anthropic:work",
+      "xai:work",
+    ]);
     expectRecordFields(authProfiles["openai-codex:work"], {
       provider: "openai-codex",
     });
@@ -725,6 +730,13 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
           refresh: "refresh-token",
           expires: Date.now() + 60_000,
         },
+        "xai:work": {
+          type: "oauth" as const,
+          provider: "xai",
+          access: "xai-token",
+          refresh: "xai-refresh",
+          expires: Date.now() + 60_000,
+        },
       },
     };
     clearAgentHarnesses();
@@ -837,6 +849,15 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         forwardedAuthProfileId: "openai-codex:default",
       },
     });
+    const harnessParams = mockCallArg(pluginRunAttempt) as {
+      authProfileStore?: { profiles?: Record<string, unknown> };
+      toolAuthProfileStore?: unknown;
+    };
+    expect(harnessParams.authProfileStore).toBe(codexAuthStore);
+    expectRecordFields(harnessParams.authProfileStore.profiles?.["xai:work"], {
+      provider: "xai",
+    });
+    expect(harnessParams.toolAuthProfileStore).toBe(codexAuthStore);
   });
 
   it("refreshes bootstrapped Codex OAuth credentials when rotating profiles", async () => {
