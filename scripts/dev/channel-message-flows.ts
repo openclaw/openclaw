@@ -9,6 +9,7 @@ import {
 } from "../../extensions/telegram/runtime-api.js";
 import { resolveTelegramAccount } from "../../extensions/telegram/src/accounts.js";
 import { normalizeTelegramApiRoot } from "../../extensions/telegram/src/api-root.js";
+import type { TelegramThreadSpec } from "../../extensions/telegram/src/bot/helpers.js";
 import {
   createTelegramDraftStream,
   type TelegramDraftStream,
@@ -226,6 +227,10 @@ function createTelegramFlowApi(params: { accountId?: string; cfg: OpenClawConfig
   } as Bot["api"];
 }
 
+export function resolveTelegramFlowThreadSpec(threadId?: number): TelegramThreadSpec | undefined {
+  return typeof threadId === "number" ? { id: threadId, scope: "forum" } : undefined;
+}
+
 function createDefaultTelegramDraftStream(params: {
   accountId?: string;
   cfg: OpenClawConfig;
@@ -240,8 +245,7 @@ function createDefaultTelegramDraftStream(params: {
       parseMode: "HTML",
       text: renderTelegramHtmlText(text, { textMode: "markdown" }),
     }),
-    thread:
-      typeof params.threadId === "number" ? { id: params.threadId, scope: "forum" } : undefined,
+    thread: resolveTelegramFlowThreadSpec(params.threadId),
     throttleMs: 250,
   });
 }
@@ -276,7 +280,7 @@ function createDefaultNativeToolProgressDraft(params: {
   const draft = createNativeTelegramToolProgressDraft({
     api: createTelegramNativeDraftApi(params),
     chatId: params.target,
-    thread: typeof params.threadId === "number" ? { id: params.threadId, scope: "dm" } : undefined,
+    thread: resolveTelegramFlowThreadSpec(params.threadId),
   });
   if (!draft) {
     throw new Error("Telegram Bot API client does not expose sendMessageDraft.");

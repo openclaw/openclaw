@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   parseChannelMessageFlowArgs,
+  resolveTelegramFlowThreadSpec,
   runTelegramThinkingFinalFlow,
   runTelegramWorkingFinalFlow,
 } from "../../scripts/dev/channel-message-flows.ts";
@@ -173,5 +174,10 @@ describe("channel message flows dev runner", () => {
     expect(sleep).toHaveBeenCalledTimes(9);
     expect(sleep).toHaveBeenCalledWith(2_000);
     expect(result.previewUpdates).toBe(7);
+  });
+
+  it("maps flow thread ids to Telegram forum topic specs", () => {
+    expect(resolveTelegramFlowThreadSpec(42)).toEqual({ id: 42, scope: "forum" });
+    expect(resolveTelegramFlowThreadSpec()).toBeUndefined();
   });
 });

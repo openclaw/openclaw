@@ -658,7 +658,9 @@ export const dispatchTelegramMessage = async ({
     return true;
   };
   const progressDraftGate = createChannelProgressDraftGate({
-    onStart: () => renderProgressDraft({ flush: true }),
+    onStart: async () => {
+      await renderProgressDraft({ flush: true });
+    },
   });
   const pushStreamToolProgress = async (
     line?: string | ChannelProgressDraftLine,
