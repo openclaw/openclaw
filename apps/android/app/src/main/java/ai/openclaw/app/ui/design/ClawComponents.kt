@@ -104,7 +104,7 @@ internal fun ClawPrimaryButton(
   Button(
     onClick = onClick,
     enabled = enabled,
-    modifier = modifier.heightIn(min = 40.dp),
+    modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     colors =
       ButtonDefaults.buttonColors(
@@ -135,7 +135,7 @@ internal fun ClawSecondaryButton(
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = modifier.heightIn(min = 38.dp),
+    modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = if (enabled) ClawTheme.colors.surfaceRaised else ClawTheme.colors.surface,
     contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
@@ -166,14 +166,14 @@ internal fun ClawIconButton(
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = modifier.size(36.dp),
+    modifier = modifier.size(ClawTheme.spacing.touchTarget),
     shape = CircleShape,
     color = if (enabled) ClawTheme.colors.surfaceRaised else ClawTheme.colors.surface,
     contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(17.dp))
+      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
     }
   }
 }
@@ -274,7 +274,11 @@ internal fun ClawDetailRow(
   trailing: @Composable () -> Unit,
 ) {
   Row(
-    modifier = modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .heightIn(min = 52.dp)
+        .padding(horizontal = 12.dp, vertical = 5.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(9.dp),
   ) {
@@ -344,8 +348,9 @@ internal fun ClawListItem(
     modifier =
       rowModifier
         .fillMaxWidth()
+        .heightIn(min = ClawTheme.spacing.touchTarget)
         .clip(RoundedCornerShape(ClawTheme.radii.row))
-        .padding(vertical = 4.dp),
+        .padding(horizontal = 2.dp, vertical = 5.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(9.dp),
   ) {

@@ -250,13 +250,13 @@ private fun V2HeaderIcon(
 ) {
   Surface(
     onClick = onClick,
-    modifier = Modifier.size(23.dp),
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget),
     shape = CircleShape,
     color = Color.Transparent,
     contentColor = ClawTheme.colors.text,
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(15.dp))
+      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(20.dp))
     }
   }
 }
@@ -496,12 +496,13 @@ private fun V2ChatComposer(
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
         Surface(
           onClick = onAbort,
+          modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
           shape = RoundedCornerShape(ClawTheme.radii.pill),
           color = ClawTheme.colors.canvas,
           contentColor = ClawTheme.colors.text,
         ) {
           Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
           ) {
@@ -526,12 +527,13 @@ private fun V2ChatContextMeter(
   ) {
     Surface(
       onClick = onClick,
+      modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
       shape = RoundedCornerShape(ClawTheme.radii.pill),
       color = ClawTheme.colors.canvas,
       contentColor = ClawTheme.colors.text,
     ) {
       Row(
-        modifier = Modifier.padding(horizontal = 1.dp, vertical = 2.5.dp),
+        modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
@@ -565,14 +567,14 @@ private fun V2ChatInputPill(
   modifier: Modifier = Modifier,
 ) {
   Surface(
-    modifier = modifier.heightIn(min = 30.dp),
-    shape = RoundedCornerShape(12.dp),
+    modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
+    shape = RoundedCornerShape(ClawTheme.radii.control),
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+      modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
@@ -598,13 +600,13 @@ private fun V2ChatInputPill(
       }
       Surface(
         onClick = onVoice,
-        modifier = Modifier.size(20.dp),
+        modifier = Modifier.size(ClawTheme.spacing.touchTarget),
         shape = CircleShape,
         color = ClawTheme.colors.surfaceRaised,
         contentColor = ClawTheme.colors.text,
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Mic, contentDescription = "Voice", modifier = Modifier.size(12.dp))
+          Icon(imageVector = Icons.Default.Mic, contentDescription = "Voice", modifier = Modifier.size(18.dp))
         }
       }
     }
@@ -628,14 +630,14 @@ private fun V2SendButton(
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = Modifier.size(31.dp),
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget),
     shape = CircleShape,
     color = if (enabled) ClawTheme.colors.primary else ClawTheme.colors.surfacePressed,
     contentColor = if (enabled) ClawTheme.colors.primaryText else ClawTheme.colors.textSubtle,
     border = BorderStroke(1.dp, if (enabled) ClawTheme.colors.primary else ClawTheme.colors.border),
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(14.dp))
+      Icon(imageVector = Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(18.dp))
     }
   }
 }

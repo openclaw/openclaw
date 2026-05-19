@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -458,7 +459,7 @@ private fun V2TalkControl(
   Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
     Surface(
       onClick = onClick,
-      modifier = Modifier.size(if (primary) 48.dp else 44.dp),
+      modifier = Modifier.size(ClawTheme.spacing.touchTarget),
       shape = CircleShape,
       color = if (primary) ClawTheme.colors.primary else ClawTheme.colors.canvas,
       contentColor = if (primary) ClawTheme.colors.primaryText else ClawTheme.colors.text,
@@ -535,7 +536,7 @@ private fun V2VoiceHeader(
 @Composable
 private fun V2VoiceAvatar(text: String) {
   Surface(
-    modifier = Modifier.size(28.dp),
+    modifier = Modifier.size(34.dp),
     shape = CircleShape,
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,
@@ -553,7 +554,7 @@ private fun V2VoicePlainIconButton(
   contentDescription: String,
   onClick: () -> Unit,
 ) {
-  Surface(onClick = onClick, modifier = Modifier.size(29.dp), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+  Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Box(contentAlignment = Alignment.Center) {
       Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
     }
@@ -649,19 +650,19 @@ private fun V2VoiceModeRow(
 ) {
   Surface(onClick = onClick, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 6.dp),
+      modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 9.dp, vertical = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Surface(
-        modifier = Modifier.size(25.dp),
+        modifier = Modifier.size(30.dp),
         shape = CircleShape,
         color = ClawTheme.colors.surface,
         contentColor = ClawTheme.colors.text,
         border = BorderStroke(1.dp, ClawTheme.colors.border),
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(14.dp))
+          Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(16.dp))
         }
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -680,7 +681,7 @@ private fun V2VoicePrimaryAction(
 ) {
   Surface(
     onClick = onClick,
-    modifier = Modifier.fillMaxWidth().height(30.dp),
+    modifier = Modifier.fillMaxWidth().height(ClawTheme.spacing.touchTarget),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = ClawTheme.colors.primary,
     contentColor = ClawTheme.colors.primaryText,
@@ -690,7 +691,7 @@ private fun V2VoicePrimaryAction(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.Center,
     ) {
-      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(13.dp))
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(17.dp))
       Text(text = text, modifier = Modifier.padding(start = 8.dp), style = ClawTheme.type.label)
     }
   }
