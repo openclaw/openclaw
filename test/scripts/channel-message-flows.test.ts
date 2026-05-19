@@ -106,14 +106,10 @@ describe("channel message flows dev runner", () => {
     expect(result).toEqual({ finalMessageId: "99", previewUpdates: 3 });
   });
 
-  it("streams working updates through the elapsed label before the final answer", async () => {
-    const stream = {
-      update: vi.fn(),
-      flush: vi.fn(async () => {}),
-      clear: vi.fn(async () => {}),
+  it("streams working updates through native message drafts before the final answer", async () => {
+    const draft = {
+      update: vi.fn(async () => true),
       stop: vi.fn(async () => {}),
-      messageId: vi.fn(() => 17),
-      forceNewMessage: vi.fn(),
     };
     const sendFinal = vi.fn(async () => ({ messageId: "100", chatId: "123" }));
 
@@ -125,24 +121,24 @@ describe("channel message flows dev runner", () => {
         target: "123",
       },
       {
-        createDraftStream: vi.fn(() => stream),
+        createNativeToolProgressDraft: vi.fn(() => draft),
         sendFinal,
         sleep: vi.fn(async () => {}),
       },
     );
 
-    expect(stream.update).toHaveBeenNthCalledWith(1, "Working");
-    expect(stream.update.mock.calls[2]?.[0]).toContain("🛠️ pgrep -fl Discord || true (agent)");
-    expect(stream.update.mock.calls[5]?.[0]).toContain(
+    expect(draft.update).toHaveBeenNthCalledWith(1, "Working");
+    expect(draft.update.mock.calls[2]?.[0]).toContain("🛠️ pgrep -fl Discord || true (agent)");
+    expect(draft.update.mock.calls[5]?.[0]).toContain(
       "🛠️ list files in /Applications/Discord.app -> run true (agent)",
     );
-    expect(stream.update.mock.calls[8]?.[0]).toContain(
-      "• `Discord is installed as a normal '/Applications/Discord.app'",
+    expect(draft.update.mock.calls[8]?.[0]).toContain(
+      "• Discord is installed as a normal '/Applications/Discord.app'",
     );
-    expect(stream.update).toHaveBeenCalledWith(
-      expect.stringContaining("Working..\n\n`🛠️ pgrep -fl Discord || true (agent)`"),
+    expect(draft.update).toHaveBeenCalledWith(
+      expect.stringContaining("Working..\n\n🛠️ pgrep -fl Discord || true (agent)"),
     );
-    expect(stream.clear).toHaveBeenCalledBefore(sendFinal);
+    expect(draft.stop).toHaveBeenCalledBefore(sendFinal);
     expect(sendFinal).toHaveBeenCalledWith({
       accountId: undefined,
       cfg: {},
@@ -150,18 +146,14 @@ describe("channel message flows dev runner", () => {
       text: "Final answer: the Telegram working preview cleared and this durable reply landed.",
       threadId: undefined,
     });
-    expect(stream.update).not.toHaveBeenCalledWith(expect.stringContaining("Working for"));
+    expect(draft.update).not.toHaveBeenCalledWith(expect.stringContaining("Working for"));
     expect(result).toEqual({ finalMessageId: "100", previewUpdates: 12 });
   });
 
   it("uses two second progress update cadence by default", async () => {
-    const stream = {
-      update: vi.fn(),
-      flush: vi.fn(async () => {}),
-      clear: vi.fn(async () => {}),
+    const draft = {
+      update: vi.fn(async () => true),
       stop: vi.fn(async () => {}),
-      messageId: vi.fn(() => 17),
-      forceNewMessage: vi.fn(),
     };
     const sleep = vi.fn(async () => {});
 
@@ -172,7 +164,7 @@ describe("channel message flows dev runner", () => {
         target: "123",
       },
       {
-        createDraftStream: vi.fn(() => stream),
+        createNativeToolProgressDraft: vi.fn(() => draft),
         sendFinal: vi.fn(async () => ({ messageId: "101", chatId: "123" })),
         sleep,
       },

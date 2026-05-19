@@ -1,17 +1,23 @@
 #!/usr/bin/env -S node --import tsx
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import type { Bot } from "grammy";
+import { Bot, type ApiClientOptions } from "grammy";
 import {
   deleteMessageTelegram,
   editMessageTelegram,
   sendMessageTelegram,
 } from "../../extensions/telegram/runtime-api.js";
+import { resolveTelegramAccount } from "../../extensions/telegram/src/accounts.js";
+import { normalizeTelegramApiRoot } from "../../extensions/telegram/src/api-root.js";
 import {
   createTelegramDraftStream,
   type TelegramDraftStream,
 } from "../../extensions/telegram/src/draft-stream.js";
 import { renderTelegramHtmlText } from "../../extensions/telegram/src/format.js";
+import {
+  createNativeTelegramToolProgressDraft,
+  type NativeTelegramToolProgressDraft,
+} from "../../extensions/telegram/src/native-tool-progress-draft.js";
 import { formatReasoningMessage } from "../../src/agents/pi-embedded-utils.js";
 import { getRuntimeConfig } from "../../src/config/config.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
@@ -51,6 +57,12 @@ type TelegramThinkingFinalDeps = {
     target: string;
     threadId?: number;
   }) => TelegramDraftStream;
+  createNativeToolProgressDraft?: (params: {
+    accountId?: string;
+    cfg: OpenClawConfig;
+    target: string;
+    threadId?: number;
+  }) => NativeTelegramToolProgressDraft;
   sendFinal?: (params: TelegramSendFinalParams) => Promise<{ messageId?: string }>;
   sleep?: (ms: number) => Promise<void>;
 };
@@ -112,7 +124,7 @@ function usage(): string {
     "",
     "Flows:",
     "  thinking-final      Reasoning/Thinking preview, then a final answer",
-    "  working-final       Working preview with tool progress, then a final answer",
+    "  working-final       Native sendMessageDraft tool progress, then a final answer",
     "",
     "Options:",
     "  --account <accountId>   Telegram account id to use",
@@ -178,14 +190,9 @@ function resolveWorkingProgressLines(elapsedMs: number): string[] {
   );
 }
 
-function formatTelegramDevProgressLine(line: string): string {
-  return `\`${line.replaceAll("`", "'")}\``;
-}
-
 function formatWorkingProgressPreview(frame: number, elapsedMs: number): string {
   return formatChannelProgressDraftText({
     entry: { streaming: { progress: { label: "Working...", toolProgress: false } } },
-    formatLine: formatTelegramDevProgressLine,
     labelFrame: frame,
     lines: resolveWorkingProgressLines(elapsedMs),
   });
@@ -240,6 +247,44 @@ function createDefaultTelegramDraftStream(params: {
   });
 }
 
+function createTelegramNativeDraftApi(params: {
+  accountId?: string;
+  cfg: OpenClawConfig;
+}): Bot["api"] {
+  const account = resolveTelegramAccount({
+    accountId: params.accountId,
+    cfg: params.cfg,
+  });
+  if (!account.enabled) {
+    throw new Error(`Telegram account "${account.accountId}" is disabled.`);
+  }
+  if (!account.token) {
+    throw new Error(`Telegram account "${account.accountId}" has no bot token.`);
+  }
+  const apiRoot = account.config.apiRoot?.trim();
+  const client: ApiClientOptions | undefined = apiRoot
+    ? { apiRoot: normalizeTelegramApiRoot(apiRoot) }
+    : undefined;
+  return new Bot(account.token, client ? { client } : undefined).api;
+}
+
+function createDefaultNativeToolProgressDraft(params: {
+  accountId?: string;
+  cfg: OpenClawConfig;
+  target: string;
+  threadId?: number;
+}): NativeTelegramToolProgressDraft {
+  const draft = createNativeTelegramToolProgressDraft({
+    api: createTelegramNativeDraftApi(params),
+    chatId: params.target,
+    thread: typeof params.threadId === "number" ? { id: params.threadId, scope: "dm" } : undefined,
+  });
+  if (!draft) {
+    throw new Error("Telegram Bot API client does not expose sendMessageDraft.");
+  }
+  return draft;
+}
+
 async function sendTelegramFinal(params: TelegramSendFinalParams): Promise<{ messageId?: string }> {
   return await sendMessageTelegram(params.target, params.text, {
     accountId: params.accountId,
@@ -291,7 +336,7 @@ export async function runTelegramWorkingFinalFlow(
 ): Promise<TelegramFlowResult> {
   const delayMs = options.delayMs ?? 2_000;
   const durationMs = options.durationMs ?? 12_000;
-  const stream = (deps.createDraftStream ?? createDefaultTelegramDraftStream)({
+  const draft = (deps.createNativeToolProgressDraft ?? createDefaultNativeToolProgressDraft)({
     accountId: options.accountId,
     cfg: options.cfg,
     target: options.target,
@@ -306,15 +351,14 @@ export async function runTelegramWorkingFinalFlow(
     elapsedMs < durationMs;
     elapsedMs += updateIntervalMs, frame += 1
   ) {
-    stream.update(formatWorkingProgressPreview(frame, elapsedMs));
+    await draft.update(formatWorkingProgressPreview(frame, elapsedMs));
     previewUpdates += 1;
-    await stream.flush();
     if (delayMs > 0 && elapsedMs + updateIntervalMs < durationMs) {
       await wait(delayMs);
     }
   }
 
-  await stream.clear();
+  draft.stop();
   const final = await (deps.sendFinal ?? sendTelegramFinal)({
     accountId: options.accountId,
     cfg: options.cfg,
