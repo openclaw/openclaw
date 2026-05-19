@@ -3,8 +3,14 @@ import type { EmbeddedPiQueueMessageOutcome } from "./pi-embedded-runner/runs.js
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
+type AgentCallResponse = { runId?: string; status: string; error?: string };
 
-const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
+const agentSpy = vi.fn(
+  async (_req: AgentCallRequest): Promise<AgentCallResponse> => ({
+    runId: "run-main",
+    status: "ok",
+  }),
+);
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}));
