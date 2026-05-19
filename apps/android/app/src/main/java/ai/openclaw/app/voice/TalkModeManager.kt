@@ -164,6 +164,7 @@ class TalkModeManager internal constructor(
   private val realtimeToolRuns = LinkedHashMap<String, RealtimeToolRun>()
   private val pendingRealtimeToolCalls = LinkedHashSet<String>()
   private val pendingRealtimeToolCompletions = LinkedHashMap<String, RealtimeToolCompletion>()
+  private val realtimeToolVisibleTexts = LinkedHashMap<String, String>()
   private var realtimeUserEntryId: String? = null
   private var realtimeAssistantEntryId: String? = null
   private val realtimePlaybackLock = Any()
@@ -410,11 +411,14 @@ class TalkModeManager internal constructor(
       handleRealtimeTalkEvent(payloadJson)
       return
     }
+    if (event == "agent") {
+      handleRealtimeAgentEvent(payloadJson)
+      if (ttsOnAllResponses) {
+        return
+      }
+    }
     if (ttsOnAllResponses) {
       Log.d(tag, "gateway event: $event")
-    }
-    if (event == "agent" && ttsOnAllResponses) {
-      return
     }
     if (event != "chat") return
     if (payloadJson.isNullOrBlank()) return
@@ -952,6 +956,7 @@ class TalkModeManager internal constructor(
     realtimeToolRuns.clear()
     pendingRealtimeToolCalls.clear()
     pendingRealtimeToolCompletions.clear()
+    realtimeToolVisibleTexts.clear()
     realtimeUserEntryId = null
     realtimeAssistantEntryId = null
     stopRealtimePlayback()
@@ -1049,7 +1054,9 @@ class TalkModeManager internal constructor(
     when (state) {
       "final" -> {
         realtimeToolRuns.remove(runId)
-        val text = extractTextFromChatEventMessage(messageEl).orEmpty()
+        val text =
+          consumeRealtimeToolVisibleText(runId)
+            ?: extractTextFromChatEventMessage(messageEl).orEmpty()
         scope.launch {
           submitRealtimeToolResult(
             callId = toolRun.callId,
@@ -1101,6 +1108,35 @@ class TalkModeManager internal constructor(
       Log.w(tag, "realtime submitToolResult failed: ${err.message ?: err::class.simpleName}")
     }
   }
+
+  private fun handleRealtimeAgentEvent(payloadJson: String?) {
+    if (realtimeSessionId == null || payloadJson.isNullOrBlank()) return
+    val obj =
+      try {
+        json.parseToJsonElement(payloadJson).asObjectOrNull()
+      } catch (_: Throwable) {
+        null
+      } ?: return
+    val runId = obj["runId"].asStringOrNull() ?: return
+    val text = ChatEventText.messageToolSourceReplyTextFromAgentPayload(obj) ?: return
+    cacheRealtimeToolVisibleText(runId, text)
+  }
+
+  private fun cacheRealtimeToolVisibleText(
+    runId: String,
+    text: String,
+  ) {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return
+    realtimeToolVisibleTexts.remove(runId)
+    realtimeToolVisibleTexts[runId] = trimmed
+    while (realtimeToolVisibleTexts.size > maxCachedRunCompletions) {
+      val first = realtimeToolVisibleTexts.keys.firstOrNull() ?: break
+      realtimeToolVisibleTexts.remove(first)
+    }
+  }
+
+  private fun consumeRealtimeToolVisibleText(runId: String): String? = realtimeToolVisibleTexts.remove(runId)?.takeIf { it.isNotBlank() }
 
   private fun upsertRealtimeConversation(
     role: VoiceConversationRole,

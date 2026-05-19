@@ -47,6 +47,67 @@ class ChatEventTextTest {
   }
 
   @Test
+  fun extractsMessageToolSourceReplyFromAgentToolResult() {
+    val payload =
+      payload(
+        """
+        {
+          "runId": "run-1",
+          "stream": "tool",
+          "data": {
+            "phase": "result",
+            "name": "message",
+            "isError": false,
+            "result": {
+              "sourceReplyDeliveryMode": "message_tool_only",
+              "sourceReply": {
+                "text": "spoken reply"
+              },
+              "message": "spoken reply"
+            }
+          }
+        }
+        """,
+      )
+
+    assertEquals(
+      "spoken reply",
+      ChatEventText.messageToolSourceReplyTextFromAgentPayload(payload),
+    )
+  }
+
+  @Test
+  fun extractsMessageToolSourceReplyFromSerializedToolContent() {
+    val payload =
+      payload(
+        """
+        {
+          "runId": "run-1",
+          "stream": "tool",
+          "data": {
+            "phase": "result",
+            "name": "message",
+            "isError": false,
+            "result": {
+              "content": [
+                {
+                  "type": "toolResult",
+                  "text": "{\"sourceReplyDeliveryMode\":\"message_tool_only\",\"sourceReply\":{\"text\":\"spoken from json\"},\"message\":\"spoken from json\"}"
+                }
+              ]
+            }
+          }
+        }
+        """,
+      )
+
+    assertEquals(
+      "spoken from json",
+      ChatEventText.messageToolSourceReplyTextFromAgentPayload(payload),
+    )
+  }
+
+  @Test
   fun ignoresUserMessages() {
     val payload =
       payload(
