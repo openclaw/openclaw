@@ -1205,11 +1205,20 @@ class TalkModeManager internal constructor(
         VoiceConversationRole.User -> realtimeUserEntryId
         VoiceConversationRole.Assistant -> realtimeAssistantEntryId
       }
+    if (role == VoiceConversationRole.Assistant) {
+      finishRealtimeConversationEntry(VoiceConversationRole.User)
+    }
+    val shouldStartNewUserEntry =
+      role == VoiceConversationRole.User &&
+        entryId != null &&
+        shouldStartNewRealtimeUserEntry(entryId, text, isFinal)
     if (
       role == VoiceConversationRole.User &&
-      entryId != null &&
-      shouldStartNewRealtimeUserEntry(entryId, text, isFinal)
+      (entryId == null || shouldStartNewUserEntry)
     ) {
+      finishRealtimeConversationEntry(VoiceConversationRole.Assistant)
+    }
+    if (shouldStartNewUserEntry) {
       finishRealtimeConversationEntry(VoiceConversationRole.User)
       entryId = null
       realtimeUserEntryAwaitingFinal = false

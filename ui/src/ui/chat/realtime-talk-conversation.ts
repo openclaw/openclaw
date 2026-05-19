@@ -46,22 +46,33 @@ export function updateRealtimeTalkConversation(
     return state;
   }
   const nowMs = update.nowMs ?? Date.now();
-  const preparedState =
-    update.role === "assistant" ? finishRealtimeConversationEntry(state, "user", nowMs) : state;
-  const entryId =
-    update.role === "user" ? preparedState.userEntryId : preparedState.assistantEntryId;
+  if (update.role === "assistant") {
+    const preparedState = finishRealtimeConversationEntry(state, "user", nowMs);
+    return upsertRealtimeConversationEntry(
+      preparedState,
+      update.role,
+      preparedState.assistantEntryId,
+      text,
+      update.final,
+      nowMs,
+    );
+  }
+  const entryId = state.userEntryId;
   const shouldStartNewUserEntry =
-    update.role === "user" &&
-    entryId !== null &&
-    shouldStartNewRealtimeUserEntry(preparedState, entryId, text, update.final, nowMs);
-  const nextState = shouldStartNewUserEntry
-    ? {
-        ...finishRealtimeConversationEntry(preparedState, "user", nowMs),
-        userEntryId: null,
-        userEntryAwaitingFinal: false,
-        userEntryAwaitingFinalStartedAtMs: null,
-      }
-    : preparedState;
+    entryId !== null && shouldStartNewRealtimeUserEntry(state, entryId, text, update.final, nowMs);
+  const assistantClosedState =
+    entryId === null || shouldStartNewUserEntry
+      ? finishRealtimeConversationEntry(state, "assistant", nowMs)
+      : state;
+  const nextState =
+    shouldStartNewUserEntry && entryId !== null
+      ? {
+          ...finishRealtimeConversationEntry(assistantClosedState, "user", nowMs),
+          userEntryId: null,
+          userEntryAwaitingFinal: false,
+          userEntryAwaitingFinalStartedAtMs: null,
+        }
+      : assistantClosedState;
   return upsertRealtimeConversationEntry(
     nextState,
     update.role,

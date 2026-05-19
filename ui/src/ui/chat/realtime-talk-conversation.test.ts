@@ -81,8 +81,48 @@ describe("realtime Talk conversation", () => {
 
     expect(state.entries).toMatchObject([
       { role: "user", text: "First request", isStreaming: false },
-      { role: "assistant", text: "Checking", isStreaming: true },
+      { role: "assistant", text: "Checking", isStreaming: false },
       { role: "user", text: "Second request", isStreaming: false },
+    ]);
+  });
+
+  it("keeps alternating realtime turns as separate bubbles", () => {
+    let state = createRealtimeTalkConversationState();
+
+    for (const update of [
+      { role: "user" as const, text: "Hey, what time is it?", final: true },
+      {
+        role: "assistant" as const,
+        text: "Let me look into that for you. It's currently 7:55 PM UTC.",
+        final: true,
+      },
+      { role: "user" as const, text: "How's it going?", final: true },
+      {
+        role: "assistant" as const,
+        text: "Great! Ready for the next task. What can I do for you?",
+        final: true,
+      },
+      { role: "user" as const, text: "Turn on the basement lights", final: true },
+      { role: "assistant" as const, text: "Got it, let me check on that.", final: true },
+    ]) {
+      state = updateRealtimeTalkConversation(state, update);
+    }
+
+    expect(state.entries).toMatchObject([
+      { role: "user", text: "Hey, what time is it?", isStreaming: false },
+      {
+        role: "assistant",
+        text: "Let me look into that for you. It's currently 7:55 PM UTC.",
+        isStreaming: false,
+      },
+      { role: "user", text: "How's it going?", isStreaming: false },
+      {
+        role: "assistant",
+        text: "Great! Ready for the next task. What can I do for you?",
+        isStreaming: false,
+      },
+      { role: "user", text: "Turn on the basement lights", isStreaming: false },
+      { role: "assistant", text: "Got it, let me check on that.", isStreaming: false },
     ]);
   });
 });

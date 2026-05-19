@@ -111,7 +111,7 @@ describe("OpenClawApp Talk controls", () => {
 
     expect(app.realtimeTalkConversation).toMatchObject([
       { role: "user", text: "Turn off the lights", isStreaming: false },
-      { role: "assistant", text: "Checking", isStreaming: true },
+      { role: "assistant", text: "Checking", isStreaming: false },
       { role: "user", text: "Second request", isStreaming: false },
     ]);
   });
