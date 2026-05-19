@@ -1297,12 +1297,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         }
 
         const channelInfo = await resolveChannelInfo(channelId);
-        if (!channelInfo?.type) {
+        const channelType =
+          normalizeOptionalString(channelInfo?.type) ??
+          normalizeOptionalString(payload.data?.channel_type);
+        if (!channelType) {
           logVerboseMessage(`mattermost: drop post (cannot resolve channel type for ${channelId})`);
           return;
         }
         const kind = resolveMattermostTrustedChatKind({
-          channelType: channelInfo.type,
+          channelType,
         });
         const chatType = channelChatType(kind);
 
