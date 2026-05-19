@@ -1,20 +1,3 @@
-function usage() {
-  console.log(`polytropos-release.mjs
-
-Usage:
-  node scripts/polytropos-release.mjs release --tag v<ver>+poly.<N> [--repo <owner/repo>] [--log <path>]
-
-Behavior (single flow):
-  - (main) creates and pushes the release tag
-  - waits for the GitHub Actions tag build to finish (gh run watch)
-  - downloads the resulting artifact
-  - stages it into ~/polytropos/releases/<tag>.tgz
-  - updates previous.tgz then current.tgz
-  - installs current.tgz globally and runs the bundled deps helper
-  - does not activate/restart the gateway
-`);
-}
-
 #!/usr/bin/env node
 /**
  * Polytropos core release script (single purpose)
@@ -177,6 +160,7 @@ function parseArgs(argv) {
   let runId = null;
   let runUrl = null;
   let artifactName = null;
+  let workflow = null;
   let releaseTag = null;
 
   for (let i = 1; i < args.length; i++) {
@@ -210,14 +194,6 @@ function parseArgs(argv) {
       continue;
     }
 
-    if (a === "--tag") {
-      const v = args[i + 1];
-      if (!v) fail("--tag requires v<ver>+poly.<N>");
-      releaseTag = v;
-      i++;
-      continue;
-    }
-
     if (a === "--artifact") {
       const v = args[i + 1];
       if (!v) fail("--artifact requires a name");
@@ -225,11 +201,181 @@ function parseArgs(argv) {
       i++;
       continue;
     }
+    if (a === "--workflow") {
+      const v = args[i + 1];
+      if (!v) fail("--workflow requires a filename (e.g. polytropos-build-pack.yml)");
+      workflow = v;
+      i++;
+      continue;
+    }
+    if (a === "--tag") {
+      const v = args[i + 1];
+      if (!v) fail("--tag requires v<ver>+poly.<N>");
+      releaseTag = v;
+      i++;
+      continue;
+    }
     if (a === "--help" || a === "-h") {
-      return { cmd: "--help", logPath, repo, runId, runUrl, artifactName, releaseTag };
+      return { cmd: "--help", logPath, repo, runId, runUrl, artifactName , workflow, releaseTag };
     }
     fail(`unknown argument: ${a}`);
   }
-  return { cmd, logPath, repo, runId, runUrl, artifactName, releaseTag };
+  return { cmd, logPath, repo, runId, runUrl, artifactName , workflow, releaseTag };
 }
 
+function usage() {
+  console.log(`polytropos-release.mjs
+
+Usage:
+  node scripts/polytropos-release.mjs release --tag v<ver>+poly.<N> [--repo <owner/repo>] [--workflow <workflow.yml>] [--log <path>]
+
+Behavior (single flow):
+  - Pushes the release tag to GitHub
+  - Waits for the GitHub Actions workflow run for that tag to complete
+  - Downloads the artifact openclaw-tgz-<tag>
+  - Stages it into ~/polytropos/releases/<tag>.tgz
+  - Updates previous.tgz then current.tgz (symlink-safe)
+  - Installs current.tgz globally and runs the bundled deps helper
+  - Does not activate/restart the gateway
+`);
+}
+
+const { cmd, logPath, repo, runId, runUrl, artifactName, workflow, releaseTag } = parseArgs(process.argv);
+if (!cmd || cmd === "--help") {
+  usage();
+  process.exit(0);
+}
+
+if (cmd !== "release") {
+  fail(`unknown command: ${cmd}`);
+}
+
+fs.mkdirSync(path.dirname(logPath), { recursive: true });
+const logStream = fs.createWriteStream(logPath, { flags: "a" });
+banner(logStream, `Log file: ${logPath}`);
+
+if (!releaseTag) {
+  fail("release requires --tag v<ver>+poly.<N>");
+}
+if (!/^v[^+]+\+poly\.\d+$/.test(releaseTag)) {
+  fail(`invalid --tag: ${releaseTag} (expected v<ver>+poly.<N>)`);
+}
+
+const ghRepo = repo || "JoshuaCWebDeveloper/openclaw-polytropos";
+const wf = workflow || "polytropos-build-pack.yml";
+banner(logStream, `GitHub repo: ${ghRepo}`);
+banner(logStream, `Workflow: ${wf}`);
+banner(logStream, `Release tag: ${releaseTag}`);
+
+// Push tag (idempotent: create locally if missing)
+try {
+  sh("git", ["rev-parse", "--verify", `refs/tags/${releaseTag}`]);
+} catch {
+  banner(logStream, `Creating tag locally: ${releaseTag}`);
+  await shTee(logStream, "git", ["tag", "-a", releaseTag, "-m", `Polytropos release ${releaseTag}`]);
+}
+banner(logStream, `Pushing tag: ${releaseTag}`);
+await shTee(logStream, "git", ["push", "origin", releaseTag]);
+
+// Find the workflow run for this tag push (latest)
+banner(logStream, "Locating workflow run for tag...");
+const runId = sh("gh", [
+  "run",
+  "list",
+  "--repo",
+  ghRepo,
+  "--workflow",
+  wf,
+  "--event",
+  "push",
+  "--branch",
+  releaseTag,
+  "--limit",
+  "1",
+  "--json",
+  "databaseId",
+  "--jq",
+  ".[0].databaseId",
+]);
+if (!runId) {
+  fail(`could not find workflow run for tag ${releaseTag}`);
+}
+banner(logStream, `Watching run: ${runId}`);
+await shTee(logStream, "gh", ["run", "watch", runId, "--repo", ghRepo, "--exit-status"]);
+
+const relRoot = releasesRoot();
+fs.mkdirSync(relRoot, { recursive: true });
+assertReleaseStoreConsistent(relRoot);
+
+const artifact = `openclaw-tgz-${releaseTag}`;
+const tmpDir = fs.mkdtempSync(path.join(resolveHome(), ".openclaw", "tmp-release-"));
+banner(logStream, `Downloading artifact ${artifact} to ${tmpDir}`);
+await shTee(logStream, "gh", ["run", "download", runId, "--repo", ghRepo, "-n", artifact, "--dir", tmpDir]);
+
+// Find exactly one .tgz under tmpDir
+function findTgz(dir) {
+  const matches = [];
+  const stack = [dir];
+  while (stack.length) {
+    const d = stack.pop();
+    for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
+      const pth = path.join(d, ent.name);
+      if (ent.isDirectory()) stack.push(pth);
+      else if (ent.isFile() && ent.name.endsWith(".tgz")) matches.push(pth);
+    }
+  }
+  return matches;
+}
+const tgzs = findTgz(tmpDir);
+if (tgzs.length !== 1) {
+  fail(`expected exactly one .tgz in artifact, found ${tgzs.length}: ${tgzs.join(", ")}`);
+}
+const tgzPath = tgzs[0];
+
+// Validate tgz internal version matches tag
+{
+  const info = tgzInternalVersion(tgzPath);
+  if (info.name !== "openclaw") fail(`unexpected package name in tgz: ${info.name}`);
+  const expectedVersion = releaseTag.replace(/^v/, "").replace(/\+poly\.\d+$/, "");
+  if (info.version !== expectedVersion) {
+    fail(`tgz version ${info.version} != expected ${expectedVersion} (from ${releaseTag})`);
+  }
+}
+
+const tarPath = path.join(relRoot, `${releaseTag}.tgz`);
+if (fs.existsSync(tarPath)) fail(`refusing to overwrite existing tarball: ${tarPath}`);
+fs.copyFileSync(tgzPath, tarPath);
+banner(logStream, `Staged tarball: ${tarPath}`);
+
+// Update symlinks (previous then current)
+const currentTgz = path.join(relRoot, "current.tgz");
+assertSymlink(currentTgz, "current.tgz");
+const previousTgz = path.join(relRoot, "previous.tgz");
+assertSymlink(previousTgz, "previous.tgz");
+const currentTarget = readlinkAbs(currentTgz);
+if (currentTarget) {
+  banner(logStream, `Setting previous.tgz -> ${currentTarget}`);
+  lnSfn(currentTarget, previousTgz);
+} else {
+  banner(logStream, "No existing current.tgz symlink; setting previous.tgz to this tarball as bootstrap");
+  lnSfn(tarPath, previousTgz);
+}
+banner(logStream, `Setting current.tgz -> ${tarPath}`);
+lnSfn(tarPath, currentTgz);
+
+// Install globally + run deps helper
+const prefix = getGlobalPrefix();
+banner(logStream, `Installing globally into prefix: ${prefix}`);
+await shTee(logStream, "npm", ["install", "-g", "--prefix", prefix, currentTgz]);
+banner(logStream, "Running Polytropos bundled plugin deps helper...");
+{
+  const npmRoot = sh("npm", ["root", "-g", "--prefix", prefix]);
+  const installedRoot = path.join(npmRoot, "openclaw");
+  const helperPath = path.join(installedRoot, "scripts", "polytropos-bundled-plugin-deps-helper.mjs");
+  if (!fs.existsSync(helperPath)) fail(`Polytropos helper not found at ${helperPath}`);
+  await shTee(logStream, "node", [helperPath]);
+}
+
+banner(logStream, "Activation required: restart the gateway to run the new code");
+banner(logStream, "Release staged (not activated)." );
+logStream.end();
