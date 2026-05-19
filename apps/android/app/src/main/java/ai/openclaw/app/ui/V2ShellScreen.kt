@@ -800,6 +800,16 @@ private fun V2SettingsShellScreen(
   val cameraEnabled by viewModel.cameraEnabled.collectAsState()
   val notificationForwardingEnabled by viewModel.notificationForwardingEnabled.collectAsState()
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
+  var route by rememberSaveable { mutableStateOf(V2SettingsRoute.Home) }
+
+  BackHandler(enabled = route != V2SettingsRoute.Home) {
+    route = V2SettingsRoute.Home
+  }
+
+  if (route != V2SettingsRoute.Home) {
+    V2SettingsDetailScreen(viewModel = viewModel, route = route, onBack = { route = V2SettingsRoute.Home })
+    return
+  }
 
   ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 20.dp)) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(13.dp)) {
@@ -822,19 +832,25 @@ private fun V2SettingsShellScreen(
         V2SettingsGroup(
           rows =
             listOf(
-              V2SettingsRow("Profile", displayName.ifBlank { "Local device" }, Icons.Default.Person),
-              V2SettingsRow("Voice", if (speakerEnabled) "Speaker on" else "Speaker muted", Icons.Default.Mic),
-              V2SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications),
-              V2SettingsRow("Privacy", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled),
-              V2SettingsRow("Gateway", gatewaySummary(statusText, isConnected), Icons.Default.Cloud, status = isConnected),
-              V2SettingsRow("Appearance", "Dark", Icons.Default.Palette),
-              V2SettingsRow("Advanced", "Diagnostics", Icons.Default.Settings),
+              V2SettingsRow("Profile", displayName.ifBlank { "Local device" }, Icons.Default.Person, route = V2SettingsRoute.Profile),
+              V2SettingsRow("Voice", if (speakerEnabled) "Speaker on" else "Speaker muted", Icons.Default.Mic, route = V2SettingsRoute.Voice),
+              V2SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = V2SettingsRoute.Notifications),
+              V2SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = V2SettingsRoute.PhoneCapabilities),
+              V2SettingsRow("Gateway", gatewaySummary(statusText, isConnected), Icons.Default.Cloud, status = isConnected, route = V2SettingsRoute.Gateway),
+              V2SettingsRow("Appearance", "Dark", Icons.Default.Palette, route = V2SettingsRoute.Appearance),
+              V2SettingsRow("Health", "Diagnostics", Icons.Default.Settings, status = isConnected, route = V2SettingsRoute.Health),
+              V2SettingsRow("About", "Version and update", Icons.Default.Storage, route = V2SettingsRoute.About),
             ),
+          onOpen = { route = it },
         )
       }
 
       item {
-        V2SettingsGroup(rows = listOf(V2SettingsRow("Sign Out", "Disconnect", Icons.AutoMirrored.Filled.ExitToApp)))
+        V2SettingsGroup(
+          rows = listOf(V2SettingsRow("Sign Out", "Disconnect", Icons.AutoMirrored.Filled.ExitToApp)),
+          onOpen = { },
+          onAction = { viewModel.disconnect() },
+        )
       }
 
       item {
@@ -863,6 +879,7 @@ private data class V2SettingsRow(
   val value: String,
   val icon: ImageVector,
   val status: Boolean? = null,
+  val route: V2SettingsRoute? = null,
 )
 
 @Composable
@@ -903,11 +920,25 @@ private fun V2ProfilePanel(displayName: String) {
 }
 
 @Composable
-private fun V2SettingsGroup(rows: List<V2SettingsRow>) {
+private fun V2SettingsGroup(
+  rows: List<V2SettingsRow>,
+  onOpen: (V2SettingsRoute) -> Unit,
+  onAction: (() -> Unit)? = null,
+) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     Column {
       rows.forEachIndexed { index, row ->
-        V2SettingsListRow(row = row)
+        V2SettingsListRow(
+          row = row,
+          onClick = {
+            val rowRoute = row.route
+            if (rowRoute == null) {
+              onAction?.invoke()
+            } else {
+              onOpen(rowRoute)
+            }
+          },
+        )
         if (index != rows.lastIndex) {
           HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
         }
@@ -917,9 +948,17 @@ private fun V2SettingsGroup(rows: List<V2SettingsRow>) {
 }
 
 @Composable
-private fun V2SettingsListRow(row: V2SettingsRow) {
+private fun V2SettingsListRow(
+  row: V2SettingsRow,
+  onClick: () -> Unit,
+) {
   Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp),
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(ClawTheme.radii.row))
+        .clickable(onClick = onClick)
+        .padding(horizontal = 10.dp, vertical = 5.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
