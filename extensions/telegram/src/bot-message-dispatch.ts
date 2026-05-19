@@ -4,7 +4,6 @@ import {
   appendSessionTranscriptMessage,
   emitSessionTranscriptUpdate,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { formatReasoningLabel } from "openclaw/plugin-sdk/agent-runtime";
 import {
   DEFAULT_TIMING,
   logAckFailure,
@@ -132,7 +131,6 @@ export { getTelegramReplyFenceSizeForTests, resetTelegramReplyFenceForTests };
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
-const TELEGRAM_DRAFT_LABEL_ANIMATION_INTERVAL_MS = 2_000;
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -602,16 +600,6 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
-  let reasoningDraftLabelFrame = 0;
-  let reasoningDraftAnimationTimer: ReturnType<typeof setInterval> | undefined;
-  const stopReasoningDraftAnimation = () => {
-    if (reasoningDraftAnimationTimer) {
-      clearInterval(reasoningDraftAnimationTimer);
-      reasoningDraftAnimationTimer = undefined;
-    }
-  };
-  const animateReasoningDraftLabel = (text: string, frame: number): string =>
-    text.replace(/^(?:Thinking\.{1,3}|Reasoning:)(\r?\n)/u, `${formatReasoningLabel(frame)}$1`);
   const streamToolProgressEnabled =
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
   const nativeToolProgressDraft =
@@ -634,17 +622,8 @@ export const dispatchTelegramMessage = async ({
   let streamToolProgressLines: Array<string | ChannelProgressDraftLine> = [];
   let lastAnswerPartialText = "";
   let activeAnswerDraftIsToolProgressOnly = false;
-  let progressDraftLabelFrame = 0;
-  let progressDraftAnimationTimer: ReturnType<typeof setInterval> | undefined;
-  const stopProgressDraftAnimation = () => {
-    if (progressDraftAnimationTimer) {
-      clearInterval(progressDraftAnimationTimer);
-      progressDraftAnimationTimer = undefined;
-    }
-  };
   function resetAnswerToolProgressDraft() {
     activeAnswerDraftIsToolProgressOnly = false;
-    stopProgressDraftAnimation();
   }
   async function prepareAnswerLaneForToolProgress() {
     if (activeAnswerDraftIsToolProgressOnly) {
@@ -661,7 +640,6 @@ export const dispatchTelegramMessage = async ({
     }
     const streamText = formatChannelProgressDraftText({
       entry: telegramCfg,
-      labelFrame: progressDraftLabelFrame,
       lines: streamToolProgressLines,
       seed: progressSeed,
       formatLine: formatProgressAsMarkdownCode,
@@ -679,35 +657,8 @@ export const dispatchTelegramMessage = async ({
     }
     return true;
   };
-  const shouldAnimateProgressDraft = () =>
-    streamMode === "progress" &&
-    progressDraftGate.hasStarted &&
-    activeAnswerDraftIsToolProgressOnly &&
-    !streamToolProgressSuppressed &&
-    !answerLane.finalized &&
-    Boolean(answerLane.stream);
-  const startProgressDraftAnimation = () => {
-    if (progressDraftAnimationTimer || !shouldAnimateProgressDraft()) {
-      return;
-    }
-    progressDraftAnimationTimer = setInterval(() => {
-      progressDraftLabelFrame = (progressDraftLabelFrame + 1) % 4;
-      void enqueueDraftLaneEvent(async () => {
-        if (!shouldAnimateProgressDraft()) {
-          stopProgressDraftAnimation();
-          return;
-        }
-        await renderProgressDraft({ flush: true });
-      });
-    }, TELEGRAM_DRAFT_LABEL_ANIMATION_INTERVAL_MS);
-  };
   const progressDraftGate = createChannelProgressDraftGate({
-    onStart: async () => {
-      progressDraftLabelFrame = 0;
-      if (await renderProgressDraft({ flush: true })) {
-        startProgressDraftAnimation();
-      }
-    },
+    onStart: () => renderProgressDraft({ flush: true }),
   });
   const pushStreamToolProgress = async (
     line?: string | ChannelProgressDraftLine,
@@ -773,9 +724,7 @@ export const dispatchTelegramMessage = async ({
       const alreadyStarted = progressDraftGate.hasStarted;
       await progressDraftGate.startNow();
       if (alreadyStarted && progressDraftGate.hasStarted) {
-        if (await renderProgressDraft()) {
-          startProgressDraftAnimation();
-        }
+        await renderProgressDraft();
         return true;
       }
       return progressDraftGate.hasStarted;
@@ -783,9 +732,7 @@ export const dispatchTelegramMessage = async ({
     const alreadyStarted = progressDraftGate.hasStarted;
     await progressDraftGate.noteWork();
     if (alreadyStarted && progressDraftGate.hasStarted) {
-      if (await renderProgressDraft()) {
-        startProgressDraftAnimation();
-      }
+      await renderProgressDraft();
       return true;
     }
     return false;
@@ -852,9 +799,6 @@ export const dispatchTelegramMessage = async ({
     if (lane === answerLane) {
       resetAnswerToolProgressDraft();
     }
-    if (lane === reasoningLane) {
-      stopReasoningDraftAnimation();
-    }
   };
   const rotateLaneForNewMessage = async (lane: DraftLaneState) => {
     if (!lane.hasStreamedMessage && typeof lane.stream?.messageId() !== "number") {
@@ -912,42 +856,7 @@ export const dispatchTelegramMessage = async ({
     }
     lane.lastPartialText = nextText;
     laneStream.update(nextText);
-    if (lane === reasoningLane) {
-      startReasoningDraftAnimation();
-    }
   };
-  function shouldAnimateReasoningDraft(): boolean {
-    return (
-      reasoningLane.hasStreamedMessage &&
-      !reasoningLane.finalized &&
-      Boolean(reasoningLane.stream) &&
-      Boolean(reasoningLane.lastPartialText)
-    );
-  }
-  function startReasoningDraftAnimation() {
-    if (reasoningDraftAnimationTimer || !shouldAnimateReasoningDraft()) {
-      return;
-    }
-    reasoningDraftAnimationTimer = setInterval(() => {
-      reasoningDraftLabelFrame = (reasoningDraftLabelFrame + 1) % 3;
-      void enqueueDraftLaneEvent(async () => {
-        if (!shouldAnimateReasoningDraft()) {
-          stopReasoningDraftAnimation();
-          return;
-        }
-        const nextText = animateReasoningDraftLabel(
-          reasoningLane.lastPartialText,
-          reasoningDraftLabelFrame,
-        );
-        if (nextText === reasoningLane.lastPartialText) {
-          return;
-        }
-        reasoningLane.lastPartialText = nextText;
-        reasoningLane.stream?.update(nextText);
-        await reasoningLane.stream?.flush();
-      });
-    }, TELEGRAM_DRAFT_LABEL_ANIMATION_INTERVAL_MS);
-  }
   const ingestDraftLaneSegments = async (
     update: { text?: string; delta?: string; replace?: true },
     isReasoning?: boolean,
@@ -1826,8 +1735,6 @@ export const dispatchTelegramMessage = async ({
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
       progressDraftGate.cancel();
-      stopProgressDraftAnimation();
-      stopReasoningDraftAnimation();
       await draftLaneEventQueue;
       nativeToolProgressDraft?.stop();
       const lanesToCleanup: Array<{ laneName: LaneName; lane: DraftLaneState }> = [

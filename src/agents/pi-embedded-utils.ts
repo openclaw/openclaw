@@ -161,12 +161,7 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
   return blocks.join("\n").trim();
 }
 
-export function formatReasoningLabel(frame = 0): string {
-  const dotCount = (Math.max(0, Math.trunc(frame)) % 3) + 1;
-  return `Thinking${".".repeat(dotCount)}`;
-}
-
-export function formatReasoningMessage(text: string, labelFrame = 0): string {
+export function formatReasoningMessage(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
     return "";
@@ -179,7 +174,7 @@ export function formatReasoningMessage(text: string, labelFrame = 0): string {
     .split("\n")
     .map((line) => (line ? `_${line}_` : line))
     .join("\n");
-  return `${formatReasoningLabel(labelFrame)}\n\n${italicLines}`;
+  return `Thinking\n\n${italicLines}`;
 }
 
 type ThinkTaggedSplitBlock =

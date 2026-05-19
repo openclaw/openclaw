@@ -1216,13 +1216,13 @@ describe("runHeartbeatOnce", () => {
         name: "raw flagged reasoning + final payload",
         caseDir: "hb-reasoning-raw",
         replies: [{ text: "Because it helps", isReasoning: true }, { text: "Final alert" }],
-        expectedTexts: ["Thinking.\n\n_Because it helps_", "Final alert"],
+        expectedTexts: ["Thinking\n\n_Because it helps_", "Final alert"],
       },
       {
         name: "raw flagged reasoning + HEARTBEAT_OK",
         caseDir: "hb-reasoning-heartbeat-ok",
         replies: [{ text: "Because it helps", isReasoning: true }, { text: "HEARTBEAT_OK" }],
-        expectedTexts: ["Thinking.\n\n_Because it helps_"],
+        expectedTexts: ["Thinking\n\n_Because it helps_"],
       },
       {
         name: "visible final that starts with thinking prose",

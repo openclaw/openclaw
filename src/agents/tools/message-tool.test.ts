@@ -1701,14 +1701,14 @@ describe("message tool reasoning tag sanitization", () => {
     },
     {
       field: "message",
-      input: "Thinking.\n_internal plan_\n\nVisible answer",
+      input: "Thinking\n_internal plan_\n\nVisible answer",
       expected: "Visible answer",
       target: "telegram:123",
       channel: "telegram",
     },
     {
       field: "message",
-      input: "Thinking.\n_internal plan_\n_more internal notes_",
+      input: "Thinking\n_internal plan_\n_more internal notes_",
       expected: "",
       target: "telegram:123",
       channel: "telegram",

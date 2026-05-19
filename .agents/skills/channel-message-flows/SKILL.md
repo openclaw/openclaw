@@ -39,6 +39,6 @@ node --import tsx scripts/dev/channel-message-flows.ts \
 ## Notes
 
 - `--target` is the numeric Telegram chat id.
-- `working-final` exercises native Telegram `sendMessageDraft` with `Working` ellipsis animation and sample tool progress.
+- `working-final` exercises native Telegram `sendMessageDraft` with static `Working` status and sample tool progress.
 - `thinking-final` exercises formatted `Thinking` reasoning preview clearing before the final answer.
 - Only `--channel telegram` is implemented for now.

@@ -92,7 +92,7 @@ describe("channel message flows dev runner", () => {
     );
 
     expect(stream.update).toHaveBeenCalledTimes(3);
-    expect(stream.update.mock.calls[0]?.[0]).toContain("Thinking.");
+    expect(stream.update.mock.calls[0]?.[0]).toContain("Thinking");
     expect(stream.update.mock.calls[0]?.[0]).toContain("_Checking the request._");
     expect(events.at(-2)).toBe("clear");
     expect(events.at(-1)).toBe("final");
@@ -129,14 +129,14 @@ describe("channel message flows dev runner", () => {
 
     expect(draft.update).toHaveBeenNthCalledWith(1, "Working");
     expect(draft.update.mock.calls[2]?.[0]).toContain("🛠️ pgrep -fl Discord || true (agent)");
-    expect(draft.update.mock.calls[5]?.[0]).toContain(
+    expect(draft.update.mock.calls[2]?.[0]).toContain(
       "🛠️ list files in /Applications/Discord.app -> run true (agent)",
     );
-    expect(draft.update.mock.calls[8]?.[0]).toContain(
+    expect(draft.update.mock.calls[4]?.[0]).toContain(
       "• Discord is installed as a normal '/Applications/Discord.app'",
     );
     expect(draft.update).toHaveBeenCalledWith(
-      expect.stringContaining("Working..\n\n🛠️ pgrep -fl Discord || true (agent)"),
+      expect.stringContaining("Working\n\n🛠️ pgrep -fl Discord || true (agent)"),
     );
     expect(draft.stop).toHaveBeenCalledBefore(sendFinal);
     expect(sendFinal).toHaveBeenCalledWith({
@@ -147,7 +147,7 @@ describe("channel message flows dev runner", () => {
       threadId: undefined,
     });
     expect(draft.update).not.toHaveBeenCalledWith(expect.stringContaining("Working for"));
-    expect(result).toEqual({ finalMessageId: "100", previewUpdates: 12 });
+    expect(result).toEqual({ finalMessageId: "100", previewUpdates: 6 });
   });
 
   it("uses two second progress update cadence by default", async () => {
@@ -172,6 +172,6 @@ describe("channel message flows dev runner", () => {
 
     expect(sleep).toHaveBeenCalledTimes(9);
     expect(sleep).toHaveBeenCalledWith(2_000);
-    expect(result.previewUpdates).toBe(10);
+    expect(result.previewUpdates).toBe(7);
   });
 });

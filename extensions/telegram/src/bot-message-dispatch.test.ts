@@ -1774,8 +1774,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.flush).toHaveBeenCalled();
   });
 
-  it("animates progress draft ellipses while the draft is active", async () => {
-    vi.useFakeTimers();
+  it("keeps progress draft labels static while the draft is active", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
     let finishRun: (() => void) | undefined;
@@ -1795,24 +1794,17 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: {
         streaming: {
           mode: "progress",
-          progress: { label: "Working...", toolProgress: false },
+          progress: { label: "Working", toolProgress: false },
         },
       },
     });
 
-    try {
-      await vi.waitFor(() => expect(draftStream.update).toHaveBeenCalledWith("Working"));
-      await vi.advanceTimersByTimeAsync(2_000);
-      await vi.waitFor(() => expect(draftStream.update).toHaveBeenCalledWith("Working."));
-      await vi.advanceTimersByTimeAsync(2_000);
-      await vi.waitFor(() => expect(draftStream.update).toHaveBeenCalledWith("Working.."));
-      await vi.advanceTimersByTimeAsync(2_000);
-      await vi.waitFor(() => expect(draftStream.update).toHaveBeenCalledWith("Working..."));
-      finishRun?.();
-      await run;
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.waitFor(() => expect(draftStream.update).toHaveBeenCalledWith("Working"));
+    expect(draftStream.update).not.toHaveBeenCalledWith("Working.");
+    expect(draftStream.update).not.toHaveBeenCalledWith("Working..");
+    expect(draftStream.update).not.toHaveBeenCalledWith("Working...");
+    finishRun?.();
+    await run;
   });
 
   it("renders Telegram progress drafts before slow status reactions resolve", async () => {
@@ -1952,7 +1944,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createReasoningStreamContext() });
 
-    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking.\n\n_Thinking_");
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_Thinking_");
     expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
     expect(deliverReplies).not.toHaveBeenCalled();
   });
@@ -1980,12 +1972,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     });
 
-    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking.\n\n_Thinking_");
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_Thinking_");
     expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
   });
 
-  it("animates reasoning draft ellipses while the reasoning lane is active", async () => {
-    vi.useFakeTimers();
+  it("keeps reasoning draft labels static while the reasoning lane is active", async () => {
     const { reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 2001,
       reasoningMessageId: 3001,
@@ -2001,23 +1992,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     const run = dispatchWithContext({ context: createReasoningStreamContext() });
 
-    try {
-      await vi.waitFor(() =>
-        expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking.\n\n_Thinking_"),
-      );
-      await vi.advanceTimersByTimeAsync(3_000);
-      await vi.waitFor(() =>
-        expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking..\n\n_Thinking_"),
-      );
-      await vi.advanceTimersByTimeAsync(3_000);
-      await vi.waitFor(() =>
-        expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking...\n\n_Thinking_"),
-      );
-      finishRun?.();
-      await run;
-    } finally {
-      vi.useRealTimers();
-    }
+    await vi.waitFor(() =>
+      expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_Thinking_"),
+    );
+    expect(reasoningDraftStream.update).not.toHaveBeenCalledWith("Thinking.\n\n_Thinking_");
+    expect(reasoningDraftStream.update).not.toHaveBeenCalledWith("Thinking..\n\n_Thinking_");
+    expect(reasoningDraftStream.update).not.toHaveBeenCalledWith("Thinking...\n\n_Thinking_");
+    finishRun?.();
+    await run;
   });
 
   it("suppresses reasoning-only finals without raw text fallback", async () => {

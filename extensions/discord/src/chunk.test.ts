@@ -132,7 +132,7 @@ describe("chunkDiscordText", () => {
 
   it("keeps thinking-prefixed reasoning italics balanced across chunks", () => {
     const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
-    const text = `Thinking...\n\n_${body}_`;
+    const text = `Thinking\n\n_${body}_`;
 
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);

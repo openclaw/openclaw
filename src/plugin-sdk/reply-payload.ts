@@ -51,7 +51,7 @@ type SendPayloadAdapter = Pick<
   "sendMedia" | "sendText" | "chunker" | "textChunkLimit"
 >;
 
-const REASONING_PREFIX_RE = /^(?:reasoning:|thinking\.{1,3}(?=\s*(?:>\s*)?_))/u;
+const REASONING_PREFIX_RE = /^(?:reasoning:|thinking\.{0,3}(?=\s*(?:>\s*)?_))/u;
 
 function readObjectValue(value: unknown): object | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;

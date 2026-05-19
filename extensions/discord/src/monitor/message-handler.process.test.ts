@@ -1743,7 +1743,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toEqual(["Pinching...\n\n🛠️ Exec\n• exec done"]);
+    expect(updates).toEqual(["Pinching\n\n🛠️ Exec\n• exec done"]);
     expectPreviewEditContent("done");
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
@@ -1773,7 +1773,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(draftStream.update).toHaveBeenCalledWith("Pinching...\n\n🛠️ Exec\n• exec done");
+    expect(draftStream.update).toHaveBeenCalledWith("Pinching\n\n🛠️ Exec\n• exec done");
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
@@ -2366,7 +2366,7 @@ describe("processDiscordMessage draft streaming", () => {
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("Reasoning");
-    expect(updates.join("\n")).not.toContain("Thinking.");
+    expect(updates.join("\n")).not.toContain("Thinking\n");
   });
 
   it("replaces reasoning snapshots instead of appending duplicates", async () => {
@@ -2399,7 +2399,7 @@ describe("processDiscordMessage draft streaming", () => {
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("_Checking files_Reasoning:");
-    expect(updates.join("\n")).not.toContain("_Checking files_Thinking.");
+    expect(updates.join("\n")).not.toContain("_Checking files_Thinking");
   });
 
   it("keeps Discord progress lines across assistant boundaries", async () => {

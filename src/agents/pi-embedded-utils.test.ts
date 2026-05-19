@@ -637,37 +637,30 @@ describe("formatReasoningMessage", () => {
 
   it("wraps single line in italics", () => {
     expect(formatReasoningMessage("Single line of reasoning")).toBe(
-      "Thinking.\n\n_Single line of reasoning_",
+      "Thinking\n\n_Single line of reasoning_",
     );
   });
 
   it("wraps each line separately for multiline text (Telegram fix)", () => {
     expect(formatReasoningMessage("Line one\nLine two\nLine three")).toBe(
-      "Thinking.\n\n_Line one_\n_Line two_\n_Line three_",
+      "Thinking\n\n_Line one_\n_Line two_\n_Line three_",
     );
   });
 
   it("preserves empty lines between reasoning text", () => {
     expect(formatReasoningMessage("First block\n\nSecond block")).toBe(
-      "Thinking.\n\n_First block_\n\n_Second block_",
+      "Thinking\n\n_First block_\n\n_Second block_",
     );
   });
 
   it("handles mixed empty and non-empty lines", () => {
-    expect(formatReasoningMessage("A\n\nB\nC")).toBe("Thinking.\n\n_A_\n\n_B_\n_C_");
+    expect(formatReasoningMessage("A\n\nB\nC")).toBe("Thinking\n\n_A_\n\n_B_\n_C_");
   });
 
   it("trims leading/trailing whitespace", () => {
     expect(formatReasoningMessage("  \n  Reasoning here  \n  ")).toBe(
-      "Thinking.\n\n_Reasoning here_",
+      "Thinking\n\n_Reasoning here_",
     );
-  });
-
-  it("animates the thinking label", () => {
-    expect(formatReasoningMessage("step", 0)).toBe("Thinking.\n\n_step_");
-    expect(formatReasoningMessage("step", 1)).toBe("Thinking..\n\n_step_");
-    expect(formatReasoningMessage("step", 2)).toBe("Thinking...\n\n_step_");
-    expect(formatReasoningMessage("step", 3)).toBe("Thinking.\n\n_step_");
   });
 });
 

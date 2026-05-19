@@ -24,10 +24,14 @@ import {
 describe("isReasoningReplyPayload", () => {
   it.each([
     { name: "flagged", payload: { text: "Visible", isReasoning: true }, expected: true },
-    { name: "prefix", payload: { text: "  \n Thinking.\n_hidden_" }, expected: true },
-    { name: "animated prefix", payload: { text: "Thinking...\n\n_hidden_" }, expected: true },
+    { name: "prefix", payload: { text: "  \n Thinking\n_hidden_" }, expected: true },
+    {
+      name: "legacy animated prefix",
+      payload: { text: "Thinking...\n\n_hidden_" },
+      expected: true,
+    },
     { name: "legacy prefix", payload: { text: "  \n Reasoning:\n_hidden_" }, expected: true },
-    { name: "blockquote", payload: { text: "> Thinking.\n> _hidden_" }, expected: true },
+    { name: "blockquote", payload: { text: "> Thinking\n> _hidden_" }, expected: true },
     {
       name: "visible prose starting with thinking",
       payload: { text: "Thinking... this is the answer" },

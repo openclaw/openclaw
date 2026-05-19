@@ -700,7 +700,7 @@ function resolveHeartbeatReasoningPayloads(
   const reasoningPayloads: ReplyPayload[] = [];
   for (const payload of payloads) {
     const text = typeof payload.text === "string" ? payload.text : "";
-    const hasFormattedReasoningPrefix = /^(?:Reasoning:|Thinking\.{1,3}(?=\s*_))/u.test(
+    const hasFormattedReasoningPrefix = /^(?:Reasoning:|Thinking\.{0,3}(?=\s*_))/u.test(
       text.trimStart(),
     );
     if (payload.isReasoning !== true && !hasFormattedReasoningPrefix) {

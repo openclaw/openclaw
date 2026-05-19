@@ -190,10 +190,9 @@ function resolveWorkingProgressLines(elapsedMs: number): string[] {
   );
 }
 
-function formatWorkingProgressPreview(frame: number, elapsedMs: number): string {
+function formatWorkingProgressPreview(elapsedMs: number): string {
   return formatChannelProgressDraftText({
-    entry: { streaming: { progress: { label: "Working...", toolProgress: false } } },
-    labelFrame: frame,
+    entry: { streaming: { progress: { label: "Working", toolProgress: false } } },
     lines: resolveWorkingProgressLines(elapsedMs),
   });
 }
@@ -345,14 +344,15 @@ export async function runTelegramWorkingFinalFlow(
   const wait = deps.sleep ?? sleep;
 
   let previewUpdates = 0;
+  let lastPreviewText = "";
   const updateIntervalMs = delayMs > 0 ? delayMs : 1_000;
-  for (
-    let elapsedMs = 0, frame = 0;
-    elapsedMs < durationMs;
-    elapsedMs += updateIntervalMs, frame += 1
-  ) {
-    await draft.update(formatWorkingProgressPreview(frame, elapsedMs));
-    previewUpdates += 1;
+  for (let elapsedMs = 0; elapsedMs < durationMs; elapsedMs += updateIntervalMs) {
+    const previewText = formatWorkingProgressPreview(elapsedMs);
+    if (previewText !== lastPreviewText) {
+      await draft.update(previewText);
+      lastPreviewText = previewText;
+      previewUpdates += 1;
+    }
     if (delayMs > 0 && elapsedMs + updateIntervalMs < durationMs) {
       await wait(delayMs);
     }

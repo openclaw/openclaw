@@ -4,7 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 
-const REASONING_MESSAGE_RE = /^Thinking\.{1,3}\s*_/u;
+const REASONING_MESSAGE_RE = /^Thinking\.{0,3}\s*_/u;
 const LEGACY_REASONING_MESSAGE_PREFIX = "Reasoning:\n";
 const REASONING_TAG_PREFIXES = [
   "<think",

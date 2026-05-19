@@ -4,7 +4,7 @@ import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 describe("splitTelegramReasoningText", () => {
   it("splits real tagged reasoning and answer", () => {
     expect(splitTelegramReasoningText("<think>example</think>Done")).toEqual({
-      reasoningText: "Thinking.\n\n_example_",
+      reasoningText: "Thinking\n\n_example_",
       answerText: "Done",
     });
   });

@@ -212,9 +212,7 @@ describe("channel-streaming", () => {
   });
 
   it("uses auto progress labels when no explicit label is configured", () => {
-    const invalidLabels = DEFAULT_PROGRESS_DRAFT_LABELS.filter((label) => !label.endsWith("..."));
-    expect(invalidLabels).toStrictEqual([]);
-    expect(DEFAULT_PROGRESS_DRAFT_LABELS[0]).toBe("Working...");
+    expect(DEFAULT_PROGRESS_DRAFT_LABELS[0]).toBe("Working");
     expect(resolveChannelProgressDraftLabel({ random: () => 0 })).toBe(
       DEFAULT_PROGRESS_DRAFT_LABELS[0],
     );
@@ -229,23 +227,12 @@ describe("channel-streaming", () => {
     ).toBe(DEFAULT_PROGRESS_DRAFT_LABELS[0]);
   });
 
-  it("animates progress labels that end in ellipses", () => {
-    const entry = { streaming: { progress: { label: "Working..." } } };
-
-    expect(formatChannelProgressDraftText({ entry, labelFrame: 0, lines: [] })).toBe("Working");
-    expect(formatChannelProgressDraftText({ entry, labelFrame: 1, lines: [] })).toBe("Working.");
-    expect(formatChannelProgressDraftText({ entry, labelFrame: 2, lines: [] })).toBe("Working..");
-    expect(formatChannelProgressDraftText({ entry, labelFrame: 3, lines: [] })).toBe("Working...");
-    expect(formatChannelProgressDraftText({ entry, labelFrame: 4, lines: [] })).toBe("Working");
-  });
-
   it("separates progress labels from detail lines with a blank line", () => {
-    const entry = { streaming: { progress: { label: "Working..." } } };
+    const entry = { streaming: { progress: { label: "Working" } } };
 
     expect(
       formatChannelProgressDraftText({
         entry,
-        labelFrame: 0,
         lines: ["🛠️ pgrep -fl Discord || true (agent)", "Discord is installed."],
       }),
     ).toBe("Working\n\n🛠️ pgrep -fl Discord || true (agent)\n• Discord is installed.");
