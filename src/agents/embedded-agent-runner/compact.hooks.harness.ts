@@ -73,10 +73,21 @@ export const resolveMemorySearchConfigMock = vi.fn(() => ({
   },
 }));
 export const resolveSessionAgentIdMock = vi.fn(() => "main");
-export const resolveSessionAgentIdsMock = vi.fn(() => ({
-  defaultAgentId: "main",
-  sessionAgentId: "main",
-}));
+function resolveHarnessSessionAgentId(params?: { agentId?: string; sessionKey?: string }): string {
+  const explicit = params?.agentId?.trim().toLowerCase();
+  if (explicit) {
+    return explicit;
+  }
+  const parsed = params?.sessionKey?.trim().match(/^agent:([^:]+):/i);
+  return parsed?.[1]?.toLowerCase() ?? "main";
+}
+
+export const resolveSessionAgentIdsMock = vi.fn(
+  (params?: { agentId?: string; sessionKey?: string }) => ({
+    defaultAgentId: "main",
+    sessionAgentId: resolveHarnessSessionAgentId(params),
+  }),
+);
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
 export const resolveContextWindowInfoMock = vi.fn(() => ({ tokens: 128_000 }));
@@ -320,7 +331,12 @@ export function resetCompactSessionStateMocks(): void {
   resolveSessionAgentIdMock.mockReset();
   resolveSessionAgentIdMock.mockReturnValue("main");
   resolveSessionAgentIdsMock.mockReset();
-  resolveSessionAgentIdsMock.mockReturnValue({ defaultAgentId: "main", sessionAgentId: "main" });
+  resolveSessionAgentIdsMock.mockImplementation(
+    (params?: { agentId?: string; sessionKey?: string }) => ({
+      defaultAgentId: "main",
+      sessionAgentId: resolveHarnessSessionAgentId(params),
+    }),
+  );
   estimateTokensMock.mockReset();
   estimateTokensMock.mockReturnValue(10);
   sessionMessages.splice(0, sessionMessages.length, ...createDefaultSessionMessages());

@@ -2370,6 +2370,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         result = await compactEmbeddedAgentSession({
           sessionId,
           sessionKey: target.canonicalKey,
+          agentId: target.agentId,
           allowGatewaySubagentBinding: true,
           sessionFile: filePath,
           workspaceDir,

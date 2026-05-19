@@ -161,6 +161,7 @@ export async function compactEmbeddedAgentSession(
   const agentIds = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
+    agentId: params.agentId,
   });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
   const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
@@ -272,6 +273,7 @@ export async function compactEmbeddedAgentSession(
         const { sessionAgentId } = resolveSessionAgentIds({
           sessionKey: params.sessionKey,
           config: params.config,
+          agentId: params.agentId,
         });
         const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
         const hookCtx = {
@@ -479,6 +481,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.params.sessionKey,
     config: params.params.config,
+    agentId: params.params.agentId,
   });
   return {
     ...params.params,

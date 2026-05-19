@@ -860,6 +860,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const result = await deps.compactEmbeddedAgentSession({
     sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
+    agentId: activeAgentId,
     sandboxSessionKey: params.runtimePolicySessionKey,
     allowGatewaySubagentBinding: true,
     messageChannel: params.followupRun.run.messageProvider,

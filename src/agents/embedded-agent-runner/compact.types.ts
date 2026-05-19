@@ -11,6 +11,8 @@ export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;
   runId?: string;
   sessionKey?: string;
+  /** Active agent id for legacy/non-agent session keys. */
+  agentId?: string;
   /** Session key used only for runtime policy/sandbox resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
   messageChannel?: string;

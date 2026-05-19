@@ -1219,6 +1219,43 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     }
   });
 
+  it("honors explicit agentId scope for legacy direct compaction sessions", async () => {
+    const sync = vi.fn(async () => {});
+    getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "legacy-session-1",
+      sessionKey: "legacy-topic-47",
+      agentId: "lossless-agent",
+      sessionFile: "/tmp/legacy-session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              postIndexSync: "off",
+            },
+          },
+          list: [
+            {
+              id: "lossless-agent",
+              compaction: {
+                postIndexSync: "await",
+              },
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(sync).toHaveBeenCalledWith({
+      reason: "post-compaction",
+      sessionFiles: ["/tmp/legacy-session.jsonl"],
+    });
+  });
+
   it("preserves tokensAfter when full-session context exceeds result.tokensBefore", () => {
     estimateTokensMock.mockImplementation((message: unknown) => {
       const role = (message as { role?: string }).role;
@@ -1816,6 +1853,43 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expectRecordFields(compactArg.runtimeContext, {
       provider: "anthropic",
       model: "claude-opus-4-6",
+    });
+  });
+
+  it("honors explicit agentId scope for legacy queued compaction sessions", async () => {
+    await compactEmbeddedPiSession(
+      wrappedCompactionArgs({
+        sessionKey: "legacy-topic-47",
+        agentId: "lossless-agent",
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                model: "openai/gpt-5.5",
+              },
+            },
+            list: [
+              {
+                id: "lossless-agent",
+                compaction: {
+                  model: "google/gemini-3.1-pro-preview",
+                },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(mockCallArg(resolveModelMock)).toBe("google");
+    expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gemini-3.1-pro-preview");
+    expect(mockCallArg(resolveModelMock, 0, 2)).toBe("/tmp/agents/lossless-agent/agent");
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(compactArg.runtimeContext, {
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
     });
   });
 
