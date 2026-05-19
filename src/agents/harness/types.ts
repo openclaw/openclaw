@@ -33,6 +33,9 @@ export type AgentHarnessSideQuestionParams = {
   sessionFile: string;
   agentId?: string;
   workspaceDir?: string;
+  messageChannel?: string;
+  messageProvider?: string;
+  currentChannelId?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 };
@@ -56,8 +59,8 @@ export type AgentHarnessResultClassification =
 
 export type AgentHarnessDeliveryDefaults = {
   /**
-   * Preferred default for visible source replies when user config has not
-   * explicitly selected automatic or message-tool delivery.
+   * @deprecated Prefer `messages.visibleReplies` / `messages.groupChat.visibleReplies`
+   * config. Kept for existing harness plugins.
    */
   sourceVisibleReplies?: "automatic" | "message_tool";
 };

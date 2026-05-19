@@ -34,6 +34,12 @@ function createRuntime(): RuntimeEnv {
   } as unknown as RuntimeEnv;
 }
 
+function readFirstJsonLog(runtime: RuntimeEnv): unknown {
+  const calls = vi.mocked(runtime.log).mock.calls;
+  const [message] = calls[0] ?? [];
+  return JSON.parse(String(message));
+}
+
 const zeroTaskAuditCounts = {
   delivery_failed: 0,
   inconsistent_timestamps: 0,
@@ -101,7 +107,7 @@ describe("tasks commands", () => {
       const runtime = createRuntime();
       await tasksAuditCommand({ json: true }, runtime);
 
-      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(0)?.[0])) as {
+      const payload = readFirstJsonLog(runtime) as {
         summary: {
           total: number;
           errors: number;
@@ -129,9 +135,7 @@ describe("tasks commands", () => {
       const limitedRuntime = createRuntime();
       await tasksAuditCommand({ json: true, limit: 1 }, limitedRuntime);
 
-      const limitedPayload = JSON.parse(
-        String(vi.mocked(limitedRuntime.log).mock.calls.at(0)?.[0]),
-      );
+      const limitedPayload = readFirstJsonLog(limitedRuntime) as { findings: unknown[] };
 
       expect(limitedPayload.findings).toStrictEqual([
         {
@@ -189,7 +193,7 @@ describe("tasks commands", () => {
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: false }, runtime);
 
-      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(0)?.[0])) as {
+      const payload = readFirstJsonLog(runtime) as {
         mode: string;
         maintenance: { taskFlows: { pruned: number } };
         auditBefore: {
@@ -296,7 +300,7 @@ describe("tasks commands", () => {
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
 
-      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(0)?.[0])) as {
+      const payload = readFirstJsonLog(runtime) as {
         maintenance: {
           sessions: {
             pruned: number;

@@ -97,8 +97,12 @@ function expectDispatcherAttached(value: unknown): void {
   expect(getDispatcherClassName(value)).toMatch(/^(Agent|Mock)$/u);
 }
 
+function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
+  return mock.mock.calls[0];
+}
+
 function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
-  const [, secondInit] = fetchImpl.mock.calls.at(1) as [string, RequestInit];
+  const secondInit = getSecondRequestInit(fetchImpl);
   return new Headers(secondInit.headers);
 }
 
@@ -119,7 +123,11 @@ function getFirstRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
 }
 
 function getSecondRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
-  const [, secondInit] = fetchImpl.mock.calls.at(1) as [string, RequestInit];
+  const call = fetchImpl.mock.calls[1];
+  if (!call) {
+    throw new Error("expected second fetch call");
+  }
+  const [, secondInit] = call as [string, RequestInit];
   return secondInit;
 }
 
@@ -233,6 +241,7 @@ describe("fetchWithSsrFGuard hardening", () => {
           autoSelectFamily: true,
           autoSelectFamilyAttemptTimeout: 300,
         },
+        clientFactory: expect.any(Function),
         proxyTls: {
           autoSelectFamily: true,
           autoSelectFamilyAttemptTimeout: 300,
@@ -301,7 +310,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     ).rejects.toThrow(/private|internal|blocked/i);
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(logWarnMock).toHaveBeenCalledTimes(1);
-    const [warning] = logWarnMock.mock.calls.at(0) as [string];
+    const [warning] = firstMockCall(logWarnMock) as [string];
     expect(warning).toContain(
       "security: blocked URL fetch (qa-audit) targetOrigin=http://127.0.0.1:8080",
     );
@@ -592,6 +601,7 @@ describe("fetchWithSsrFGuard hardening", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://proxy.example:7890",
+      clientFactory: expect.any(Function),
       proxyTls: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
@@ -602,7 +612,7 @@ describe("fetchWithSsrFGuard hardening", () => {
       },
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const fetchCall = fetchImpl.mock.calls.at(0) as [string, { dispatcher?: unknown }] | undefined;
+    const fetchCall = firstMockCall(fetchImpl) as [string, { dispatcher?: unknown }] | undefined;
     expect(fetchCall?.[0]).toBe("https://public.example/resource");
     if (!fetchCall?.[1].dispatcher) {
       throw new Error("Expected proxy dispatcher");
@@ -619,6 +629,141 @@ describe("fetchWithSsrFGuard hardening", () => {
       lookupFn,
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not carry exact-origin trust across private-host redirects to another port", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(redirectResponse("http://127.0.0.1:11435/"));
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://127.0.0.1:11434/start",
+        fetchImpl,
+        policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not carry exact-origin trust across redirects to a different private host", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(redirectResponse("http://10.0.0.6:11434/"));
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://10.0.0.5:11434/start",
+        fetchImpl,
+        policy: { allowedOrigins: ["http://10.0.0.5:11434"] },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows a configured private DNS origin and blocks the same host on another port", async () => {
+    const lookupFn: LookupFn = vi.fn(async () => [
+      { address: "10.0.0.5", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "http://model.lan:11434/v1/models",
+      fetchImpl,
+      lookupFn,
+      policy: { allowedOrigins: ["http://model.lan:11434"] },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
+
+    const blockedFetchImpl = vi.fn(async () => okResponse());
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://model.lan:11435/v1/models",
+        fetchImpl: blockedFetchImpl,
+        lookupFn,
+        policy: { allowedOrigins: ["http://model.lan:11434"] },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(blockedFetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("blocks exact-origin private DNS when it resolves to link-local metadata IPs", async () => {
+    const lookupFn: LookupFn = vi.fn(async () => [
+      { address: "169.254.169.254", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://model.lan:11434/v1/models",
+        fetchImpl,
+        lookupFn,
+        policy: { allowedOrigins: ["http://model.lan:11434"] },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("blocks exact-origin private DNS when it resolves to embedded IPv6 link-local metadata IPs", async () => {
+    const lookupFn: LookupFn = vi.fn(async () => [
+      { address: "64:ff9b::a9fe:a9fe", family: 6 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://model.lan:11434/v1/models",
+        fetchImpl,
+        lookupFn,
+        policy: { allowedOrigins: ["http://model.lan:11434"] },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("blocks exact-origin private DNS when it resolves to non-link-local metadata IPs", async () => {
+    const lookupFn: LookupFn = vi.fn(async () => [
+      { address: "100.100.100.200", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://model.lan:11434/v1/models",
+        fetchImpl,
+        lookupFn,
+        policy: { allowedOrigins: ["http://model.lan:11434"] },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("blocks exact-origin private DNS when it resolves to IPv6 cloud metadata IPs", async () => {
+    const lookupFn: LookupFn = vi.fn(async () => [
+      { address: "fd00:ec2::254", family: 6 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://model.lan:11434/v1/models",
+        fetchImpl,
+        lookupFn,
+        policy: { allowedOrigins: ["http://model.lan:11434"] },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("allows a configured IPv6 unique-local exact origin through the guard", async () => {
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "http://[fd00::1]:11434/v1/models",
+      fetchImpl,
+      policy: { allowedOrigins: ["http://[fd00::1]:11434"] },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
   });
 
   it("enforces hostname allowlist policies", async () => {
@@ -1446,6 +1591,33 @@ describe("fetchWithSsrFGuard hardening", () => {
           mode: "explicit-proxy",
           proxyUrl: "http://localhost:6152",
           allowPrivateProxy: false,
+        },
+      }),
+    ).rejects.toThrow(/blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not use target origin trust to allow a private explicit proxy", async () => {
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const lookupFn: LookupFn = vi.fn(async () => [
+      { address: "10.0.0.5", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://10.0.0.5:11434/v1/models",
+        fetchImpl,
+        lookupFn,
+        policy: { allowedOrigins: ["https://10.0.0.5:11434"] },
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://10.0.0.5:7890",
         },
       }),
     ).rejects.toThrow(/blocked/i);

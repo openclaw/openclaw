@@ -107,7 +107,7 @@ type ComfyWorkflowResult = {
 
 let comfyFetchGuard = fetchWithSsrFGuard;
 
-export function _setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+export function setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   comfyFetchGuard = impl ?? fetchWithSsrFGuard;
 }
 
@@ -299,7 +299,11 @@ async function readJsonResponse<T>(params: {
   });
   try {
     await assertOkOrThrowHttpError(response, params.errorPrefix);
-    return (await response.json()) as T;
+    try {
+      return (await response.json()) as T;
+    } catch (cause) {
+      throw new Error(`${params.errorPrefix}: malformed JSON response`, { cause });
+    }
   } finally {
     await release();
   }

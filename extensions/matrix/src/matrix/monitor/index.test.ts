@@ -62,9 +62,11 @@ const hoisted = vi.hoisted(() => {
     drainPendingDecryptions: vi.fn(async () => undefined),
   });
   const createMatrixRoomMessageHandler = vi.fn(() => vi.fn());
-  const createDirectRoomTracker = vi.fn((_client: unknown, _opts?: DirectRoomTrackerOptions) => ({
-    isDirectMessage: vi.fn(async () => false),
-  }));
+  const createDirectRoomTracker = vi.fn(
+    (clientForTest: unknown, _opts?: DirectRoomTrackerOptions) => ({
+      isDirectMessage: vi.fn(async () => false),
+    }),
+  );
   const getRoomInfo = vi.fn<
     (roomId: string, opts?: { includeAliases?: boolean }) => Promise<MatrixRoomInfo>
   >(async () => ({
@@ -384,12 +386,12 @@ vi.mock("./startup.js", () => ({
   runMatrixStartupMaintenance: hoisted.runMatrixStartupMaintenance,
 }));
 
-let matrixMonitorTesting: typeof import("./index.js").__testing;
+let matrixMonitorTesting: typeof import("./index.js").testing;
 let monitorMatrixProvider: typeof import("./index.js").monitorMatrixProvider;
 
 describe("monitorMatrixProvider", () => {
   beforeAll(async () => {
-    ({ __testing: matrixMonitorTesting, monitorMatrixProvider } = await import("./index.js"));
+    ({ testing: matrixMonitorTesting, monitorMatrixProvider } = await import("./index.js"));
   });
 
   async function flushUntil(predicate: () => boolean, message: string): Promise<void> {
@@ -819,7 +821,16 @@ describe("monitorMatrixProvider", () => {
   it("resolves text chunk limit for the effective Matrix account", async () => {
     await startMonitorAndAbortAfterStartup();
 
-    expect(mockCallArg(hoisted.resolveTextChunkLimit, 0, 0)).toBeDefined();
+    expect(mockCallArg(hoisted.resolveTextChunkLimit, 0, 0)).toEqual({
+      channels: {
+        matrix: {
+          dm: {
+            allowFrom: [],
+          },
+          groupAllowFrom: [],
+        },
+      },
+    });
     expect(mockCallArg(hoisted.resolveTextChunkLimit, 0, 1)).toBe("matrix");
     expect(mockCallArg(hoisted.resolveTextChunkLimit, 0, 2)).toBe("default");
   });

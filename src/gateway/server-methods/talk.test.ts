@@ -629,7 +629,7 @@ describe("talk.session unified handlers", () => {
       mode: "transcription",
       transport: "gateway-relay",
       transcriptionSessionId: "stt-unified-1",
-      audio: { inputEncoding: "pcm16", inputSampleRateHz: 24000 },
+      audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
       expiresAt: 1_797_986_400,
     });
 
@@ -666,7 +666,6 @@ describe("talk.session unified handlers", () => {
       transport: "gateway-relay",
       brain: "none",
     });
-
     const inputRespond = vi.fn();
     await talkHandlers["talk.session.appendAudio"]({
       req: { type: "req", id: "2", method: "talk.session.appendAudio" },
@@ -708,7 +707,7 @@ describe("talk.session unified handlers", () => {
         sessionKey: "session:main",
         ttlMs: 5000,
       },
-      client: { connId: "conn-1" } as never,
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
       isWebchatConnect: () => false,
       respond: createRespond as never,
       context: {
@@ -807,6 +806,64 @@ describe("talk.session unified handlers", () => {
     expect(mockCallArg(broadcastToConnIds, 2, 3)).toEqual({ dropIfSlow: true });
   });
 
+  it("passes managed-room spawnedBy visibility scope to session resolution", async () => {
+    const createRespond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        mode: "stt-tts",
+        transport: "managed-room",
+        sessionKey: "agent:worker:subagent:child",
+        spawnedBy: "agent:main:parent",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,
+      isWebchatConnect: () => false,
+      respond: createRespond as never,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondOk(createRespond, {
+      transport: "managed-room",
+      brain: "agent-consult",
+    });
+    expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
+      cfg: {},
+      p: {
+        key: "agent:worker:subagent:child",
+        spawnedBy: "agent:main:parent",
+        includeGlobal: true,
+        includeUnknown: true,
+      },
+    });
+  });
+
+  it("rejects unscoped managed-room session keys without admin scope", async () => {
+    const createRespond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        mode: "stt-tts",
+        transport: "managed-room",
+        sessionKey: "agent:worker:main",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,
+      isWebchatConnect: () => false,
+      respond: createRespond as never,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondError(createRespond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message:
+        "talk.session.create managed-room sessionKey requires spawnedBy or gateway scope: operator.admin",
+    });
+    expect(mocks.resolveSessionKeyFromResolveParams).not.toHaveBeenCalled();
+  });
+
   it("requires managed-room ownership before turn control", async () => {
     const broadcastToConnIds = vi.fn();
     const createRespond = vi.fn();
@@ -817,7 +874,7 @@ describe("talk.session unified handlers", () => {
         transport: "managed-room",
         sessionKey: "session:main",
       },
-      client: { connId: "creator" } as never,
+      client: { connId: "creator", connect: { scopes: ["operator.admin"] } } as never,
       isWebchatConnect: () => false,
       respond: createRespond as never,
       context: {
