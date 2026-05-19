@@ -329,7 +329,7 @@ await shTee(logStream, "git", ["push", "origin", releaseTag]);
 
 // Dispatch workflow explicitly for this tag (avoids tag-push trigger flakes)
 banner(logStream, "Dispatching workflow...");
-await shTee(logStream, "gh", ["api", "-X", "POST", f"/repos/{ghRepo}/actions/workflows/{wf}/dispatches", "-f", f"ref={releaseTag}"]);
+await shTee(logStream, "gh", ["api", "-X", "POST", `/repos/${ghRepo}/actions/workflows/${wf}/dispatches`, "-f", `ref=${releaseTag}`]);
 
 // Locate the workflow run (eventual consistency: retry)
 banner(logStream, "Locating workflow run...");
