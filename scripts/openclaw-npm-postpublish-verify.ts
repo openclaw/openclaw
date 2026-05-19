@@ -73,6 +73,12 @@ const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // Consumers importing them run under their own Vitest dev dependency.
   "vitest",
 ]);
+const DISALLOWED_ROOT_RUNTIME_IMPORT_REWRITES = new Map([
+  ["@mariozechner/pi-agent-core", "@earendil-works/pi-agent-core"],
+  ["@mariozechner/pi-ai", "@earendil-works/pi-ai"],
+  ["@mariozechner/pi-coding-agent", "@earendil-works/pi-coding-agent"],
+  ["@mariozechner/pi-tui", "@earendil-works/pi-tui"],
+]);
 const require = createRequire(import.meta.url);
 const acorn = require("acorn") as typeof import("acorn");
 
@@ -417,6 +423,7 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
     ];
   }
   const missingImporters = new Map<string, Set<string>>();
+  const disallowedImporters = new Map<string, Set<string>>();
   const bundledExtensionRuntimeDependencyOwners =
     collectBundledExtensionRuntimeDependencyOwners(packageRoot);
 
@@ -438,6 +445,12 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
     }
     for (const specifier of parsedSpecifiers.specifiers) {
       const dependencyName = packageNameFromSpecifier(specifier);
+      if (dependencyName && DISALLOWED_ROOT_RUNTIME_IMPORT_REWRITES.has(dependencyName)) {
+        const importers = disallowedImporters.get(dependencyName) ?? new Set<string>();
+        importers.add(relativePath);
+        disallowedImporters.set(dependencyName, importers);
+        continue;
+      }
       if (
         !dependencyName ||
         NODE_BUILTIN_MODULES.has(dependencyName) ||
@@ -457,12 +470,23 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
     }
   }
 
-  return [...missingImporters.entries()]
-    .map(([dependencyName, importers]) => {
+  const deprecatedImportErrors = [...disallowedImporters.entries()].map(
+    ([dependencyName, importers]) => {
+      const importerList = [...importers].toSorted((left, right) => left.localeCompare(right));
+      const replacement = DISALLOWED_ROOT_RUNTIME_IMPORT_REWRITES.get(dependencyName);
+      return `installed package root dist imports deprecated runtime package '${dependencyName}' via: ${importerList.join(", ")}. Rebuild so published artifacts use '${replacement}'.`;
+    },
+  );
+  const missingDependencyErrors = [...missingImporters.entries()].map(
+    ([dependencyName, importers]) => {
       const importerList = [...importers].toSorted((left, right) => left.localeCompare(right));
       return `installed package root is missing declared runtime dependency '${dependencyName}' for dist importers: ${importerList.join(", ")}. Add it to package.json dependencies/optionalDependencies.`;
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+    },
+  );
+
+  return [...deprecatedImportErrors, ...missingDependencyErrors].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
 }
 
 function collectBundledExtensionRuntimeDependencyOwners(
