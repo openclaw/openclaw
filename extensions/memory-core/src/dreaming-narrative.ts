@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
@@ -52,6 +53,18 @@ export type NarrativePhaseData = {
   themes?: string[];
   /** Snippets that were promoted to durable memory (deep). */
   promotions?: string[];
+  /**
+   * Temporal context fed to the narrative model so each diary entry knows
+   * which day it is and what was already written.  Without this the prompt
+   * had no way to honor the "vary each entry" instruction and every sweep
+   * regenerated the same "first day" framing (see issue #83830).
+   */
+  /** Current date in human-readable form (e.g. "May 19, 2026"). */
+  currentDate?: string;
+  /** 1-based day number of this diary entry. */
+  dayCount?: number;
+  /** Short snippets (first line / heading) of previously written diary entries, most-recent first. */
+  previousEntries?: string[];
 };
 
 type Logger = {
@@ -258,6 +271,25 @@ function buildNarrativeSessionKey(params: {
 
 export function buildNarrativePrompt(data: NarrativePhaseData): string {
   const lines: string[] = [];
+
+  // Temporal context comes first so the model anchors itself in time before
+  // reading memory fragments.  When recall is dominated by early "first
+  // meeting" snippets, this is the only signal the model has that today is
+  // not actually day 1 (see issue #83830).
+  const hasDate = typeof data.currentDate === "string" && data.currentDate.length > 0;
+  const hasDay =
+    typeof data.dayCount === "number" && Number.isFinite(data.dayCount) && data.dayCount > 0;
+  if (hasDate || hasDay) {
+    lines.push("Context:");
+    if (hasDate) {
+      lines.push(`- Today is ${data.currentDate}.`);
+    }
+    if (hasDay) {
+      lines.push(`- This is day ${data.dayCount} of the dream diary.`);
+    }
+    lines.push("");
+  }
+
   lines.push("Write a dream diary entry from these memory fragments:\n");
 
   for (const snippet of data.snippets.slice(0, 12)) {
@@ -276,6 +308,19 @@ export function buildNarrativePrompt(data: NarrativePhaseData): string {
     for (const promo of data.promotions.slice(0, 5)) {
       lines.push(`- ${promo}`);
     }
+  }
+
+  const prevEntries = data.previousEntries?.filter(
+    (entry) => typeof entry === "string" && entry.trim().length > 0,
+  );
+  if (prevEntries && prevEntries.length > 0) {
+    lines.push("\nPreviously written diary entries (avoid repeating these openings or phrasing):");
+    for (const entry of prevEntries.slice(0, 5)) {
+      lines.push(`- ${entry.trim()}`);
+    }
+    lines.push(
+      '\nDo not open with a "first day" or "waking up for the first time" framing unless this truly is day 1, and do not echo the wording of the previous entries above.',
+    );
   }
 
   return lines.join("\n");
@@ -876,6 +921,64 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
   }
 }
 
+/**
+ * Read existing diary blocks from DREAMS.md and extract short snippets of the
+ * most recent entries plus the next day number.  Best-effort and synchronous
+ * so it can run before the subagent call without adding extra event-loop
+ * ticks that callers (notably runDetachedDreamNarrative) rely on for
+ * test-time ordering.
+ */
+function readDiaryTemporalContextSync(workspaceDir: string): {
+  dayCount: number;
+  previousEntries: string[];
+} {
+  try {
+    let dreamsPath: string | null = null;
+    for (const name of DREAMS_FILENAMES) {
+      const candidate = path.join(workspaceDir, name);
+      try {
+        fsSync.accessSync(candidate);
+        dreamsPath = candidate;
+        break;
+      } catch {
+        // try next filename
+      }
+    }
+    if (!dreamsPath) {
+      return { dayCount: 1, previousEntries: [] };
+    }
+    let existing = "";
+    try {
+      existing = fsSync.readFileSync(dreamsPath, "utf-8");
+    } catch {
+      return { dayCount: 1, previousEntries: [] };
+    }
+    const startIdx = existing.indexOf(DIARY_START_MARKER);
+    const endIdx = existing.indexOf(DIARY_END_MARKER);
+    if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
+      return { dayCount: 1, previousEntries: [] };
+    }
+    const inner = existing.slice(startIdx + DIARY_START_MARKER.length, endIdx);
+    const blocks = splitDiaryBlocks(inner);
+    const previousEntries: string[] = [];
+    for (const block of [...blocks].reverse()) {
+      const firstLine = block
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line.length > 0 && !line.startsWith("<!--") && !line.startsWith("#"));
+      if (firstLine) {
+        previousEntries.push(firstLine.slice(0, 200));
+      }
+      if (previousEntries.length >= 5) {
+        break;
+      }
+    }
+    return { dayCount: blocks.length + 1, previousEntries };
+  } catch {
+    return { dayCount: 1, previousEntries: [] };
+  }
+}
+
 export async function generateAndAppendDreamNarrative(params: {
   subagent: SubagentSurface;
   workspaceDir: string;
@@ -896,7 +999,18 @@ export async function generateAndAppendDreamNarrative(params: {
     phase: params.data.phase,
     nowMs,
   });
-  const message = buildNarrativePrompt(params.data);
+  // Enrich phase data with temporal context so the narrative does not repeat
+  // the "first day" framing every sweep (see issue #83830).  Reads DREAMS.md
+  // to count existing entries and surface short snippets of the most recent
+  // ones; falls back gracefully when no diary exists yet.
+  const temporal = readDiaryTemporalContextSync(params.workspaceDir);
+  const enrichedData: NarrativePhaseData = {
+    ...params.data,
+    currentDate: params.data.currentDate ?? formatNarrativeDate(nowMs, params.timezone),
+    dayCount: params.data.dayCount ?? temporal.dayCount,
+    previousEntries: params.data.previousEntries ?? temporal.previousEntries,
+  };
+  const message = buildNarrativePrompt(enrichedData);
   const attempts: Array<{ sessionKey: string; runId: string | null }> = [];
   let successfulSessionKey: string | null = null;
   try {
@@ -912,7 +1026,7 @@ export async function generateAndAppendDreamNarrative(params: {
           subagent: params.subagent,
           sessionKey: attemptSessionKey,
           message,
-          data: params.data,
+          data: enrichedData,
           workspaceDir: params.workspaceDir,
           nowMs,
           timezone: params.timezone,

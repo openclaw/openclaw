@@ -123,6 +123,51 @@ describe("buildNarrativePrompt", () => {
     expect(prompt).toContain("snippet-11");
     expect(prompt).not.toContain("snippet-12");
   });
+
+  it("renders without temporal context when none is provided (issue #83830 regression)", () => {
+    const prompt = buildNarrativePrompt({ phase: "light", snippets: ["a"] });
+    expect(prompt).not.toContain("Context:");
+    expect(prompt).not.toContain("Previously written diary entries");
+  });
+
+  it("injects current date, day count, and previous entries when provided", () => {
+    const prompt = buildNarrativePrompt({
+      phase: "light",
+      snippets: ["fragment-a"],
+      currentDate: "May 19, 2026",
+      dayCount: 4,
+      previousEntries: ["Day 1: first meeting in a dim hallway", "Day 2: short walk by the river"],
+    });
+    expect(prompt).toContain("Context:");
+    expect(prompt).toContain("Today is May 19, 2026.");
+    expect(prompt).toContain("This is day 4 of the dream diary.");
+    expect(prompt).toContain(
+      "Previously written diary entries (avoid repeating these openings or phrasing):",
+    );
+    expect(prompt).toContain("Day 1: first meeting in a dim hallway");
+    expect(prompt).toContain("Day 2: short walk by the river");
+    expect(prompt).toContain('Do not open with a "first day"');
+  });
+
+  it("caps previous entries at 5 and skips empty/whitespace entries", () => {
+    const previousEntries = [
+      "entry-0",
+      "   ",
+      "entry-1",
+      "entry-2",
+      "entry-3",
+      "entry-4",
+      "entry-5",
+    ];
+    const prompt = buildNarrativePrompt({
+      phase: "light",
+      snippets: ["fragment"],
+      previousEntries,
+    });
+    expect(prompt).toContain("entry-0");
+    expect(prompt).toContain("entry-4");
+    expect(prompt).not.toContain("entry-5");
+  });
 });
 
 describe("extractNarrativeText", () => {
