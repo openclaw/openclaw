@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - "v*\+poly.*"
+      - "v[0-9]*.[0-9]*.[0-9]*+poly.[0-9]*"
 permissions:
   contents: read
 
