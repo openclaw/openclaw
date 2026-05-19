@@ -130,12 +130,6 @@ export type LoadInstalledPluginIndexParams = {
   installRecords?: Record<string, PluginInstallRecord>;
   candidates?: PluginCandidate[];
   diagnostics?: PluginDiagnostic[];
-  /**
-   * Pre-computed discovery result. When supplied (and `candidates` is not),
-   * the internal `discoverOpenClawPlugins` call is skipped. Callers sharing a
-   * discovery snapshot across registry helpers in the same flow should supply
-   * this to avoid redundant filesystem walks.
-   */
   discovery?: PluginDiscoveryResult;
   now?: () => Date;
 };

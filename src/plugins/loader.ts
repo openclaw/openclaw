@@ -202,13 +202,6 @@ export type PluginLoadOptions = {
   loadModules?: boolean;
   throwOnLoadError?: boolean;
   manifestRegistry?: PluginManifestRegistry;
-  /**
-   * Pre-computed plugin discovery result. When supplied, internal calls to
-   * `discoverOpenClawPlugins` are skipped. Callers in the same startup flow
-   * can compute one discovery result and share it across loader entry points
-   * to eliminate redundant filesystem walks. Ignored when `manifestRegistry`
-   * is also provided (the registry already implies a discovery snapshot).
-   */
   discovery?: PluginDiscoveryResult;
 };
 

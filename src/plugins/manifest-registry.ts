@@ -920,12 +920,6 @@ export function loadPluginManifestRegistry(
     diagnostics?: PluginDiagnostic[];
     installRecords?: Record<string, PluginInstallRecord>;
     bundledChannelConfigCollector?: BundledChannelConfigCollector;
-    /**
-     * Pre-computed discovery result. When supplied (and `candidates` is not),
-     * the internal `discoverOpenClawPlugins` call is skipped. Callers sharing
-     * a discovery snapshot across multiple registry helpers in the same flow
-     * should supply this to avoid redundant filesystem walks.
-     */
     discovery?: PluginDiscoveryResult;
   } = {},
 ): PluginManifestRegistry {

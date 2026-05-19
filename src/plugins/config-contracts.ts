@@ -114,12 +114,6 @@ export function resolvePluginConfigContractsById(params: {
   fallbackToBundledMetadataForResolvedBundled?: boolean;
   fallbackBundledPluginIds?: readonly string[];
   pluginIds: readonly string[];
-  /**
-   * Pre-computed discovery result. When supplied, the bundled-fallback path
-   * skips its internal `discoverOpenClawPlugins` call so callers sharing a
-   * discovery snapshot across registry helpers avoid redundant filesystem
-   * walks.
-   */
   discovery?: PluginDiscoveryResult;
 }): ReadonlyMap<string, PluginConfigContractMetadata> {
   const matches = new Map<string, PluginConfigContractMetadata>();
