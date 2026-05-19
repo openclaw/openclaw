@@ -862,8 +862,8 @@ export function createImageGenerateTool(options?: {
           model !== undefined
             ? (explicitModelRef?.model ?? model)
             : (primaryModelRef?.model ??
-              selectedProvider?.defaultModel ??
-              imageGenerationModelConfig.primary),
+              imageGenerationModelConfig.primary ??
+              selectedProvider?.defaultModel),
         count,
         imageInputs,
         size,

@@ -658,22 +658,28 @@ export function createMusicGenerateTool(options?: {
       const explicitModelRef = parseMusicGenerationModelRef(model);
       const primaryModelRef = parseMusicGenerationModelRef(musicGenerationModelConfig.primary);
       const selectedModelRef = explicitModelRef ?? primaryModelRef;
-      const requestKeyProvider = resolveSelectedMusicGenerationProvider({
-        config: effectiveCfg,
-        musicGenerationModelConfig,
-        modelOverride: model,
-      });
-      const selectedProvider = imageInputs.length > 0 ? requestKeyProvider : undefined;
+      const shouldResolveSelectedProvider =
+        imageInputs.length > 0 ||
+        (model !== undefined && !explicitModelRef) ||
+        (model === undefined && !primaryModelRef);
+      const selectedProvider = shouldResolveSelectedProvider
+        ? resolveSelectedMusicGenerationProvider({
+            config: effectiveCfg,
+            musicGenerationModelConfig,
+            modelOverride: model,
+          })
+        : undefined;
+      const selectedProviderId = selectedProvider?.id ?? selectedModelRef?.provider;
       const requestKey = buildMediaGenerationRequestKey({
         tool: "music_generate",
         prompt,
-        provider: requestKeyProvider?.id ?? selectedModelRef?.provider,
+        provider: selectedProviderId,
         model:
           model !== undefined
             ? (explicitModelRef?.model ?? model)
             : (primaryModelRef?.model ??
-              requestKeyProvider?.defaultModel ??
-              musicGenerationModelConfig.primary),
+              musicGenerationModelConfig.primary ??
+              selectedProvider?.defaultModel),
         lyrics,
         instrumental,
         durationSeconds,
@@ -721,7 +727,7 @@ export function createMusicGenerateTool(options?: {
           runId: taskHandle.runId,
           taskLabel: prompt,
           requestKey,
-          providerId: requestKeyProvider?.id ?? selectedModelRef?.provider,
+          providerId: selectedProviderId,
           progressSummary: "Generating music",
         });
         scheduleMediaGenerationTaskCompletion({

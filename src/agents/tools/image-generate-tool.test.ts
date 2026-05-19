@@ -978,6 +978,77 @@ describe("createImageGenerateTool", () => {
     expect(resultDetails(result).active).toBe(false);
   });
 
+  it("dedupes a model-only primary image request repeated with provider-qualified model", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("GEMINI_API_KEY", "google-test");
+    const now = Date.now();
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-model-only-image",
+    });
+    const scheduled: Array<() => Promise<void>> = [];
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "gemini-3-pro-image-preview",
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/agent",
+        agentSessionKey: "agent:main:discord:direct:123",
+        scheduleBackgroundWork: (work) => {
+          scheduled.push(work);
+        },
+      }),
+    );
+
+    await tool.execute("call-model-only-start", {
+      prompt: "Already generated proof image",
+      filename: "proof.png",
+    });
+    const createdTask = mockCallArg(
+      taskRuntimeMocks.createRunningTaskRun,
+      0,
+      "createRunningTaskRun",
+    );
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-model-only-image",
+        runId: createdTask.runId,
+        runtime: "cli",
+        taskKind: "image_generation",
+        sourceId: "image_generate:google",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        scopeKind: "session",
+        task: "Already generated proof image",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: now - 20_000,
+        endedAt: now - 10_000,
+        progressSummary: "Generated 1 image",
+      },
+    ]);
+
+    const result = await tool.execute("call-provider-qualified-repeat", {
+      prompt: "Already generated proof image",
+      filename: "proof.png",
+      model: "google/gemini-3-pro-image-preview",
+    });
+
+    expect(scheduled).toHaveLength(1);
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledTimes(1);
+    expect(resultText(result)).toContain(
+      "Image generation task task-model-only-image recently succeeded",
+    );
+    expect(resultDetails(result).duplicateGuard).toBe(true);
+    expect(resultDetails(result).active).toBe(false);
+  });
+
   it("does not collapse distinct unqualified explicit image models in recent duplicate keys", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("GEMINI_API_KEY", "google-test");

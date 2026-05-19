@@ -992,6 +992,83 @@ describe("createVideoGenerateTool", () => {
     expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
   });
 
+  it("dedupes a model-only primary video request repeated with provider-qualified model", async () => {
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+      {
+        id: "google",
+        defaultModel: "veo-3.1-fast-generate-preview",
+        models: ["veo-3.1-fast-generate-preview", "veo-3.1-pro-generate-preview"],
+        capabilities: {},
+        generateVideo: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const now = Date.now();
+    taskExecutorMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-model-only-video",
+    });
+    const scheduled: Array<() => Promise<void>> = [];
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "veo-3.1-pro-generate-preview" },
+          },
+        },
+      }),
+      agentSessionKey: "agent:main:discord:direct:123",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:1",
+      },
+      scheduleBackgroundWork: (work) => {
+        scheduled.push(work);
+      },
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await tool.execute("call-model-only-start", {
+      prompt: "friendly lobster surfing",
+    });
+    const createdTask = firstMockCallArg(taskExecutorMocks.createRunningTaskRun) as {
+      runId: string;
+    };
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-model-only-video",
+        runId: createdTask.runId,
+        runtime: "cli",
+        taskKind: "video_generation",
+        sourceId: "video_generate:google",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        scopeKind: "session",
+        task: "friendly lobster surfing",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: now - 20_000,
+        endedAt: now - 10_000,
+        progressSummary: "Generated 1 video",
+      },
+    ]);
+
+    const result = await tool.execute("call-provider-qualified-repeat", {
+      prompt: "friendly lobster surfing",
+      model: "google/veo-3.1-pro-generate-preview",
+    });
+    const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
+
+    expect(scheduled).toHaveLength(1);
+    expect(taskExecutorMocks.createRunningTaskRun).toHaveBeenCalledTimes(1);
+    expect(text).toContain("Video generation task task-model-only-video recently succeeded");
+    expect(resultDetails(result).duplicateGuard).toBe(true);
+    expect(resultDetails(result).active).toBe(false);
+  });
+
   it("shows duration normalization details from runtime metadata", async () => {
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
       provider: "google",

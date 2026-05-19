@@ -1066,8 +1066,8 @@ export function createVideoGenerateTool(options?: {
           model !== undefined
             ? (explicitModelRef?.model ?? model)
             : (primaryModelRef?.model ??
-              selectedProvider?.defaultModel ??
-              videoGenerationModelConfig.primary),
+              videoGenerationModelConfig.primary ??
+              selectedProvider?.defaultModel),
         size,
         aspectRatio,
         resolution,
