@@ -31,7 +31,6 @@ import {
   type CodexThreadStartParams,
   type CodexTurnStartParams,
   type CodexUserInput,
-  type JsonObject,
   type JsonValue,
 } from "./protocol.js";
 import {
@@ -179,18 +178,6 @@ export async function startOrResumeThread(params: {
       currentInputFingerprint: params.pluginThreadConfig?.inputFingerprint,
       hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
     });
-    embeddedAgentLog.debug("codex app-server plugin binding evaluated", {
-      threadId: binding.threadId,
-      stale: pluginBindingStale,
-      enabled: params.pluginThreadConfig?.enabled ?? false,
-      bindingFingerprint: binding.pluginAppsFingerprint,
-      bindingInputFingerprint: binding.pluginAppsInputFingerprint,
-      currentInputFingerprint: params.pluginThreadConfig?.inputFingerprint,
-      boundAppIds: Object.keys(binding.pluginAppPolicyContext?.apps ?? {}).toSorted(),
-      boundPluginConfigKeys: Object.keys(
-        binding.pluginAppPolicyContext?.pluginAppIds ?? {},
-      ).toSorted(),
-    });
     if (
       !pluginBindingStale &&
       shouldRecheckRecoverablePluginBinding({
@@ -202,13 +189,6 @@ export async function startOrResumeThread(params: {
         prebuiltPluginThreadConfig = await params.pluginThreadConfig?.build();
         pluginBindingStale =
           prebuiltPluginThreadConfig?.fingerprint !== binding.pluginAppsFingerprint;
-        embeddedAgentLog.debug("codex app-server plugin binding recovery recheck completed", {
-          threadId: binding.threadId,
-          stale: pluginBindingStale,
-          nextFingerprint: prebuiltPluginThreadConfig?.fingerprint,
-          nextAppIds: Object.keys(prebuiltPluginThreadConfig?.policyContext.apps ?? {}).toSorted(),
-          diagnostics: prebuiltPluginThreadConfig?.diagnostics.map((diagnostic) => diagnostic.code),
-        });
       } catch (error) {
         embeddedAgentLog.warn("codex app-server plugin app config recovery check failed", {
           error,
@@ -370,13 +350,6 @@ export async function startOrResumeThread(params: {
     pluginThreadConfig?.configPatch,
     params.finalConfigPatch,
   );
-  embeddedAgentLog.debug("codex app-server starting thread with plugin app config", {
-    enabled: pluginThreadConfig?.enabled ?? false,
-    configAppIds: Object.keys(readJsonObject(config?.apps) ?? {}).toSorted(),
-    policyAppIds: Object.keys(pluginThreadConfig?.policyContext.apps ?? {}).toSorted(),
-    pluginConfigKeys: Object.keys(pluginThreadConfig?.policyContext.pluginAppIds ?? {}).toSorted(),
-    diagnostics: pluginThreadConfig?.diagnostics.map((diagnostic) => diagnostic.code),
-  });
   const response = assertCodexThreadStartResponse(
     await params.client.request(
       "thread/start",
@@ -576,10 +549,6 @@ function shouldRecheckRecoverablePluginBinding(params: {
   }
   const expectedPluginConfigKeys = params.pluginThreadConfig.enabledPluginConfigKeys ?? [];
   return Object.keys(policyContext.apps).length === 0 || expectedPluginConfigKeys.length > 0;
-}
-
-function readJsonObject(value: JsonValue | undefined): JsonObject | undefined {
-  return isJsonObject(value) ? value : undefined;
 }
 
 export function buildThreadStartParams(

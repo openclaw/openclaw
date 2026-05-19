@@ -686,10 +686,6 @@ function maxFiniteNumber(values: Array<number | undefined>): number | undefined 
   return Math.max(...nums);
 }
 
-function fingerprintCodexPluginAppCacheKeyForLog(key: string): string {
-  return createHash("sha256").update(key).digest("hex").slice(0, 12);
-}
-
 async function rotateOversizedCodexAppServerStartupBinding(params: {
   binding: CodexAppServerThreadBinding | undefined;
   sessionFile: string;
@@ -1184,13 +1180,14 @@ export async function runCodexAppServerAttempt(
     const pluginThreadConfigPluginConfig = nativeToolSurfaceEnabled
       ? pluginConfig
       : disableCodexPluginThreadConfig(pluginConfig);
-    const pluginAppCacheKey = buildCodexPluginAppCacheKey({
+    const pluginAppCacheKeyInput = {
       appServer,
       agentDir,
       authProfileId: startupAuthProfileId,
       accountId: startupAuthAccountCacheKey,
       envApiKeyFingerprint: startupEnvApiKeyCacheKey,
-    });
+    };
+    const pluginAppCacheKey = buildCodexPluginAppCacheKey(pluginAppCacheKeyInput);
     const pluginThreadConfigInputFingerprint = pluginThreadConfigRequired
       ? buildCodexPluginThreadConfigInputFingerprint({
           pluginConfig: pluginThreadConfigPluginConfig,
@@ -1216,7 +1213,7 @@ export async function runCodexAppServerAttempt(
         .map((plugin) => plugin.configKey)
         .toSorted(),
       enabledPluginConfigKeys,
-      appCacheKeyFingerprint: fingerprintCodexPluginAppCacheKeyForLog(pluginAppCacheKey),
+      appCacheKeyInput: pluginAppCacheKeyInput,
       authProfileId: startupAuthProfileId,
       appServerTransport: appServer.start.transport,
       appServerCommandSource: appServer.start.commandSource,
