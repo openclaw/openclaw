@@ -7381,6 +7381,19 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
 
     expect(result.aborted).toBe(true);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).rejects.toThrow("native hook relay not found");
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });

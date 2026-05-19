@@ -179,7 +179,7 @@ describe("native hook relay registry", () => {
     );
   });
 
-  it("allows callers to replace a relay at a stable id", () => {
+  it("allows callers to replace a relay at a stable id", async () => {
     const first = registerNativeHookRelay({
       provider: "codex",
       relayId: "codex-stable-session",
@@ -231,6 +231,21 @@ describe("native hook relay registry", () => {
         allowedEvents: ["post_tool_use"],
       },
     );
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId: second.relayId,
+        event: "post_tool_use",
+        timeoutMs: 2_000,
+        rawPayload: {
+          hook_event_name: "PostToolUse",
+          tool_name: "Bash",
+          tool_use_id: "replacement-call",
+          tool_input: { command: "pnpm test" },
+          tool_response: { output: "ok", exit_code: 0 },
+        },
+      }),
+    ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
 
     second.unregister();
     expect(testing.getNativeHookRelayRegistrationForTests(first.relayId)).toBeUndefined();
@@ -776,6 +791,7 @@ describe("native hook relay registry", () => {
       runId: "run-1",
       ttlMs: 1,
     });
+    expect(testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeDefined();
 
     vi.setSystemTime(new Date("2026-04-24T12:00:01Z"));
 
@@ -788,6 +804,9 @@ describe("native hook relay registry", () => {
       }),
     ).rejects.toThrow("expired");
     expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+    expect(testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();
+    relay.unregister();
+    expect(testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();
   });
 
   it("uses the Codex no-op output when no OpenClaw hook decides", async () => {

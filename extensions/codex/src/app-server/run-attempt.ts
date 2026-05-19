@@ -3331,11 +3331,15 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     closeCleanup?.();
-    // Codex hook subprocesses can outlive the app-server turn by a few
-    // seconds. Keep the relay available briefly so late nativeHook.invoke
-    // RPCs can still reach before_tool_call enforcement.
     if (nativeHookRelay) {
-      scheduleCodexNativeHookRelayUnregister(nativeHookRelay);
+      if (!timedOut && !runAbortController.signal.aborted) {
+        // Codex hook subprocesses can outlive a completed app-server turn by a
+        // few seconds. Keep the relay available briefly so late
+        // nativeHook.invoke RPCs can still reach before_tool_call enforcement.
+        scheduleCodexNativeHookRelayUnregister(nativeHookRelay);
+      } else {
+        nativeHookRelay.unregister();
+      }
     }
     await releaseSandboxExecEnvironment();
     runAbortController.signal.removeEventListener("abort", abortListener);
