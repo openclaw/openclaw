@@ -129,15 +129,22 @@ export function resolveDefaultTelegramAccountSelection(cfg: OpenClawConfig): {
     };
   }
   const accountIds = listTelegramAccountIds(cfg);
+  const configuredDefaultAccountId =
+    normalizeOptionalAccountId(cfg.channels?.telegram?.defaultAccount) ?? undefined;
   const resolved = resolveListedDefaultAccountId({
     accountIds,
-    configuredDefaultAccountId:
-      normalizeOptionalAccountId(cfg.channels?.telegram?.defaultAccount) ?? undefined,
+    configuredDefaultAccountId,
   });
+  // The warning's own remediation text instructs the operator to set
+  // channels.telegram.defaultAccount. When that field is already set, the
+  // operator has done the recommended thing; firing the warning anyway is just
+  // noise on every `openclaw status` invocation. See #83948.
+  const hasExplicitDefaultAccount = configuredDefaultAccountId !== undefined;
   return {
     accountId: resolved,
     accountIds,
     shouldWarnMissingDefault:
+      !hasExplicitDefaultAccount &&
       resolved === accountIds[0] &&
       !accountIds.includes(DEFAULT_ACCOUNT_ID) &&
       accountIds.length > 1,

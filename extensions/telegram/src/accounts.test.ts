@@ -227,6 +227,29 @@ describe("resolveDefaultTelegramAccountId", () => {
     expectNoMissingDefaultWarning();
   });
 
+  // #83948: in a multi-account setup where channels.telegram.defaultAccount is
+  // already set, the warning recommending exactly that field was still firing
+  // because the predicate only checked for a literal `accounts.default` alias.
+  it("does not warn when defaultAccount is explicitly set in a multi-account setup (#83948)", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "charles",
+          accounts: {
+            hermes: { botToken: "tok-hermes" },
+            charles: { botToken: "tok-charles" },
+            ops: { botToken: "tok-ops" },
+            alerts: { botToken: "tok-alerts" },
+            bridge: { botToken: "tok-bridge" },
+          },
+        },
+      },
+    };
+
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("charles");
+    expectNoMissingDefaultWarning();
+  });
+
   it("does not warn when only one non-default account is configured", () => {
     const cfg: OpenClawConfig = {
       channels: {
