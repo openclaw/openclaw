@@ -73,10 +73,6 @@ export function registerAcpCli(program: Command) {
           verbose: Boolean(opts.verbose || inheritedVerbose),
         });
       } catch (err) {
-        // Match the parent `acp` action a few lines up (line 52): both surfaces
-        // route errors through `formatErrorMessage`, which normalises plain
-        // Error objects and non-Error throws into a readable message instead of
-        // the default `[object Object]` from `String(err)`. See #83904.
         defaultRuntime.error(formatErrorMessage(err));
         defaultRuntime.exit(1);
       }

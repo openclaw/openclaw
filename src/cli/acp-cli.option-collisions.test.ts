@@ -166,21 +166,15 @@ describe("acp cli option collisions", () => {
     expectCliError(/Failed to (inspect|read) Gateway token file/);
   });
 
-  // #83904: the `acp client` subcommand used `String(err)` while `acp` itself
-  // already routed through `formatErrorMessage`. Non-Error throws (e.g. plain
-  // objects) surfaced as `[object Object]` instead of a readable diagnostic.
-  // After this fix both subcommands share the same formatter.
   it("formats client errors with formatErrorMessage instead of String(err) (#83904)", async () => {
     runAcpClientInteractive.mockImplementationOnce(async () => {
-      // Plain-object throw: `String({})` → "[object Object]". `formatErrorMessage`
-      // produces something more useful for log triage.
       throw { code: 42, why: "boom" } as unknown as Error;
     });
     const program = createAcpProgram();
     await program.parseAsync(["acp", "client"], { from: "user" });
 
     const errors = defaultRuntime.error.mock.calls.map(([message]) => String(message));
-    expect(errors.some((message) => message.includes("[object Object]"))).toBe(false);
+    expect(errors).toContain('{"code":42,"why":"boom"}');
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 });
