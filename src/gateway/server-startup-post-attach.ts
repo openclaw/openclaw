@@ -996,8 +996,9 @@ export async function startGatewayPostAttachRuntime(
       await new Promise<void>((resolve) => setImmediate(resolve));
       const hookRunner = await runtimeDeps.getGlobalHookRunner();
       if (hookRunner?.hasHooks("gateway_start")) {
-        void hookRunner
-          .runGatewayStart(
+        const { withPluginHttpRouteRegistry } = await import("../plugins/http-registry.js");
+        void withPluginHttpRouteRegistry(sidecarsResult.pluginRegistry, () =>
+          hookRunner.runGatewayStart(
             { port: params.port },
             {
               port: params.port,
@@ -1007,10 +1008,10 @@ export async function startGatewayPostAttachRuntime(
                 params.getCronService?.() ??
                 (params.deps.cron as PluginHookGatewayCronService | undefined),
             },
-          )
-          .catch((err) => {
-            params.log.warn(`gateway_start hook failed: ${String(err)}`);
-          });
+          ),
+        ).catch((err) => {
+          params.log.warn(`gateway_start hook failed: ${String(err)}`);
+        });
       }
     })
     .catch((err) => {
@@ -1041,7 +1042,7 @@ export async function startGatewayPostAttachRuntime(
   };
 }
 
-export const __testing = {
+export const testing = {
   hasRestartSentinelFileFast,
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,
@@ -1051,3 +1052,4 @@ export const __testing = {
   shouldSkipStartupModelPrewarm,
   stopPostReadySidecarsAfterCloseStarted,
 };
+export { testing as __testing };

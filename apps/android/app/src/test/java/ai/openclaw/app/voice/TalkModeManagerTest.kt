@@ -13,6 +13,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -227,10 +228,24 @@ class TalkModeManagerTest {
     assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
   }
 
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun chatFinalWaitWithoutSubscribeUsesShortTimeout() =
+    runTest {
+      val manager = createManager(scope = this, supportsChatSubscribe = false)
+
+      setPrivateField(manager, "pendingRunId", "run-missing-final")
+      setPrivateField(manager, "pendingFinal", CompletableDeferred<Boolean>())
+
+      assertFalse(manager.waitForChatFinal("run-missing-final"))
+      assertEquals(6_000, currentTime)
+    }
+
   private fun createManager(
     talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(),
     talkAudioPlayer: TalkAudioPlaying? = null,
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    supportsChatSubscribe: Boolean = false,
     isConnected: () -> Boolean = { true },
     onStoppedByRelay: () -> Unit = {},
   ): TalkModeManager {
@@ -249,7 +264,7 @@ class TalkModeManagerTest {
       context = app,
       scope = scope,
       session = session,
-      supportsChatSubscribe = false,
+      supportsChatSubscribe = supportsChatSubscribe,
       isConnected = isConnected,
       onStoppedByRelay = onStoppedByRelay,
       talkSpeakClient = talkSpeakClient,
@@ -258,12 +273,10 @@ class TalkModeManagerTest {
   }
 
   @Suppress("UNCHECKED_CAST")
-  private fun playbackGeneration(manager: TalkModeManager) =
-    readPrivateField(manager, "playbackGeneration") as AtomicLong
+  private fun playbackGeneration(manager: TalkModeManager) = readPrivateField(manager, "playbackGeneration") as AtomicLong
 
   @Suppress("UNCHECKED_CAST")
-  private fun realtimeToolRuns(manager: TalkModeManager) =
-    readPrivateField(manager, "realtimeToolRuns") as MutableMap<String, RealtimeToolRun>
+  private fun realtimeToolRuns(manager: TalkModeManager) = readPrivateField(manager, "realtimeToolRuns") as MutableMap<String, RealtimeToolRun>
 
   private fun setPrivateField(
     target: Any,

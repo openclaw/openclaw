@@ -151,7 +151,12 @@ class MicCaptureManagerTest {
       )
       runCurrent()
 
-      assertEquals("testing testing 1 2 3", manager.conversation.value.single().text)
+      assertEquals(
+        "testing testing 1 2 3",
+        manager.conversation.value
+          .single()
+          .text,
+      )
       assertEquals("transcription-1", privateField<String?>(manager, "transcriptionSessionId"))
       privateField<Job?>(manager, "transcriptionDrainJob")?.cancel()
     }

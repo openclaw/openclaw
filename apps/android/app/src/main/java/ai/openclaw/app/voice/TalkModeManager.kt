@@ -31,6 +31,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -39,6 +40,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -167,11 +169,15 @@ class TalkModeManager internal constructor(
   private val realtimePlaybackLock = Any()
   private var realtimeAudioTrack: AudioTrack? = null
   private var realtimePlaybackIdleJob: Job? = null
-  @Volatile private var realtimePlaybackEndsAtMs = 0L
 
-  @Volatile private var realtimeOutputSuppressed = false
+  @Volatile
+  private var realtimePlaybackEndsAtMs = 0L
 
-  @Volatile private var playbackEnabled = true
+  @Volatile
+  private var realtimeOutputSuppressed = false
+
+  @Volatile
+  private var playbackEnabled = true
   private val playbackGeneration = AtomicLong(0L)
 
   private var ttsJob: Job? = null
@@ -753,11 +759,9 @@ class TalkModeManager internal constructor(
       }
   }
 
-  private fun shouldAppendRealtimeCapturedFrame(length: Int): Boolean =
-    !isRealtimePlaybackActive() && length > 0
+  private fun shouldAppendRealtimeCapturedFrame(length: Int): Boolean = !isRealtimePlaybackActive() && length > 0
 
-  private fun isRealtimePlaybackActive(): Boolean =
-    _isSpeaking.value || SystemClock.elapsedRealtime() < realtimePlaybackEndsAtMs
+  private fun isRealtimePlaybackActive(): Boolean = _isSpeaking.value || SystemClock.elapsedRealtime() < realtimePlaybackEndsAtMs
 
   private fun handleRealtimeTalkEvent(payloadJson: String?) {
     if (payloadJson.isNullOrBlank()) return
@@ -1403,7 +1407,7 @@ class TalkModeManager internal constructor(
     }
   }
 
-  private suspend fun waitForChatFinal(runId: String): Boolean {
+  internal suspend fun waitForChatFinal(runId: String): Boolean {
     consumeRunCompletion(runId)?.let { return it }
     val deferred =
       if (pendingRunId == runId) {
@@ -1414,13 +1418,12 @@ class TalkModeManager internal constructor(
 
     consumeRunCompletion(runId)?.let { return it }
 
+    val timeoutMs = if (supportsChatSubscribe) chatFinalWaitWithSubscribeMs else chatFinalWaitWithoutSubscribeMs
     val result =
-      withContext(Dispatchers.IO) {
-        try {
-          kotlinx.coroutines.withTimeout(120_000) { deferred.await() }
-        } catch (_: Throwable) {
-          false
-        }
+      try {
+        withTimeout(timeoutMs) { deferred.await() }
+      } catch (_: TimeoutCancellationException) {
+        false
       }
 
     if (!result && pendingRunId == runId) {
