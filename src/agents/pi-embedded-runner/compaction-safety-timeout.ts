@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
 import { withTimeout } from "../../node-host/with-timeout.js";
 
 export const EMBEDDED_COMPACTION_TIMEOUT_MS = 900_000;
@@ -89,5 +90,40 @@ export async function compactWithSafetyTimeout<T>(
     },
     timeoutMs,
     "Compaction",
+  );
+}
+
+/** Parameters for a single {@link ContextEngine.compact} invocation. */
+export type ContextEngineCompactParams = Parameters<ContextEngine["compact"]>[0];
+
+/**
+ * Invoke a plugin-owned {@link ContextEngine.compact} bounded by the same
+ * finite safety timeout that protects native runtime compaction.
+ *
+ * Plugin context engines that advertise `ownsCompaction` previously had their
+ * `compact()` awaited with no timeout, no watchdog, and no abort signal — a
+ * slow or hung plugin compaction would hang the agent turn indefinitely. This
+ * wrapper closes that gap:
+ *  - the call is bounded by `timeoutMs` (host-resolved, default
+ *    {@link EMBEDDED_COMPACTION_TIMEOUT_MS}); on timeout it rejects with a
+ *    "Compaction timed out" error so the caller's existing failure handling
+ *    runs instead of hanging;
+ *  - `abortSignal` is both raced against the call (so a non-cooperating engine
+ *    is still bounded) and threaded into the `compact()` params (so cooperating
+ *    engines can cancel their own in-flight work).
+ *
+ * Callers keep their existing try/catch — a timeout or abort surfaces as a
+ * thrown error, never a silent hang.
+ */
+export function compactContextEngineWithSafetyTimeout(
+  contextEngine: Pick<ContextEngine, "compact">,
+  params: ContextEngineCompactParams,
+  timeoutMs: number = EMBEDDED_COMPACTION_TIMEOUT_MS,
+  abortSignal?: AbortSignal,
+): Promise<CompactResult> {
+  return compactWithSafetyTimeout(
+    () => contextEngine.compact(abortSignal ? { ...params, abortSignal } : params),
+    timeoutMs,
+    abortSignal ? { abortSignal } : undefined,
   );
 }

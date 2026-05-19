@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CompactResult, ContextEngine } from "../context-engine/types.js";
 import {
+  compactContextEngineWithSafetyTimeout,
   compactWithSafetyTimeout,
   EMBEDDED_COMPACTION_TIMEOUT_MS,
   resolveCompactionTimeoutMs,
@@ -157,5 +159,98 @@ describe("resolveCompactionTimeoutMs", () => {
         agents: { defaults: { compaction: { timeoutSeconds: Infinity } } },
       }),
     ).toBe(EMBEDDED_COMPACTION_TIMEOUT_MS);
+  });
+});
+
+describe("compactContextEngineWithSafetyTimeout", () => {
+  type CompactFn = ContextEngine["compact"];
+  const baseParams: Parameters<CompactFn>[0] = {
+    sessionId: "session-1",
+    sessionFile: "/tmp/session-1.jsonl",
+    tokenBudget: 100_000,
+    force: true,
+  };
+
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("bounds a hung plugin compact() and rejects with a timeout error", async () => {
+    vi.useFakeTimers();
+    const compact = vi.fn<CompactFn>(() => new Promise<CompactResult>(() => {}));
+
+    const pending = compactContextEngineWithSafetyTimeout({ compact }, baseParams, 30);
+    const assertion = expect(pending).rejects.toThrow("Compaction timed out");
+
+    await vi.advanceTimersByTimeAsync(30);
+    await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("returns the plugin compact() result when it settles in time", async () => {
+    const result: CompactResult = {
+      ok: true,
+      compacted: true,
+      result: { tokensBefore: 1000, tokensAfter: 200 },
+    };
+    const compact = vi.fn<CompactFn>(async () => result);
+
+    await expect(compactContextEngineWithSafetyTimeout({ compact }, baseParams, 30)).resolves.toBe(
+      result,
+    );
+  });
+
+  it("threads the abort signal into the plugin compact() params", async () => {
+    const controller = new AbortController();
+    const compact = vi.fn<CompactFn>(async () => ({ ok: true, compacted: false }));
+
+    await compactContextEngineWithSafetyTimeout({ compact }, baseParams, 30, controller.signal);
+
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact.mock.calls[0]?.[0]?.abortSignal).toBe(controller.signal);
+  });
+
+  it("does not add an abortSignal field when no signal is provided", async () => {
+    const compact = vi.fn<CompactFn>(async () => ({ ok: true, compacted: false }));
+
+    await compactContextEngineWithSafetyTimeout({ compact }, baseParams, 30);
+
+    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("abortSignal");
+  });
+
+  it("rejects promptly when the run abort signal fires before the timeout", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const abortError = new Error("run aborted");
+    const compact = vi.fn<CompactFn>(() => new Promise<CompactResult>(() => {}));
+
+    const pending = compactContextEngineWithSafetyTimeout(
+      { compact },
+      baseParams,
+      EMBEDDED_COMPACTION_TIMEOUT_MS,
+      controller.signal,
+    );
+    const assertion = expect(pending).rejects.toBe(abortError);
+
+    controller.abort(abortError);
+    await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("preserves a thrown plugin compaction error", async () => {
+    const error = new Error("engine compaction failed");
+    const compact = vi.fn<CompactFn>(async () => {
+      throw error;
+    });
+
+    await expect(compactContextEngineWithSafetyTimeout({ compact }, baseParams, 30)).rejects.toBe(
+      error,
+    );
   });
 });
