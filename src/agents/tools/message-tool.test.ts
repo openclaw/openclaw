@@ -452,6 +452,7 @@ describe("message tool secret scoping", () => {
         toolOptions: {
           sourceReplyDeliveryMode: "message_tool_only",
           currentChannelProvider: "discord",
+          currentChannelId: "user:123",
           agentSessionKey: "agent:main:discord:direct:123",
           onSourceReplyDelivered,
         },
@@ -470,6 +471,7 @@ describe("message tool secret scoping", () => {
         toolOptions: {
           sourceReplyDeliveryMode: "message_tool_only",
           currentChannelProvider: "discord",
+          currentChannelId: "user:123",
           agentSessionKey: "agent:main:discord:direct:123",
           onSourceReplyDelivered,
         },
@@ -487,6 +489,7 @@ describe("message tool secret scoping", () => {
         toolOptions: {
           sourceReplyDeliveryMode: "automatic",
           currentChannelProvider: "discord",
+          currentChannelId: "user:123",
           agentSessionKey: "agent:main:discord:direct:123",
           onSourceReplyDelivered,
         },
@@ -512,6 +515,7 @@ describe("message tool secret scoping", () => {
         runMessageAction: mocks.runMessageAction as never,
         sourceReplyDeliveryMode: "message_tool_only",
         currentChannelProvider: "discord",
+        currentChannelId: "user:123",
         agentSessionKey: "agent:main:discord:direct:123",
         onSourceReplyDelivered,
       });
@@ -533,11 +537,127 @@ describe("message tool secret scoping", () => {
           toolOptions: {
             sourceReplyDeliveryMode: "message_tool_only",
             currentChannelProvider: "discord",
+            currentChannelId: "user:123",
             agentSessionKey: "agent:main:discord:direct:123",
             onSourceReplyDelivered,
           },
         }),
       ).resolves.toBeDefined();
+
+      expect(onSourceReplyDelivered).toHaveBeenCalledTimes(1);
+    });
+
+    // Reviewer P3: don't seal the source channel's typing keepalive when the
+    // agent fires a `message.send` to a different conversation in the same
+    // turn. Only the send that actually targets the source conversation should
+    // trigger the callback.
+    it("does not fire onSourceReplyDelivered when the send targets a different channel", async () => {
+      mocks.runMessageAction.mockClear();
+      mocks.runMessageAction.mockResolvedValue({
+        kind: "send",
+        action: "send",
+        channel: "telegram",
+        to: "user:999",
+        handledBy: "plugin",
+        payload: {},
+        dryRun: false,
+      } satisfies MessageActionRunResult);
+      const onSourceReplyDelivered = vi.fn();
+
+      await executeSend({
+        action: { message: "hello", channel: "telegram", target: "user:999" },
+        toolOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          currentChannelProvider: "discord",
+          currentChannelId: "user:123",
+          agentSessionKey: "agent:main:discord:direct:123",
+          onSourceReplyDelivered,
+        },
+      });
+
+      expect(onSourceReplyDelivered).not.toHaveBeenCalled();
+    });
+
+    it("does not fire onSourceReplyDelivered when the send targets a different recipient on the same channel", async () => {
+      mocks.runMessageAction.mockClear();
+      mocks.runMessageAction.mockResolvedValue({
+        kind: "send",
+        action: "send",
+        channel: "discord",
+        to: "user:999",
+        handledBy: "plugin",
+        payload: {},
+        dryRun: false,
+      } satisfies MessageActionRunResult);
+      const onSourceReplyDelivered = vi.fn();
+
+      await executeSend({
+        action: { message: "hello", target: "user:999" },
+        toolOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          currentChannelProvider: "discord",
+          currentChannelId: "user:123",
+          agentSessionKey: "agent:main:discord:direct:123",
+          onSourceReplyDelivered,
+        },
+      });
+
+      expect(onSourceReplyDelivered).not.toHaveBeenCalled();
+    });
+
+    it("matches the source conversation regardless of the channel-target prefix", async () => {
+      // Resolved target may or may not carry a `user:` prefix depending on the
+      // channel/runner; the comparison must normalize both sides.
+      mocks.runMessageAction.mockClear();
+      mocks.runMessageAction.mockResolvedValue({
+        kind: "send",
+        action: "send",
+        channel: "discord",
+        to: "123",
+        handledBy: "plugin",
+        payload: {},
+        dryRun: false,
+      } satisfies MessageActionRunResult);
+      const onSourceReplyDelivered = vi.fn();
+
+      await executeSend({
+        action: { message: "hello" },
+        toolOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          currentChannelProvider: "discord",
+          currentChannelId: "user:123",
+          agentSessionKey: "agent:main:discord:direct:123",
+          onSourceReplyDelivered,
+        },
+      });
+
+      expect(onSourceReplyDelivered).toHaveBeenCalledTimes(1);
+    });
+
+    it("fires onSourceReplyDelivered for webchat internal-source sends regardless of resolved target string", async () => {
+      mocks.runMessageAction.mockClear();
+      mocks.runMessageAction.mockResolvedValue({
+        kind: "send",
+        action: "send",
+        channel: "webchat",
+        to: "current-run",
+        handledBy: "internal-source",
+        payload: {},
+        dryRun: false,
+      } satisfies MessageActionRunResult);
+      const onSourceReplyDelivered = vi.fn();
+
+      await executeSend({
+        action: { message: "hello" },
+        toolOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          currentChannelProvider: "webchat",
+          // intentionally omit currentChannelId — the internal-source sink
+          // always means "the current run's source conversation".
+          agentSessionKey: "agent:main:webchat:direct:user-1",
+          onSourceReplyDelivered,
+        },
+      });
 
       expect(onSourceReplyDelivered).toHaveBeenCalledTimes(1);
     });

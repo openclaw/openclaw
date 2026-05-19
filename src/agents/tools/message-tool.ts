@@ -54,6 +54,38 @@ function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
   return EXPLICIT_TARGET_ACTIONS.has(action);
 }
 
+// Issue #84276: only treat a `message_tool_only` send as a source-conversation
+// reply when the resolved channel + target actually point at the inbound
+// conversation. Otherwise an agent that sends a side message to a different
+// conversation (e.g. `target=channel:other`) inside the same turn would
+// prematurely seal the source channel's typing keepalive.
+function stripChannelTargetPrefix(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/^(?:user|channel|group|dm):/u, "")
+    .trim();
+}
+
+function sendTargetIsSourceConversation(
+  result: Extract<MessageActionRunResult, { kind: "send" }>,
+  options: Pick<MessageToolOptions, "currentChannelProvider" | "currentChannelId">,
+): boolean {
+  // The webchat internal source-reply sink always targets the current run.
+  if (result.handledBy === "internal-source") {
+    return true;
+  }
+  const sourceChannel = options.currentChannelProvider?.trim().toLowerCase();
+  if (!sourceChannel || String(result.channel).toLowerCase() !== sourceChannel) {
+    return false;
+  }
+  const sourceTarget = options.currentChannelId?.trim();
+  if (!sourceTarget) {
+    return false;
+  }
+  return stripChannelTargetPrefix(result.to) === stripChannelTargetPrefix(sourceTarget);
+}
+
 function stripFormattedReasoningMessage(text: string): string {
   const stripped = stripReasoningTagsFromText(text);
   const lines = stripped.split(/\r?\n/u);
@@ -1073,11 +1105,18 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       // for the rest of the channel-side TTL after the reply has already
       // landed. Notify the caller (which wires this into the typing
       // controller) so the keepalive can be sealed in lockstep with delivery.
+      // Only fire when the send actually went to the source conversation —
+      // a `message.send` to a different channel/target inside the same turn
+      // must not seal the source channel's typing keepalive.
       if (
         action === "send" &&
         options?.sourceReplyDeliveryMode === "message_tool_only" &&
         result.kind === "send" &&
-        result.dryRun !== true
+        result.dryRun !== true &&
+        sendTargetIsSourceConversation(result, {
+          currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
+          currentChannelId: effectiveCurrentChannel.currentChannelId,
+        })
       ) {
         try {
           options.onSourceReplyDelivered?.();
