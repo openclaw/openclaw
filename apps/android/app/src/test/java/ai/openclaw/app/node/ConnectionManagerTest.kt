@@ -369,6 +369,20 @@ class ConnectionManagerTest {
   }
 
   @Test
+  fun buildOperatorConnectOptions_requestsQrBootstrapHandoffScopes() {
+    val options = newManager().buildOperatorConnectOptions()
+
+    assertEquals(
+      listOf(
+        "operator.approvals",
+        "operator.read",
+        "operator.write",
+      ),
+      options.scopes,
+    )
+  }
+
+  @Test
   fun buildNodeConnectOptions_advertisesRequestableSmsSearchWithoutSmsCapability() {
     val options =
       newManager(
