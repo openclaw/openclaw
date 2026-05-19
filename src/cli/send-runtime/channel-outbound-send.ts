@@ -3,6 +3,7 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundDeliveryFormattingOptions } from "../../infra/outbound/formatting.js";
+import type { OutboundIdentity } from "../../infra/outbound/identity-types.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
@@ -25,6 +26,15 @@ type RuntimeSendOpts = {
   gifPlayback?: boolean;
   gatewayClientScopes?: readonly string[];
   textMode?: "markdown" | "html";
+  /**
+   * Per-agent persona overlay (name / emoji / avatar) propagated into the
+   * channel adapter context. Issue #84297: this used to be silently dropped
+   * here, so cron and heartbeat outbound sends rendered under the generic app
+   * identity in Slack instead of the configured agent persona. The adapter
+   * side already accepts `identity` on `ChannelOutboundContext`; the legacy
+   * runtime-send factory just wasn't forwarding it.
+   */
+  identity?: OutboundIdentity;
 };
 
 function resolveRuntimeThreadId(opts: RuntimeSendOpts): string | number | undefined {
@@ -62,6 +72,10 @@ export function createChannelOutboundRuntimeSend(params: {
           opts.formatting ?? (opts.textMode === "html" ? { parseMode: "HTML" } : undefined),
         gifPlayback: opts.gifPlayback,
         gatewayClientScopes: opts.gatewayClientScopes,
+        // Issue #84297: forward per-agent identity overlay so channel adapters
+        // (Slack, Discord webhook, Feishu cards, …) can apply the configured
+        // agent persona on cron/heartbeat-driven sends.
+        identity: opts.identity,
       });
       const hasMedia = Boolean(opts.mediaUrl);
       if (opts.blocks && outbound?.sendPayload) {

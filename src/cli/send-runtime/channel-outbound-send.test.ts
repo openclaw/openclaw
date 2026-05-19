@@ -228,6 +228,96 @@ describe("createChannelOutboundRuntimeSend", () => {
     expect(params.replyToId).toBe("400.000");
   });
 
+  // Issue #84297: per-agent identity overlay was being silently dropped here,
+  // so cron/heartbeat outbound sends rendered under the generic app identity
+  // instead of the configured agent persona. Lock in that runtime-send
+  // forwards `identity` to every adapter entry point.
+  describe("identity propagation (issue #84297)", () => {
+    const identity = { name: "Pulse", emoji: "📟", avatarUrl: undefined, theme: undefined };
+
+    it("forwards identity into sendText for plain sends", async () => {
+      const sendText = vi.fn(async () => ({ channel: "slack", messageId: "slack-id" }));
+      mocks.loadChannelOutboundAdapter.mockResolvedValue({ sendText });
+
+      const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
+      const runtimeSend = createChannelOutboundRuntimeSend({
+        channelId: "slack" as never,
+        unavailableMessage: "unavailable",
+      });
+
+      await runtimeSend.sendMessage("C123", "status", {
+        cfg: {},
+        accountId: "default",
+        identity,
+      });
+
+      const params = expectSingleCallParams(sendText);
+      expect(params.identity).toEqual(identity);
+    });
+
+    it("forwards identity into sendMedia for media sends", async () => {
+      const sendMedia = vi.fn(async () => ({ channel: "slack", messageId: "slack-media" }));
+      mocks.loadChannelOutboundAdapter.mockResolvedValue({
+        sendText: vi.fn(),
+        sendMedia,
+      });
+
+      const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
+      const runtimeSend = createChannelOutboundRuntimeSend({
+        channelId: "slack" as never,
+        unavailableMessage: "unavailable",
+      });
+
+      await runtimeSend.sendMessage("C123", "caption", {
+        cfg: {},
+        mediaUrl: "file:///tmp/photo.png",
+        identity,
+      });
+
+      const params = expectSingleCallParams(sendMedia);
+      expect(params.identity).toEqual(identity);
+    });
+
+    it("forwards identity into sendPayload for block/payload sends", async () => {
+      const sendPayload = vi.fn(async () => ({ channel: "slack", messageId: "slack-blocks" }));
+      mocks.loadChannelOutboundAdapter.mockResolvedValue({
+        sendPayload,
+        sendText: vi.fn(),
+      });
+
+      const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
+      const runtimeSend = createChannelOutboundRuntimeSend({
+        channelId: "slack" as never,
+        unavailableMessage: "unavailable",
+      });
+
+      await runtimeSend.sendMessage("C123", "fallback", {
+        cfg: {},
+        blocks: [{ type: "actions", elements: [] }],
+        identity,
+      });
+
+      const params = expectSingleCallParams(sendPayload);
+      expect(params.identity).toEqual(identity);
+    });
+
+    it("leaves identity undefined when the caller does not supply it", async () => {
+      const sendText = vi.fn(async () => ({ channel: "slack", messageId: "slack-noid" }));
+      mocks.loadChannelOutboundAdapter.mockResolvedValue({ sendText });
+
+      const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
+      const runtimeSend = createChannelOutboundRuntimeSend({
+        channelId: "slack" as never,
+        unavailableMessage: "unavailable",
+      });
+
+      await runtimeSend.sendMessage("C123", "no identity", { cfg: {} });
+
+      const params = expectSingleCallParams(sendText);
+      expect(params.identity).toBeUndefined();
+    });
+  });
+
   it("falls back to sendText when media is present but sendMedia is unavailable", async () => {
     const sendText = vi.fn(async () => ({ channel: "whatsapp", messageId: "wa-3" }));
     mocks.loadChannelOutboundAdapter.mockResolvedValue({

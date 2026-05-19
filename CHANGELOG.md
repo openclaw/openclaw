@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Slack/agents: forward the per-agent identity overlay (`agents.list[].identity`) on heartbeat target-channel pushes and through the legacy CLI `runtimeSend` factory, so cron-driven announcements and heartbeat sends render under the configured agent persona instead of the generic Slack app identity. Pairs with the reply-path fix from #38235 to cover the announce/push paths. Fixes #84297.
 - Plugins/perf: thread explicit plugin discovery results through `loadBundledCapabilityRuntimeRegistry`, `resolveBundledPluginSources`, and `listChannelCatalogEntries` so callers that already hold a discovery result skip redundant filesystem walks. Thanks @SebTardif.
 - harden update restart script creation [AI]. (#84088) Thanks @pgondhi987.
 - Docker: keep the bundled Codex plugin in official release image keep lists so the default OpenAI agent harness remains available after Docker pruning. Fixes #83613. (#83626) Thanks @YuanHanzhong.
