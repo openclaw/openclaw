@@ -6,7 +6,7 @@ on:
     branches:
       - main
     tags:
-      - "v[0-9]*.[0-9]*.[0-9]*+poly.[0-9]*"
+      - "v*poly.*"
 permissions:
   contents: read
 
