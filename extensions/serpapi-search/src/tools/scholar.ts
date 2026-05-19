@@ -80,18 +80,24 @@ export function createSerpApiScholarTool(api: OpenClawPluginApi, ctx?: SerpApiTo
     },
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
+      const query = readStringParam(args, "query");
+      const cites = readStringParam(args, "cites");
+      const cluster = readStringParam(args, "cluster");
+      if (!query && !cites && !cluster) {
+        throw new Error("serpapi_scholar: at least one of query, cites, or cluster is required");
+      }
       const count = readNumberParam(args, "count", { integer: true }) ?? 5;
       const raw = await callSerpApi({
         cfg,
         engine: "google_scholar",
         allowedParams: ALLOWED_PARAMS,
         params: {
-          q: readStringParam(args, "query"),
+          q: query,
           as_ylo: readNumberParam(args, "as_ylo", { integer: true }) ?? undefined,
           as_yhi: readNumberParam(args, "as_yhi", { integer: true }) ?? undefined,
           scisbd: readNumberParam(args, "scisbd", { integer: true }) ?? undefined,
-          cites: readStringParam(args, "cites") ?? undefined,
-          cluster: readStringParam(args, "cluster") ?? undefined,
+          cites: cites ?? undefined,
+          cluster: cluster ?? undefined,
           as_sdt: readStringParam(args, "as_sdt") ?? undefined,
           lr: readStringParam(args, "lr") ?? undefined,
           start: readNumberParam(args, "start", { integer: true }) ?? undefined,
