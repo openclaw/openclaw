@@ -5,6 +5,7 @@ import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
+import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
@@ -67,6 +69,7 @@ internal enum class V2SettingsRoute {
   Profile,
   Voice,
   Agents,
+  Approvals,
   Notifications,
   PhoneCapabilities,
   Gateway,
@@ -86,6 +89,7 @@ internal fun V2SettingsDetailScreen(
     V2SettingsRoute.Profile -> V2ProfileSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Voice -> V2VoiceSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Agents -> V2AgentsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    V2SettingsRoute.Approvals -> V2ApprovalsSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Notifications -> V2NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.PhoneCapabilities -> V2PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Gateway -> V2GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -128,6 +132,38 @@ private fun V2AgentsSettingsScreen(
           Text(text = "No agents loaded yet.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
       else -> V2AgentsPanel(agents = agents, defaultAgentId = defaultAgentId)
+    }
+  }
+}
+
+@Composable
+private fun V2ApprovalsSettingsScreen(
+  viewModel: MainViewModel,
+  onBack: () -> Unit,
+) {
+  val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
+  val pendingRunCount by viewModel.pendingRunCount.collectAsState()
+  val waitingCount = pendingToolCalls.count { it.isError != true }
+  val issueCount = pendingToolCalls.count { it.isError == true }
+
+  V2SettingsDetailFrame(title = "Approvals", subtitle = "Review actions that need your attention.", icon = Icons.Default.Lock, onBack = onBack) {
+    V2SettingsMetricPanel(
+      rows =
+        listOf(
+          V2SettingsMetric("Pending", waitingCount.toString()),
+          V2SettingsMetric("Issues", issueCount.toString()),
+          V2SettingsMetric("Active Runs", pendingRunCount.toString()),
+        ),
+    )
+    if (pendingToolCalls.isEmpty()) {
+      ClawPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+          Text(text = "Nothing needs approval.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Text(text = "OpenClaw will show action requests here when a session pauses for review.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+      }
+    } else {
+      V2ApprovalsPanel(toolCalls = pendingToolCalls)
     }
   }
 }
@@ -384,6 +420,41 @@ private data class V2SettingsMetric(
 )
 
 @Composable
+private fun V2ApprovalsPanel(toolCalls: List<ChatPendingToolCall>) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+    Column {
+      toolCalls.forEachIndexed { index, toolCall ->
+        V2ApprovalListRow(toolCall = toolCall)
+        if (index != toolCalls.lastIndex) {
+          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun V2ApprovalListRow(toolCall: ChatPendingToolCall) {
+  val hasIssue = toolCall.isError == true
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
+  ) {
+    Surface(modifier = Modifier.size(30.dp), shape = CircleShape, color = ClawTheme.colors.surfacePressed, border = BorderStroke(1.dp, ClawTheme.colors.border)) {
+      Box(contentAlignment = Alignment.Center) {
+        Icon(imageVector = Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
+      }
+    }
+    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+      Text(text = approvalActionName(toolCall.name), style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Text(text = approvalSubtitle(toolCall, hasIssue), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+    ClawStatusPill(text = if (hasIssue) "Issue" else "Review", status = if (hasIssue) ClawStatus.Warning else ClawStatus.Success)
+  }
+}
+
+@Composable
 private fun V2AgentsPanel(
   agents: List<GatewayAgentSummary>,
   defaultAgentId: String?,
@@ -445,6 +516,30 @@ private fun agentBadge(agent: GatewayAgentSummary): String {
     .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
     .joinToString("")
     .ifBlank { "A" }
+}
+
+private fun approvalActionName(name: String): String {
+  val cleaned =
+    name
+      .replace('.', ' ')
+      .replace('_', ' ')
+      .replace('-', ' ')
+      .trim()
+  return cleaned
+    .split(' ')
+    .filter { it.isNotBlank() }
+    .joinToString(" ") { word -> word.replaceFirstChar { it.uppercaseChar() } }
+    .ifBlank { "Action Request" }
+}
+
+private fun approvalSubtitle(
+  toolCall: ChatPendingToolCall,
+  hasIssue: Boolean,
+): String {
+  if (hasIssue) return "Needs attention"
+  val ageMs = (System.currentTimeMillis() - toolCall.startedAtMs).coerceAtLeast(0L)
+  val minutes = ageMs / 60_000L
+  return if (minutes < 1) "Waiting for review" else "Waiting ${minutes}m"
 }
 
 @Composable
