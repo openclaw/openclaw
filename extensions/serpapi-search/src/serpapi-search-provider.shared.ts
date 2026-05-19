@@ -12,7 +12,7 @@ export function createSerpApiWebSearchProviderBase() {
     placeholder: "serpapi-...",
     signupUrl: "https://serpapi.com/users/sign_up",
     docsUrl: "https://docs.openclaw.ai/tools/web",
-    autoDetectOrder: 60,
+    autoDetectOrder: 75,
     credentialPath: SERPAPI_CREDENTIAL_PATH,
     ...createWebSearchProviderContractFields({
       credentialPath: SERPAPI_CREDENTIAL_PATH,
