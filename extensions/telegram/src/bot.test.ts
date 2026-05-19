@@ -3174,7 +3174,7 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("enqueues system event for reaction", async () => {
+  it("queues system event for reaction without waking by default", async () => {
     onSpy.mockClear();
     enqueueSystemEventSpy.mockClear();
     requestHeartbeatSpy.mockClear();
@@ -3214,11 +3214,49 @@ describe("createTelegramBot", () => {
         trusted: false,
       }),
     );
+    expect(requestHeartbeatSpy).not.toHaveBeenCalled();
+  });
+
+  it("wakes routed session for reaction when notificationWake opts in", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    requestHeartbeatSpy.mockClear();
+    enqueueSystemEventSpy.mockReturnValue(true);
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          reactionNotifications: "all",
+          notificationWake: { reactions: "wake" },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 501 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada", username: "ada_bot" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
     expect(requestHeartbeatSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         source: "notifications-event",
         intent: "immediate",
-        reason: "telegram-reaction",
+        reason: "notification-wake:telegram-reaction",
       }),
     );
   });
@@ -3260,7 +3298,7 @@ describe("createTelegramBot", () => {
         ),
       }),
     );
-    expect(requestHeartbeatSpy).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatSpy).not.toHaveBeenCalled();
   });
 
   it("does not wake when reaction event enqueue is deduplicated", async () => {

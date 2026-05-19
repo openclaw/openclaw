@@ -29,7 +29,6 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -40,6 +39,7 @@ import {
   resolveSessionStoreEntry,
   updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { enqueueNotificationSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -1503,29 +1503,31 @@ export const registerTelegramHandlers = ({
       });
       const sessionKey = route.sessionKey;
 
-      let enqueuedCount = 0;
       for (const addedReaction of addedReactions) {
         const text = `Telegram reaction added: ${addedReaction.label} by ${senderLabel} on msg ${messageId} (reaction_key=${addedReaction.key})`;
-        const enqueued = telegramDeps.enqueueSystemEvent(text, {
+        const result = enqueueNotificationSystemEvent({
+          cfg: telegramDeps.getRuntimeConfig(),
+          channel: "telegram",
+          accountId,
+          agentId: route.agentId,
           sessionKey,
+          family: "reactions",
+          text,
           contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${addedReaction.key}`,
           forceSenderIsOwnerFalse: true,
           trusted: false,
+          reason: "telegram-reaction",
+          enqueueSystemEvent: telegramDeps.enqueueSystemEvent,
         });
-        if (!enqueued) {
+        if (result.status === "skipped") {
+          logVerbose(`telegram: reaction event skipped by notificationWake policy: ${text}`);
+          continue;
+        }
+        if (result.status === "deduped") {
           logVerbose(`telegram: skipped duplicate reaction event: ${text}`);
           continue;
         }
-        enqueuedCount += 1;
         logVerbose(`telegram: reaction event enqueued: ${text}`);
-      }
-      if (enqueuedCount > 0) {
-        requestHeartbeat({
-          source: "notifications-event",
-          intent: "immediate",
-          reason: "telegram-reaction",
-          sessionKey,
-        });
       }
     } catch (err) {
       runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));

@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ChannelsConfig } from "./types.channels.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import { ContextVisibilityModeSchema, GroupPolicySchema } from "./zod-schema.core.js";
+import { NotificationWakePolicyConfigSchema } from "./zod-schema.notifications.js";
 
 const ChannelModelByChannelSchema = z
   .record(z.string(), z.record(z.string(), z.string()))
@@ -55,6 +56,7 @@ export const ChannelsSchema: z.ZodType<ChannelsConfig | undefined> = z
         groupPolicy: GroupPolicySchema.optional(),
         contextVisibility: ContextVisibilityModeSchema.optional(),
         heartbeat: ChannelHeartbeatVisibilitySchema,
+        notificationWake: NotificationWakePolicyConfigSchema,
         botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
       })
       .strict()

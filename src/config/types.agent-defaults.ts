@@ -12,6 +12,7 @@ import type {
   HumanDelayConfig,
   TypingMode,
 } from "./types.base.js";
+import type { NotificationWakePolicyConfig } from "./types.notifications.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
@@ -428,6 +429,8 @@ export type AgentDefaultsConfig = {
      */
     includeReasoning?: boolean;
   };
+  /** Default notification system-event wake policy for routed sessions. */
+  notificationWake?: NotificationWakePolicyConfig;
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */

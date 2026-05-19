@@ -777,12 +777,13 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Config:
 
     - `channels.telegram.reactionNotifications`: `off | own | all` (default: `own`)
+    - `channels.telegram.notificationWake.reactions`: `off | queue | wake | inherit` (default: `queue`)
     - `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` (default: `minimal`)
 
     Notes:
 
     - `own` means user reactions to bot-sent messages only (best-effort via sent-message cache).
-    - Accepted reaction events request an immediate heartbeat wake so reaction-only inputs are processed without a follow-up text message.
+    - Accepted reaction events enqueue by default. Set `notificationWake.reactions: "wake"` to request an immediate routed heartbeat wake for reaction-only inputs.
     - Standard emoji use `reaction_key=emoji:<emoji>`; Telegram custom emoji use `reaction_key=custom_emoji:<id>`.
     - Reaction events still respect Telegram access controls (`dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`); unauthorized senders are dropped.
     - Telegram does not provide thread IDs in reaction updates.

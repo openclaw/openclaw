@@ -59,6 +59,10 @@ vi.mock("openclaw/plugin-sdk/heartbeat-runtime", () => ({
   requestHeartbeat: requestHeartbeatSpy,
 }));
 
+vi.mock("../../../src/infra/heartbeat-wake.js", () => ({
+  requestHeartbeat: requestHeartbeatSpy,
+}));
+
 const {
   getRuntimeConfig,
   loadSessionStoreMock,

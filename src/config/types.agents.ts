@@ -126,6 +126,8 @@ export type AgentConfig = {
   contextTokens?: number;
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
+  /** Optional per-agent notification system-event wake policy. */
+  notificationWake?: AgentDefaultsConfig["notificationWake"];
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
   subagents?: {

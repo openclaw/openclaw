@@ -9,6 +9,7 @@ import type { GoogleChatConfig } from "./types.googlechat.js";
 import type { IMessageConfig } from "./types.imessage.js";
 import type { IrcConfig } from "./types.irc.js";
 import type { MSTeamsConfig } from "./types.msteams.js";
+import type { NotificationWakePolicyConfig } from "./types.notifications.js";
 import type { SignalConfig } from "./types.signal.js";
 import type { SlackConfig } from "./types.slack.js";
 import type { TelegramConfig } from "./types.telegram.js";
@@ -25,6 +26,8 @@ export type ChannelDefaultsConfig = {
   contextVisibility?: ContextVisibilityMode;
   /** Default heartbeat visibility for all channels. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Default notification system-event wake policy for all channels. */
+  notificationWake?: NotificationWakePolicyConfig;
   /** Default pair loop guard settings for channels that support bot loop protection. */
   botLoopProtection?: ChannelBotLoopProtectionConfig;
 };
@@ -70,6 +73,7 @@ export type ExtensionChannelConfig = {
     spawnSubagentSessions?: boolean;
   };
   botLoopProtection?: ChannelBotLoopProtectionConfig;
+  notificationWake?: NotificationWakePolicyConfig;
   spawnSubagentSessions?: boolean;
   dangerouslyAllowPrivateNetwork?: boolean;
   accounts?: Record<string, unknown>;
