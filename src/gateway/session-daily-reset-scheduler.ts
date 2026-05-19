@@ -103,8 +103,11 @@ function hasProviderOwnedSession(entry: SessionEntry | undefined, resetConfigure
 
 export function startDailySessionResetScheduler(params: {
   cfg: OpenClawConfig;
+  getConfig?: () => OpenClawConfig;
   intervalMs?: number;
+  getNowMs?: () => number;
   getActiveSessionKeys?: () => ReadonlySet<string>;
+  performReset?: (key: string) => Promise<{ ok: boolean }>;
 }): ReturnType<typeof setInterval> {
   let inFlight = false;
   const run = () => {
@@ -113,8 +116,10 @@ export function startDailySessionResetScheduler(params: {
     }
     inFlight = true;
     void resetStaleDailySessions({
-      cfg: params.cfg,
+      cfg: params.getConfig?.() ?? params.cfg,
+      nowMs: params.getNowMs?.(),
       activeSessionKeys: params.getActiveSessionKeys?.(),
+      performReset: params.performReset,
     })
       .then((result) => {
         if (result.reset > 0 || result.errors > 0) {

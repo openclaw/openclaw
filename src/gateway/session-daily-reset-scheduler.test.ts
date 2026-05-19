@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetStaleDailySessions } from "./session-daily-reset-scheduler.js";
+import {
+  resetStaleDailySessions,
+  startDailySessionResetScheduler,
+} from "./session-daily-reset-scheduler.js";
 
 const tmpDirs: string[] = [];
 
@@ -135,5 +138,48 @@ describe("daily session reset scheduler", () => {
 
     expect(result).toEqual({ checked: 0, reset: 0, errors: 0 });
     expect(performReset).not.toHaveBeenCalled();
+  });
+
+  it("uses current runtime config on each scheduler sweep", async () => {
+    vi.useFakeTimers();
+    const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
+    const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
+    const sessionKey = "agent:main:telegram:direct:user-1";
+    const { cfg: staleAtFour } = await makeStore({
+      [sessionKey]: {
+        sessionId: "old-session",
+        updatedAt: beforeReset,
+        sessionStartedAt: beforeReset,
+      },
+    });
+    const freshUntilNoon = {
+      ...staleAtFour,
+      session: {
+        ...staleAtFour.session,
+        reset: {
+          mode: "daily",
+          atHour: 12,
+        },
+      },
+    } as OpenClawConfig;
+    let currentConfig = freshUntilNoon;
+    const performReset = vi.fn(async () => ({ ok: true }));
+
+    const timer = startDailySessionResetScheduler({
+      cfg: staleAtFour,
+      getConfig: () => currentConfig,
+      getNowMs: () => afterReset,
+      intervalMs: 60_000,
+      performReset,
+    });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(performReset).not.toHaveBeenCalled();
+
+    currentConfig = staleAtFour;
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(performReset).toHaveBeenCalledWith(sessionKey);
+    clearInterval(timer);
   });
 });

@@ -51,6 +51,7 @@ export function startGatewayMaintenanceTimers(params: {
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   cfg?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig;
   mediaCleanupTtlMs?: number;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
@@ -249,17 +250,19 @@ export function startGatewayMaintenanceTimers(params: {
     sweepStaleRunContexts();
   }, 60_000);
 
-  const dailySessionReset = params.cfg
-    ? startDailySessionResetScheduler({
-        cfg: params.cfg,
-        getActiveSessionKeys: () =>
-          new Set(
-            [...params.chatAbortControllers.values()]
-              .map((entry) => entry.sessionKey)
-              .filter((sessionKey) => sessionKey.trim()),
-          ),
-      })
-    : null;
+  const dailySessionReset =
+    params.cfg || params.getConfig
+      ? startDailySessionResetScheduler({
+          cfg: params.cfg ?? params.getConfig?.() ?? {},
+          getConfig: params.getConfig,
+          getActiveSessionKeys: () =>
+            new Set(
+              [...params.chatAbortControllers.values()]
+                .map((entry) => entry.sessionKey)
+                .filter((sessionKey) => sessionKey.trim()),
+            ),
+        })
+      : null;
 
   if (typeof params.mediaCleanupTtlMs !== "number") {
     return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null, dailySessionReset };

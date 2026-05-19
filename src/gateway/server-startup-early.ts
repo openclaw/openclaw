@@ -158,6 +158,7 @@ export async function startGatewayEarlyRuntime(params: {
       const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
       return startGatewayMaintenanceTimers({
         cfg: params.getRuntimeConfig(),
+        getConfig: params.getRuntimeConfig,
         broadcast: params.broadcast,
         nodeSendToAllSubscribed: params.nodeSendToAllSubscribed,
         getPresenceVersion: params.getPresenceVersion,
