@@ -170,6 +170,7 @@ export async function searchMemoryCorpusSupplements(params: {
     query: params.query,
     maxResults: params.maxResults,
     agentSessionKey: params.agentSessionKey,
+    corpus: params.corpus,
     engineCandidates: params.engineCandidates,
   };
   const results = (

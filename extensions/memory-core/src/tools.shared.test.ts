@@ -171,3 +171,71 @@ describe("searchMemoryCorpusSupplements engineCandidates passthrough", () => {
     expect(results.every((r) => r.corpus === "reranker-style")).toBe(true);
   });
 });
+
+describe("searchMemoryCorpusSupplements corpus passthrough", () => {
+  afterEach(() => {
+    clearMemoryPluginState();
+  });
+
+  it('forwards corpus="wiki" to supplements', async () => {
+    const received: { corpus?: "memory" | "wiki" | "all" | "sessions" }[] = [];
+    registerMemoryCorpusSupplement("recorder-plugin", {
+      search: async (params) => {
+        received.push({ corpus: params.corpus });
+        return [];
+      },
+      get: async () => null,
+    });
+
+    await searchMemoryCorpusSupplements({
+      query: "test query",
+      maxResults: 5,
+      agentSessionKey: "agent:main:main",
+      corpus: "wiki",
+    });
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.corpus).toBe("wiki");
+  });
+
+  it('forwards corpus="all" to supplements', async () => {
+    const received: { corpus?: "memory" | "wiki" | "all" | "sessions" }[] = [];
+    registerMemoryCorpusSupplement("recorder-plugin", {
+      search: async (params) => {
+        received.push({ corpus: params.corpus });
+        return [];
+      },
+      get: async () => null,
+    });
+
+    await searchMemoryCorpusSupplements({
+      query: "test query",
+      maxResults: 5,
+      agentSessionKey: "agent:main:main",
+      corpus: "all",
+    });
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.corpus).toBe("all");
+  });
+
+  it("passes undefined corpus when caller omits the field", async () => {
+    const received: { corpus?: "memory" | "wiki" | "all" | "sessions" }[] = [];
+    registerMemoryCorpusSupplement("recorder-plugin", {
+      search: async (params) => {
+        received.push({ corpus: params.corpus });
+        return [];
+      },
+      get: async () => null,
+    });
+
+    await searchMemoryCorpusSupplements({
+      query: "test query",
+      maxResults: 5,
+      agentSessionKey: "agent:main:main",
+    });
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.corpus).toBeUndefined();
+  });
+});

@@ -46,6 +46,14 @@ export type MemoryCorpusSupplement = {
     maxResults?: number;
     agentSessionKey?: string;
     /**
+     * The engine corpus scope the caller requested. Supplements that
+     * want to specialize on `wiki` vs `all` can branch on this. The
+     * engine helper early-returns for `"memory"` and `"sessions"`, so
+     * in practice supplements only ever observe `"wiki"`, `"all"`, or
+     * `undefined`.
+     */
+    corpus?: "memory" | "wiki" | "all" | "sessions";
+    /**
      * Candidates the engine has already computed for this query (via the
      * built-in `manager.search`) on the same turn. Supplements that
      * rerank, filter, or annotate existing results can use these
@@ -62,6 +70,12 @@ export type MemoryCorpusSupplement = {
     fromLine?: number;
     lineCount?: number;
     agentSessionKey?: string;
+    /**
+     * The engine corpus scope the caller requested. Mirrors the field
+     * on `search` so supplements can apply the same scope-aware logic
+     * to lookups.
+     */
+    corpus?: "memory" | "wiki" | "all" | "sessions";
   }): Promise<MemoryCorpusGetResult | null>;
 };
 
