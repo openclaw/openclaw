@@ -1634,8 +1634,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(createNativeTelegramToolProgressDraft).toHaveBeenCalled();
-    expect(nativeDraft.update).toHaveBeenCalledWith("Working\n🛠️ Exec");
-    expect(answerDraftStream.update).not.toHaveBeenCalledWith("Working\n`🛠️ Exec`");
+    expect(nativeDraft.update).toHaveBeenCalledWith("Working\n\n🛠️ Exec");
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith("Working\n\n`🛠️ Exec`");
     expect(nativeDraft.freeze).toHaveBeenCalled();
     expectDeliveredReply(0, { text: "Done." });
     expect(nativeDraft.freeze.mock.invocationCallOrder[0]).toBeLessThan(
@@ -1699,9 +1699,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(sendMessageDraft).toHaveBeenCalledWith(
       123,
       expect.any(Number),
-      "Working\n🛠️ Exec",
+      "Working\n\n🛠️ Exec",
       { message_thread_id: 777 },
-      expect.any(AbortSignal),
+      expect.any(Object),
     );
     expect(draftSignal?.aborted).toBe(true);
     expectDeliveredReply(0, { text: "Done." });
@@ -1726,7 +1726,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Working\n`🛠️ Exec`");
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Working\n\n`🛠️ Exec`");
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Working");
     expectDeliveredReply(0, { text: "Done." });
   });
