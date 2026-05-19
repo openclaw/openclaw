@@ -551,15 +551,59 @@ function hasExplicitTargetParam(params: Record<string, unknown>): boolean {
   );
 }
 
+function isCurrentSourceTargetParam(
+  input: RunMessageActionParams,
+  params: Record<string, unknown>,
+): boolean {
+  const currentChannelId = normalizeOptionalString(input.toolContext?.currentChannelId);
+  if (!currentChannelId) {
+    return false;
+  }
+  const currentChannelProvider = normalizeOptionalLowercaseString(
+    input.toolContext?.currentChannelProvider,
+  );
+  const explicitChannel = normalizeOptionalLowercaseString(params.channel);
+  if (explicitChannel && currentChannelProvider && explicitChannel !== currentChannelProvider) {
+    return false;
+  }
+
+  const explicitTarget =
+    normalizeOptionalString(params.target) ??
+    normalizeOptionalString(params.to) ??
+    normalizeOptionalString(params.channelId);
+  if (!explicitTarget) {
+    return false;
+  }
+
+  const provider = explicitChannel ?? currentChannelProvider;
+  const currentCandidates = new Set<string>();
+  addCandidateAndUnprefixedAlias(currentCandidates, currentChannelId);
+  if (provider) {
+    addCandidateAndUnprefixedAlias(
+      currentCandidates,
+      normalizeTargetForAccountBinding(provider, currentChannelId),
+    );
+  }
+
+  const explicitCandidates = new Set<string>();
+  addCandidateAndUnprefixedAlias(explicitCandidates, explicitTarget);
+  if (provider) {
+    addCandidateAndUnprefixedAlias(
+      explicitCandidates,
+      normalizeTargetForAccountBinding(provider, explicitTarget),
+    );
+  }
+  return Array.from(explicitCandidates).some((candidate) => currentCandidates.has(candidate));
+}
+
 function applyImplicitSourceReplySendPolicy(
   input: RunMessageActionParams,
   params: Record<string, unknown>,
 ) {
-  if (
-    input.action !== "send" ||
-    input.sourceReplyDeliveryMode !== "message_tool_only" ||
-    hasExplicitTargetParam(params)
-  ) {
+  if (input.action !== "send" || input.sourceReplyDeliveryMode !== "message_tool_only") {
+    return;
+  }
+  if (hasExplicitTargetParam(params) && !isCurrentSourceTargetParam(input, params)) {
     return;
   }
   params.bestEffort = true;

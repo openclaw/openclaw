@@ -251,7 +251,32 @@ describe("runMessageAction core send routing", () => {
     expect(sendText).toHaveBeenCalledOnce();
   });
 
-  it("preserves required delivery when message-tool-only sends include an explicit target", async () => {
+  it("uses best-effort delivery for explicit current-source message-tool-only replies", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        target: "channel:C123",
+        message: "visible current-channel source reply",
+        bestEffort: false,
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      sessionKey: "agent:main:slack:channel:C123",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(result.to).toBe("channel:C123");
+  });
+
+  it("preserves required delivery when message-tool-only sends target another conversation", async () => {
     const sendText = registerSlackTextPlugin();
 
     await expect(
@@ -259,7 +284,7 @@ describe("runMessageAction core send routing", () => {
         cfg: slackConfig,
         action: "send",
         params: {
-          target: "channel:C123",
+          target: "channel:C999",
           message: "explicit durable send",
           bestEffort: false,
         },
