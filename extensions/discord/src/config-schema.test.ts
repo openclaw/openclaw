@@ -418,7 +418,7 @@ describe("discord config schema", () => {
   });
 
   it("rejects invalid agentComponents.ttlMs values", () => {
-    for (const ttlMs of [0, -1, 1.5, 604_800_001]) {
+    for (const ttlMs of [0, -1, 1.5, 86_400_001]) {
       const res = DiscordConfigSchema.safeParse({
         agentComponents: {
           ttlMs,

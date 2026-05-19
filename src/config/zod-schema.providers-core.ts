@@ -706,7 +706,7 @@ export const DiscordAccountSchema = z
           .number()
           .int()
           .positive()
-          .max(7 * 24 * 60 * 60 * 1000)
+          .max(24 * 60 * 60 * 1000)
           .optional(),
       })
       .strict()
