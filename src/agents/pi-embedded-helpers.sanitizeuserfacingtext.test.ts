@@ -445,9 +445,14 @@ describe("sanitizeUserFacingText", () => {
         "Text\n\u2026(truncated TOOLS.md: kept 200+100 chars of 5000)\u2026\nMore",
       ),
     ).toBe("Text\nMore");
+    expect(sanitizeUserFacingText("Data\n[\u2026truncated 200+100/5000]\nRest")).toBe("Data\nRest");
+    // Bootstrap read-file sentinel
     expect(
-      sanitizeUserFacingText("Data\n[\u2026truncated 200+100/5000]\nRest"),
-    ).toBe("Data\nRest");
+      sanitizeUserFacingText("Before\n[...truncated, read AGENTS.md for full content...]\nAfter"),
+    ).toBe("Before\nAfter");
+    expect(sanitizeUserFacingText("[...truncated, read src/foo/bar.ts for full content...]")).toBe(
+      "",
+    );
   });
 
   it("preserves normal prose ellipses and bracketed text", () => {

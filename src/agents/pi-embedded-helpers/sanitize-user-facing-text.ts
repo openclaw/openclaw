@@ -53,7 +53,7 @@ const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE = /^[ \t]*\[tool calls omitted\][ \
 // truncation, and session-history truncation.  They are internal scaffolding and
 // must not leak into user-visible final replies.
 const TRUNCATION_SENTINEL_LINE_RE =
-  /^[ \t]*(?:\.\.\.\(truncated\)\.\.\.|…\(truncated(?:\s[^)]*)?\)…|\[\.\.\.,?\s*\d+\s+more\s+characters?\s+truncated\]|\[…truncated\s[^\]]*\])[ \t]*$/i;
+  /^[ \t]*(?:\.\.\.\(truncated\)\.\.\.|…\(truncated(?:\s[^)]*)?\)…|\[\.\.\.,?\s*\d+\s+more\s+characters?\s+truncated\]|\[…truncated\s[^\]]*\]|\[\.\.\.truncated,\sread\s\S+\sfor\sfull\scontent\.\.\.\])[ \t]*$/i;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
