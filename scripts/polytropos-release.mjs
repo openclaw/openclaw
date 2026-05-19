@@ -164,7 +164,7 @@ async function findRunIdForTag({ logStream, ghRepo, wf, releaseTag, timeoutMs = 
         "--event",
         "push",
                 "--limit",
-        "1",
+        "20",
         "--json",
         "databaseId,headBranch",
         "--jq",
