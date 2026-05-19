@@ -973,14 +973,18 @@ export async function runEmbeddedPiAgent(
       }
       startupStages.mark("auth");
       notifyExecutionPhase("auth", { provider, model: modelId });
-      const runAttemptAuthProfileStore = pluginHarnessOwnsTransport
-        ? createScopedAuthProfileStore(
-            attemptAuthProfileStore,
-            pluginHarnessForwardedProfileCandidates.length > 0
-              ? pluginHarnessForwardedProfileCandidates
-              : lastProfileId,
-          )
-        : attemptAuthProfileStore;
+      const codexHarnessOwnsTransport = pluginHarnessOwnsTransport && agentHarness.id === "codex";
+      // Codex builds OpenClaw tools inside its harness. Keep the full store on
+      // the existing field so installed Codex packages can resolve tool auth.
+      const runAttemptAuthProfileStore =
+        pluginHarnessOwnsTransport && !codexHarnessOwnsTransport
+          ? createScopedAuthProfileStore(
+              attemptAuthProfileStore,
+              pluginHarnessForwardedProfileCandidates.length > 0
+                ? pluginHarnessForwardedProfileCandidates
+                : lastProfileId,
+            )
+          : attemptAuthProfileStore;
       const { sessionAgentId } = resolveSessionAgentIds({
         sessionKey: params.sessionKey,
         config: params.config,
