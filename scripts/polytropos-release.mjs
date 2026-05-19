@@ -149,9 +149,36 @@ function banner(logStream, s) {
   teeWriteStream(logStream, line);
 }
 
+
+function inferGhRepoFromOrigin() {
+  // Supports: git@github.com:owner/repo.git OR https://github.com/owner/repo.git
+  const url = sh("git", ["remote", "get-url", "origin"]);
+  const m1 = url.match(/github\.com[:/](.+?)\.git$/);
+  if (m1) return m1[1];
+  const m2 = url.match(/github\.com[:/](.+?)$/);
+  if (m2) return m2[1];
+  fail(`could not infer GitHub repo from origin url: ${url}`);
+}
+
+function computeNextReleaseTag() {
+  // base version comes from package.json
+  const ver = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+  // next poly is global max + 1
+  const tags = sh("git", ["tag", "-l", "v*+poly.*"]);
+  let maxN = -1;
+  for (const line of tags.split(/\r?\n/)) {
+    const m = line.match(/\+poly\.(\d+)$/);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n > maxN) maxN = n;
+  }
+  const nextN = maxN + 1;
+  return `v${ver}+poly.${nextN}`;
+}
+
 function parseArgs(argv) {
   // Supported:
-  //   node scripts/polytropos-release.mjs release --tag v<ver>+poly.<N> [--repo <owner/repo>] [--workflow <workflow.yml>] [--log <path>]
+  //   node scripts/polytropos-release.mjs release [--tag v<ver>+poly.<N>] [--repo <owner/repo>] [--workflow <workflow.yml>] [--log <path>]
   const args = argv.slice(2);
   const cmd = args[0] || "";
   let logPath = process.env.POLYTROPOS_RELEASE_LOG || defaultLogPath();
@@ -202,7 +229,7 @@ function usage() {
   console.log(`polytropos-release.mjs
 
 Usage:
-  node scripts/polytropos-release.mjs release --tag v<ver>+poly.<N> [--repo <owner/repo>] [--workflow <workflow.yml>] [--log <path>]
+  node scripts/polytropos-release.mjs release [--tag v<ver>+poly.<N>] [--repo <owner/repo>] [--workflow <workflow.yml>] [--log <path>]
 
 Behavior (single flow):
   - Pushes the release tag to GitHub
@@ -226,7 +253,7 @@ if (cmd !== "release") {
 }
 
 if (!releaseTag) {
-  fail("release requires --tag v<ver>+poly.<N>");
+  releaseTag = computeNextReleaseTag();
 }
 if (!/^v[^+]+\+poly\.\d+$/.test(releaseTag)) {
   fail(`invalid --tag: ${releaseTag} (expected v<ver>+poly.<N>)`);
@@ -236,7 +263,7 @@ fs.mkdirSync(path.dirname(logPath), { recursive: true });
 const logStream = fs.createWriteStream(logPath, { flags: "a" });
 banner(logStream, `Log file: ${logPath}`);
 
-const ghRepo = repo || "JoshuaCWebDeveloper/openclaw-polytropos";
+const ghRepo = repo || inferGhRepoFromOrigin();
 const wf = workflow || "polytropos-build-pack.yml";
 
 banner(logStream, `GitHub repo: ${ghRepo}`);
