@@ -306,7 +306,9 @@ describe("embedded attempt session lock lifecycle", () => {
       acquireSessionWriteLock,
       lockOptions: { ...lockOptions, sessionFile },
     });
-    await fs.appendFile(sessionFile, '{"type":"message","id":"same-process"}\n', "utf8");
+    await secondController.withSessionWriteLock(async () => {
+      await fs.appendFile(sessionFile, '{"type":"message","id":"same-process"}\n', "utf8");
+    });
     await secondController.releaseForPrompt();
 
     await expect(
@@ -317,6 +319,39 @@ describe("embedded attempt session lock lifecycle", () => {
     ).resolves.toBe("post-write");
 
     expect(firstController.hasSessionTakeover()).toBe(false);
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
+    expect(releases).toEqual(["release", "release", "release"]);
+  });
+
+  it("rejects external session edits even when another controller releases for prompt afterward", async () => {
+    const sessionFile = await createTempSessionFile();
+    const releases: string[] = [];
+    const acquireSessionWriteLock = vi.fn(async () => ({
+      release: vi.fn(async () => {
+        releases.push("release");
+      }),
+    }));
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await firstController.releaseForPrompt();
+    await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
+
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    await secondController.releaseForPrompt();
+
+    await expect(
+      firstController.withSessionWriteLock(async () => {
+        await fs.appendFile(sessionFile, '{"type":"message","id":"late"}\n', "utf8");
+      }),
+    ).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
+
+    expect(firstController.hasSessionTakeover()).toBe(true);
     expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
     expect(releases).toEqual(["release", "release", "release"]);
   });
