@@ -224,6 +224,8 @@ type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromp
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
 type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   promptContextFiles?: EmbeddedContextFile[];
+  developerInstructionFiles?: EmbeddedContextFile[];
+  heartbeatReferenceFiles?: EmbeddedContextFile[];
   promptContext?: string;
   developerInstructions?: string;
   heartbeatCollaborationInstructions?: string;
@@ -4253,16 +4255,20 @@ async function buildCodexWorkspaceBootstrapContext(params: {
       }),
     );
     const promptContextFiles = selectCodexWorkspacePromptContextFiles(contextFiles);
+    const developerInstructionFiles = shouldInjectCodexOpenClawPromptContext(params.params)
+      ? selectCodexWorkspaceDeveloperInstructionFiles(contextFiles)
+      : [];
+    const heartbeatReferenceFiles = selectCodexWorkspaceHeartbeatReferenceFiles(contextFiles);
     return {
       ...bootstrapContext,
       contextFiles,
       promptContextFiles,
+      developerInstructionFiles,
+      heartbeatReferenceFiles,
       promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
-      developerInstructions: renderCodexWorkspaceDeveloperInstructions({
-        params: params.params,
-        contextFiles,
-      }),
-      heartbeatCollaborationInstructions: renderCodexWorkspaceHeartbeatReference(contextFiles),
+      developerInstructions: renderCodexWorkspaceDeveloperInstructions(developerInstructionFiles),
+      heartbeatCollaborationInstructions:
+        renderCodexWorkspaceHeartbeatReference(heartbeatReferenceFiles),
     };
   } catch (error) {
     embeddedAgentLog.warn("failed to load codex workspace bootstrap instructions", { error });
@@ -4306,6 +4312,7 @@ function buildCodexSystemPromptReport(params: {
     injectedWorkspaceFiles: buildCodexBootstrapInjectionStats({
       bootstrapFiles: params.workspaceBootstrapContext.bootstrapFiles,
       injectedFiles: params.workspaceBootstrapContext.promptContextFiles ?? [],
+      developerInstructionFiles: params.workspaceBootstrapContext.developerInstructionFiles ?? [],
     }),
     skills: {
       promptChars: skillsPrompt.length,
@@ -4372,39 +4379,73 @@ function buildCodexToolSchemaStats(
 function buildCodexBootstrapInjectionStats(params: {
   bootstrapFiles: CodexBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
+  developerInstructionFiles?: EmbeddedContextFile[];
 }): CodexSystemPromptReport["injectedWorkspaceFiles"] {
-  const injectedByPath = new Map<string, string>();
-  const injectedByBaseName = new Map<string, string>();
-  for (const file of params.injectedFiles) {
-    const pathValue = readNonEmptyString(file.path);
-    if (!pathValue) {
-      continue;
-    }
-    if (!injectedByPath.has(pathValue)) {
-      injectedByPath.set(pathValue, file.content);
-    }
-    const baseName = path.posix.basename(pathValue.replaceAll("\\", "/"));
-    if (!injectedByBaseName.has(baseName)) {
-      injectedByBaseName.set(baseName, file.content);
-    }
-  }
+  const injectedIndex = indexCodexContextFileContent(params.injectedFiles);
+  const developerInstructionIndex = indexCodexContextFileContent(
+    params.developerInstructionFiles ?? [],
+  );
   return params.bootstrapFiles.map((file) => {
     const pathValue = readNonEmptyString(file.path) ?? file.name;
+    const baseName = getCodexContextFileBasename(pathValue || file.name);
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
     const injected =
-      injectedByPath.get(pathValue) ??
-      injectedByPath.get(file.name) ??
-      injectedByBaseName.get(file.name);
-    const injectedChars = injected?.length ?? 0;
+      readCodexIndexedContextFileContent(injectedIndex, pathValue, file.name) ??
+      readCodexIndexedContextFileContent(developerInstructionIndex, pathValue, file.name);
+    let injectedChars = injected?.length ?? 0;
+    let truncated = !file.missing && injectedChars < rawChars;
+    if (injected === undefined) {
+      if (CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName)) {
+        injectedChars = rawChars;
+        truncated = false;
+      } else if (baseName === CODEX_HEARTBEAT_CONTEXT_BASENAME) {
+        injectedChars = 0;
+        truncated = false;
+      }
+    }
     return {
       name: file.name,
       path: pathValue,
       missing: file.missing,
       rawChars,
       injectedChars,
-      truncated: !file.missing && injectedChars < rawChars,
+      truncated,
     };
   });
+}
+
+function indexCodexContextFileContent(files: EmbeddedContextFile[]): {
+  byPath: Map<string, string>;
+  byBaseName: Map<string, string>;
+} {
+  const byPath = new Map<string, string>();
+  const byBaseName = new Map<string, string>();
+  for (const file of files) {
+    const pathValue = readNonEmptyString(file.path);
+    if (!pathValue) {
+      continue;
+    }
+    if (!byPath.has(pathValue)) {
+      byPath.set(pathValue, file.content);
+    }
+    const baseName = getCodexContextFileBasename(pathValue);
+    if (baseName && !byBaseName.has(baseName)) {
+      byBaseName.set(baseName, file.content);
+    }
+  }
+  return { byPath, byBaseName };
+}
+
+function readCodexIndexedContextFileContent(
+  index: { byPath: Map<string, string>; byBaseName: Map<string, string> },
+  pathValue: string,
+  fileName: string,
+): string | undefined {
+  return (
+    index.byPath.get(pathValue) ??
+    index.byPath.get(fileName) ??
+    index.byBaseName.get(getCodexContextFileBasename(fileName))
+  );
 }
 
 function readPositiveNumber(value: unknown): number | undefined {
@@ -4500,14 +4541,10 @@ function selectCodexWorkspacePromptContextFiles(
     .toSorted(compareCodexContextFiles);
 }
 
-function renderCodexWorkspaceDeveloperInstructions(params: {
-  params: EmbeddedRunAttemptParams;
-  contextFiles: EmbeddedContextFile[];
-}): string | undefined {
-  if (!shouldInjectCodexOpenClawPromptContext(params.params)) {
-    return undefined;
-  }
-  const files = params.contextFiles
+function selectCodexWorkspaceDeveloperInstructionFiles(
+  contextFiles: EmbeddedContextFile[],
+): EmbeddedContextFile[] {
+  return contextFiles
     .filter((file) => {
       const baseName = getCodexContextFileBasename(file.path);
       return (
@@ -4518,6 +4555,11 @@ function renderCodexWorkspaceDeveloperInstructions(params: {
       );
     })
     .toSorted(compareCodexContextFiles);
+}
+
+function renderCodexWorkspaceDeveloperInstructions(
+  files: EmbeddedContextFile[],
+): string | undefined {
   if (files.length === 0) {
     return undefined;
   }
@@ -4533,10 +4575,10 @@ function renderCodexWorkspaceDeveloperInstructions(params: {
   return lines.join("\n").trim();
 }
 
-function renderCodexWorkspaceHeartbeatReference(
+function selectCodexWorkspaceHeartbeatReferenceFiles(
   contextFiles: EmbeddedContextFile[],
-): string | undefined {
-  const files = contextFiles
+): EmbeddedContextFile[] {
+  return contextFiles
     .filter((file) => {
       const baseName = getCodexContextFileBasename(file.path);
       return (
@@ -4546,6 +4588,9 @@ function renderCodexWorkspaceHeartbeatReference(
       );
     })
     .toSorted(compareCodexContextFiles);
+}
+
+function renderCodexWorkspaceHeartbeatReference(files: EmbeddedContextFile[]): string | undefined {
   if (files.length === 0) {
     return undefined;
   }

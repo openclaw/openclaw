@@ -1384,7 +1384,7 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(
       testing.buildDeveloperInstructions(params, {
-        dynamicTools: [createRuntimeDynamicTool("message")],
+        dynamicTools: [createMessageDynamicTool("Message test tool")],
       }),
     ).toContain("To send a visible message, use the `message` tool.");
 
@@ -4690,21 +4690,28 @@ describe("runCodexAppServerAttempt", () => {
   it("passes stable workspace files as Codex developer instructions and keeps MEMORY.md as turn context", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
+    const agentsGuidance = "Follow AGENTS guidance.";
+    const soulGuidance = "Soul voice goes here.";
+    const identityGuidance = "Identity guidance goes here.";
+    const toolGuidance = "Tool guidance goes here.";
+    const userProfile = "User profile goes here.";
+    const heartbeatChecklist = "Heartbeat checklist goes here.";
+    const memorySummary = "Memory summary goes here.";
     await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS guidance.");
-    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
-    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "Identity guidance goes here.");
-    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), "Tool guidance goes here.");
-    await fs.writeFile(path.join(workspaceDir, "USER.md"), "User profile goes here.");
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "Heartbeat checklist goes here.");
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Memory summary goes here.");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), agentsGuidance);
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
+    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), identityGuidance);
+    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), toolGuidance);
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), userProfile);
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), heartbeatChecklist);
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
     const harness = createStartedThreadHarness();
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await harness.waitForMethod("turn/start");
     await new Promise<void>((resolve) => setImmediate(resolve));
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    const result = await run;
 
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as {
@@ -4717,14 +4724,14 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadStartParams.developerInstructions).toContain(
       "They define who you are, how you work",
     );
-    expect(threadStartParams.developerInstructions).toContain("Soul voice goes here.");
-    expect(threadStartParams.developerInstructions).toContain("Identity guidance goes here.");
-    expect(threadStartParams.developerInstructions).toContain("Tool guidance goes here.");
-    expect(threadStartParams.developerInstructions).toContain("User profile goes here.");
-    expect(threadStartParams.developerInstructions).not.toContain("Heartbeat checklist goes here.");
-    expect(threadStartParams.developerInstructions).not.toContain("Memory summary goes here.");
+    expect(threadStartParams.developerInstructions).toContain(soulGuidance);
+    expect(threadStartParams.developerInstructions).toContain(identityGuidance);
+    expect(threadStartParams.developerInstructions).toContain(toolGuidance);
+    expect(threadStartParams.developerInstructions).toContain(userProfile);
+    expect(threadStartParams.developerInstructions).not.toContain(heartbeatChecklist);
+    expect(threadStartParams.developerInstructions).not.toContain(memorySummary);
     expect(threadStartParams.developerInstructions).not.toContain("Codex loads AGENTS.md natively");
-    expect(threadStartParams.developerInstructions).not.toContain("Follow AGENTS guidance.");
+    expect(threadStartParams.developerInstructions).not.toContain(agentsGuidance);
     expect(config?.instructions).toBeUndefined();
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
@@ -4735,15 +4742,54 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("OpenClaw runtime context for this turn:");
     expect(inputText).not.toContain("does not override Codex system/developer instructions");
     expect(inputText).not.toContain("not developer policy");
-    expect(inputText).not.toContain("Soul voice goes here.");
-    expect(inputText).not.toContain("Identity guidance goes here.");
-    expect(inputText).not.toContain("Tool guidance goes here.");
-    expect(inputText).not.toContain("User profile goes here.");
-    expect(inputText).not.toContain("Heartbeat checklist goes here.");
-    expect(inputText).toContain("Memory summary goes here.");
+    expect(inputText).not.toContain(soulGuidance);
+    expect(inputText).not.toContain(identityGuidance);
+    expect(inputText).not.toContain(toolGuidance);
+    expect(inputText).not.toContain(userProfile);
+    expect(inputText).not.toContain(heartbeatChecklist);
+    expect(inputText).toContain(memorySummary);
     expect(inputText).toContain("Codex loads AGENTS.md natively");
-    expect(inputText).not.toContain("Follow AGENTS guidance.");
+    expect(inputText).not.toContain(agentsGuidance);
     expect(inputText).toContain("Current user request:\nhello");
+
+    const fileStats = new Map(
+      result.systemPromptReport?.injectedWorkspaceFiles.map((file) => [file.name, file]) ?? [],
+    );
+    expect(fileStats.get("SOUL.md")).toMatchObject({
+      rawChars: soulGuidance.length,
+      injectedChars: soulGuidance.length,
+      truncated: false,
+    });
+    expect(fileStats.get("IDENTITY.md")).toMatchObject({
+      rawChars: identityGuidance.length,
+      injectedChars: identityGuidance.length,
+      truncated: false,
+    });
+    expect(fileStats.get("TOOLS.md")).toMatchObject({
+      rawChars: toolGuidance.length,
+      injectedChars: toolGuidance.length,
+      truncated: false,
+    });
+    expect(fileStats.get("USER.md")).toMatchObject({
+      rawChars: userProfile.length,
+      injectedChars: userProfile.length,
+      truncated: false,
+    });
+    expect(fileStats.get("MEMORY.md")).toMatchObject({
+      rawChars: memorySummary.length,
+      injectedChars: memorySummary.length,
+      truncated: false,
+    });
+    expect(fileStats.get("HEARTBEAT.md")).toMatchObject({
+      rawChars: heartbeatChecklist.length,
+      injectedChars: 0,
+      truncated: false,
+    });
+    expect(fileStats.get("AGENTS.md")).toMatchObject({
+      rawChars: agentsGuidance.length,
+      injectedChars: agentsGuidance.length,
+      truncated: false,
+    });
   });
 
   it("points heartbeat Codex turns at HEARTBEAT.md without injecting its contents", async () => {
