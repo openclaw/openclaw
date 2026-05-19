@@ -64,6 +64,11 @@ const args = [
   opts.out,
 ];
 
+// Spawn the bench fixture updater under the same Node binary that is executing
+// this script. PATH-resolved "node" would route through nvm/fnm/volta/asdf
+// shims and could pick a different version than the parent process, writing a
+// fixture that future CI runs cannot reproduce. Mirrors the pattern in
+// bench-cli-startup.ts and check-cli-startup-memory.mjs. See #83921.
 const run = spawnSync(process.execPath, args, {
   cwd: process.cwd(),
   stdio: "inherit",

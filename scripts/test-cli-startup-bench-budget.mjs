@@ -105,6 +105,12 @@ function resolveCurrentReportPath() {
     "--output",
     reportPath,
   ];
+  // Spawn the bench runner under the same Node binary that is executing this
+  // script. Resolving "node" via PATH would route through nvm/fnm/volta/asdf
+  // shims and could pick a different version than the one CI and the parent
+  // process are using, producing measurements that are not comparable. Other
+  // bench scripts (bench-cli-startup.ts, check-cli-startup-memory.mjs) already
+  // use process.execPath for the same reason. See #83921.
   const run = spawnSync(process.execPath, args, {
     cwd: process.cwd(),
     stdio: "inherit",
