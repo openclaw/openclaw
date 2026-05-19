@@ -702,6 +702,12 @@ export const DiscordAccountSchema = z
     agentComponents: z
       .object({
         enabled: z.boolean().optional(),
+        ttlMs: z
+          .number()
+          .int()
+          .positive()
+          .max(7 * 24 * 60 * 60 * 1000)
+          .optional(),
       })
       .strict()
       .optional(),
