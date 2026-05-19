@@ -122,7 +122,8 @@ struct VoiceWakeSettings: View {
                 SettingsCardGroup("Activation") {
                     SettingsCardToggleRow(
                         title: "Enable Voice Wake",
-                        subtitle: "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
+                        subtitle:
+                            "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
                         binding: self.voiceWakeBinding)
                         .disabled(!voiceWakeSupported)
 
@@ -150,7 +151,8 @@ struct VoiceWakeSettings: View {
 
                     SettingsCardToggleRow(
                         title: "Play phase-transition sounds",
-                        subtitle: "Play short sounds when Talk Mode switches between listening, thinking, and speaking.",
+                        subtitle:
+                            "Play short sounds when Talk Mode switches between listening, thinking, and speaking.",
                         binding: self.$state.talkPhaseSoundsEnabled)
                         .disabled(!voiceWakeSupported)
 
