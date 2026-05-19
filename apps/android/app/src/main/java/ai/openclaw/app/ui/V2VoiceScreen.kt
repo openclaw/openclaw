@@ -226,57 +226,57 @@ private fun V2DictationScreen(
       Modifier
         .fillMaxSize()
         .imePadding()
-        .padding(horizontal = 20.dp, vertical = 12.dp),
-    verticalArrangement = Arrangement.spacedBy(12.dp),
+        .padding(horizontal = 20.dp, vertical = 8.dp),
+    verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
       V2VoicePlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to voice", onClick = onCancel)
-      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(text = "Dictation", style = ClawTheme.type.title, color = ClawTheme.colors.text)
-        Text(text = "Transcribe then send", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(text = "Dictation", style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp), color = ClawTheme.colors.text)
+        Text(text = "Transcribe then send", style = ClawTheme.type.body.copy(fontSize = 10.sp, lineHeight = 13.sp), color = ClawTheme.colors.textMuted)
       }
       V2VoicePlainIconButton(icon = Icons.Default.Settings, contentDescription = "Dictation settings", onClick = {})
     }
 
     Surface(
-      modifier = Modifier.fillMaxWidth().aspectRatio(0.74f),
-      shape = RoundedCornerShape(ClawTheme.radii.sheet),
-      color = ClawTheme.colors.surface,
+      modifier = Modifier.fillMaxWidth().aspectRatio(0.82f),
+      shape = RoundedCornerShape(ClawTheme.radii.panel),
+      color = ClawTheme.colors.canvas,
       border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
     ) {
-      Column(modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 14.dp), verticalArrangement = Arrangement.SpaceBetween) {
+      Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 12.dp), verticalArrangement = Arrangement.SpaceBetween) {
         Text(
           text = draftText.ifBlank { if (sending) "Sending to chat..." else "Start speaking..." },
-          style = ClawTheme.type.title,
+          style = ClawTheme.type.title.copy(fontSize = 15.sp, lineHeight = 19.sp),
           color = if (draftText.isBlank()) ClawTheme.colors.textSubtle else ClawTheme.colors.text,
           maxLines = 7,
           overflow = TextOverflow.Ellipsis,
         )
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
           V2DictationWaveform(active = listening || sending)
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(17.dp), tint = if (listening) ClawTheme.colors.success else ClawTheme.colors.textMuted)
-            Text(text = statusText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(15.dp), tint = if (listening) ClawTheme.colors.success else ClawTheme.colors.textMuted)
+            Text(text = statusText, style = ClawTheme.type.body.copy(fontSize = 9.8.sp, lineHeight = 13.sp), color = ClawTheme.colors.textMuted)
           }
         }
       }
     }
 
-    ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)) {
-      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) {
+      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Surface(
-          modifier = Modifier.size(34.dp),
+          modifier = Modifier.size(30.dp),
           shape = CircleShape,
           color = ClawTheme.colors.surfacePressed,
           border = BorderStroke(1.dp, ClawTheme.colors.border),
         ) {
           Box(contentAlignment = Alignment.Center) {
-            Icon(imageVector = Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(18.dp), tint = ClawTheme.colors.text)
+            Icon(imageVector = Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.text)
           }
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-          Text(text = "Speech provider", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-          Text(text = gatewayStatus.voiceGatewayLabel(), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+          Text(text = "Speech provider", style = ClawTheme.type.section.copy(fontSize = 11.sp, lineHeight = 14.sp), color = ClawTheme.colors.text)
+          Text(text = gatewayStatus.voiceGatewayLabel(), style = ClawTheme.type.body.copy(fontSize = 9.8.sp, lineHeight = 12.5.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
           Text(
@@ -286,7 +286,7 @@ private fun V2DictationScreen(
                 speechProviderReady -> "Ready"
                 else -> "Offline"
               },
-            style = ClawTheme.type.caption,
+            style = ClawTheme.type.caption.copy(fontSize = 9.sp, lineHeight = 11.5.sp),
             color =
               when {
                 sending -> ClawTheme.colors.warning
@@ -325,13 +325,13 @@ private fun V2DictationScreen(
 
 @Composable
 private fun V2DictationWaveform(active: Boolean) {
-  Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
-    List(40) { index ->
-      val height = if (active) 4 + ((index * 7) % 18) else 4 + (index % 3) * 3
+  Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+    List(48) { index ->
+      val height = if (active) 3 + ((index * 7) % 16) else 3 + (index % 3) * 2
       Box(
         modifier =
           Modifier
-            .size(width = 3.dp, height = height.dp)
+            .size(width = 2.dp, height = height.dp)
             .clip(RoundedCornerShape(999.dp))
             .background(if (active) ClawTheme.colors.text else ClawTheme.colors.textSubtle),
       )
