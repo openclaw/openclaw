@@ -100,6 +100,33 @@ describe("createNativeTelegramToolProgressDraft", () => {
     );
   });
 
+  it("uses a conservative default cadence for visible native draft refreshes", async () => {
+    vi.useFakeTimers();
+    const sendMessageDraft = createSendMessageDraftMock();
+    const draft = createNativeTelegramToolProgressDraft({
+      api: { sendMessageDraft },
+      chatId: 123,
+    } as never);
+
+    expect(draft).toBeDefined();
+    await expect(draft?.update("Starting")).resolves.toBe(true);
+    await expect(draft?.update("Running checks")).resolves.toBe(true);
+
+    expect(sendMessageDraft).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(sendMessageDraft).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sendMessageDraft).toHaveBeenCalledTimes(2);
+    expect(sendMessageDraft).toHaveBeenLastCalledWith(
+      123,
+      expect.any(Number),
+      "Running checks",
+      undefined,
+      expect.any(AbortSignal),
+    );
+  });
+
   it("does not send overlapping native draft updates while a prior update is in flight", async () => {
     vi.useFakeTimers();
     let resolveFirstSend: ((value: unknown) => void) | undefined;

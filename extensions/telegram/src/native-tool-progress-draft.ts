@@ -3,7 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 
 const TELEGRAM_NATIVE_DRAFT_MAX_CHARS = 4096;
-const TELEGRAM_NATIVE_DRAFT_MIN_UPDATE_INTERVAL_MS = 750;
+const TELEGRAM_NATIVE_DRAFT_MIN_UPDATE_INTERVAL_MS = 5_000;
 const TELEGRAM_DRAFT_ID_STATE_KEY = Symbol.for("openclaw.telegramNativeDraftIdState");
 
 type TelegramSendMessageDraft = (
