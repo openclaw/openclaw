@@ -4,14 +4,26 @@ import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
-  "q", "check_in_date", "check_out_date", "adults", "currency", "gl", "hl",
-  "sort_by", "min_price", "max_price", "hotel_class", "rating", "vacation_rentals",
-  "next_page_token", "zero_trace",
+  "q",
+  "check_in_date",
+  "check_out_date",
+  "adults",
+  "currency",
+  "gl",
+  "hl",
+  "sort_by",
+  "min_price",
+  "max_price",
+  "hotel_class",
+  "rating",
+  "vacation_rentals",
+  "next_page_token",
+  "zero_trace",
 ] as const;
 
 function isoDateOffset(days: number): string {
   const d = new Date();
-  d.setDate(d.getDate() + days);
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
@@ -54,7 +66,7 @@ export function createSerpApiHotelsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
         max_price: { type: "number", description: "Maximum price per night." },
         hotel_class: {
           type: "string",
-          description: "Star class filter, comma-separated (e.g. \"4,5\" for 4- and 5-star).",
+          description: 'Star class filter, comma-separated (e.g. "4,5" for 4- and 5-star).',
         },
         rating: {
           type: "number",
