@@ -16,6 +16,7 @@ import { normalizeToolName } from "./tool-policy.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
+const TOOL_DENIAL_ERROR_CODES = ["SYSTEM_RUN_DENIED", "INVALID_REQUEST"] as const;
 
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) {
@@ -104,12 +105,30 @@ function readErrorCodeField(value: unknown): string | undefined {
   return typeof value === "string" ? normalizeOptionalString(value) : undefined;
 }
 
+function readDenialErrorCodeFromMessage(value: unknown): string | undefined {
+  const message = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+  if (!message) {
+    return undefined;
+  }
+  for (const code of TOOL_DENIAL_ERROR_CODES) {
+    if (message === code || message.startsWith(`${code}:`)) {
+      return code;
+    }
+  }
+  return undefined;
+}
+
 function readNestedErrorCodeField(value: unknown): string | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
   const record = value as Record<string, unknown>;
-  return readErrorCodeField(record.code) ?? readErrorCodeField(record.gatewayCode);
+  return (
+    readDenialErrorCodeFromMessage(record.message) ??
+    readDenialErrorCodeFromMessage(record.error) ??
+    readErrorCodeField(record.code) ??
+    readErrorCodeField(record.gatewayCode)
+  );
 }
 
 function extractDirectErrorCodeField(value: unknown): string | undefined {
