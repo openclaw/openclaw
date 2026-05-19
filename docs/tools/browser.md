@@ -188,6 +188,52 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 }
 ```
 
+### Screenshot vision (text-only model support)
+
+When the main model is text-only (no vision/multimodal support), browser
+screenshots return image blocks that the model cannot read. Configure
+`browser.models` to automatically describe screenshots using a vision model,
+returning text that any model can reason about.
+
+```json5
+{
+  browser: {
+    // ... existing browser config ...
+    models: [
+      { provider: "bytedance", model: "doubao-seed-2.0-pro" },
+      // Add fallback candidates; first success wins
+      { provider: "openai", model: "gpt-4o" },
+    ],
+    // Optional overrides:
+    // visionEnabled: false,       // force-disable without removing models
+    // visionPrompt: "...",        // custom instruction for vision model
+    // visionMaxChars: 4096,       // max description length
+    // visionMaxBytes: 10485760,   // max screenshot file size (10MB)
+    // visionTimeoutSeconds: 60,   // per-model timeout
+  },
+}
+```
+
+**How it works:**
+
+1. Agent calls `browser screenshot` → image captured to disk as usual.
+2. If `browser.models` is configured, the image is sent to the first valid
+   vision model for description.
+3. The vision model returns a text description, which is wrapped with
+   `wrapExternalContent` (prompt injection guard) and returned to the agent
+   as a text block instead of an image block.
+4. If vision fails (timeout, API error, empty response, file exceeds
+   `visionMaxBytes`), falls back to returning the original image block.
+
+**Per-model overrides:** Each entry in `models[]` can override `prompt`,
+`timeoutSeconds`, `maxChars`, `maxBytes`, `profile`, and `preferredProfile`.
+
+**When to use:** Configure this when your main model cannot process images
+(e.g. `hy3-preview`, text-only models) but you still want the agent to
+reason about web pages via screenshots. If your main model already supports
+vision (e.g. Claude, GPT-4o), leave `models` unconfigured — the agent will
+read the image directly.
+
 <AccordionGroup>
 
 <Accordion title="Ports and reachability">
