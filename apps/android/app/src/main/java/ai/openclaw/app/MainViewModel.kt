@@ -85,6 +85,8 @@ class MainViewModel(
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = runtimeState(initial = emptyList()) { it.modelAuthProviders }
   val modelCatalogRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.modelCatalogRefreshing }
   val modelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.modelCatalogErrorText }
+  val gatewayDefaultAgentId: StateFlow<String?> = runtimeState(initial = null) { it.gatewayDefaultAgentId }
+  val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = runtimeState(initial = emptyList()) { it.gatewayAgents }
   val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
   val seamColorArgb: StateFlow<Long> = runtimeState(initial = 0xFF0EA5E9) { it.seamColorArgb }
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
@@ -361,6 +363,10 @@ class MainViewModel(
 
   fun refreshModelCatalog() {
     ensureRuntime().refreshModelCatalog()
+  }
+
+  fun refreshAgents() {
+    ensureRuntime().refreshAgents()
   }
 
   fun loadChat(sessionKey: String) {

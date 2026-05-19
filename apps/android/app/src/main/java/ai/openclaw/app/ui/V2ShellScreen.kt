@@ -519,7 +519,14 @@ private fun V2SettingsShellScreen(
   val cameraEnabled by viewModel.cameraEnabled.collectAsState()
   val notificationForwardingEnabled by viewModel.notificationForwardingEnabled.collectAsState()
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
+  val agents by viewModel.gatewayAgents.collectAsState()
   var route by rememberSaveable { mutableStateOf(V2SettingsRoute.Home) }
+
+  LaunchedEffect(isConnected) {
+    if (isConnected) {
+      viewModel.refreshAgents()
+    }
+  }
 
   BackHandler(enabled = route != V2SettingsRoute.Home) {
     route = V2SettingsRoute.Home
@@ -553,6 +560,7 @@ private fun V2SettingsShellScreen(
             listOf(
               V2SettingsRow("Profile", displayName.ifBlank { "Local device" }, Icons.Default.Person, route = V2SettingsRoute.Profile),
               V2SettingsRow("Voice", if (speakerEnabled) "Speaker on" else "Speaker muted", Icons.Default.Mic, route = V2SettingsRoute.Voice),
+              V2SettingsRow("Agents", if (agents.isEmpty()) "Load from gateway" else "${agents.size} available", Icons.Default.Person, status = agents.isNotEmpty(), route = V2SettingsRoute.Agents),
               V2SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = V2SettingsRoute.Notifications),
               V2SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = V2SettingsRoute.PhoneCapabilities),
               V2SettingsRow("Gateway", gatewaySummary(statusText, isConnected), Icons.Default.Cloud, status = isConnected, route = V2SettingsRoute.Gateway),
