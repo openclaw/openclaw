@@ -658,11 +658,15 @@ export function createMusicGenerateTool(options?: {
       const explicitModelRef = parseMusicGenerationModelRef(model);
       const primaryModelRef = parseMusicGenerationModelRef(musicGenerationModelConfig.primary);
       const selectedModelRef = explicitModelRef ?? primaryModelRef;
-      const requestKeyProvider = resolveSelectedMusicGenerationProvider({
-        config: effectiveCfg,
-        musicGenerationModelConfig,
-        modelOverride: model,
-      });
+      const shouldResolveRequestKeyProvider =
+        imageInputs.length > 0 || !explicitModelConfig || !selectedModelRef;
+      const requestKeyProvider = shouldResolveRequestKeyProvider
+        ? resolveSelectedMusicGenerationProvider({
+            config: effectiveCfg,
+            musicGenerationModelConfig,
+            modelOverride: model,
+          })
+        : undefined;
       const selectedProvider = imageInputs.length > 0 ? requestKeyProvider : undefined;
       const requestKey = buildMediaGenerationRequestKey({
         tool: "music_generate",
@@ -712,7 +716,7 @@ export function createMusicGenerateTool(options?: {
       });
       const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
 
-      if (shouldDetach) {
+      if (taskHandle && shouldDetach) {
         recordRecentMediaGenerationTaskStartForSession({
           sessionKey: options?.agentSessionKey,
           taskKind: "music_generation",

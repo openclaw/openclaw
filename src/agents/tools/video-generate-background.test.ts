@@ -238,6 +238,41 @@ describe("video generate background helpers", () => {
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers completed videos directly when the completion agent misses the message tool", async () => {
+    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not deliver through the message tool",
+    });
+
+    await wakeVideoGenerationTaskCompletion({
+      ...createMediaCompletionFixture({
+        runId: "tool:video_generate:abc",
+        taskLabel: "friendly lobster surfing",
+        result: "Generated 1 video.\nMEDIA:/tmp/generated-lobster.mp4",
+        mediaUrls: ["/tmp/generated-lobster.mp4"],
+      }),
+    });
+
+    expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:1",
+        threadId: "thread-1",
+        content: "Video generation completed.",
+        mediaUrls: ["/tmp/generated-lobster.mp4"],
+        requesterSessionKey: "agent:main:discord:direct:123",
+        idempotencyKey: "video_generate:task-123:ok:direct",
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:discord:direct:123",
+          idempotencyKey: "video_generate:task-123:ok:direct",
+        }),
+      }),
+    );
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps active video generation failure wakes agent-mediated", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: true,

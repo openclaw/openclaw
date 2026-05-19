@@ -489,7 +489,18 @@ async function wakeMediaGenerationTaskCompletion(params: {
   if (delivery.delivered) {
     return true;
   }
-  if (params.status === "error") {
+  if (params.status === "ok") {
+    const delivered = await tryDeliverMediaGenerationSuccessDirect({
+      config: params.config,
+      handle: params.handle,
+      toolName: params.toolName,
+      completionLabel: params.completionLabel,
+      mediaUrls,
+    });
+    if (delivered) {
+      return true;
+    }
+  } else {
     const delivered = await tryDeliverMediaGenerationFailureDirect({
       config: params.config,
       handle: params.handle,
@@ -510,6 +521,56 @@ async function wakeMediaGenerationTaskCompletion(params: {
     });
   }
   return false;
+}
+
+async function tryDeliverMediaGenerationSuccessDirect(params: {
+  config?: OpenClawConfig;
+  handle: MediaGenerationTaskHandle;
+  toolName: string;
+  completionLabel: string;
+  mediaUrls: string[];
+}): Promise<boolean> {
+  const origin = normalizeDeliveryContext(params.handle.requesterOrigin);
+  if (
+    !origin?.channel ||
+    !origin.to ||
+    !isDeliverableMessageChannel(origin.channel) ||
+    params.mediaUrls.length === 0
+  ) {
+    return false;
+  }
+  const label = `${params.completionLabel[0]?.toUpperCase() ?? "M"}${params.completionLabel.slice(1)}`;
+  const agentId = resolveAgentIdFromSessionKey(params.handle.requesterSessionKey);
+  const idempotencyKey = `${params.toolName}:${params.handle.taskId}:ok:direct`;
+  try {
+    const { sendMessage } = await import("../../tasks/task-registry-delivery-runtime.js");
+    await sendMessage({
+      cfg: params.config,
+      channel: origin.channel,
+      to: origin.to,
+      accountId: origin.accountId,
+      threadId: origin.threadId,
+      content: `${label} generation completed.`,
+      mediaUrls: params.mediaUrls,
+      requesterSessionKey: params.handle.requesterSessionKey,
+      agentId,
+      idempotencyKey,
+      mirror: {
+        sessionKey: params.handle.requesterSessionKey,
+        agentId,
+        idempotencyKey,
+      },
+    });
+    return true;
+  } catch (error) {
+    log.warn("Direct media generation completion delivery failed; falling back to agent wake", {
+      taskId: params.handle.taskId,
+      runId: params.handle.runId,
+      toolName: params.toolName,
+      error,
+    });
+    return false;
+  }
 }
 
 async function tryDeliverMediaGenerationFailureDirect(params: {
