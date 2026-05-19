@@ -1,0 +1,13 @@
+{
+  "id": "claworks-robot",
+  "name": "ClaWorks Robot",
+  "description": "ClaWorks industrial robot runtime — EventKernel · DataPlane · OrchPlane · A2A",
+  "version": "0.1.0-alpha",
+  "provides": ["service", "tools"],
+  "services": [
+    {
+      "id": "claworks-kernel",
+      "description": "ClaWorks EventKernel — autonomous event loop and playbook execution"
+    }
+  ]
+}
