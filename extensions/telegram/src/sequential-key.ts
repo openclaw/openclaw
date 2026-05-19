@@ -11,6 +11,16 @@ import {
 } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 
+const TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS = new Set([
+  "commands",
+  "context",
+  "help",
+  "status",
+  "tasks",
+  "tools",
+  "whoami",
+]);
+
 type TelegramSequentialKeyContext = {
   chat?: { id?: number };
   me?: UserFromGetMe;
@@ -28,13 +38,12 @@ type TelegramSequentialKeyContext = {
   };
 };
 
-function resolveStatusCommandControlLane(params: {
+export function isTelegramReadOnlyControlLaneText(params: {
   rawText?: string;
   botUsername?: string;
 }): boolean {
-  // Only read-only status commands should bypass the per-topic lane. Commands
-  // like /export-session stay on the normal lane because they materialize
-  // session state to disk and should not interleave with an active turn.
+  // Only read-only status commands should bypass the per-topic lane.
+  // Diagnostics and export commands materialize state and should not interleave with an active turn.
   const normalizedBody = normalizeCommandBody(
     params.rawText?.trim() ?? "",
     params.botUsername ? { botUsername: params.botUsername } : undefined,
@@ -46,7 +55,7 @@ function resolveStatusCommandControlLane(params: {
   const command = listChatCommands().find((entry) =>
     entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
   );
-  return command?.category === "status" && command.key !== "export-session";
+  return command?.category === "status" && TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS.has(command.key);
 }
 
 function isTelegramTargetedStopCommand(rawText?: string, botUsername?: string): boolean {
@@ -82,7 +91,7 @@ export function isTelegramControlLaneText(params: {
   if (isTelegramTargetedStopCommand(params.rawText, params.botUsername)) {
     return true;
   }
-  return resolveStatusCommandControlLane(params);
+  return isTelegramReadOnlyControlLaneText(params);
 }
 
 export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {

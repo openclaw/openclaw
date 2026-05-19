@@ -1,7 +1,11 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing as replyRunTesting,
+  createReplyOperation,
+} from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  testing,
   abortAndDrainEmbeddedPiRun,
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
@@ -21,20 +25,27 @@ import {
 type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
 
 function createRunHandle(
-  overrides: { isCompacting?: boolean; isStreaming?: boolean; abort?: () => void } = {},
+  overrides: {
+    abort?: () => void;
+    isCompacting?: boolean;
+    isStreaming?: boolean;
+    supportsTranscriptCommitWait?: boolean;
+  } = {},
 ): RunHandle {
   const abort = overrides.abort ?? (() => {});
   return {
     queueMessage: async () => {},
     isStreaming: () => overrides.isStreaming ?? true,
     isCompacting: () => overrides.isCompacting ?? false,
+    supportsTranscriptCommitWait: overrides.supportsTranscriptCommitWait,
     abort,
   };
 }
 
 describe("pi-embedded runner run registry", () => {
   afterEach(() => {
-    __testing.resetActiveEmbeddedRuns();
+    testing.resetActiveEmbeddedRuns();
+    replyRunTesting.resetReplyRunRegistry();
     vi.restoreAllMocks();
   });
 
@@ -183,6 +194,64 @@ describe("pi-embedded runner run registry", () => {
     );
   });
 
+  it("rejects transcript-commit waits for active handles without support", async () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-no-transcript-wait", {
+      ...createRunHandle(),
+      queueMessage,
+    });
+
+    const outcome = await queueEmbeddedPiMessageWithOutcomeAsync(
+      "session-no-transcript-wait",
+      "continue",
+      { waitForTranscriptCommit: true },
+    );
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-no-transcript-wait",
+      reason: "transcript_commit_wait_unsupported",
+      gatewayHealth: "live",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps reply-run fallback reachable for transcript-commit wait requests", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-reply-run",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+
+    const outcome = await queueEmbeddedPiMessageWithOutcomeAsync(
+      "session-reply-run",
+      "completion from child",
+      { waitForTranscriptCommit: true },
+    );
+
+    expect(outcome.queued).toBe(true);
+    if (!outcome.queued) {
+      throw new Error("expected reply-run fallback to queue");
+    }
+    expect(outcome).toMatchObject({
+      queued: true,
+      sessionId: "session-reply-run",
+      target: "reply_run",
+      gatewayHealth: "live",
+    });
+    expect(outcome.enqueuedAtMs).toEqual(expect.any(Number));
+    expect(outcome.deliveredAtMs).toBeUndefined();
+    expect(queueMessage).toHaveBeenCalledWith("completion from child");
+  });
+
   it("force-clears an aborted run that does not drain", async () => {
     vi.useFakeTimers();
     try {
@@ -255,8 +324,8 @@ describe("pi-embedded runner run registry", () => {
     );
     const handle = createRunHandle();
 
-    runsA.__testing.resetActiveEmbeddedRuns();
-    runsB.__testing.resetActiveEmbeddedRuns();
+    runsA.testing.resetActiveEmbeddedRuns();
+    runsB.testing.resetActiveEmbeddedRuns();
 
     try {
       runsA.setActiveEmbeddedRun("session-shared", handle);
@@ -265,8 +334,8 @@ describe("pi-embedded runner run registry", () => {
       runsB.clearActiveEmbeddedRun("session-shared", handle);
       expect(runsA.isEmbeddedPiRunActive("session-shared")).toBe(false);
     } finally {
-      runsA.__testing.resetActiveEmbeddedRuns();
-      runsB.__testing.resetActiveEmbeddedRuns();
+      runsA.testing.resetActiveEmbeddedRuns();
+      runsB.testing.resetActiveEmbeddedRuns();
     }
   });
 

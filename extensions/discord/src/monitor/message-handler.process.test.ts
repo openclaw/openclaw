@@ -207,7 +207,7 @@ const createDiscordRestClientSpy = vi.hoisted(() =>
 );
 let createBaseDiscordMessageContext: typeof import("./message-handler.test-harness.js").createBaseDiscordMessageContext;
 let createDiscordDirectMessageContextOverrides: typeof import("./message-handler.test-harness.js").createDiscordDirectMessageContextOverrides;
-let threadBindingTesting: typeof import("./thread-bindings.js").__testing;
+let threadBindingTesting: typeof import("./thread-bindings.js").testing;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
 let notifyDiscordInboundEventOutboundSuccess: typeof import("../inbound-event-delivery.js").notifyDiscordInboundEventOutboundSuccess;
@@ -370,7 +370,7 @@ beforeAll(async () => {
   vi.useRealTimers();
   ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
     await import("./message-handler.test-harness.js"));
-  ({ __testing: threadBindingTesting, createThreadBindingManager } =
+  ({ testing: threadBindingTesting, createThreadBindingManager } =
     await import("./thread-bindings.js"));
   ({ processDiscordMessage } = await import("./message-handler.process.js"));
   ({ notifyDiscordInboundEventOutboundSuccess } = await import("../inbound-event-delivery.js"));
@@ -1257,11 +1257,17 @@ describe("processDiscordMessage session routing", () => {
     });
   });
 
-  it("marks always-on guild replies as message-tool-only and disables source streaming", async () => {
+  it("marks explicit message-tool guild replies as message-tool-only and disables source streaming", async () => {
     const ctx = await createBaseContext({
       shouldRequireMention: false,
       effectiveWasMentioned: false,
       discordConfig: { streaming: "partial", blockStreaming: true },
+      cfg: {
+        messages: {
+          groupChat: { visibleReplies: "message_tool" },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
       route: BASE_CHANNEL_ROUTE,
     });
 
@@ -1283,6 +1289,7 @@ describe("processDiscordMessage session routing", () => {
         messages: {
           ackReaction: "👀",
           ackReactionScope: "all",
+          groupChat: { visibleReplies: "message_tool" },
           statusReactions: {
             timing: { debounceMs: 0 },
           },
@@ -1314,6 +1321,7 @@ describe("processDiscordMessage session routing", () => {
         messages: {
           ackReaction: "👀",
           ackReactionScope: "all",
+          groupChat: { visibleReplies: "message_tool" },
           statusReactions: {
             enabled: true,
             timing: { debounceMs: 0 },
@@ -1500,7 +1508,7 @@ describe("processDiscordMessage session routing", () => {
     });
   });
 
-  it("defaults guild replies to message-tool-only source delivery", async () => {
+  it("resolves guild source delivery from default, explicit, and room-event modes", async () => {
     await runProcessDiscordMessage(
       await createBaseContext({
         shouldRequireMention: true,
@@ -1508,7 +1516,7 @@ describe("processDiscordMessage session routing", () => {
         route: BASE_CHANNEL_ROUTE,
       }),
     );
-    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("automatic");
 
     dispatchInboundMessage.mockClear();
     await runProcessDiscordMessage(
@@ -1518,7 +1526,7 @@ describe("processDiscordMessage session routing", () => {
         cfg: {
           messages: {
             groupChat: {
-              visibleReplies: "automatic",
+              visibleReplies: "message_tool",
             },
           },
           session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
@@ -1526,7 +1534,7 @@ describe("processDiscordMessage session routing", () => {
         route: BASE_CHANNEL_ROUTE,
       }),
     );
-    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("automatic");
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
 
     dispatchInboundMessage.mockClear();
     await runProcessDiscordMessage(
@@ -1712,6 +1720,7 @@ describe("processDiscordMessage draft streaming", () => {
 
   it("defaults unset Discord preview streaming to progress mode without drafting text-only turns", async () => {
     await runSingleChunkFinalScenario({ maxLinesPerMessage: 5 });
+    expect(getLastDispatchReplyOptions()?.onPartialReply).toBeUndefined();
     expect(createDiscordDraftStream).toHaveBeenCalledTimes(1);
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
@@ -1753,6 +1762,9 @@ describe("processDiscordMessage draft streaming", () => {
     const ctx = await createBaseContext({
       cfg: {
         tools: { profile: "coding" },
+        messages: {
+          groupChat: { visibleReplies: "message_tool" },
+        },
         session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
       route: BASE_CHANNEL_ROUTE,
@@ -1914,6 +1926,116 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the preview and sends media-only for TTS supplement finals", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      } as never);
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      replyToMode: "first",
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(draftStream.discardPending).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expectPreviewEditContent("Spoken answer");
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replyToId: "m1",
+      replies: [
+        {
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement: { spokenText: "Spoken answer" },
+        },
+      ],
+    });
+  });
+
+  it("falls back with visible text when TTS supplement preview finalization fails", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    editMessageDiscord.mockRejectedValueOnce(new Error("edit failed"));
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      } as never);
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(draftStream.discardPending).toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [
+        {
+          text: "Spoken answer",
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement: { spokenText: "Spoken answer" },
+        },
+      ],
+    });
+  });
+
+  it("keeps already-delivered TTS supplement fallback audio-only", async () => {
+    editMessageDiscord.mockRejectedValueOnce(new Error("edit failed"));
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: {
+          spokenText: "Spoken answer",
+          visibleTextAlreadyDelivered: true,
+        },
+      } as never);
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [
+        {
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement: {
+            spokenText: "Spoken answer",
+            visibleTextAlreadyDelivered: true,
+          },
+        },
+      ],
+    });
   });
 
   it("does not flush draft previews for error finals before normal delivery", async () => {
@@ -2206,7 +2328,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-prev…",
+      "Clawing...\n🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-preview.ts",
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("Apply Patch");

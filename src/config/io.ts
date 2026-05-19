@@ -100,6 +100,7 @@ import {
   getRuntimeConfigSnapshotRefreshHandler as getRuntimeConfigSnapshotRefreshHandlerState,
   setRuntimeConfigSnapshotRefreshHandler as setRuntimeConfigSnapshotRefreshHandlerState,
   type ConfigWriteAfterWrite,
+  type RuntimeConfigSnapshotRefreshOptions,
   type RuntimeConfigWriteNotification,
 } from "./runtime-snapshot.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
@@ -220,6 +221,10 @@ export type ConfigWriteOptions = {
    */
   skipRuntimeSnapshotRefresh?: boolean;
   /**
+   * Optional controls for the active runtime snapshot refresh after this write.
+   */
+  runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
+  /**
    * Allow intentionally destructive config writes, such as explicit reset flows.
    * Normal writers must keep this false so clobbers are rejected before disk commit.
    */
@@ -251,6 +256,11 @@ export type ConfigWriteOptions = {
    * an unrelated plugin rule prevents the full write from succeeding.
    */
   skipPluginValidation?: boolean;
+  /**
+   * Preserve an older writer version for update handoff writes that must be
+   * readable by the parent process after a candidate doctor repair.
+   */
+  lastTouchedVersionOverride?: string;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -887,6 +897,14 @@ export type ConfigIoDeps = {
   logger?: Pick<typeof console, "error" | "warn">;
   measure?: ConfigSnapshotReadMeasure;
   suppressFutureVersionWarning?: boolean;
+  observe?: boolean;
+};
+
+export type ConfigSnapshotReadOptions = {
+  measure?: ConfigSnapshotReadMeasure;
+  observe?: boolean;
+  skipPluginValidation?: boolean;
+  preservedLegacyRootKeys?: readonly string[];
 };
 
 function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">): void {
@@ -904,8 +922,8 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
   }
 }
 
-function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
-  return stampConfigWriteMetadata(cfg);
+function stampConfigVersion(cfg: OpenClawConfig, version?: string): OpenClawConfig {
+  return stampConfigWriteMetadata(cfg, new Date().toISOString(), version);
 }
 
 function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {
@@ -946,6 +964,7 @@ function normalizeDeps(overrides: ConfigIoDeps = {}): Required<ConfigIoDeps> {
     logger: overrides.logger ?? console,
     measure: overrides.measure ?? (async (_name, run) => await run()),
     suppressFutureVersionWarning: overrides.suppressFutureVersionWarning ?? false,
+    observe: overrides.observe ?? true,
   };
 }
 
@@ -1218,7 +1237,9 @@ async function finalizeReadConfigSnapshotInternalResult(
   deps: Required<ConfigIoDeps>,
   result: ReadConfigFileSnapshotInternalResult,
 ): Promise<ReadConfigFileSnapshotInternalResult> {
-  await observeConfigSnapshot(deps, result.snapshot);
+  if (deps.observe) {
+    await observeConfigSnapshot(deps, result.snapshot);
+  }
   return result;
 }
 
@@ -2124,7 +2145,10 @@ export function createConfigIO(
     const outputConfig = applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths);
     // Do NOT apply runtime defaults when writing - user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
-    const stampedOutputConfig = stampConfigVersion(outputConfig);
+    const stampedOutputConfig = stampConfigVersion(
+      outputConfig,
+      options.lastTouchedVersionOverride,
+    );
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
     const nextHash = hashConfigRaw(json);
     const previousHash = resolveConfigSnapshotHash(snapshot);
@@ -2382,15 +2406,14 @@ export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
   return await createConfigIO().readSourceConfigBestEffort();
 }
 
-export async function readConfigFileSnapshot(options?: {
-  measure?: ConfigSnapshotReadMeasure;
-  skipPluginValidation?: boolean;
-  preservedLegacyRootKeys?: readonly string[];
-}): Promise<ConfigFileSnapshot> {
+export async function readConfigFileSnapshot(
+  options: ConfigSnapshotReadOptions = {},
+): Promise<ConfigFileSnapshot> {
   return await createConfigIO({
-    ...(options?.measure ? { measure: options.measure } : {}),
-    ...(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}),
-    ...(options?.preservedLegacyRootKeys
+    ...(options.measure ? { measure: options.measure } : {}),
+    ...(options.observe === false ? { observe: false } : {}),
+    ...(options.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+    ...(options.preservedLegacyRootKeys
       ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }
       : {}),
   }).readConfigFileSnapshot();
@@ -2478,6 +2501,7 @@ export async function writeConfigFile(
     skipOutputLogs: options.skipOutputLogs,
     skipPluginValidation: options.skipPluginValidation,
     preservedLegacyRootKeys: options.preservedLegacyRootKeys,
+    lastTouchedVersionOverride: options.lastTouchedVersionOverride,
   });
   if (
     options.skipRuntimeSnapshotRefresh &&
@@ -2527,6 +2551,7 @@ export async function writeConfigFile(
   // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
   await finalizeRuntimeSnapshotWrite({
     nextSourceConfig: canonicalSourceConfig,
+    refreshOptions: options.runtimeRefresh,
     hadRuntimeSnapshot,
     hadBothSnapshots,
     loadFreshConfig: () => io.loadConfig(),

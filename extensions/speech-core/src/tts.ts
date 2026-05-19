@@ -11,7 +11,9 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { transcodeAudioBuffer } from "openclaw/plugin-sdk/media-runtime";
 import {
+  markReplyPayloadAsTtsSupplement,
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -49,7 +51,6 @@ import {
   type TtsDirectiveParseResult,
   type TtsConfigResolutionContext,
 } from "../api.js";
-import { transcodeAudioBuffer } from "./audio-transcode.js";
 
 export type {
   ResolvedTtsConfig,
@@ -540,8 +541,8 @@ export function buildTtsSystemPromptHint(
   if (autoMode === "off") {
     return undefined;
   }
-  const _config = resolveTtsConfig(cfg, agentId);
-  const persona = getTtsPersona(_config, prefsPath);
+  const configForTest = resolveTtsConfig(cfg, agentId);
+  const persona = getTtsPersona(configForTest, prefsPath);
   const maxLength = getTtsMaxLength(prefsPath);
   const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
   const autoHint =
@@ -1845,13 +1846,16 @@ export async function maybeApplyTtsToPayload(params: {
       latencyMs: result.latencyMs,
     };
 
-    return {
+    const payloadWithAudio = {
       ...nextPayload,
       mediaUrl: result.audioPath,
       audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
       spokenText: textForAudio,
       trustedLocalMedia: true,
     } as ReplyPayload;
+    return nextPayload.text?.trim()
+      ? markReplyPayloadAsTtsSupplement(payloadWithAudio)
+      : payloadWithAudio;
   }
 
   lastTtsAttempt = {
@@ -1870,7 +1874,7 @@ export async function maybeApplyTtsToPayload(params: {
   return nextPayload;
 }
 
-export const _test = {
+export const testApi = {
   parseTtsDirectives,
   resolveModelOverridePolicy,
   supportsNativeVoiceNoteTts,
@@ -1882,3 +1886,6 @@ export const _test = {
   formatTtsProviderError,
   sanitizeTtsErrorForLog,
 };
+
+/** @deprecated Use `testApi`. */
+export { testApi as _test };

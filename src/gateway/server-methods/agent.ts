@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import {
   listAgentIds,
   resolveDefaultAgentId,
@@ -39,6 +40,8 @@ import {
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
   resolveAgentMainSessionKey,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveSessionLifecycleTimestamps,
   resolveSessionResetPolicy,
   resolveSessionResetType,
@@ -1009,7 +1012,24 @@ export const agentHandlers: GatewayRequestHandlers = {
               policy: resetPolicy,
             })
           : undefined;
-        const canReuseSession = Boolean(entry?.sessionId) && (freshness?.fresh ?? false);
+        let failedSessionTranscriptMissing = false;
+        if (entry?.status === "failed" && entry.sessionId?.trim()) {
+          try {
+            const sessionPathOpts = resolveSessionFilePathOptions({
+              storePath,
+              agentId: resolveAgentIdFromSessionKey(canonicalKey),
+            });
+            failedSessionTranscriptMissing = !existsSync(
+              resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
+            );
+          } catch {
+            failedSessionTranscriptMissing = true;
+          }
+        }
+        const canReuseSession =
+          Boolean(entry?.sessionId) &&
+          (freshness?.fresh ?? false) &&
+          !failedSessionTranscriptMissing;
         const usableRequestedSessionId =
           requestedSessionId && (!entry?.sessionId || canReuseSession)
             ? requestedSessionId
@@ -1021,6 +1041,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           !entry ||
           (!canReuseSession && !usableRequestedSessionId) ||
           Boolean(usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId);
+        const rotatedSessionId = Boolean(entry?.sessionId && entry.sessionId !== sessionId);
         const touchInteraction =
           request.bootstrapContextRunKind !== "cron" &&
           request.bootstrapContextRunKind !== "heartbeat" &&
@@ -1100,6 +1121,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           requestDeliveryHint,
         );
         const effectiveDeliveryFields = normalizeSessionDeliveryFields({
+          route: deliveryFields.route,
           deliveryContext: effectiveDelivery,
         });
         const nextEntryPatch: SessionEntry = {
@@ -1122,6 +1144,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           systemSent: entry?.systemSent,
           sendPolicy: entry?.sendPolicy,
           skillsSnapshot: entry?.skillsSnapshot,
+          route: effectiveDeliveryFields.route,
           deliveryContext: effectiveDeliveryFields.deliveryContext,
           lastChannel: effectiveDeliveryFields.lastChannel ?? entry?.lastChannel,
           lastTo: effectiveDeliveryFields.lastTo ?? entry?.lastTo,
@@ -1138,8 +1161,16 @@ export const agentHandlers: GatewayRequestHandlers = {
           groupChannel: resolvedGroupChannel,
           space: resolvedGroupSpace,
           ...(pluginOwnerId ? { pluginOwnerId } : {}),
-          sessionFile:
-            entry?.sessionId && entry.sessionId !== sessionId ? undefined : entry?.sessionFile,
+          ...(rotatedSessionId
+            ? {
+                status: undefined,
+                startedAt: undefined,
+                endedAt: undefined,
+                runtimeMs: undefined,
+                abortedLastRun: undefined,
+                sessionFile: undefined,
+              }
+            : { sessionFile: entry?.sessionFile }),
           cliSessionIds: entry?.cliSessionIds,
           cliSessionBindings: entry?.cliSessionBindings,
           claudeCliSessionId: entry?.claudeCliSessionId,

@@ -4,10 +4,8 @@ import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
-import {
-  getActiveRuntimeWebToolsMetadata,
-  getActiveSecretsRuntimeSnapshot,
-} from "../secrets/runtime.js";
+import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
+import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
@@ -105,6 +103,8 @@ export function createOpenClawTools(
     replyToMode?: "off" | "first" | "all" | "batched";
     /** Mutable ref to track if a reply was sent (for "first" mode). */
     hasRepliedRef?: { value: boolean };
+    /** Fail closed instead of posting same-channel thread-originated replies at the root. */
+    sameChannelThreadRequired?: boolean;
     /** If true, the model has native vision capability */
     modelHasVision?: boolean;
     /** Active model provider for provider-specific tool gating. */
@@ -301,6 +301,7 @@ export function createOpenClawTools(
         currentMessageId: options?.currentMessageId,
         replyToMode: options?.replyToMode,
         hasRepliedRef: options?.hasRepliedRef,
+        sameChannelThreadRequired: options?.sameChannelThreadRequired,
         sandboxRoot: options?.sandboxRoot,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
@@ -346,6 +347,7 @@ export function createOpenClawTools(
     !embedded ||
     options?.sourceReplyDeliveryMode === "message_tool_only" ||
     messageExplicitlyAllowed;
+  const includeSubagentSpawnTool = !embedded || options?.allowGatewaySubagentBinding === true;
   const effectiveCallGateway = embedded
     ? createEmbeddedCallGateway()
     : openClawToolsDeps.callGateway;
@@ -424,8 +426,12 @@ export function createOpenClawTools(
             config: resolvedConfig,
             callGateway: openClawToolsDeps.callGateway,
           }),
+        ]),
+    ...(includeSubagentSpawnTool
+      ? [
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,
+            completionOwnerKey: options?.runSessionKey,
             agentChannel: options?.agentChannel,
             agentAccountId: options?.agentAccountId,
             agentTo: options?.agentTo,
@@ -441,7 +447,8 @@ export function createOpenClawTools(
             inheritedToolAllowlist: options?.inheritedToolAllowlist,
             inheritedToolDenylist: options?.inheritedToolDenylist,
           }),
-        ]),
+        ]
+      : []),
     createSessionsYieldTool({
       sessionId: options?.sessionId,
       onYield: options?.onYield,
@@ -501,7 +508,7 @@ export function createOpenClawTools(
   );
 }
 
-export const __testing = {
+export const testing = {
   resolveOptionalMediaToolFactoryPlan,
   setDepsForTest(overrides?: Partial<OpenClawToolsDeps>) {
     openClawToolsDeps = overrides
@@ -512,3 +519,4 @@ export const __testing = {
       : defaultOpenClawToolsDeps;
   },
 };
+export { testing as __testing };

@@ -1,4 +1,8 @@
-import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
+import {
+  completionRequiresMessageToolDelivery,
+  resolveCompletionChatType,
+} from "../auto-reply/reply/completion-delivery-policy.js";
+import { routeFromConversationRef, routeToDeliveryFields } from "../channels/route-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
@@ -7,11 +11,7 @@ import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import {
-  mergeDeliveryContext,
-  normalizeDeliveryContext,
-  resolveConversationDeliveryTarget,
-} from "../utils/delivery-context.js";
+import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -157,11 +157,7 @@ function resolveBoundConversationOrigin(params: {
     };
   }
 
-  const boundTarget = resolveConversationDeliveryTarget({
-    channel: conversation.channel,
-    conversationId,
-    parentConversationId,
-  });
+  const boundTarget = routeToDeliveryFields(routeFromConversationRef(conversation));
   const inferredThreadId =
     boundTarget.threadId ??
     (parentConversationId && parentConversationId !== conversationId
@@ -351,10 +347,10 @@ export async function resolveSubagentCompletionOrigin(params: {
   const accountId = normalizeAccountId(requesterOrigin?.accountId);
   const threadId =
     requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
-      ? stringifyRouteThreadId(requesterOrigin.threadId)
+      ? requesterOrigin.threadId
       : undefined;
   const conversationId =
-    threadId ||
+    stringifyRouteThreadId(threadId) ||
     resolveConversationIdFromTargets({
       targets: [to],
     }) ||
@@ -363,6 +359,23 @@ export async function resolveSubagentCompletionOrigin(params: {
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
 
   const router = createBoundDeliveryRouter();
+  const requesterRoute = router.resolveDestination({
+    eventKind: "task_completion",
+    targetSessionKey: params.requesterSessionKey,
+    requester: requesterConversation,
+    failClosed: true,
+  });
+  if (requesterRoute.mode === "bound" && requesterRoute.binding) {
+    return mergeDeliveryContext(
+      resolveBoundConversationOrigin({
+        bindingConversation: requesterRoute.binding.conversation,
+        requesterConversation,
+        requesterOrigin,
+      }),
+      requesterOrigin,
+    );
+  }
+
   const childRoute = router.resolveDestination({
     eventKind: "task_completion",
     targetSessionKey: params.childSessionKey,
@@ -373,23 +386,6 @@ export async function resolveSubagentCompletionOrigin(params: {
     return mergeDeliveryContext(
       resolveBoundConversationOrigin({
         bindingConversation: childRoute.binding.conversation,
-        requesterConversation,
-        requesterOrigin,
-      }),
-      requesterOrigin,
-    );
-  }
-
-  const route = router.resolveDestination({
-    eventKind: "task_completion",
-    targetSessionKey: params.requesterSessionKey,
-    requester: requesterConversation,
-    failClosed: true,
-  });
-  if (route.mode === "bound" && route.binding) {
-    return mergeDeliveryContext(
-      resolveBoundConversationOrigin({
-        bindingConversation: route.binding.conversation,
         requesterConversation,
         requesterOrigin,
       }),
@@ -449,18 +445,21 @@ export function loadSessionEntryByKey(sessionKey: string) {
 }
 
 async function maybeSteerSubagentAnnounce(params: {
+  deliveryTimeoutMs?: number;
   requesterSessionKey: string;
   steerMessage: string;
   signal?: AbortSignal;
-}): Promise<"steered" | "none" | "dropped"> {
+}): Promise<
+  { status: "steered"; deliveredAt?: number; enqueuedAt?: number } | { status: "none" | "dropped" }
+> {
   if (params.signal?.aborted) {
-    return "none";
+    return { status: "none" };
   }
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
-  const { sessionId, isActive } = resolveRequesterSessionActivity(canonicalKey);
+  const { sessionId } = resolveRequesterSessionActivity(canonicalKey);
   if (!sessionId) {
-    return "none";
+    return { status: "none" };
   }
 
   const queueSettings = resolveQueueSettings({
@@ -471,15 +470,36 @@ async function maybeSteerSubagentAnnounce(params: {
 
   // Subagent announcements are internal handoffs into an active requester turn.
   // Queue modes such as followup/collect apply to user prompts, not this path.
-  const queueOutcome = await resolveQueueEmbeddedPiMessageOutcome(sessionId, params.steerMessage, {
+  const queueOptions: EmbeddedPiQueueMessageOptions = {
+    deliveryTimeoutMs: params.deliveryTimeoutMs,
     steeringMode: "all",
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
-  });
+    waitForTranscriptCommit: true,
+  };
+  let queueOutcome = await resolveQueueEmbeddedPiMessageOutcome(
+    sessionId,
+    params.steerMessage,
+    queueOptions,
+  );
+  if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
+    const bestEffortQueueOptions = { ...queueOptions };
+    delete bestEffortQueueOptions.waitForTranscriptCommit;
+    queueOutcome = await resolveQueueEmbeddedPiMessageOutcome(
+      sessionId,
+      params.steerMessage,
+      bestEffortQueueOptions,
+    );
+  }
   if (queueOutcome.queued) {
-    return "steered";
+    return {
+      status: "steered",
+      deliveredAt: queueOutcome.deliveredAtMs,
+      enqueuedAt: queueOutcome.enqueuedAtMs,
+    };
   }
 
-  return isActive ? "dropped" : "none";
+  const currentActivity = resolveRequesterSessionActivity(canonicalKey);
+  return { status: currentActivity.isActive ? "dropped" : "none" };
 }
 
 function hasVisibleGatewayAgentPayload(response: unknown): boolean {
@@ -636,9 +656,18 @@ async function sendSubagentAnnounceDirectly(params: {
       sourceTool: params.sourceTool,
     });
     const expectedMediaUrls = collectExpectedMediaFromInternalEvents(params.internalEvents);
+    const completionChatType = resolveCompletionChatType({
+      requesterSessionKey: params.requesterSessionKey,
+      targetRequesterSessionKey: canonicalRequesterSessionKey,
+      requesterEntry,
+      directOrigin: effectiveDirectOrigin,
+      requesterSessionOrigin,
+    });
     const requiresMessageToolDelivery =
       agentMediatedCompletion &&
-      (expectedMediaUrls.length > 0 ||
+      (completionChatType === "channel" ||
+        completionChatType === "group" ||
+        expectedMediaUrls.length > 0 ||
         completionRequiresMessageToolDelivery({
           cfg,
           requesterSessionKey: params.requesterSessionKey,
@@ -667,6 +696,7 @@ async function sendSubagentAnnounceDirectly(params: {
         requesterActivity.sessionId,
         params.triggerMessage,
         {
+          deliveryTimeoutMs: announceTimeoutMs,
           steeringMode: "all",
           ...(completionSourceReplyDeliveryMode
             ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
@@ -674,11 +704,14 @@ async function sendSubagentAnnounceDirectly(params: {
           ...(requesterQueueSettings.debounceMs !== undefined
             ? { debounceMs: requesterQueueSettings.debounceMs }
             : {}),
+          waitForTranscriptCommit: true,
         },
       );
       if (wakeOutcome.queued) {
         return {
           delivered: true,
+          deliveredAt: wakeOutcome.deliveredAtMs,
+          enqueuedAt: wakeOutcome.enqueuedAtMs,
           path: "steered",
         };
       }
@@ -697,6 +730,11 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "none",
       };
     }
+    const directAgentThreadId = shouldDeliverAgentFinal
+      ? stringifyRouteThreadId(deliveryTarget.threadId)
+      : sessionOnlyOriginChannel
+        ? stringifyRouteThreadId(sessionOnlyOrigin?.threadId)
+        : undefined;
     const directAgentParams: Record<string, unknown> = {
       sessionKey: canonicalRequesterSessionKey,
       message: params.triggerMessage,
@@ -714,11 +752,7 @@ async function sendSubagentAnnounceDirectly(params: {
         : sessionOnlyOriginChannel
           ? sessionOnlyOrigin?.to
           : undefined,
-      threadId: shouldDeliverAgentFinal
-        ? deliveryTarget.threadId
-        : sessionOnlyOriginChannel
-          ? sessionOnlyOrigin?.threadId
-          : undefined,
+      threadId: directAgentThreadId,
       inputProvenance: {
         kind: "inter_session",
         sourceSessionKey: params.sourceSessionKey,
@@ -844,6 +878,9 @@ export async function deliverSubagentAnnouncement(params: {
     signal: params.signal,
     steer: async () =>
       await maybeSteerSubagentAnnounce({
+        deliveryTimeoutMs: resolveSubagentAnnounceTimeoutMs(
+          subagentAnnounceDeliveryDeps.getRuntimeConfig(),
+        ),
         requesterSessionKey: params.requesterSessionKey,
         steerMessage: params.steerMessage,
         signal: params.signal,
@@ -869,7 +906,7 @@ export async function deliverSubagentAnnouncement(params: {
   });
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides?: Partial<SubagentAnnounceDeliveryDeps> & {
       callGateway?: typeof callGateway;
@@ -898,3 +935,4 @@ export const __testing = {
       : defaultSubagentAnnounceDeliveryDeps;
   },
 };
+export { testing as __testing };

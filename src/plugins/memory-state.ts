@@ -340,4 +340,4 @@ export function clearMemoryPluginState(): void {
   memoryPluginState.promptSupplements = [];
 }
 
-export const _resetMemoryPluginState = clearMemoryPluginState;
+export const resetMemoryPluginState = clearMemoryPluginState;
