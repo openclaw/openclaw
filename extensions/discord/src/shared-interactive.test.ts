@@ -150,4 +150,31 @@ describe("buildDiscordInteractiveComponents", () => {
       ],
     });
   });
+
+  it("preserves disabled presentation buttons for Discord components", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Already handled", value: "done", disabled: true }],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Already handled",
+              style: "secondary",
+              callbackData: "done",
+              disabled: true,
+            },
+          ],
+        },
+      ],
+    });
+  });
 });
