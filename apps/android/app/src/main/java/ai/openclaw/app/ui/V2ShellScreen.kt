@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.ui.chat.V2ChatScreen
@@ -458,8 +459,8 @@ private fun V2SettingsShellScreen(viewModel: MainViewModel) {
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-          Text(text = "Settings", style = ClawTheme.type.display, color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
-          V2PlainIconButton(icon = Icons.Default.Search, contentDescription = "Search settings", onClick = {})
+          Text(text = "Settings", style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 22.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
+          V2SettingsSearchButton(onClick = {})
         }
       }
 
@@ -492,7 +493,7 @@ private fun V2SettingsShellScreen(viewModel: MainViewModel) {
           horizontalAlignment = Alignment.CenterHorizontally,
           verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-          Text(text = "OpenClaw", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          Text(text = "OpenClaw ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
           Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
               text = if (isConnected) "All systems operational" else "Gateway not connected",
@@ -516,14 +517,14 @@ private data class V2SettingsRow(
 
 @Composable
 private fun V2ProfilePanel(displayName: String) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 18.dp, vertical = 18.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 11.dp, vertical = 10.dp)) {
     Row(
       modifier = Modifier.fillMaxWidth(),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(16.dp),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Surface(
-        modifier = Modifier.size(68.dp),
+        modifier = Modifier.size(38.dp),
         shape = CircleShape,
         color = ClawTheme.colors.surfacePressed,
         border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
@@ -531,20 +532,20 @@ private fun V2ProfilePanel(displayName: String) {
         Box(contentAlignment = Alignment.Center) {
           Text(
             text = displayName.firstOrNull()?.uppercase() ?: "O",
-            style = ClawTheme.type.display,
+            style = ClawTheme.type.title,
             color = ClawTheme.colors.text,
             textAlign = TextAlign.Center,
           )
         }
       }
-      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(text = displayName, style = ClawTheme.type.title, color = ClawTheme.colors.text, maxLines = 1)
-        Text(text = "OpenClaw mobile", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, maxLines = 1)
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(text = displayName, style = ClawTheme.type.section.copy(fontSize = 12.3.sp, lineHeight = 15.sp), color = ClawTheme.colors.text, maxLines = 1)
+        Text(text = "OpenClaw mobile", style = ClawTheme.type.caption.copy(fontSize = 9.3.sp, lineHeight = 12.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
       }
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open profile",
-        modifier = Modifier.size(26.dp),
+        modifier = Modifier.size(19.dp),
         tint = ClawTheme.colors.text,
       )
     }
@@ -568,23 +569,32 @@ private fun V2SettingsGroup(rows: List<V2SettingsRow>) {
 @Composable
 private fun V2SettingsListRow(row: V2SettingsRow) {
   Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp),
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 7.dp),
     verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(16.dp),
+    horizontalArrangement = Arrangement.spacedBy(12.dp),
   ) {
-    Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(24.dp), tint = ClawTheme.colors.text)
-    Text(text = row.title, style = ClawTheme.type.section, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      Text(text = row.value, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, maxLines = 1)
+    Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = ClawTheme.colors.text)
+    Text(text = row.title, style = ClawTheme.type.body.copy(fontSize = 10.8.sp, lineHeight = 14.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+      Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 9.4.sp, lineHeight = 12.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
       row.status?.let { active ->
-        Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
+        Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
       }
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open ${row.title}",
-        modifier = Modifier.size(24.dp),
+        modifier = Modifier.size(17.dp),
         tint = ClawTheme.colors.text,
       )
+    }
+  }
+}
+
+@Composable
+private fun V2SettingsSearchButton(onClick: () -> Unit) {
+  Surface(onClick = onClick, modifier = Modifier.size(30.dp), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+    Box(contentAlignment = Alignment.Center) {
+      Icon(imageVector = Icons.Default.Search, contentDescription = "Search settings", modifier = Modifier.size(18.dp))
     }
   }
 }
