@@ -445,3 +445,44 @@ describe("createFeishuWSClient proxy handling", () => {
     expect(options.agent).toEqual({ proxied: true });
   });
 });
+
+describe("setFeishuClientRuntimeForTest cache eviction (#83911)", () => {
+  it("evicts any cached clients so the next createFeishuClient picks up the new SDK", () => {
+    const creds = {
+      appId: "app_cache_evict",
+      appSecret: "secret_cache_evict", // pragma: allowlist secret
+      accountId: "cache-evict",
+    } as const;
+
+    // First client uses the default SDK installed by the outer beforeEach.
+    const firstCall = clientCtorMock.mock.calls.length;
+    createFeishuClient(creds);
+    expect(clientCtorMock.mock.calls.length).toBeGreaterThan(firstCall);
+
+    // Swap the SDK to a freshly tracked Client constructor. Without the new
+    // cache eviction inside setFeishuClientRuntimeForTest, the next
+    // createFeishuClient call would hit the existing cache entry and never
+    // invoke this constructor.
+    const replacementClientCtor = vi.fn(function replacementCtor() {
+      return { replaced: true };
+    });
+    setFeishuClientRuntimeForTest({
+      sdk: {
+        AppType: { SelfBuild: "self" } as never,
+        Domain: {
+          Feishu: "https://open.feishu.cn",
+          Lark: "https://open.larksuite.com",
+        } as never,
+        LoggerLevel: { info: "info" } as never,
+        Client: replacementClientCtor as never,
+        WSClient: wsClientCtorMock as never,
+        EventDispatcher: vi.fn() as never,
+        defaultHttpInstance: mockBaseHttpInstance as never,
+      },
+    });
+
+    expect(replacementClientCtor).toHaveBeenCalledTimes(0);
+    createFeishuClient(creds);
+    expect(replacementClientCtor).toHaveBeenCalledTimes(1);
+  });
+});

@@ -259,4 +259,9 @@ export function setFeishuClientRuntimeForTest(overrides?: {
   feishuClientSdk = overrides?.sdk
     ? { ...defaultFeishuClientSdk, ...overrides.sdk }
     : defaultFeishuClientSdk;
+  // Any clients already cached under an accountId were constructed against the
+  // previous SDK. Without this eviction, the next createFeishuClient call with
+  // matching credentials hits the cache and returns the stale client — so the
+  // SDK swap is silently ignored from the test's perspective. See #83911.
+  clearClientCache();
 }
