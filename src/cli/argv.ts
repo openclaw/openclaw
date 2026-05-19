@@ -222,7 +222,12 @@ function getCommandPathInternal(
     if (!arg) {
       continue;
     }
-    if (arg === "--") {
+    // Every other helper in this file (isHelpOrVersionInvocation,
+    // hasRootVersionAlias, isRootInvocationForFlags, getFlagValue, hasFlag)
+    // uses the imported FLAG_TERMINATOR constant. Mirror that here so a future
+    // change to FLAG_TERMINATOR in cli-root-options.ts doesn't silently diverge
+    // command-path resolution from help/version detection. See #83902.
+    if (arg === FLAG_TERMINATOR) {
       break;
     }
     if (opts.skipRootOptions) {

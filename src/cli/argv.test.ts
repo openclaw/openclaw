@@ -259,6 +259,24 @@ describe("argv helpers", () => {
     ).toEqual(["update.channel"]);
   });
 
+  // #83902: every argv helper in this module uses the imported FLAG_TERMINATOR
+  // constant as the args-end sentinel; getCommandPathInternal used to compare
+  // against the string literal "--", which would silently diverge from the rest
+  // of the parser if FLAG_TERMINATOR is ever changed. Pin against the live constant.
+  it("stops command-path extraction at the imported FLAG_TERMINATOR constant (#83902)", async () => {
+    const { FLAG_TERMINATOR } = await import("../infra/cli-root-options.js");
+    expect(FLAG_TERMINATOR).toBe("--"); // current value; not the point of this test
+    expect(
+      getCommandPath(["node", "openclaw", "channels", FLAG_TERMINATOR, "add"], 2),
+    ).toEqual(["channels"]);
+    expect(
+      getCommandPathWithRootOptions(
+        ["node", "openclaw", "channels", FLAG_TERMINATOR, "add"],
+        2,
+      ),
+    ).toEqual(["channels"]);
+  });
+
   it("extracts routed config unset positionals with interleaved root options", () => {
     expect(
       getCommandPositionalsWithRootOptions(
