@@ -109,6 +109,14 @@ Zero isn't ready for production use yet, but it's on our radar for Pi Core archi
 - [ ] **Team viability** — Mostly @ctate. Need contributor growth or foundation backing.
 - [ ] **Package ecosystem** — `zero.json` manifests exist but no registry, no dependency management
 
+### Patent & IP Note
+
+- Apache 2.0 allows commercial use, modification, and distribution. We can build Pi Core tools in Zero and ship them under our own license.
+- Apache 2.0's patent grant protects us _from Zero's contributors_ — they've licensed any patents in Zero to all users.
+- **No upstream contributions.** Submitting PRs to vercel-labs/zero would grant our patents to all Zero users under Apache 2.0's patent clause. We use and study Zero; we don't contribute code upstream.
+- **Reference implementation path.** Instead of contributing to Zero, we build impressive things _with_ its philosophy and let the work speak. Lead by example, not by merge request.
+- Our own patents (memory system, diagnostics contract, capability manifests) are independent inventions. Using Zero as a compiler doesn't weaken our patent position.
+
 ### Monitoring Cadence
 
 - **Weekly:** Check GitHub releases for new versions
