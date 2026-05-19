@@ -487,6 +487,9 @@ describe("LINE send helpers", () => {
   });
 
   // T12 — sendMessageLine: oversize image URL must reject before client.pushMessage runs.
+  // Note: with no explicit previewImageUrl, the image branch falls back to
+  // previewImageUrl = mediaUrl. The preview cap (1 MiB) then binds first
+  // because it is strictly stricter than the image cap (10 MiB).
   it("does not call LINE pushMessage when an outbound image exceeds the LINE size cap", async () => {
     fetchWithSsrFGuardMock.mockReset();
     fetchWithSsrFGuardMock.mockImplementation(async () => ({
@@ -504,9 +507,82 @@ describe("LINE send helpers", () => {
         mediaUrl: "https://example.com/over-cap.png",
         mediaKind: "image",
       }),
-    ).rejects.toThrow(/LINE image media must be ≤10485760 bytes/);
+    ).rejects.toThrow(/LINE (image|preview) media must be ≤(10485760|1048576) bytes/);
 
     expect(pushMessageMock).not.toHaveBeenCalled();
     expect(replyMessageMock).not.toHaveBeenCalled();
+  });
+
+  // Preview-cap regression — sendMessageLine image branch must reject when
+  // an explicit previewImageUrl exceeds the LINE 1 MiB preview cap (even if
+  // it is well under the 10 MiB cap that applies to originalContentUrl).
+  it("rejects when previewImageUrl exceeds the LINE 1 MiB preview cap and never calls pushMessage", async () => {
+    const between = 5 * 1024 * 1024;
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(null, {
+          status: 200,
+          headers: new Headers({ "content-length": String(1024) }),
+        }),
+        finalUrl: "https://example.com/under-cap.jpg",
+        release: async () => undefined,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(null, {
+          status: 200,
+          headers: new Headers({ "content-length": String(between) }),
+        }),
+        finalUrl: "https://example.com/big-preview.png",
+        release: async () => undefined,
+      });
+
+    await expect(
+      sendModule.sendMessageLine("line:user:U777", "", {
+        cfg: LINE_TEST_CFG,
+        mediaUrl: "https://example.com/under-cap.jpg",
+        mediaKind: "image",
+        previewImageUrl: "https://example.com/big-preview.png",
+      }),
+    ).rejects.toThrow(/LINE preview media must be ≤1048576 bytes \(got 5242880 bytes/);
+
+    expect(pushMessageMock).not.toHaveBeenCalled();
+    expect(replyMessageMock).not.toHaveBeenCalled();
+  });
+
+  // Preview-cap regression — pushImageMessage must reject when an explicit
+  // preview URL exceeds the LINE 1 MiB preview cap, and pushMessage must not
+  // be reached even though the original content URL passes the 10 MiB cap.
+  it("pushImageMessage rejects when the preview URL exceeds the LINE 1 MiB preview cap", async () => {
+    const between = 3 * 1024 * 1024;
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(null, {
+          status: 200,
+          headers: new Headers({ "content-length": String(1024) }),
+        }),
+        finalUrl: "https://example.com/original.jpg",
+        release: async () => undefined,
+      })
+      .mockResolvedValueOnce({
+        response: new Response(null, {
+          status: 200,
+          headers: new Headers({ "content-length": String(between) }),
+        }),
+        finalUrl: "https://example.com/big-preview.png",
+        release: async () => undefined,
+      });
+
+    await expect(
+      sendModule.pushImageMessage(
+        "line:user:U777",
+        "https://example.com/original.jpg",
+        "https://example.com/big-preview.png",
+        { cfg: LINE_TEST_CFG },
+      ),
+    ).rejects.toThrow(/LINE preview media must be ≤1048576 bytes \(got 3145728 bytes/);
+
+    expect(pushMessageMock).not.toHaveBeenCalled();
   });
 });

@@ -294,8 +294,12 @@ export async function sendMessageLine(
           throw new Error("LINE video messages require previewImageUrl to reference an image URL");
         }
         await validateLineMediaUrl(previewImageUrl);
-        await precheckLineOutboundMediaSize(mediaUrl, "video");
-        await precheckLineOutboundMediaSize(previewImageUrl, "image");
+        if (previewImageUrl === mediaUrl) {
+          await precheckLineOutboundMediaSize(mediaUrl, "preview");
+        } else {
+          await precheckLineOutboundMediaSize(mediaUrl, "video");
+          await precheckLineOutboundMediaSize(previewImageUrl, "preview");
+        }
         const trackingId = isLineUserChatId(chatId) ? opts.trackingId : undefined;
         messages.push(createVideoMessage(mediaUrl, previewImageUrl, trackingId));
         break;
@@ -310,9 +314,11 @@ export async function sendMessageLine(
         {
           const previewImageUrl = opts.previewImageUrl?.trim() || mediaUrl;
           await validateLineMediaUrl(previewImageUrl);
-          await precheckLineOutboundMediaSize(mediaUrl, "image");
-          if (previewImageUrl !== mediaUrl) {
-            await precheckLineOutboundMediaSize(previewImageUrl, "image");
+          if (previewImageUrl === mediaUrl) {
+            await precheckLineOutboundMediaSize(mediaUrl, "preview");
+          } else {
+            await precheckLineOutboundMediaSize(mediaUrl, "image");
+            await precheckLineOutboundMediaSize(previewImageUrl, "preview");
           }
           messages.push(createImageMessage(mediaUrl, previewImageUrl));
         }
@@ -397,9 +403,13 @@ export async function pushImageMessage(
   if (previewImageUrl) {
     await validateLineMediaUrl(previewImageUrl);
   }
-  await precheckLineOutboundMediaSize(originalContentUrl, "image");
-  if (previewImageUrl && previewImageUrl !== originalContentUrl) {
-    await precheckLineOutboundMediaSize(previewImageUrl, "image");
+  if (previewImageUrl && previewImageUrl === originalContentUrl) {
+    await precheckLineOutboundMediaSize(originalContentUrl, "preview");
+  } else {
+    await precheckLineOutboundMediaSize(originalContentUrl, "image");
+    if (previewImageUrl) {
+      await precheckLineOutboundMediaSize(previewImageUrl, "preview");
+    }
   }
   return pushLineMessages(to, [createImageMessage(originalContentUrl, previewImageUrl)], opts, {
     verboseMessage: (chatId) => `line: pushed image to ${chatId}`,

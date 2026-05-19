@@ -249,6 +249,37 @@ describe("resolveLineOutboundMedia", () => {
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects when an explicit previewImageUrl exceeds the LINE preview cap (between 1 MiB and 10 MiB)", async () => {
+    const between = 5 * 1024 * 1024; // ≈ 5 MiB — under image cap, over preview cap
+    ssrfMocks.fetchWithSsrFGuard.mockReset();
+    ssrfMocks.fetchWithSsrFGuard
+      .mockResolvedValueOnce(
+        buildGuardedHeadResult({ status: 200, contentLength: "1024" }), // media: under cap
+      )
+      .mockResolvedValueOnce(
+        buildGuardedHeadResult({ status: 200, contentLength: String(between) }), // preview: over preview cap
+      );
+    await expect(
+      resolveLineOutboundMedia("https://example.com/video.mp4", {
+        mediaKind: "video",
+        previewImageUrl: "https://example.com/big-preview.png",
+      }),
+    ).rejects.toThrow(/LINE preview media must be ≤1048576 bytes \(got 5242880 bytes/);
+  });
+
+  it("rejects when previewImageUrl equals mediaUrl and the shared file exceeds the preview cap", async () => {
+    const sharedUrl = "https://example.com/shared.jpg";
+    const between = 5 * 1024 * 1024;
+    ssrfMocks.fetchWithSsrFGuard.mockReset();
+    ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce(
+      buildGuardedHeadResult({ status: 200, contentLength: String(between) }),
+    );
+    await expect(
+      resolveLineOutboundMedia(sharedUrl, { previewImageUrl: sharedUrl }),
+    ).rejects.toThrow(/LINE preview media must be ≤1048576 bytes \(got 5242880 bytes/);
+    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+  });
+
   // T11
   it("rejects a video URL whose HEAD reports a payload larger than the LINE video cap", async () => {
     const oversized = LINE_OUTBOUND_MEDIA_MAX_BYTES.video + 1;
@@ -382,6 +413,29 @@ describe("precheckLineOutboundMediaSize", () => {
     );
     await expect(
       precheckLineOutboundMediaSize("https://example.com/audio.m4a", "audio"),
+    ).resolves.toBeUndefined();
+    expect(runtimeEnvMocks.logVerbose).not.toHaveBeenCalled();
+  });
+
+  it("rejects with the preview cap when kind=preview and content-length is between 1 MiB and 10 MiB", async () => {
+    const between = 5 * 1024 * 1024; // under image cap, over preview cap
+    ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce(
+      buildGuardedHeadResult({ status: 200, contentLength: String(between) }),
+    );
+    await expect(
+      precheckLineOutboundMediaSize("https://example.com/preview.png", "preview"),
+    ).rejects.toThrow(/LINE preview media must be ≤1048576 bytes \(got 5242880 bytes/);
+  });
+
+  it("resolves when kind=preview and content-length is exactly at the 1 MiB preview cap (inclusive)", async () => {
+    ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce(
+      buildGuardedHeadResult({
+        status: 200,
+        contentLength: String(LINE_OUTBOUND_MEDIA_MAX_BYTES.preview),
+      }),
+    );
+    await expect(
+      precheckLineOutboundMediaSize("https://example.com/preview.png", "preview"),
     ).resolves.toBeUndefined();
     expect(runtimeEnvMocks.logVerbose).not.toHaveBeenCalled();
   });

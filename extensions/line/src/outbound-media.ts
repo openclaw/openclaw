@@ -8,6 +8,12 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 
 type LineOutboundMediaKind = "image" | "video" | "audio";
 
+// "preview" covers previewImageUrl payloads on image/video messages, which
+// LINE caps at 1 MB (smaller than the 10 MB / 200 MB caps that apply to the
+// originalContentUrl). It is not a message-level media kind, so it is kept
+// out of LineOutboundMediaKind / LineOutboundMediaResolved.mediaKind.
+type LineOutboundMediaSizeKind = LineOutboundMediaKind | "preview";
+
 export type LineOutboundMediaResolved = {
   mediaUrl: string;
   mediaKind: LineOutboundMediaKind;
@@ -27,12 +33,16 @@ const LINE_OUTBOUND_MEDIA_SSRF_POLICY: SsrFPolicy = {
   allowPrivateNetwork: false,
 };
 
-// Verified against developers.line.biz/en/reference/messaging-api/ on 2026-05-19.
-// Image message: "Max file size: 10MB". Video / audio: "Max file size: 200 MB".
-export const LINE_OUTBOUND_MEDIA_MAX_BYTES: Record<LineOutboundMediaKind, number> = {
+// Verified against developers.line.biz/en/reference/messaging-api/ on 2026-05-20.
+// Image message originalContentUrl: "Max file size: 10MB".
+// Video / audio message originalContentUrl: "Max file size: 200 MB".
+// previewImageUrl (image / video messages): "Max file size: 1 MB" — strictly
+// smaller than the originalContentUrl cap, so it has to be checked separately.
+export const LINE_OUTBOUND_MEDIA_MAX_BYTES: Record<LineOutboundMediaSizeKind, number> = {
   image: 10 * 1024 * 1024,
   video: 200 * 1024 * 1024,
   audio: 200 * 1024 * 1024,
+  preview: 1 * 1024 * 1024,
 };
 
 const LINE_OUTBOUND_MEDIA_PRECHECK_TIMEOUT_MS = 5000;
@@ -54,7 +64,7 @@ function redactLineOutboundMediaUrl(url: string): string {
 
 export async function precheckLineOutboundMediaSize(
   url: string,
-  kind: LineOutboundMediaKind,
+  kind: LineOutboundMediaSizeKind,
   opts: PrecheckLineOutboundMediaSizeOpts = {},
 ): Promise<void> {
   const cap = LINE_OUTBOUND_MEDIA_MAX_BYTES[kind];
@@ -186,9 +196,15 @@ export async function resolveLineOutboundMedia(
       (opts.trackingId?.trim() ? "video" : undefined) ??
       detectLineMediaKindFromUrl(trimmedUrl) ??
       "image";
-    await precheckLineOutboundMediaSize(trimmedUrl, mediaKind);
-    if (previewImageUrl && previewImageUrl !== trimmedUrl) {
-      await precheckLineOutboundMediaSize(previewImageUrl, "image");
+    if (previewImageUrl && previewImageUrl === trimmedUrl) {
+      // Same URL serves as both originalContentUrl and previewImageUrl;
+      // dedupe to one HEAD probe but evaluate against the stricter preview cap.
+      await precheckLineOutboundMediaSize(trimmedUrl, "preview");
+    } else {
+      await precheckLineOutboundMediaSize(trimmedUrl, mediaKind);
+      if (previewImageUrl) {
+        await precheckLineOutboundMediaSize(previewImageUrl, "preview");
+      }
     }
     return {
       mediaUrl: trimmedUrl,
