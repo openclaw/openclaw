@@ -159,6 +159,7 @@ import {
 import { loadLocalAssistantIdentity } from "./storage.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import type { GatewaySessionRow } from "./types.ts";
+import { viDashboardText as uiText } from "./vi-dashboard-text.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
@@ -270,10 +271,13 @@ function renderSidebarSessions(state: AppViewState) {
   const recent = collapsed ? [] : resolveSidebarRecentSessions(state);
   const newSessionDisabled = !state.connected || state.sessionsLoading || busy || !state.client;
   const newSessionTitle = !state.connected
-    ? "Connect to create a new session"
+    ? uiText("Connect to create a new session", "Kết nối để tạo phiên mới")
     : busy
-      ? "Finish the active run before creating a new session"
-      : "New session";
+      ? uiText(
+          "Finish the active run before creating a new session",
+          "Hoàn tất lượt chạy hiện tại trước khi tạo phiên mới",
+        )
+      : t("chat.runControls.newSession");
 
   return html`
     <section class="sidebar-sessions ${collapsed ? "sidebar-sessions--collapsed" : ""}">
@@ -316,7 +320,7 @@ function renderSidebarSessions(state: AppViewState) {
 function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow) {
   const active = row.key === state.sessionKey;
   const label = resolveSessionDisplayName(row.key, row);
-  const meta = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
+  const meta = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : uiText("n/a", "không có");
   const href = `${pathForTab("chat", state.basePath)}?session=${encodeURIComponent(row.key)}`;
   return html`
     <a

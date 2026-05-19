@@ -26,17 +26,17 @@ import {
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
 
 const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
-  0: "None",
-  25: "Slight",
-  50: "Default",
-  75: "Round",
-  100: "Full",
+  0: uiText("None", "Không bo"),
+  25: uiText("Slight", "Nhẹ"),
+  50: uiText("Default", "Mặc định"),
+  75: uiText("Round", "Bo tròn"),
+  100: uiText("Full", "Tròn hẳn"),
 };
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
-  90: "Small",
-  100: "Default",
-  110: "Large",
+  90: uiText("Small", "Nhỏ"),
+  100: uiText("Default", "Mặc định"),
+  110: uiText("Large", "Lớn"),
   125: "XL",
   140: "XXL",
 };
@@ -787,13 +787,20 @@ type ThemeOption = {
   icon: TemplateResult;
 };
 const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
-  { id: "claw", label: "Claw", description: "Chroma family", icon: icons.zap },
-  { id: "knot", label: "Knot", description: "Black & red", icon: icons.link },
-  { id: "dash", label: "Dash", description: "Chocolate blueprint", icon: icons.barChart },
+  { id: "claw", label: "Claw", description: uiText("Chroma family", "Họ Chroma"), icon: icons.zap },
+  { id: "knot", label: "Knot", description: uiText("Black & red", "Đen & đỏ"), icon: icons.link },
+  {
+    id: "dash",
+    label: "Dash",
+    description: uiText("Chocolate blueprint", "Bản thiết kế chocolate"),
+    icon: icons.barChart,
+  },
 ];
 
 function importedThemeName(props: Pick<ConfigProps, "hasCustomTheme" | "customThemeLabel">) {
-  return props.hasCustomTheme && props.customThemeLabel ? props.customThemeLabel : "Imported theme";
+  return props.hasCustomTheme && props.customThemeLabel
+    ? props.customThemeLabel
+    : uiText("Imported theme", "Theme đã import");
 }
 
 function focusCustomThemeImportInput() {
@@ -822,8 +829,12 @@ function renderNotificationsSection(props: ConfigProps) {
     return html`
       <div class="settings-appearance">
         <div class="settings-appearance__section">
-          <h3 class="settings-appearance__heading">Push Notifications</h3>
-          <p class="settings-appearance__hint">Not available in this browser.</p>
+          <h3 class="settings-appearance__heading">
+            ${uiText("Push Notifications", "Thông báo đẩy")}
+          </h3>
+          <p class="settings-appearance__hint">
+            ${uiText("Not available in this browser.", "Không khả dụng trong trình duyệt này.")}
+          </p>
         </div>
       </div>
     `;
@@ -831,38 +842,49 @@ function renderNotificationsSection(props: ConfigProps) {
 
   const permissionLabel =
     push.permission === "granted"
-      ? "Granted"
+      ? uiText("Granted", "Đã cấp")
       : push.permission === "denied"
-        ? "Denied"
+        ? uiText("Denied", "Đã từ chối")
         : push.permission === "default"
-          ? "Not requested"
-          : "Unsupported";
+          ? uiText("Not requested", "Chưa yêu cầu")
+          : uiText("Unsupported", "Không hỗ trợ");
   const statusDot = push.subscribed ? "settings-status-dot--ok" : "";
 
   return html`
     <div class="settings-appearance">
       <div class="settings-appearance__section">
-        <h3 class="settings-appearance__heading">Push Notifications</h3>
+        <h3 class="settings-appearance__heading">
+          ${uiText("Push Notifications", "Thông báo đẩy")}
+        </h3>
         <p class="settings-appearance__hint">
-          Subscribe to receive browser push notifications from your gateway.
+          ${uiText(
+            "Subscribe to receive browser push notifications from your gateway.",
+            "Đăng ký để nhận thông báo đẩy từ Gateway trong trình duyệt.",
+          )}
         </p>
 
         <div class="settings-info-grid">
           <div class="settings-info-row">
-            <span class="settings-info-row__label">Browser support</span>
+            <span class="settings-info-row__label">
+              ${uiText("Browser support", "Hỗ trợ trình duyệt")}
+            </span>
             <span class="settings-info-row__value"
-              >${push.supported ? "Available" : "Not supported"}</span
+              >${push.supported
+                ? uiText("Available", "Khả dụng")
+                : uiText("Not supported", "Không hỗ trợ")}</span
             >
           </div>
           <div class="settings-info-row">
-            <span class="settings-info-row__label">Permission</span>
+            <span class="settings-info-row__label">${uiText("Permission", "Quyền")}</span>
             <span class="settings-info-row__value">${permissionLabel}</span>
           </div>
           <div class="settings-info-row">
-            <span class="settings-info-row__label">Status</span>
+            <span class="settings-info-row__label">${uiText("Status", "Trạng thái")}</span>
             <span class="settings-info-row__value">
               <span class="settings-status-dot ${statusDot}"></span>
-              ${push.subscribed ? "Subscribed" : "Not subscribed"}
+              ${push.subscribed
+                ? uiText("Subscribed", "Đã đăng ký")
+                : uiText("Not subscribed", "Chưa đăng ký")}
             </span>
           </div>
         </div>
@@ -879,14 +901,14 @@ function renderNotificationsSection(props: ConfigProps) {
                         ?disabled=${push.loading || !props.connected}
                         @click=${() => props.onWebPushUnsubscribe?.()}
                       >
-                        Unsubscribe
+                        ${uiText("Unsubscribe", "Hủy đăng ký")}
                       </button>
                       <button
                         class="config-bar__btn"
                         ?disabled=${push.loading || !props.connected}
                         @click=${() => props.onWebPushTest?.()}
                       >
-                        Send test
+                        ${uiText("Send test", "Gửi thử")}
                       </button>
                     `
                   : html`
@@ -895,7 +917,9 @@ function renderNotificationsSection(props: ConfigProps) {
                         ?disabled=${push.loading || !props.connected}
                         @click=${() => props.onWebPushSubscribe?.()}
                       >
-                        ${push.loading ? "Subscribing..." : "Enable notifications"}
+                        ${push.loading
+                          ? uiText("Subscribing...", "Đang đăng ký...")
+                          : uiText("Enable notifications", "Bật thông báo")}
                       </button>
                     `}
               </div>
@@ -905,8 +929,10 @@ function renderNotificationsSection(props: ConfigProps) {
           ? html`
               <div class="settings-appearance__section">
                 <p class="settings-appearance__hint">
-                  Notifications are blocked. Update your browser site permissions to allow
-                  notifications.
+                  ${uiText(
+                    "Notifications are blocked. Update your browser site permissions to allow notifications.",
+                    "Thông báo đang bị chặn. Hãy cập nhật quyền của trang trong trình duyệt để cho phép thông báo.",
+                  )}
                 </p>
               </div>
             `
@@ -930,18 +956,23 @@ function renderAppearanceSection(props: ConfigProps) {
     ...BUILTIN_THEME_OPTIONS,
     {
       id: "custom",
-      label: props.hasCustomTheme ? importedName : "Import",
+      label: props.hasCustomTheme ? importedName : uiText("Import", "Import"),
       description: props.hasCustomTheme
-        ? `Imported from tweakcn: ${importedName}`
-        : "Import a tweakcn theme into this browser-local slot",
+        ? uiText(`Imported from tweakcn: ${importedName}`, `Đã import từ tweakcn: ${importedName}`)
+        : uiText(
+            "Import a tweakcn theme into this browser-local slot",
+            "Import theme tweakcn vào vị trí chỉ lưu trong trình duyệt này",
+          ),
       icon: icons.spark,
     },
   ];
   return html`
     <div class="settings-appearance">
       <div class="settings-appearance__section">
-        <h3 class="settings-appearance__heading">Theme</h3>
-        <p class="settings-appearance__hint">Choose a theme family.</p>
+        <h3 class="settings-appearance__heading">${uiText("Theme", "Theme")}</h3>
+        <p class="settings-appearance__hint">
+          ${uiText("Choose a theme family.", "Chọn họ theme.")}
+        </p>
         <div class="settings-theme-grid">
           ${themeOptions.map(
             (opt) => html`
@@ -978,11 +1009,14 @@ function renderAppearanceSection(props: ConfigProps) {
           ? html`
               <div class="settings-theme-import">
                 <div class="settings-theme-import__copy">
-                  <div class="settings-theme-import__title">Import from tweakcn</div>
+                  <div class="settings-theme-import__title">
+                    ${uiText("Import from tweakcn", "Import từ tweakcn")}
+                  </div>
                   <p class="settings-theme-import__hint">
-                    Open tweakcn.com, choose or create a theme, click Share, then paste the copied
-                    theme link here. Share links, editor URLs, registry URLs, theme IDs, and default
-                    theme names like amethyst-haze are accepted.
+                    ${uiText(
+                      "Open tweakcn.com, choose or create a theme, click Share, then paste the copied theme link here. Share links, editor URLs, registry URLs, theme IDs, and default theme names like amethyst-haze are accepted.",
+                      "Mở tweakcn.com, chọn hoặc tạo theme, bấm Share rồi dán link đã sao chép vào đây. Chấp nhận link chia sẻ, URL editor, URL registry, ID theme và tên theme mặc định như amethyst-haze.",
+                    )}
                   </p>
                 </div>
                 <a
@@ -991,16 +1025,21 @@ function renderAppearanceSection(props: ConfigProps) {
                   target="_blank"
                   rel="noreferrer noopener"
                 >
-                  Browse tweakcn themes ${icons.externalLink}
+                  ${uiText("Browse tweakcn themes", "Duyệt theme tweakcn")} ${icons.externalLink}
                 </a>
                 <label class="settings-theme-import__field">
-                  <span class="settings-theme-import__label">Theme link or ID</span>
+                  <span class="settings-theme-import__label">
+                    ${uiText("Theme link or ID", "Link hoặc ID theme")}
+                  </span>
                   <input
                     class="settings-theme-import__input"
                     data-custom-theme-import-input
                     type="text"
                     spellcheck="false"
-                    placeholder="https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
+                    placeholder=${uiText(
+                      "https://tweakcn.com/editor/theme?theme=... or amethyst-haze",
+                      "https://tweakcn.com/editor/theme?theme=... hoặc amethyst-haze",
+                    )}
                     .value=${props.customThemeImportUrl}
                     @input=${(e: Event) =>
                       props.onCustomThemeImportUrlChange(
@@ -1016,15 +1055,15 @@ function renderAppearanceSection(props: ConfigProps) {
                     @click=${props.onImportCustomTheme}
                   >
                     ${props.customThemeImportBusy
-                      ? "Importing…"
+                      ? uiText("Importing…", "Đang import…")
                       : props.hasCustomTheme
-                        ? `Replace ${importedName}`
-                        : "Import theme"}
+                        ? uiText(`Replace ${importedName}`, `Thay ${importedName}`)
+                        : uiText("Import theme", "Import theme")}
                   </button>
                   ${props.hasCustomTheme
                     ? html`
                         <button class="btn btn--sm danger" @click=${props.onClearCustomTheme}>
-                          Clear ${importedName}
+                          ${uiText(`Clear ${importedName}`, `Xóa ${importedName}`)}
                         </button>
                       `
                     : nothing}
@@ -1032,7 +1071,9 @@ function renderAppearanceSection(props: ConfigProps) {
                 ${props.hasCustomTheme
                   ? html`
                       <div class="settings-theme-import__meta">
-                        <span class="settings-theme-import__meta-label">Loaded</span>
+                        <span class="settings-theme-import__meta-label">
+                          ${uiText("Loaded", "Đã tải")}
+                        </span>
                         <span class="settings-theme-import__meta-value"
                           >${importedName} · ${props.customThemeSourceUrl ?? "tweakcn"}</span
                         >
@@ -1053,15 +1094,20 @@ function renderAppearanceSection(props: ConfigProps) {
             `
           : html`
               <p class="settings-theme-import__inline-hint">
-                Click <strong>Import</strong> to add one browser-local tweakcn theme. In tweakcn,
-                use Share and paste the copied link here.
+                ${uiText("Click", "Bấm")} <strong>${uiText("Import", "Import")}</strong>
+                ${uiText(
+                  "to add one browser-local tweakcn theme. In tweakcn, use Share and paste the copied link here.",
+                  "để thêm một theme tweakcn chỉ lưu trong trình duyệt. Trong tweakcn, dùng Share rồi dán link đã sao chép vào đây.",
+                )}
               </p>
             `}
       </div>
 
       <div class="settings-appearance__section">
-        <h3 class="settings-appearance__heading">Roundness</h3>
-        <p class="settings-appearance__hint">Adjust corner radius across the UI.</p>
+        <h3 class="settings-appearance__heading">${uiText("Roundness", "Độ bo góc")}</h3>
+        <p class="settings-appearance__hint">
+          ${uiText("Adjust corner radius across the UI.", "Điều chỉnh bo góc trên toàn UI.")}
+        </p>
         <div class="settings-roundness">
           <div class="settings-roundness__options">
             ${BORDER_RADIUS_STOPS.map(
@@ -1084,7 +1130,7 @@ function renderAppearanceSection(props: ConfigProps) {
       </div>
 
       <div class="settings-appearance__section">
-        <h3 class="settings-appearance__heading">Text size</h3>
+        <h3 class="settings-appearance__heading">${uiText("Text size", "Cỡ chữ")}</h3>
         <div class="settings-text-scale">
           <div class="settings-text-scale__options">
             ${TEXT_SCALE_STOPS.map(
@@ -1104,14 +1150,14 @@ function renderAppearanceSection(props: ConfigProps) {
       </div>
 
       <div class="settings-appearance__section">
-        <h3 class="settings-appearance__heading">Connection</h3>
+        <h3 class="settings-appearance__heading">${uiText("Connection", "Kết nối")}</h3>
         <div class="settings-info-grid">
           <div class="settings-info-row">
             <span class="settings-info-row__label">Gateway</span>
             <span class="settings-info-row__value mono">${props.gatewayUrl || "-"}</span>
           </div>
           <div class="settings-info-row">
-            <span class="settings-info-row__label">Status</span>
+            <span class="settings-info-row__label">${uiText("Status", "Trạng thái")}</span>
             <span class="settings-info-row__value">
               <span
                 class="settings-status-dot ${props.connected ? "settings-status-dot--ok" : ""}"
@@ -1122,7 +1168,7 @@ function renderAppearanceSection(props: ConfigProps) {
           ${props.assistantName
             ? html`
                 <div class="settings-info-row">
-                  <span class="settings-info-row__label">Assistant</span>
+                  <span class="settings-info-row__label">${uiText("Assistant", "Trợ lý")}</span>
                   <span class="settings-info-row__value">${props.assistantName}</span>
                 </div>
               `
@@ -1249,7 +1295,9 @@ export function renderConfig(props: ConfigProps) {
     .map((k) => ({ key: k, label: k.charAt(0).toUpperCase() + k.slice(1) }));
 
   const otherCategory: SectionCategory | null =
-    extraSections.length > 0 ? { id: "other", label: "Other", sections: extraSections } : null;
+    extraSections.length > 0
+      ? { id: "other", label: uiText("Other", "Khác"), sections: extraSections }
+      : null;
 
   const isVirtualSection =
     includeVirtualSections &&
@@ -1271,7 +1319,7 @@ export function renderConfig(props: ConfigProps) {
 
   const topTabs = [
     ...(showRootTab
-      ? [{ key: null as string | null, label: props.navRootLabel ?? "Settings" }]
+      ? [{ key: null as string | null, label: props.navRootLabel ?? uiText("Settings", "Cài đặt") }]
       : []),
     ...[...visibleCategories, ...(otherCategory ? [otherCategory] : [])].flatMap((cat) =>
       cat.sections.map((s) => ({ key: s.key, label: s.label })),
@@ -1315,7 +1363,7 @@ export function renderConfig(props: ConfigProps) {
                 >
                   <polyline points="15 18 9 12 15 6"></polyline>
                 </svg>
-                Quick Settings
+                ${uiText("Quick Settings", "Cài đặt nhanh")}
               </button>
             `
           : nothing}
@@ -1437,20 +1485,28 @@ export function renderConfig(props: ConfigProps) {
                     <button
                       class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
                       ?disabled=${props.schemaLoading || !props.schema}
-                      title=${formUnsafe ? "Form view can't safely edit some fields" : ""}
+                      title=${formUnsafe
+                        ? uiText(
+                            "Form view can't safely edit some fields",
+                            "Chế độ form không thể sửa an toàn một số trường",
+                          )
+                        : ""}
                       @click=${() => props.onFormModeChange("form")}
                     >
-                      Form
+                      ${uiText("Form", "Form")}
                     </button>
                     <button
                       class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
                       ?disabled=${!rawAvailable}
                       title=${rawAvailable
-                        ? "Edit raw JSON/JSON5 config"
-                        : "Raw mode unavailable for this snapshot"}
+                        ? uiText("Edit raw JSON/JSON5 config", "Sửa cấu hình JSON/JSON5 thô")
+                        : uiText(
+                            "Raw mode unavailable for this snapshot",
+                            "Chế độ thô không khả dụng cho snapshot này",
+                          )}
                       @click=${() => props.onFormModeChange("raw")}
                     >
-                      Raw
+                      ${uiText("Raw", "Thô")}
                     </button>
                   </div>
                 `
@@ -1459,17 +1515,27 @@ export function renderConfig(props: ConfigProps) {
               ? html`
                   <span class="config-changes-badge"
                     >${formMode === "raw"
-                      ? "Unsaved changes"
-                      : `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`}</span
+                      ? uiText("Unsaved changes", "Thay đổi chưa lưu")
+                      : uiText(
+                          `${diff.length} unsaved change${diff.length !== 1 ? "s" : ""}`,
+                          `${diff.length} thay đổi chưa lưu`,
+                        )}</span
                   >
                 `
-              : html` <span class="config-status muted">No changes</span> `}
+              : html`
+                  <span class="config-status muted"
+                    >${uiText("No changes", "Không có thay đổi")}</span
+                  >
+                `}
           </div>
           <div class="config-actions__right">
             ${!rawAvailable
               ? html`
                   <span class="config-status muted config-actions__notice"
-                    >Raw mode disabled (snapshot cannot safely round-trip raw text).</span
+                    >${uiText(
+                      "Raw mode disabled (snapshot cannot safely round-trip raw text).",
+                      "Chế độ thô đã tắt (snapshot không thể round-trip text thô an toàn).",
+                    )}</span
                   >
                 `
               : nothing}
@@ -1478,10 +1544,12 @@ export function renderConfig(props: ConfigProps) {
                 ? html`
                     <button
                       class="btn btn--sm"
-                      title=${props.configPath ? `Open ${props.configPath}` : "Open config file"}
+                      title=${props.configPath
+                        ? uiText(`Open ${props.configPath}`, `Mở ${props.configPath}`)
+                        : uiText("Open config file", "Mở tệp cấu hình")}
                       @click=${props.onOpenFile}
                     >
-                      ${icons.fileText} Open
+                      ${icons.fileText} ${uiText("Open", "Mở")}
                     </button>
                   `
                 : nothing}
@@ -1489,7 +1557,7 @@ export function renderConfig(props: ConfigProps) {
                 ${props.loading ? t("common.loading") : t("common.reload")}
               </button>
               <button class="btn btn--sm" ?disabled=${!hasChanges} @click=${props.onReset}>
-                Clear
+                ${uiText("Clear", "Xóa")}
               </button>
               <button
                 class="btn btn--sm primary"
@@ -1497,7 +1565,11 @@ export function renderConfig(props: ConfigProps) {
                 aria-busy=${props.saving ? "true" : "false"}
                 @click=${props.onSave}
               >
-                ${renderActionButtonContent(props.saving, "Save", "Saving…")}
+                ${renderActionButtonContent(
+                  props.saving,
+                  uiText("Save", "Lưu"),
+                  uiText("Saving…", "Đang lưu…"),
+                )}
               </button>
               <button
                 class="btn btn--sm"
@@ -1505,7 +1577,11 @@ export function renderConfig(props: ConfigProps) {
                 aria-busy=${props.applying ? "true" : "false"}
                 @click=${props.onApply}
               >
-                ${renderActionButtonContent(props.applying, "Apply", "Applying…")}
+                ${renderActionButtonContent(
+                  props.applying,
+                  uiText("Apply", "Áp dụng"),
+                  uiText("Applying…", "Đang áp dụng…"),
+                )}
               </button>
               <button
                 class="btn btn--sm"
@@ -1513,7 +1589,11 @@ export function renderConfig(props: ConfigProps) {
                 aria-busy=${props.updating ? "true" : "false"}
                 @click=${props.onUpdate}
               >
-                ${renderActionButtonContent(props.updating, "Update", "Updating…")}
+                ${renderActionButtonContent(
+                  props.updating,
+                  uiText("Update", "Cập nhật"),
+                  uiText("Updating…", "Đang cập nhật…"),
+                )}
               </button>
             </div>
           </div>
@@ -1540,8 +1620,8 @@ export function renderConfig(props: ConfigProps) {
                           <input
                             type="text"
                             class="config-search__input"
-                            placeholder="Search settings..."
-                            aria-label="Search settings"
+                            placeholder=${uiText("Search settings...", "Tìm cài đặt...")}
+                            aria-label=${uiText("Search settings", "Tìm cài đặt")}
                             .value=${props.searchQuery}
                             @input=${(e: Event) =>
                               props.onSearchChange((e.target as HTMLInputElement).value)}
@@ -1550,7 +1630,7 @@ export function renderConfig(props: ConfigProps) {
                             ? html`
                                 <button
                                   class="config-search__clear"
-                                  aria-label="Clear search"
+                                  aria-label=${uiText("Clear search", "Xóa tìm kiếm")}
                                   @click=${() => props.onSearchChange("")}
                                 >
                                   ×
@@ -1609,7 +1689,10 @@ export function renderConfig(props: ConfigProps) {
                   <line x1="12" y1="17" x2="12.01" y2="17"></line>
                 </svg>
                 <span class="config-validity-warning__text"
-                  >Your configuration is invalid. Some settings may not work as expected.</span
+                  >${uiText(
+                    "Your configuration is invalid. Some settings may not work as expected.",
+                    "Cấu hình của bạn không hợp lệ. Một số cài đặt có thể không hoạt động như mong đợi.",
+                  )}</span
                 >
                 <button
                   class="btn btn--sm"
@@ -1618,7 +1701,7 @@ export function renderConfig(props: ConfigProps) {
                     requestUpdate();
                   }}
                 >
-                  Don't remind again
+                  ${uiText("Don't remind again", "Đừng nhắc lại")}
                 </button>
               </div>
             `
@@ -1629,7 +1712,12 @@ export function renderConfig(props: ConfigProps) {
           ? html`
               <details class="config-diff">
                 <summary class="config-diff__summary">
-                  <span>View ${diff.length} pending change${diff.length !== 1 ? "s" : ""}</span>
+                  <span>
+                    ${uiText(
+                      `View ${diff.length} pending change${diff.length !== 1 ? "s" : ""}`,
+                      `Xem ${diff.length} thay đổi đang chờ`,
+                    )}
+                  </span>
                   <svg
                     class="config-diff__chevron"
                     viewBox="0 0 24 24"
@@ -1679,7 +1767,7 @@ export function renderConfig(props: ConfigProps) {
                 }}
               >
                 <summary class="config-diff__summary">
-                  <span>View pending changes</span>
+                  <span>${uiText("View pending changes", "Xem thay đổi đang chờ")}</span>
                   <svg
                     class="config-diff__chevron"
                     viewBox="0 0 24 24"
@@ -1722,7 +1810,10 @@ export function renderConfig(props: ConfigProps) {
                       )
                     : html`
                         <div class="config-diff__item">
-                          Changes detected (JSON diff not available)
+                          ${uiText(
+                            "Changes detected (JSON diff not available)",
+                            "Đã phát hiện thay đổi (không có diff JSON)",
+                          )}
                         </div>
                       `}
                 </div>
@@ -1749,7 +1840,9 @@ export function renderConfig(props: ConfigProps) {
                         class="config-env-peek-btn ${envSensitiveVisible
                           ? "config-env-peek-btn--active"
                           : ""}"
-                        title=${envSensitiveVisible ? "Hide env values" : "Reveal env values"}
+                        title=${envSensitiveVisible
+                          ? uiText("Hide env values", "Ẩn giá trị env")
+                          : uiText("Reveal env values", "Hiện giá trị env")}
                         @click=${() => {
                           cvs.envRevealed = !cvs.envRevealed;
                           requestUpdate();
@@ -1768,7 +1861,7 @@ export function renderConfig(props: ConfigProps) {
                           <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
                           <circle cx="12" cy="12" r="3"></circle>
                         </svg>
-                        Peek
+                        ${uiText("Peek", "Xem nhanh")}
                       </button>
                     `
                   : nothing}
@@ -1792,7 +1885,7 @@ export function renderConfig(props: ConfigProps) {
                       ? html`
                           <div class="config-loading">
                             <div class="config-loading__spinner"></div>
-                            <span>Loading schema…</span>
+                            <span>${uiText("Loading schema…", "Đang tải schema…")}</span>
                           </div>
                         `
                       : renderConfigForm({
@@ -1826,14 +1919,16 @@ export function renderConfig(props: ConfigProps) {
                       ${formUnsafe
                         ? html`
                             <div class="callout info" style="margin-bottom: 12px">
-                              Your config contains fields the form editor can't safely represent.
-                              Use Raw mode to edit those entries.
+                              ${uiText(
+                                "Your config contains fields the form editor can't safely represent. Use Raw mode to edit those entries.",
+                                "Cấu hình của bạn có trường mà trình sửa form không thể biểu diễn an toàn. Hãy dùng chế độ thô để sửa các mục đó.",
+                              )}
                             </div>
                           `
                         : nothing}
                       <div class="field config-raw-field">
                         <span style="display:flex;align-items:center;gap:8px;">
-                          Raw config (JSON/JSON5)
+                          ${uiText("Raw config (JSON/JSON5)", "Cấu hình thô (JSON/JSON5)")}
                           ${sensitiveCount > 0
                             ? html`
                                 <span class="pill pill--sm"
@@ -1845,9 +1940,12 @@ export function renderConfig(props: ConfigProps) {
                                 <button
                                   class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"
                                   title=${blurred
-                                    ? "Reveal sensitive values"
-                                    : "Hide sensitive values"}
-                                  aria-label="Toggle raw config redaction"
+                                    ? uiText("Reveal sensitive values", "Hiện giá trị nhạy cảm")
+                                    : uiText("Hide sensitive values", "Ẩn giá trị nhạy cảm")}
+                                  aria-label=${uiText(
+                                    "Toggle raw config redaction",
+                                    "Bật/tắt che cấu hình thô",
+                                  )}
                                   aria-pressed=${!blurred}
                                   @click=${() => {
                                     cvs.rawRevealed = !cvs.rawRevealed;
@@ -1862,13 +1960,18 @@ export function renderConfig(props: ConfigProps) {
                         ${blurred
                           ? html`
                               <div class="callout info" style="margin-top: 12px">
-                                ${sensitiveCount} sensitive value${sensitiveCount === 1 ? "" : "s"}
-                                hidden. Use the reveal button above to edit the raw config.
+                                ${uiText(
+                                  `${sensitiveCount} sensitive value${sensitiveCount === 1 ? "" : "s"} hidden. Use the reveal button above to edit the raw config.`,
+                                  `${sensitiveCount} giá trị nhạy cảm đang bị ẩn. Dùng nút hiện ở trên để sửa cấu hình thô.`,
+                                )}
                               </div>
                             `
                           : html`
                               <textarea
-                                placeholder="Raw config (JSON/JSON5)"
+                                placeholder=${uiText(
+                                  "Raw config (JSON/JSON5)",
+                                  "Cấu hình thô (JSON/JSON5)",
+                                )}
                                 .value=${props.raw}
                                 @input=${(e: Event) => {
                                   props.onRawChange((e.target as HTMLTextAreaElement).value);

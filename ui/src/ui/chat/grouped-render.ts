@@ -17,6 +17,7 @@ import type {
   ToolCard,
 } from "../types/chat-types.ts";
 import { resolveLocalUserName } from "../user-identity.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 export { resolveAssistantTextAvatar } from "../views/agents-utils.ts";
 import { renderChatAvatar } from "./chat-avatar.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
@@ -51,8 +52,8 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) {
     return {
-      label: "Unknown date",
-      title: "Unknown date",
+      label: uiText("Unknown date", "Không rõ ngày"),
+      title: uiText("Unknown date", "Không rõ ngày"),
       dateTime: "",
     };
   }
@@ -348,7 +349,7 @@ export function renderStreamingGroup(
   basePath?: string,
   authToken?: string | null,
 ) {
-  const name = assistant?.name ?? "Assistant";
+  const name = assistant?.name ?? uiText("Assistant", "Trợ lý");
 
   return html`
     <div class="chat-group assistant">
@@ -400,7 +401,7 @@ export function renderMessageGroup(
   },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
-  const assistantName = opts.assistantName ?? "Assistant";
+  const assistantName = opts.assistantName ?? uiText("Assistant", "Trợ lý");
   const resolvedUserName = resolveLocalUserName({
     name: opts.userName ?? null,
     avatar: opts.userAvatar ?? null,
@@ -412,7 +413,7 @@ export function renderMessageGroup(
       : normalizedRole === "assistant"
         ? assistantName
         : normalizedRole === "tool"
-          ? "Tool"
+          ? uiText("Tool", "Công cụ")
           : normalizedRole;
   const roleClass =
     normalizedRole === "user"
@@ -603,9 +604,12 @@ function renderMessageMeta(meta: GroupMeta | null) {
 
   return html`
     <details class="msg-meta">
-      <summary class="msg-meta__summary" title="Show message context details">
+      <summary
+        class="msg-meta__summary"
+        title=${uiText("Show message context details", "Hiện chi tiết ngữ cảnh tin nhắn")}
+      >
         <span class="msg-meta__summary-icon" aria-hidden="true">${icons.chevronRight}</span>
-        <span>Context</span>
+        <span>${uiText("Context", "Ngữ cảnh")}</span>
       </summary>
       <span class="msg-meta__details">${parts}</span>
     </details>
@@ -640,8 +644,8 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
     <span class="chat-delete-wrap">
       <button
         class="chat-group-delete"
-        title="Delete"
-        aria-label="Delete message"
+        title=${uiText("Delete", "Xóa")}
+        aria-label=${uiText("Delete message", "Xóa tin nhắn")}
         @click=${(e: Event) => {
           if (shouldSkipDeleteConfirm()) {
             onDelete();
@@ -657,14 +661,14 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
           const popover = document.createElement("div");
           popover.className = `chat-delete-confirm chat-delete-confirm--${side}`;
           popover.innerHTML = `
-            <p class="chat-delete-confirm__text">Delete this message?</p>
+            <p class="chat-delete-confirm__text">${uiText("Delete this message?", "Xóa tin nhắn này?")}</p>
             <label class="chat-delete-confirm__remember">
               <input type="checkbox" class="chat-delete-confirm__check" />
-              <span>Don't ask again</span>
+              <span>${uiText("Don't ask again", "Đừng hỏi lại")}</span>
             </label>
             <div class="chat-delete-confirm__actions">
-              <button class="chat-delete-confirm__cancel" type="button">Cancel</button>
-              <button class="chat-delete-confirm__yes" type="button">Delete</button>
+              <button class="chat-delete-confirm__cancel" type="button">${uiText("Cancel", "Hủy")}</button>
+              <button class="chat-delete-confirm__yes" type="button">${uiText("Delete", "Xóa")}</button>
             </div>
           `;
           wrap.appendChild(popover);
@@ -758,7 +762,7 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
   const renderImageElement = (img: RenderableImageBlock, previewUrl: string) => html`
     <img
       src=${previewUrl}
-      alt=${img.alt ?? "Attached image"}
+      alt=${img.alt ?? uiText("Attached image", "Ảnh đính kèm")}
       class="chat-message-image"
       width=${img.width ?? nothing}
       height=${img.height ?? nothing}
@@ -791,8 +795,8 @@ function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
       <span class="chat-reply-pill__icon">${icons.messageSquare}</span>
       <span class="chat-reply-pill__label">
         ${replyTarget.kind === "current"
-          ? "Replying to current message"
-          : `Replying to ${replyTarget.id}`}
+          ? uiText("Replying to current message", "Đang trả lời tin nhắn hiện tại")
+          : uiText(`Replying to ${replyTarget.id}`, `Đang trả lời ${replyTarget.id}`)}
       </span>
     </div>
   `;
@@ -1195,7 +1199,10 @@ function renderAssistantAttachments(
             return renderAssistantAttachmentStatusCard({
               kind: "image",
               label: attachment.label,
-              badge: availability.status === "checking" ? "Checking..." : "Unavailable",
+              badge:
+                availability.status === "checking"
+                  ? uiText("Checking...", "Đang kiểm tra...")
+                  : uiText("Unavailable", "Không khả dụng"),
               reason: availability.status === "unavailable" ? availability.reason : undefined,
             });
           }
@@ -1216,10 +1223,14 @@ function renderAssistantAttachments(
                 ${!attachmentUrl
                   ? html`<span
                       class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
-                      >${availability.status === "checking" ? "Checking..." : "Unavailable"}</span
+                      >${availability.status === "checking"
+                        ? uiText("Checking...", "Đang kiểm tra...")
+                        : uiText("Unavailable", "Không khả dụng")}</span
                     >`
                   : attachment.isVoiceNote
-                    ? html`<span class="chat-assistant-attachment-badge">Voice note</span>`
+                    ? html`<span class="chat-assistant-attachment-badge">
+                        ${uiText("Voice note", "Ghi âm thoại")}
+                      </span>`
                     : nothing}
               </div>
               ${attachmentUrl
@@ -1237,7 +1248,10 @@ function renderAssistantAttachments(
             return renderAssistantAttachmentStatusCard({
               kind: "video",
               label: attachment.label,
-              badge: availability.status === "checking" ? "Checking..." : "Unavailable",
+              badge:
+                availability.status === "checking"
+                  ? uiText("Checking...", "Đang kiểm tra...")
+                  : uiText("Unavailable", "Không khả dụng"),
               reason: availability.status === "unavailable" ? availability.reason : undefined,
             });
           }
@@ -1258,7 +1272,10 @@ function renderAssistantAttachments(
           return renderAssistantAttachmentStatusCard({
             kind: "document",
             label: attachment.label,
-            badge: availability.status === "checking" ? "Checking..." : "Unavailable",
+            badge:
+              availability.status === "checking"
+                ? uiText("Checking...", "Đang kiểm tra...")
+                : uiText("Unavailable", "Không khả dụng"),
             reason: availability.status === "unavailable" ? availability.reason : undefined,
           });
         }
@@ -1342,14 +1359,17 @@ function detectJson(text: string): { parsed: unknown; pretty: string } | null {
 /** Build a short summary label for collapsed JSON (type + key count or array length). */
 function jsonSummaryLabel(parsed: unknown): string {
   if (Array.isArray(parsed)) {
-    return `Array (${parsed.length} item${parsed.length === 1 ? "" : "s"})`;
+    return uiText(
+      `Array (${parsed.length} item${parsed.length === 1 ? "" : "s"})`,
+      `Mảng (${parsed.length} mục)`,
+    );
   }
   if (parsed && typeof parsed === "object") {
     const keys = Object.keys(parsed as Record<string, unknown>);
     if (keys.length <= 4) {
       return `{ ${keys.join(", ")} }`;
     }
-    return `Object (${keys.length} keys)`;
+    return uiText(`Object (${keys.length} keys)`, `Đối tượng (${keys.length} khóa)`);
   }
   return "JSON";
 }
@@ -1359,8 +1379,8 @@ function renderExpandButton(markdown: string, onOpenSidebar: (content: SidebarCo
     <button
       class="btn btn--xs chat-expand-btn"
       type="button"
-      title="Open in canvas"
-      aria-label="Open in canvas"
+      title=${uiText("Open in canvas", "Mở trong canvas")}
+      aria-label=${uiText("Open in canvas", "Mở trong canvas")}
       @click=${() => onOpenSidebar({ kind: "markdown", content: markdown })}
     >
       <span class="chat-expand-btn__icon" aria-hidden="true">${icons.panelRightOpen}</span>
@@ -1490,7 +1510,7 @@ function renderGroupedMessage(
       ? singleToolDisplay.detail
       : singleToolDisplay && !markdown && !hasImages
         ? singleToolDisplay.label
-        : "Tool output";
+        : uiText("Tool output", "Output công cụ");
   const toolMessageIcon = singleToolDisplay ? icons[singleToolDisplay.icon] : icons.zap;
 
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
@@ -1636,8 +1656,14 @@ function renderGroupedMessage(
       ${duplicateCount > 1
         ? html`<div
             class="chat-duplicate-count"
-            aria-label=${`${duplicateCount} consecutive identical messages collapsed`}
-            title=${`${duplicateCount} consecutive identical messages collapsed`}
+            aria-label=${uiText(
+              `${duplicateCount} consecutive identical messages collapsed`,
+              `${duplicateCount} tin nhắn giống nhau liên tiếp đã được gộp`,
+            )}
+            title=${uiText(
+              `${duplicateCount} consecutive identical messages collapsed`,
+              `${duplicateCount} tin nhắn giống nhau liên tiếp đã được gộp`,
+            )}
           >
             ×${duplicateCount}
           </div>`
