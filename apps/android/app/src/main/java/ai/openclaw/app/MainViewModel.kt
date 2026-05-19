@@ -91,6 +91,9 @@ class MainViewModel(
   val cronJobs: StateFlow<List<GatewayCronJobSummary>> = runtimeState(initial = emptyList()) { it.cronJobs }
   val cronRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.cronRefreshing }
   val cronErrorText: StateFlow<String?> = runtimeState(initial = null) { it.cronErrorText }
+  val usageSummary: StateFlow<GatewayUsageSummary> = runtimeState(initial = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())) { it.usageSummary }
+  val usageRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.usageRefreshing }
+  val usageErrorText: StateFlow<String?> = runtimeState(initial = null) { it.usageErrorText }
   val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
   val seamColorArgb: StateFlow<Long> = runtimeState(initial = 0xFF0EA5E9) { it.seamColorArgb }
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
@@ -375,6 +378,10 @@ class MainViewModel(
 
   fun refreshCronJobs() {
     ensureRuntime().refreshCronJobs()
+  }
+
+  fun refreshUsage() {
+    ensureRuntime().refreshUsage()
   }
 
   fun loadChat(sessionKey: String) {
