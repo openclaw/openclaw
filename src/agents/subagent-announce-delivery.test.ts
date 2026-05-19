@@ -1200,7 +1200,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "completion agent did not deliver through the message tool",
+      error: "completion agent did not produce a visible reply",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -1574,11 +1574,16 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
     });
     const sendMessage = createSendMessageMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "transcript_commit_wait_unsupported",
+      "no_active_run",
+    ]);
     const result = await deliverSlackThreadAnnouncement({
       callGateway,
       sendMessage,
+      queueEmbeddedPiMessageWithOutcome,
       sessionId: "requester-session-4",
-      isActive: false,
+      isActive: true,
       expectsCompletionMessage: true,
       directIdempotencyKey: "announce-thread-fallback-empty",
       internalEvents: [
@@ -2281,11 +2286,16 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
     });
     const sendMessage = createSendMessageMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "transcript_commit_wait_unsupported",
+      "no_active_run",
+    ]);
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
       sendMessage,
+      queueEmbeddedPiMessageWithOutcome,
       sessionId: "requester-session-channel",
-      isActive: false,
+      isActive: true,
       expectsCompletionMessage: true,
       directIdempotencyKey: "announce-channel-fallback-empty",
       internalEvents: [
