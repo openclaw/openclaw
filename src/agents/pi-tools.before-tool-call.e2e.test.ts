@@ -6,8 +6,8 @@ import {
 } from "../infra/diagnostic-events.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
-import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
+import { type HookContext, wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
+import { CRITICAL_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 vi.mock("../plugins/hook-runner-global.js");
@@ -46,7 +46,7 @@ describe("before_tool_call loop detection behavior", () => {
   function createWrappedTool(
     name: string,
     execute: ReturnType<typeof vi.fn>,
-    loopDetectionContext = enabledLoopDetectionContext,
+    loopDetectionContext: HookContext = enabledLoopDetectionContext,
   ) {
     return wrapToolWithBeforeToolCallHook(
       { name, execute } as unknown as AnyAgentTool,
@@ -193,30 +193,57 @@ describe("before_tool_call loop detection behavior", () => {
     }
   });
 
-  it("keeps generic repeated calls warn-only below global breaker", async () => {
+  it("blocks generic repeated identical calls at the block threshold (P2.12)", async () => {
+    // P2.12 deliberately overturns the old "generic loops are warn-only"
+    // contract: a model spamming the same (tool, args) call in a row must be
+    // blocked early, not merely warned. Default block threshold is 5.
     const { tool, params } = createGenericReadRepeatFixture();
 
-    for (let i = 0; i < CRITICAL_THRESHOLD + 5; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
       await expect(tool.execute(`read-${i}`, params, undefined, undefined)).resolves.toBeDefined();
     }
+
+    await expect(tool.execute("read-4", params, undefined, undefined)).rejects.toThrow("CRITICAL");
   });
 
-  it("blocks generic repeated no-progress calls at global breaker threshold", async () => {
-    const { tool, params } = createGenericReadRepeatFixture();
+  it("intercepts a generic identical runaway well before the global breaker (P2.12)", async () => {
+    await withToolLoopEvents(
+      async (emitted) => {
+        const { tool, params } = createGenericReadRepeatFixture();
 
-    for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
-      await expect(tool.execute(`read-${i}`, params, undefined, undefined)).resolves.toBeDefined();
-    }
+        for (let i = 0; i < 4; i += 1) {
+          await tool.execute(`read-${i}`, params, undefined, undefined);
+        }
+        await expect(tool.execute("read-4", params, undefined, undefined)).rejects.toThrow(
+          "CRITICAL",
+        );
 
-    await expect(
-      tool.execute(`read-${GLOBAL_CIRCUIT_BREAKER_THRESHOLD}`, params, undefined, undefined),
-    ).rejects.toThrow("global circuit breaker");
+        const blockEvent = emitted.at(-1);
+        expect(blockEvent?.detector).toBe("generic_repeat");
+        expect(blockEvent?.level).toBe("critical");
+        expect(blockEvent?.action).toBe("block");
+        // Blocked at 5, far below the global-breaker threshold (30).
+        expect(blockEvent?.count).toBe(5);
+      },
+      (evt) => evt.level === "critical",
+    );
   });
 
   it("coalesces repeated generic warning events into threshold buckets", async () => {
     await withToolLoopEvents(
       async (emitted) => {
-        const { tool, params } = createGenericReadRepeatFixture();
+        const execute = vi.fn().mockResolvedValue({
+          content: [{ type: "text", text: "same output" }],
+          details: { ok: true },
+        });
+        // Raise the P2.12 block threshold above the warn buckets so the
+        // warn-coalescing path stays exercised (block path covered above).
+        const tool = createWrappedTool("read", execute, {
+          agentId: "main",
+          sessionKey: "main",
+          loopDetection: { enabled: true, genericRepeatBlockThreshold: 100 },
+        });
+        const params = { path: "/tmp/file" };
 
         for (let i = 0; i < 21; i += 1) {
           await tool.execute(`read-bucket-${i}`, params, undefined, undefined);

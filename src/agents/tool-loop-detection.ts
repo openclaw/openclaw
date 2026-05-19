@@ -28,12 +28,31 @@ export const TOOL_CALL_HISTORY_SIZE = 30;
 export const WARNING_THRESHOLD = 10;
 export const CRITICAL_THRESHOLD = 20;
 export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+
+// P2.12 tool-call loop guard (gemma-memory follow-up).
+// Small local models (e.g. gemma) re-issue the *same* (tool, args) call dozens of
+// times after every ENOENT/sanitize failure, burning tokens + latency (observed
+// up to 61 identical `read` calls in a single session). The pre-existing
+// generic_repeat detector only *warns* and never blocks, so add a low-threshold
+// blocking escalation: once the same (toolName, args) repeats this many times
+// (inclusive of the current attempt) the call is blocked with a synthetic
+// tool_result via the before-tool-call hook, letting the model respond with text.
+// "window" = number of prior identical calls tolerated; block fires on
+// (window + 1)-th. Default window 4 -> block on the 5th identical call.
+export const DEFAULT_GENERIC_REPEAT_BLOCK_WINDOW = 4;
+
+// Env knobs so operators can tune/disable without editing config files.
+const ENV_GUARD_DISABLED = "OPENCLAW_TOOL_LOOP_GUARD_DISABLED";
+const ENV_GUARD_ENABLED = "OPENCLAW_TOOL_LOOP_GUARD_ENABLED";
+const ENV_GUARD_WINDOW = "OPENCLAW_TOOL_LOOP_GUARD_WINDOW";
+
 const DEFAULT_LOOP_DETECTION_CONFIG = {
   enabled: false,
   historySize: TOOL_CALL_HISTORY_SIZE,
   warningThreshold: WARNING_THRESHOLD,
   criticalThreshold: CRITICAL_THRESHOLD,
   globalCircuitBreakerThreshold: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+  genericRepeatBlockThreshold: DEFAULT_GENERIC_REPEAT_BLOCK_WINDOW + 1,
   detectors: {
     genericRepeat: true,
     knownPollNoProgress: true,
@@ -47,6 +66,11 @@ type ResolvedLoopDetectionConfig = {
   warningThreshold: number;
   criticalThreshold: number;
   globalCircuitBreakerThreshold: number;
+  /**
+   * Total identical (toolName, args) call count — including the current
+   * attempt — at which generic_repeat escalates from warn to a hard block.
+   */
+  genericRepeatBlockThreshold: number;
   detectors: {
     genericRepeat: boolean;
     knownPollNoProgress: boolean;
@@ -59,6 +83,35 @@ function asPositiveInt(value: number | undefined, fallback: number): number {
     return fallback;
   }
   return value;
+}
+
+/** Parse a boolean-ish env var; undefined when unset/unparseable. */
+function envFlag(name: string): boolean | undefined {
+  const raw = process.env[name];
+  if (raw === undefined) {
+    return undefined;
+  }
+  const v = raw.trim().toLowerCase();
+  if (v === "1" || v === "true" || v === "yes" || v === "on") {
+    return true;
+  }
+  if (v === "" || v === "0" || v === "false" || v === "no" || v === "off") {
+    return false;
+  }
+  return undefined;
+}
+
+/** Parse a positive-int env var; undefined when unset/invalid. */
+function envPositiveInt(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined) {
+    return undefined;
+  }
+  const n = Number.parseInt(raw.trim(), 10);
+  if (!Number.isInteger(n) || n <= 0) {
+    return undefined;
+  }
+  return n;
 }
 
 function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedLoopDetectionConfig {
@@ -82,12 +135,40 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
     globalCircuitBreakerThreshold = criticalThreshold + 1;
   }
 
+  // enabled precedence: DISABLED env kill-switch > ENABLED env > config > default.
+  let enabled = config?.enabled ?? DEFAULT_LOOP_DETECTION_CONFIG.enabled;
+  const envEnabled = envFlag(ENV_GUARD_ENABLED);
+  if (envEnabled !== undefined) {
+    enabled = envEnabled;
+  }
+  if (envFlag(ENV_GUARD_DISABLED) === true) {
+    enabled = false;
+  }
+
+  // genericRepeatBlockThreshold precedence: WINDOW env (+1) > config > default.
+  // Keep the warn->block ordering sane and never above the global breaker.
+  const envWindow = envPositiveInt(ENV_GUARD_WINDOW);
+  let genericRepeatBlockThreshold =
+    envWindow !== undefined
+      ? envWindow + 1
+      : asPositiveInt(
+          config?.genericRepeatBlockThreshold,
+          DEFAULT_LOOP_DETECTION_CONFIG.genericRepeatBlockThreshold,
+        );
+  if (genericRepeatBlockThreshold < 2) {
+    genericRepeatBlockThreshold = 2;
+  }
+  if (genericRepeatBlockThreshold > globalCircuitBreakerThreshold) {
+    genericRepeatBlockThreshold = globalCircuitBreakerThreshold;
+  }
+
   return {
-    enabled: config?.enabled ?? DEFAULT_LOOP_DETECTION_CONFIG.enabled,
+    enabled,
     historySize: asPositiveInt(config?.historySize, DEFAULT_LOOP_DETECTION_CONFIG.historySize),
     warningThreshold,
     criticalThreshold,
     globalCircuitBreakerThreshold,
+    genericRepeatBlockThreshold,
     detectors: {
       genericRepeat:
         config?.detectors?.genericRepeat ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.genericRepeat,
@@ -366,6 +447,29 @@ function canonicalPairKey(signatureA: string, signatureB: string): string {
 }
 
 /**
+ * Count the trailing run of identical (toolName, argsHash) calls at the end of
+ * history. Any interleaved different toolName/args resets the run, so this is
+ * a true consecutive streak (not a windowed occurrence count). Used by the
+ * P2.12 generic-repeat hard block so that legitimate alternating patterns
+ * (handled by the ping-pong detector) are never preempted.
+ */
+function getConsecutiveIdenticalStreak(
+  history: ReadonlyArray<{ toolName: string; argsHash: string }>,
+  toolName: string,
+  argsHash: string,
+): number {
+  let streak = 0;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const record = history[i];
+    if (!record || record.toolName !== toolName || record.argsHash !== argsHash) {
+      break;
+    }
+    streak += 1;
+  }
+  return streak;
+}
+
+/**
  * Detect if an agent is stuck in a repetitive tool call loop.
  * Checks if the same tool+params combination has been called excessively.
  */
@@ -470,10 +574,40 @@ export function detectToolCallLoop(
     };
   }
 
-  // Generic detector: warn-only for repeated identical calls.
+  // Generic detector for repeated identical (toolName, args) calls.
+  // `recentCount` counts prior identical calls anywhere in the history window;
+  // the current attempt is not yet recorded (recordToolCall runs after detect).
   const recentCount = history.filter(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
   ).length;
+
+  // P2.12: hard-block consecutive runaways. Count the trailing run of identical
+  // calls (any interleaved different tool/args resets it) and, once the same
+  // call has repeated genericRepeatBlockThreshold times in a row (default 5),
+  // block it with a critical result so the before-tool-call hook injects a
+  // synthetic blocked tool_result instead of executing. Every subsequent
+  // identical attempt keeps getting blocked (the model can never re-run it),
+  // which is the catastrophic-loop backstop. Using a consecutive streak (not a
+  // windowed count) keeps legitimate alternating patterns for the ping-pong
+  // detector, which is evaluated earlier.
+  const consecutiveIdentical = getConsecutiveIdenticalStreak(history, toolName, currentHash) + 1;
+  if (
+    !knownPollTool &&
+    resolvedConfig.detectors.genericRepeat &&
+    consecutiveIdentical >= resolvedConfig.genericRepeatBlockThreshold
+  ) {
+    log.error(
+      `Blocking ${toolName}: called ${consecutiveIdentical} times in a row with identical arguments (generic repeat block)`,
+    );
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "generic_repeat",
+      count: consecutiveIdentical,
+      message: `CRITICAL: ${toolName} has been called ${consecutiveIdentical} times in a row with identical arguments and the previous attempts all returned the same result. Session execution blocked to prevent a runaway loop. Do not retry this exact call — try a different approach or report the result honestly to the user.`,
+      warningKey: `generic:${toolName}:${currentHash}`,
+    };
+  }
 
   if (
     !knownPollTool &&

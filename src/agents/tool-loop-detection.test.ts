@@ -276,18 +276,20 @@ describe("tool-loop-detection", () => {
       expect(result.stuck).toBe(false);
     });
 
-    it("warns on generic repeated tool+args calls", () => {
+    it("warns on generic repeated tool+args calls below the block threshold", () => {
       const state = createState();
+      // P2.12: generic_repeat now hard-blocks by default. Raise the block
+      // threshold above the warning threshold so the warn tier is still
+      // exercised (the block tier is covered in the loop-guard test suite).
+      const warnOnlyConfig: ToolLoopDetectionConfig = {
+        enabled: true,
+        genericRepeatBlockThreshold: WARNING_THRESHOLD + 5,
+      };
       for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
-        recordToolCall(state, "read", { path: "/same.txt" }, `warn-${i}`);
+        recordToolCall(state, "read", { path: "/same.txt" }, `warn-${i}`, warnOnlyConfig);
       }
 
-      const result = detectToolCallLoop(
-        state,
-        "read",
-        { path: "/same.txt" },
-        enabledLoopDetectionConfig,
-      );
+      const result = detectToolCallLoop(state, "read", { path: "/same.txt" }, warnOnlyConfig);
 
       expect(result.stuck).toBe(true);
       if (result.stuck) {
@@ -299,7 +301,10 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("keeps generic loops warn-only below global breaker threshold", () => {
+    it("blocks generic repeated tool+args calls at the default block threshold (P2.12)", () => {
+      // P2.12 deliberately overturns the old "generic loops are warn-only"
+      // contract: a small local model spamming the same (tool, args) call must
+      // be blocked, not merely warned. Default block threshold is 5.
       const fixture = createReadNoProgressFixture();
       const loopResult = detectLoopAfterRepeatedCalls({
         toolName: fixture.toolName,
@@ -309,7 +314,9 @@ describe("tool-loop-detection", () => {
       });
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("generic_repeat");
+        expect(loopResult.message).toContain("CRITICAL");
       }
     });
 

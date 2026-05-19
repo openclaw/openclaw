@@ -161,6 +161,12 @@ export type ToolLoopDetectionConfig = {
   criticalThreshold?: number;
   /** Global no-progress breaker threshold (default: 30). */
   globalCircuitBreakerThreshold?: number;
+  /**
+   * Total identical (toolName, args) call count — including the current
+   * attempt — at which generic_repeat hard-blocks the call instead of only
+   * warning (default: 5, or OPENCLAW_TOOL_LOOP_GUARD_WINDOW + 1).
+   */
+  genericRepeatBlockThreshold?: number;
   /** Detector toggles. */
   detectors?: ToolLoopDetectionDetectorConfig;
 };
