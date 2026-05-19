@@ -154,6 +154,20 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeTranscriptFragmentsInsertWordSpacing() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "Turn off"))
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "the lights"))
+
+    val entry = manager.conversation.value.single()
+    assertEquals("Turn off the lights", entry.text)
+    assertTrue(entry.isStreaming)
+  }
+
+  @Test
   fun realtimeFinalTranscriptCanCompleteDeltaText() {
     val manager = createManager()
 
@@ -224,6 +238,27 @@ class TalkModeManagerTest {
     assertFalse(entries[0].isStreaming)
     assertEquals(VoiceConversationRole.Assistant, entries[1].role)
     assertEquals("Checking", entries[1].text)
+  }
+
+  @Test
+  fun realtimeFinalNextUserAfterAssistantStartsCreatesNewBubble() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "First request"))
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "assistant", text = "Checking"))
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "Second request", final = true))
+
+    val entries = manager.conversation.value
+    assertEquals(3, entries.size)
+    assertEquals(VoiceConversationRole.User, entries[0].role)
+    assertEquals("First request", entries[0].text)
+    assertEquals(VoiceConversationRole.Assistant, entries[1].role)
+    assertEquals("Checking", entries[1].text)
+    assertEquals(VoiceConversationRole.User, entries[2].role)
+    assertEquals("Second request", entries[2].text)
+    assertFalse(entries[2].isStreaming)
   }
 
   @Test

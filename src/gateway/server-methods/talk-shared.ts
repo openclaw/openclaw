@@ -211,7 +211,12 @@ export function resolveConfiguredRealtimeTranscriptionProvider(params: {
   throw new Error("No realtime transcription provider registered");
 }
 
-const DEFAULT_REALTIME_INSTRUCTIONS = `You are OpenClaw's realtime voice interface. Keep spoken replies concise. If the user asks for code, repository state, tools, files, current OpenClaw context, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`;
+const DEFAULT_REALTIME_INSTRUCTIONS = [
+  "You are OpenClaw's realtime voice interface. Keep spoken replies concise.",
+  `If the user asks for code, repository state, tools, files, current OpenClaw context, device or home-control actions, lights, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`,
+  `Do not claim you cannot control devices, use tools, or reach OpenClaw unless ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} returns that failure.`,
+  `When ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} is in progress, speak one brief acknowledgement such as "Let me check that for you", then wait for the final OpenClaw result before answering with the actual result.`,
+].join(" ");
 
 export function buildRealtimeInstructions(configuredInstructions?: string): string {
   const extra = normalizeOptionalString(configuredInstructions);

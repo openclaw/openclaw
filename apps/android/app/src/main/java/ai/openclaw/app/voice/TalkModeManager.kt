@@ -106,6 +106,7 @@ class TalkModeManager internal constructor(
     private const val maxCachedRunCompletions = 128
     private const val maxConversationEntries = 40
     private const val realtimePlaybackBufferMs = 240
+    private const val realtimeUserFinalRewriteGraceMs = 1_500L
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -167,6 +168,7 @@ class TalkModeManager internal constructor(
   private val pendingRealtimeToolCompletions = LinkedHashMap<String, RealtimeToolCompletion>()
   private var realtimeUserEntryId: String? = null
   private var realtimeUserEntryAwaitingFinal = false
+  private var realtimeUserEntryAwaitingFinalStartedAtMs: Long? = null
   private var realtimeAssistantEntryId: String? = null
   private val realtimePlaybackLock = Any()
   private var realtimeAudioTrack: AudioTrack? = null
@@ -1015,6 +1017,7 @@ class TalkModeManager internal constructor(
     pendingRealtimeToolCompletions.clear()
     realtimeUserEntryId = null
     realtimeUserEntryAwaitingFinal = false
+    realtimeUserEntryAwaitingFinalStartedAtMs = null
     realtimeAssistantEntryId = null
     stopRealtimePlayback()
     if (preserveStatus) {
@@ -1210,6 +1213,7 @@ class TalkModeManager internal constructor(
       finishRealtimeConversationEntry(VoiceConversationRole.User)
       entryId = null
       realtimeUserEntryAwaitingFinal = false
+      realtimeUserEntryAwaitingFinalStartedAtMs = null
     }
     var resolvedText: String
     val resolvedEntryId =
@@ -1224,6 +1228,7 @@ class TalkModeManager internal constructor(
       VoiceConversationRole.User -> {
         realtimeUserEntryId = if (isFinal) null else resolvedEntryId
         realtimeUserEntryAwaitingFinal = false
+        realtimeUserEntryAwaitingFinalStartedAtMs = null
       }
       VoiceConversationRole.Assistant -> realtimeAssistantEntryId = if (isFinal) null else resolvedEntryId
     }
@@ -1244,6 +1249,7 @@ class TalkModeManager internal constructor(
       _conversation.value = updated
       if (role == VoiceConversationRole.User) {
         realtimeUserEntryAwaitingFinal = true
+        realtimeUserEntryAwaitingFinalStartedAtMs = SystemClock.elapsedRealtime()
       }
     }
     when (role) {
@@ -1257,13 +1263,19 @@ class TalkModeManager internal constructor(
     incoming: String,
     isFinal: Boolean,
   ): Boolean {
-    if (isFinal && realtimeUserEntryAwaitingFinal) return false
     val entry = _conversation.value.firstOrNull { it.id == entryId } ?: return false
     if (entry.isStreaming) return false
     val existing = entry.text
     if (existing.isBlank() || incoming.isBlank()) return false
     if (incoming.firstOrNull()?.isWhitespace() == true) return false
     if (incoming == existing || incoming.startsWith(existing) || existing.endsWith(incoming)) return false
+    if (isFinal && realtimeUserEntryAwaitingFinal) {
+      val elapsedMs =
+        realtimeUserEntryAwaitingFinalStartedAtMs?.let { SystemClock.elapsedRealtime() - it } ?: Long.MAX_VALUE
+      if (elapsedMs <= realtimeUserFinalRewriteGraceMs && looksLikeTranscriptReplacement(existing, incoming)) {
+        return false
+      }
+    }
     return true
   }
 
@@ -1319,8 +1331,78 @@ class TalkModeManager internal constructor(
     if (incoming == existing || existing.endsWith(incoming)) return existing
     if (incoming.startsWith(existing)) return incoming
     if (incoming.firstOrNull()?.isWhitespace() == true) return existing + incoming
-    if (isFinal && incoming.length > existing.length) return incoming
-    return existing + incoming
+    if (isFinal && looksLikeTranscriptReplacement(existing, incoming)) return incoming
+    val overlap = findTranscriptTextOverlap(existing, incoming)
+    val suffix = if (overlap > 0) incoming.drop(overlap) else incoming
+    if (suffix.isEmpty()) return existing
+    val separator =
+      if (overlap > 0 || !shouldInsertTranscriptSpace(existing, suffix)) {
+        ""
+      } else {
+        " "
+      }
+    return existing + separator + suffix
+  }
+
+  private fun looksLikeTranscriptReplacement(
+    existing: String,
+    incoming: String,
+  ): Boolean {
+    val existingWords = transcriptWords(existing)
+    val incomingWords = transcriptWords(incoming)
+    if (existingWords.isEmpty() || incomingWords.isEmpty()) return false
+    if (existingWords[0] != incomingWords[0]) return false
+    if (existingWords.size > 1 && incomingWords.size > 1 && existingWords[1] == incomingWords[1]) return true
+    val existingText = normalizeTranscriptText(existing)
+    val incomingText = normalizeTranscriptText(incoming)
+    val commonPrefix = commonPrefixLength(existingText, incomingText)
+    val shortest = minOf(existingText.length, incomingText.length)
+    return commonPrefix >= 6 && commonPrefix.toDouble() / maxOf(1, shortest).toDouble() >= 0.45
+  }
+
+  private fun transcriptWords(value: String): List<String> =
+    Regex("""[\p{L}\p{N}]+""")
+      .findAll(value.lowercase(Locale.ROOT))
+      .map { it.value }
+      .toList()
+
+  private fun normalizeTranscriptText(value: String): String = value.lowercase(Locale.ROOT).replace(Regex("""\s+"""), " ").trim()
+
+  private fun commonPrefixLength(
+    left: String,
+    right: String,
+  ): Int {
+    val max = minOf(left.length, right.length)
+    var index = 0
+    while (index < max && left[index] == right[index]) {
+      index += 1
+    }
+    return index
+  }
+
+  private fun findTranscriptTextOverlap(
+    existing: String,
+    incoming: String,
+  ): Int {
+    val base = existing.lowercase(Locale.ROOT)
+    val next = incoming.lowercase(Locale.ROOT)
+    val max = minOf(base.length, next.length)
+    for (length in max downTo 3) {
+      if (base.endsWith(next.take(length))) {
+        return length
+      }
+    }
+    return 0
+  }
+
+  private fun shouldInsertTranscriptSpace(
+    existing: String,
+    incoming: String,
+  ): Boolean {
+    val last = existing.lastOrNull() ?: return false
+    val first = incoming.firstOrNull() ?: return false
+    if (last.isWhitespace() || first.isWhitespace()) return false
+    return last.isLetterOrDigit() && first.isLetterOrDigit()
   }
 
   private fun startListeningInternal(markListening: Boolean) {
