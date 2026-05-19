@@ -637,11 +637,18 @@ function dismissDeleteConfirm(element: Element) {
   element.remove();
 }
 
-function resolveViewportSize() {
+function resolveViewportBounds() {
   const viewport = window.visualViewport;
+  const left = viewport?.offsetLeft ?? 0;
+  const top = viewport?.offsetTop ?? 0;
+  const width = viewport?.width ?? window.innerWidth ?? document.documentElement.clientWidth;
+  const height = viewport?.height ?? window.innerHeight ?? document.documentElement.clientHeight;
+
   return {
-    width: viewport?.width ?? window.innerWidth ?? document.documentElement.clientWidth,
-    height: viewport?.height ?? window.innerHeight ?? document.documentElement.clientHeight,
+    bottom: top + height,
+    left,
+    right: left + width,
+    top,
   };
 }
 
@@ -659,28 +666,27 @@ function placeDeleteConfirmPopover(
 ) {
   const triggerRect = trigger.getBoundingClientRect();
   const popoverRect = popover.getBoundingClientRect();
-  const viewport = resolveViewportSize();
+  const viewport = resolveViewportBounds();
   const margin = DELETE_CONFIRM_VIEWPORT_MARGIN_PX;
   const gap = DELETE_CONFIRM_TRIGGER_GAP_PX;
-  const popoverWidth = Math.min(popoverRect.width, viewport.width - margin * 2);
-  const popoverHeight = Math.min(popoverRect.height, viewport.height - margin * 2);
-  const spaceAbove = triggerRect.top - margin - gap;
-  const spaceBelow = viewport.height - triggerRect.bottom - margin - gap;
+  const viewportWidth = viewport.right - viewport.left;
+  const viewportHeight = viewport.bottom - viewport.top;
+  const popoverWidth = Math.min(popoverRect.width, viewportWidth - margin * 2);
+  const popoverHeight = Math.min(popoverRect.height, viewportHeight - margin * 2);
+  const spaceAbove = triggerRect.top - viewport.top - margin - gap;
+  const spaceBelow = viewport.bottom - triggerRect.bottom - margin - gap;
   const placeBelow = spaceAbove < popoverHeight && spaceBelow >= spaceAbove;
-  const desiredLeft =
-    side === "left" ? triggerRect.right - popoverWidth : triggerRect.left;
+  const desiredLeft = side === "left" ? triggerRect.right - popoverWidth : triggerRect.left;
   const left = clampDeleteConfirmPosition(
     desiredLeft,
-    margin,
-    viewport.width - margin - popoverWidth,
+    viewport.left + margin,
+    viewport.right - margin - popoverWidth,
   );
-  const desiredTop = placeBelow
-    ? triggerRect.bottom + gap
-    : triggerRect.top - gap - popoverHeight;
+  const desiredTop = placeBelow ? triggerRect.bottom + gap : triggerRect.top - gap - popoverHeight;
   const top = clampDeleteConfirmPosition(
     desiredTop,
-    margin,
-    viewport.height - margin - popoverHeight,
+    viewport.top + margin,
+    viewport.bottom - margin - popoverHeight,
   );
 
   popover.style.left = `${Math.round(left)}px`;

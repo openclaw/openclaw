@@ -415,21 +415,27 @@ function domRect(params: {
 function stubDeleteConfirmGeometry(params: {
   trigger: { left: number; top: number; width: number; height: number };
   popover: { width: number; height: number };
-  viewport: { width: number; height: number };
+  viewport: { left?: number; top?: number; width: number; height: number };
 }) {
   vi.stubGlobal("innerWidth", params.viewport.width);
   vi.stubGlobal("innerHeight", params.viewport.height);
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
-    this: HTMLElement,
-  ) {
-    if (this.classList.contains("chat-group-delete")) {
-      return domRect(params.trigger);
-    }
-    if (this.classList.contains("chat-delete-confirm")) {
-      return domRect(params.popover);
-    }
-    return domRect({});
+  vi.stubGlobal("visualViewport", {
+    height: params.viewport.height,
+    offsetLeft: params.viewport.left ?? 0,
+    offsetTop: params.viewport.top ?? 0,
+    width: params.viewport.width,
   });
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: HTMLElement) {
+      if (this.classList.contains("chat-group-delete")) {
+        return domRect(params.trigger);
+      }
+      if (this.classList.contains("chat-delete-confirm")) {
+        return domRect(params.popover);
+      }
+      return domRect({});
+    },
+  );
 }
 
 function clickDeleteButtonIconPath(deleteButton: HTMLButtonElement) {
@@ -623,11 +629,7 @@ describe("grouped chat rendering", () => {
 
     openDeleteConfirm(fixture.deleteButton);
 
-    const popover = expectElement(
-      fixture.container,
-      ".chat-delete-confirm",
-      HTMLElement,
-    );
+    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
     expect(popover.dataset.placement).toBe("below");
     expect(popover.style.top).toBe("34px");
     expect(popover.style.left).toBe("20px");
@@ -643,11 +645,7 @@ describe("grouped chat rendering", () => {
 
     openDeleteConfirm(fixture.deleteButton);
 
-    const popover = expectElement(
-      fixture.container,
-      ".chat-delete-confirm",
-      HTMLElement,
-    );
+    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
     expect(popover.dataset.placement).toBe("above");
     expect(popover.style.top).toBe("104px");
     expect(popover.style.left).toBe("20px");
@@ -663,12 +661,24 @@ describe("grouped chat rendering", () => {
 
     openDeleteConfirm(fixture.deleteButton);
 
-    const popover = expectElement(
-      fixture.container,
-      ".chat-delete-confirm",
-      HTMLElement,
-    );
+    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
     expect(popover.style.left).toBe("112px");
+  });
+
+  it("clamps the delete confirm inside shifted visual viewports", () => {
+    stubDeleteConfirmGeometry({
+      trigger: { left: 620, top: 540, width: 24, height: 24 },
+      popover: { width: 200, height: 80 },
+      viewport: { left: 320, top: 300, width: 320, height: 240 },
+    });
+    const fixture = renderDeleteConfirmFixture();
+
+    openDeleteConfirm(fixture.deleteButton);
+
+    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
+    expect(popover.dataset.placement).toBe("above");
+    expect(popover.style.left).toBe("432px");
+    expect(popover.style.top).toBe("452px");
   });
 
   it("removes the delete confirm outside-click listener when Cancel dismisses it", () => {
