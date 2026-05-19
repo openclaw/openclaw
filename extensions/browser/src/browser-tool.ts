@@ -789,8 +789,7 @@ export function createBrowserTool(opts?: {
                   describeImageFileWithModel: browserToolDeps.describeImageFileWithModel,
                 },
               );
-              const headerLines = [`MEDIA:${screenshotPath}`];
-              headerLines.push(`[analyzed by ${described.provider}/${described.model}]`);
+              const headerLines = [`[analyzed by ${described.provider}/${described.model}]`];
               // Vision model descriptions contain web page content which is
               // untrusted external input — wrap it the same way snapshot and
               // tabs results are wrapped to mitigate prompt injection.
@@ -803,9 +802,11 @@ export function createBrowserTool(opts?: {
                 content: [{ type: "text", text }],
                 details: {
                   ...(result as Record<string, unknown>),
-                  media: {
-                    mediaUrl: screenshotPath,
-                  },
+                  // Do NOT include details.media here — the vision path returns
+                  // a text description as the deliverable output. Exposing the raw
+                  // screenshot as media would cause channel delivery to auto-send
+                  // potentially sensitive page content. The local screenshot file
+                  // is still referenced in result.path for diagnostic purposes.
                   vision: {
                     provider: described.provider,
                     model: described.model,
