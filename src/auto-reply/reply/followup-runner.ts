@@ -419,7 +419,7 @@ export function createFollowupRunner(params: {
         sessionId: run.sessionId,
         sessionKey: replySessionKey ?? "",
         resetTriggered: false,
-        upstreamAbortSignal: queued.abortSignal ?? opts?.abortSignal,
+        upstreamAbortSignal: queued.abortSignal,
       });
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
@@ -654,7 +654,7 @@ export function createFollowupRunner(params: {
                     agentAccountId: run.agentAccountId,
                     senderIsOwner: run.senderIsOwner,
                     disableTools: opts?.disableTools,
-                    abortSignal: queued.abortSignal ?? opts?.abortSignal,
+                    abortSignal: queued.abortSignal,
                   },
                   transformResult: (rawResult) =>
                     isRoomEventCliRun && rawResult.meta.agentMeta
@@ -742,7 +742,7 @@ export function createFollowupRunner(params: {
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
                 runId,
-                abortSignal: queued.abortSignal ?? opts?.abortSignal,
+                abortSignal: queued.abortSignal,
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,

@@ -2,6 +2,7 @@ import {
   completionRequiresMessageToolDelivery,
   resolveCompletionChatType,
 } from "../auto-reply/reply/completion-delivery-policy.js";
+import { routeFromConversationRef, routeToDeliveryFields } from "../channels/route-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
@@ -10,11 +11,7 @@ import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import {
-  mergeDeliveryContext,
-  normalizeDeliveryContext,
-  resolveConversationDeliveryTarget,
-} from "../utils/delivery-context.js";
+import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -32,7 +29,10 @@ import {
   hasVisibleAgentPayload,
 } from "./pi-embedded-runner/delivery-evidence.js";
 import type { EmbeddedPiQueueMessageOptions } from "./pi-embedded-runner/run-state.js";
-import type { EmbeddedPiQueueMessageOutcome } from "./pi-embedded-runner/runs.js";
+import type {
+  EmbeddedPiQueueFailureReason,
+  EmbeddedPiQueueMessageOutcome,
+} from "./pi-embedded-runner/runs.js";
 import {
   callGateway,
   createBoundDeliveryRouter,
@@ -160,11 +160,7 @@ function resolveBoundConversationOrigin(params: {
     };
   }
 
-  const boundTarget = resolveConversationDeliveryTarget({
-    channel: conversation.channel,
-    conversationId,
-    parentConversationId,
-  });
+  const boundTarget = routeToDeliveryFields(routeFromConversationRef(conversation));
   const inferredThreadId =
     boundTarget.threadId ??
     (parentConversationId && parentConversationId !== conversationId
@@ -464,8 +460,8 @@ async function maybeSteerSubagentAnnounce(params: {
   }
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
-  const { sessionId } = resolveRequesterSessionActivity(canonicalKey);
-  if (!sessionId) {
+  const { sessionId, isActive } = resolveRequesterSessionActivity(canonicalKey);
+  if (!sessionId || !isActive) {
     return { status: "none" };
   }
 
@@ -687,6 +683,8 @@ async function sendSubagentAnnounceDirectly(params: {
       ? "message_tool_only"
       : undefined;
     const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
+    let completionWakeFailureReason: EmbeddedPiQueueFailureReason | undefined;
+    let completionWakeRetriedWithoutTranscriptWait = false;
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
@@ -698,22 +696,37 @@ async function sendSubagentAnnounceDirectly(params: {
         directOrigin?.channel,
       sessionEntry: requesterEntry,
     });
-    if (params.expectsCompletionMessage && requesterActivity.sessionId) {
-      const wakeOutcome = await resolveQueueEmbeddedPiMessageOutcome(
+    if (
+      params.expectsCompletionMessage &&
+      requesterActivity.sessionId &&
+      requesterActivity.isActive
+    ) {
+      const wakeOptions: EmbeddedPiQueueMessageOptions = {
+        deliveryTimeoutMs: announceTimeoutMs,
+        steeringMode: "all",
+        ...(completionSourceReplyDeliveryMode
+          ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
+          : {}),
+        ...(requesterQueueSettings.debounceMs !== undefined
+          ? { debounceMs: requesterQueueSettings.debounceMs }
+          : {}),
+        waitForTranscriptCommit: true,
+      };
+      let wakeOutcome = await resolveQueueEmbeddedPiMessageOutcome(
         requesterActivity.sessionId,
         params.triggerMessage,
-        {
-          deliveryTimeoutMs: announceTimeoutMs,
-          steeringMode: "all",
-          ...(completionSourceReplyDeliveryMode
-            ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
-            : {}),
-          ...(requesterQueueSettings.debounceMs !== undefined
-            ? { debounceMs: requesterQueueSettings.debounceMs }
-            : {}),
-          waitForTranscriptCommit: true,
-        },
+        wakeOptions,
       );
+      if (!wakeOutcome.queued && wakeOutcome.reason === "transcript_commit_wait_unsupported") {
+        const bestEffortWakeOptions = { ...wakeOptions };
+        delete bestEffortWakeOptions.waitForTranscriptCommit;
+        completionWakeRetriedWithoutTranscriptWait = true;
+        wakeOutcome = await resolveQueueEmbeddedPiMessageOutcome(
+          requesterActivity.sessionId,
+          params.triggerMessage,
+          bestEffortWakeOptions,
+        );
+      }
       if (wakeOutcome.queued) {
         return {
           delivered: true,
@@ -722,14 +735,13 @@ async function sendSubagentAnnounceDirectly(params: {
           path: "steered",
         };
       }
-      if (requesterActivity.isActive) {
-        defaultRuntime.log(
-          `[warn] Active requester session could not be woken for subagent completion; falling back to requester-agent handoff: ${formatQueueWakeFailureError(
-            "active requester session could not be woken",
-            wakeOutcome,
-          )}`,
-        );
-      }
+      completionWakeFailureReason = wakeOutcome.reason;
+      defaultRuntime.log(
+        `[warn] Active requester session could not be woken for subagent completion; falling back to requester-agent handoff: ${formatQueueWakeFailureError(
+          "active requester session could not be woken",
+          wakeOutcome,
+        )}`,
+      );
     }
     if (params.signal?.aborted) {
       return {
@@ -839,6 +851,41 @@ async function sendSubagentAnnounceDirectly(params: {
       shouldDeliverAgentFinal &&
       !hasVisibleGatewayAgentPayload(directAnnounceResponse)
     ) {
+      if (
+        completionWakeRetriedWithoutTranscriptWait &&
+        (completionWakeFailureReason === "no_active_run" ||
+          completionWakeFailureReason === "transcript_commit_wait_unsupported")
+      ) {
+        const forcedMessageToolResponse = await runAnnounceDeliveryWithRetry({
+          operation: "completion message-tool announce agent call",
+          signal: params.signal,
+          run: async () =>
+            await runAnnounceAgentCall({
+              agentParams: {
+                ...directAgentParams,
+                deliver: false,
+                sourceReplyDeliveryMode: "message_tool_only",
+                idempotencyKey: `${params.directIdempotencyKey}:message-tool`,
+              },
+              expectFinal: true,
+              timeoutMs: announceTimeoutMs,
+            }),
+        });
+        if (
+          isGatewayAgentRunPending(forcedMessageToolResponse) ||
+          hasGatewayAgentMessagingToolDelivery(forcedMessageToolResponse)
+        ) {
+          return {
+            delivered: true,
+            path: "direct",
+          };
+        }
+        return {
+          delivered: false,
+          path: "direct",
+          error: "completion agent did not deliver through the message tool",
+        };
+      }
       return {
         delivered: false,
         path: "direct",

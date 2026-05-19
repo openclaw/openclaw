@@ -30,7 +30,15 @@ async function getConfigSnapshot() {
   if (process.env.VITEST === "true") {
     return readConfigFileSnapshot();
   }
-  configSnapshotPromise ??= readConfigFileSnapshot();
+  if (!configSnapshotPromise) {
+    const pendingSnapshot = readConfigFileSnapshot();
+    configSnapshotPromise = pendingSnapshot;
+    pendingSnapshot.catch(() => {
+      if (configSnapshotPromise === pendingSnapshot) {
+        configSnapshotPromise = null;
+      }
+    });
+  }
   return configSnapshotPromise;
 }
 

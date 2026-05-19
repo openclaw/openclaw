@@ -21,7 +21,7 @@ import type {
 } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { normalizeAgentRuntimeTools } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { createOpenClawCodingTools } from "../../../src/plugin-sdk/agent-harness.js";
-import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { loadBundledPluginPublicSurfaceSourceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
@@ -114,7 +114,10 @@ type PromptScenario = {
   toolSnapshotFile: string;
 };
 
-const codexApi = loadBundledPluginTestApiSync("codex") as CodexPromptSnapshotApi;
+const codexApi = loadBundledPluginPublicSurfaceSourceSync({
+  pluginId: "codex",
+  artifactBasename: "test-api.js",
+}) as CodexPromptSnapshotApi;
 
 const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
   {

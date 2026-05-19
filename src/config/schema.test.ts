@@ -390,6 +390,44 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
+  it("keeps per-agent model overrides limited to model selection", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            model: {
+              primary: "openai/gpt-5.5",
+              timeoutMs: 30_000,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects per-agent subagent model timeout config", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              model: {
+                primary: "openai/gpt-5.5",
+                timeoutMs: 30_000,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("accepts exec command highlighting config in global and agent scopes", () => {
     const tools = ToolsSchema.parse({
       exec: {
@@ -661,6 +699,13 @@ describe("config schema", () => {
     expect(lookup?.children.find((child) => child.key === "gateway")?.path).toBe("gateway");
     const schema = lookup?.schema as { properties?: unknown } | undefined;
     expect(schema?.properties).toBeUndefined();
+  });
+
+  it("lists Matrix in messages.queue.byChannel schema lookup", () => {
+    const lookup = lookupConfigSchema(baseSchema, "messages.queue.byChannel");
+    expect(lookup?.path).toBe("messages.queue.byChannel");
+    expect(lookup?.children.map((child) => child.key)).toEqual(expect.arrayContaining(["matrix"]));
+    expect(lookup?.schema).toMatchObject({ additionalProperties: false });
   });
 
   it("includes reload metadata when a resolver is provided", () => {

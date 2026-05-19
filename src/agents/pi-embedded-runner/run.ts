@@ -1444,6 +1444,9 @@ export async function runEmbeddedPiAgent(
             initialReplayState: accumulatedReplayState,
             authStorage,
             authProfileStore: runAttemptAuthProfileStore,
+            // Codex builds OpenClaw tools inside its harness. Keep transport
+            // auth scoped while letting tool construction see plugin creds.
+            toolAuthProfileStore: agentHarness.id === "codex" ? attemptAuthProfileStore : undefined,
             modelRegistry,
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
