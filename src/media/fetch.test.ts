@@ -624,6 +624,7 @@ describe("readRemoteMediaBuffer", () => {
   it.each([
     ["https://example.com/files/reports%2FQ1.pdf", "reports_Q1.pdf"],
     ["https://example.com/files/reports%5CQ1.pdf", "reports_Q1.pdf"],
+    ["https://example.com/files/reports%2F%2FQ1.pdf", "reports__Q1.pdf"],
   ])(
     "keeps decoded URL fallback separators inside the selected basename",
     async (url, fileName) => {

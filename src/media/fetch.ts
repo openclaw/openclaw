@@ -135,7 +135,7 @@ function basenameFromUrlPathname(pathname: string): string {
     return "";
   }
   try {
-    return decodeURIComponent(base).replace(/[\\/]+/g, "_");
+    return decodeURIComponent(base).replace(/[\\/]/g, "_");
   } catch {
     return base;
   }
