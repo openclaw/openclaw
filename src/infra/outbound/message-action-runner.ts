@@ -15,6 +15,14 @@ import {
 } from "../../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import {
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
+  stripSilentToken,
+} from "../../auto-reply/tokens.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -455,7 +463,14 @@ type ResolvedActionContext = {
   abortSignal?: AbortSignal;
 };
 
-type SendPayloadParts = {
+type SendPayloadSuppressedPayload = {
+  ok: true;
+  suppressed: true;
+  reason: "silent_reply_token";
+};
+
+type DeliverableSendPayloadParts = {
+  suppressed?: false;
   message: string;
   payload: ReplyPayload;
   mediaUrl?: string;
@@ -467,10 +482,22 @@ type SendPayloadParts = {
   silent?: boolean;
 };
 
+type SuppressedSendPayloadParts = {
+  suppressed: true;
+  reason: "silent_reply_token";
+  message: "";
+  payload: SendPayloadSuppressedPayload;
+};
+
+type SendPayloadParts = DeliverableSendPayloadParts | SuppressedSendPayloadParts;
+
 function updateSendPayloadPartsFromReplyPayload(
   parts: SendPayloadParts,
   payload: ReplyPayload,
 ): SendPayloadParts {
+  if (parts.suppressed) {
+    return parts;
+  }
   const sendable = resolveSendableOutboundReplyParts(payload);
   const mediaUrls = sendable.mediaUrls.length > 0 ? sendable.mediaUrls : undefined;
   return {
@@ -487,6 +514,9 @@ function applySendPayloadPartsToActionParams(
   actionParams: Record<string, unknown>,
   parts: SendPayloadParts,
 ) {
+  if (parts.suppressed) {
+    return;
+  }
   actionParams.message = parts.message;
   actionParams.media = parts.mediaUrl;
   actionParams.mediaUrl = parts.mediaUrl;
@@ -833,6 +863,17 @@ async function handleInternalSourceReplySendAction(
         ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
         : undefined),
   });
+  if (sourceReply.suppressed) {
+    return {
+      kind: "send",
+      channel: INTERNAL_MESSAGE_CHANNEL,
+      action: "send",
+      to: "current-run",
+      handledBy: "internal-source",
+      payload: sourceReply.payload,
+      dryRun,
+    };
+  }
   const payload = {
     status: "ok",
     deliveryStatus: dryRun ? "dry_run" : "sent",
@@ -959,10 +1000,17 @@ async function buildSendPayloadParts(params: {
     message = caption;
   }
 
+  const rawMessage = message;
   const parsed = parseInlineDirectives(message, {
     stripAudioTag: true,
     stripReplyTags: true,
   });
+  const replyDirectives = parseReplyDirectives(rawMessage);
+  const hadSilentReplyToken =
+    replyDirectives.isSilent ||
+    rawMessage.includes(SILENT_REPLY_TOKEN) ||
+    isSilentReplyText(rawMessage) ||
+    startsWithSilentToken(rawMessage, SILENT_REPLY_TOKEN);
   const mergedMediaUrls: string[] = [];
   const seenMedia = new Set<string>();
   const pushMedia = (value?: string | null) => {
@@ -989,6 +1037,18 @@ async function buildSendPayloadParts(params: {
   mergedMediaUrls.push(...normalizedMediaUrls);
 
   message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text));
+  const isGroupContext =
+    input.toolContext?.chatType === "group" || input.toolContext?.chatType === "channel";
+  if (message && hadSilentReplyToken) {
+    if (isGroupContext) {
+      message = "";
+    } else {
+      message =
+        isSilentReplyText(message) || startsWithSilentToken(message, SILENT_REPLY_TOKEN)
+          ? stripLeadingSilentToken(message, SILENT_REPLY_TOKEN)
+          : stripSilentToken(message);
+    }
+  }
   actionParams.message = message;
   if (!actionParams.replyTo && parsed.replyToId) {
     actionParams.replyTo = parsed.replyToId;
@@ -1023,6 +1083,14 @@ async function buildSendPayloadParts(params: {
       interactive: actionParams.interactive,
     })
   ) {
+    if (hadSilentReplyToken) {
+      return {
+        suppressed: true,
+        reason: "silent_reply_token",
+        message: "",
+        payload: { ok: true, suppressed: true, reason: "silent_reply_token" },
+      };
+    }
     throw new Error("send requires text or media");
   }
   actionParams.message = message;
@@ -1098,6 +1166,17 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     agentId,
   });
+  if (sendPayload.suppressed) {
+    return {
+      kind: "send",
+      channel,
+      action,
+      to,
+      handledBy: "core",
+      payload: sendPayload.payload,
+      dryRun,
+    };
+  }
 
   const replyToId = resolveAndApplyOutboundReplyToId(params, {
     channel,

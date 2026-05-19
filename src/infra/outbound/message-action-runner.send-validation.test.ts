@@ -89,6 +89,30 @@ describe("runMessageAction send validation", () => {
     expect(result.kind).toBe("send");
   });
 
+  it("returns silent success when NO_REPLY stripping leaves no send payload", async () => {
+    const result = await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "#C12345678",
+        message: "NO_REPLY",
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+      to: "C12345678",
+      handledBy: "core",
+      dryRun: true,
+      payload: {
+        ok: true,
+        suppressed: true,
+        reason: "silent_reply_token",
+      },
+    });
+  });
+
   it("uses the current internal UI source as the message-tool-only send sink", async () => {
     const result = await runMessageAction({
       cfg: emptyConfig,
