@@ -217,6 +217,7 @@ const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
+const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
 const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
@@ -276,7 +277,10 @@ type PendingCodexNativeHookRelayUnregister = {
 
 const pendingCodexNativeHookRelayUnregisters = new Set<PendingCodexNativeHookRelayUnregister>();
 
-function scheduleCodexNativeHookRelayUnregister(relay: NativeHookRelayRegistrationHandle): void {
+function scheduleCodexNativeHookRelayUnregister(params: {
+  relay: NativeHookRelayRegistrationHandle;
+  hookTimeoutSec?: number;
+}): void {
   let pending: PendingCodexNativeHookRelayUnregister | undefined;
   const unregister = () => {
     if (!pending) {
@@ -287,12 +291,26 @@ function scheduleCodexNativeHookRelayUnregister(relay: NativeHookRelayRegistrati
     if (!pendingCodexNativeHookRelayUnregisters.delete(current)) {
       return;
     }
-    relay.unregister();
+    params.relay.unregister();
   };
-  const timeout = setTimeout(unregister, CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS);
+  const timeout = setTimeout(
+    unregister,
+    resolveCodexNativeHookRelayUnregisterGraceMs(params.hookTimeoutSec),
+  );
   pending = { timeout, unregister };
   pendingCodexNativeHookRelayUnregisters.add(pending);
   timeout.unref();
+}
+
+function resolveCodexNativeHookRelayUnregisterGraceMs(hookTimeoutSec: number | undefined): number {
+  const hookTimeoutMs =
+    typeof hookTimeoutSec === "number" && Number.isFinite(hookTimeoutSec) && hookTimeoutSec > 0
+      ? Math.ceil(hookTimeoutSec) * 1000
+      : 0;
+  return Math.max(
+    CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS,
+    hookTimeoutMs + CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS,
+  );
 }
 
 function flushPendingCodexNativeHookRelayUnregistersForTests(): void {
@@ -3339,7 +3357,10 @@ export async function runCodexAppServerAttempt(
         // Codex hook subprocesses can outlive a completed app-server turn by a
         // few seconds. Keep the relay available briefly so late
         // nativeHook.invoke RPCs can still reach before_tool_call enforcement.
-        scheduleCodexNativeHookRelayUnregister(nativeHookRelay);
+        scheduleCodexNativeHookRelayUnregister({
+          relay: nativeHookRelay,
+          hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+        });
       } else {
         nativeHookRelay.unregister();
       }
@@ -5728,5 +5749,6 @@ export const testing = {
   },
   flushPendingCodexNativeHookRelayUnregistersForTests,
   clearPendingCodexNativeHookRelayUnregistersForTests,
+  resolveCodexNativeHookRelayUnregisterGraceMs,
 } as const;
 export { testing as __testing };

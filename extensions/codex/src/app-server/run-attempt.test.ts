@@ -7142,6 +7142,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(relayId).not.toContain("cu-pr-relay-smoke");
   });
 
+  it("extends native hook relay cleanup grace for configured hook timeouts", () => {
+    expect(testing.resolveCodexNativeHookRelayUnregisterGraceMs(undefined)).toBe(10_000);
+    expect(testing.resolveCodexNativeHookRelayUnregisterGraceMs(5)).toBe(10_000);
+    expect(testing.resolveCodexNativeHookRelayUnregisterGraceMs(9)).toBe(14_000);
+    expect(testing.resolveCodexNativeHookRelayUnregisterGraceMs(60)).toBe(65_000);
+  });
+
   it("sends clearing Codex native hook config when the relay is disabled", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
