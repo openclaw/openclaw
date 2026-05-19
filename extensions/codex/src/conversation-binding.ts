@@ -437,8 +437,10 @@ async function runBoundTurn(params: {
     signal: turnAbortController.signal,
   });
   const dynamicToolsFingerprint = codexDynamicToolsFingerprint(toolBridge.specs);
-  // Older bound sidecars predate dynamic-tool fingerprints and were started
-  // without a dynamic tool catalog, so refresh only when a catalog exists.
+  // Older bound sidecars predate dynamic-tool fingerprints and origin markers.
+  // Only known managed sidecars may be refreshed automatically; no-origin
+  // legacy bindings might be explicit /codex resume selections and must keep
+  // their selected thread until the user refreshes it deliberately.
   // Empty catalogs are recorded in place to avoid losing bound thread context.
   if (binding.dynamicToolsFingerprint === undefined && toolBridge.specs.length === 0) {
     await writeCodexAppServerBinding(
@@ -458,7 +460,7 @@ async function runBoundTurn(params: {
   }
   const shouldRefreshDynamicTools =
     (binding.dynamicToolsFingerprint === undefined &&
-      binding.threadBindingOrigin !== "explicit" &&
+      binding.threadBindingOrigin === "managed" &&
       toolBridge.specs.length > 0) ||
     (binding.dynamicToolsFingerprint !== undefined &&
       !areCodexDynamicToolFingerprintsCompatible({
