@@ -1,10 +1,12 @@
 import type { Command } from "commander";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { runNodeHost } from "../../node-host/runner.js";
+import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { parsePort } from "../daemon-cli/shared.js";
+import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import { formatHelpExamples } from "../help-format.js";
 import {
   runNodeDaemonInstall,
@@ -15,9 +17,28 @@ import {
   runNodeDaemonUninstall,
 } from "./daemon.js";
 
-function parsePortWithFallback(value: unknown, fallback: number): number {
-  const parsed = parsePort(value);
-  return parsed ?? fallback;
+// Mirrors the install / gateway-run validation paths so an invalid `--port`
+// (non-numeric, zero, negative, or > 65535) fails fast with a clear diagnostic
+// instead of silently falling back to the configured / default port. The
+// previous `parsePortWithFallback(opts.port, fallback)` helper hid the parse
+// failure entirely. See #83923.
+function resolveNodeRunPort(
+  rawPortOption: unknown,
+  configPort: number | undefined,
+): number | null {
+  const portOverride = parsePort(rawPortOption);
+  if (rawPortOption !== undefined && portOverride === null) {
+    defaultRuntime.error(formatInvalidPortOption("--port"));
+    defaultRuntime.exit(1);
+    return null;
+  }
+  const port = portOverride ?? configPort ?? 18789;
+  if (!Number.isFinite(port) || port <= 0 || port > 65_535) {
+    defaultRuntime.error(formatInvalidConfigPort("node.gateway.port"));
+    defaultRuntime.exit(1);
+    return null;
+  }
+  return port;
 }
 
 export function registerNodeCli(program: Command) {
@@ -54,7 +75,10 @@ export function registerNodeCli(program: Command) {
         normalizeOptionalString(opts.host as string | undefined) ||
         existing?.gateway?.host ||
         "127.0.0.1";
-      const port = parsePortWithFallback(opts.port, existing?.gateway?.port ?? 18789);
+      const port = resolveNodeRunPort(opts.port, existing?.gateway?.port);
+      if (port === null) {
+        return;
+      }
       await runNodeHost({
         gatewayHost: host,
         gatewayPort: port,
