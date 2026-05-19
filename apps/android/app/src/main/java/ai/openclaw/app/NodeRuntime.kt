@@ -12,6 +12,7 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
+import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.node.A2UIHandler
@@ -295,6 +296,12 @@ class NodeRuntime(
   private val _remoteAddress = MutableStateFlow<String?>(null)
   val remoteAddress: StateFlow<String?> = _remoteAddress.asStateFlow()
 
+  private val _gatewayVersion = MutableStateFlow<String?>(null)
+  val gatewayVersion: StateFlow<String?> = _gatewayVersion.asStateFlow()
+
+  private val _gatewayUpdateAvailable = MutableStateFlow<GatewayUpdateAvailableSummary?>(null)
+  val gatewayUpdateAvailable: StateFlow<GatewayUpdateAvailableSummary?> = _gatewayUpdateAvailable.asStateFlow()
+
   private val _seamColorArgb = MutableStateFlow(DEFAULT_SEAM_COLOR_ARGB)
   val seamColorArgb: StateFlow<Long> = _seamColorArgb.asStateFlow()
   private val _modelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
@@ -377,13 +384,15 @@ class NodeRuntime(
       scope = scope,
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
-      onConnected = { name, remote, mainSessionKey ->
+      onConnected = { hello ->
         operatorConnected = true
         operatorStatusText = "Connected"
-        _serverName.value = name
-        _remoteAddress.value = remote
+        _serverName.value = hello.serverName
+        _remoteAddress.value = hello.remoteAddress
+        _gatewayVersion.value = hello.serverVersion
+        _gatewayUpdateAvailable.value = hello.updateAvailable
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-        syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainSessionKey))
+        syncMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
         updateStatus()
         micCapture.onGatewayConnectionChanged(true)
         scope.launch {
@@ -398,6 +407,8 @@ class NodeRuntime(
         operatorStatusText = message
         _serverName.value = null
         _remoteAddress.value = null
+        _gatewayVersion.value = null
+        _gatewayUpdateAvailable.value = null
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         _modelCatalog.value = emptyList()
         _modelAuthProviders.value = emptyList()
@@ -429,7 +440,7 @@ class NodeRuntime(
       scope = scope,
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
-      onConnected = { _, _, _ ->
+      onConnected = {
         _nodeConnected.value = true
         nodeStatusText = "Connected"
         didAutoRequestCanvasRehydrate = false
@@ -1585,9 +1596,26 @@ class NodeRuntime(
     event: String,
     payloadJson: String?,
   ) {
+    if (event == "update.available") {
+      _gatewayUpdateAvailable.value = parseGatewayUpdateAvailable(payloadJson)
+    }
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
+  }
+
+  private fun parseGatewayUpdateAvailable(payloadJson: String?): GatewayUpdateAvailableSummary? {
+    return try {
+      val root = payloadJson?.let { json.parseToJsonElement(it).asObjectOrNull() }
+      val update = root?.get("updateAvailable").asObjectOrNull() ?: return null
+      GatewayUpdateAvailableSummary(
+        currentVersion = update["currentVersion"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+        latestVersion = update["latestVersion"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+        channel = update["channel"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+      )
+    } catch (_: Throwable) {
+      null
+    }
   }
 
   private fun parseChatSendRunId(response: String): String? {

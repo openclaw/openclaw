@@ -18,7 +18,6 @@ import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -60,7 +59,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
@@ -111,7 +109,7 @@ internal fun V2SettingsDetailScreen(
     V2SettingsRoute.Gateway -> V2GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Appearance -> V2AppearanceSettingsScreen(onBack = onBack)
     V2SettingsRoute.Health -> V2HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
-    V2SettingsRoute.About -> V2AboutSettingsScreen(onBack = onBack)
+    V2SettingsRoute.About -> V2AboutSettingsScreen(viewModel = viewModel, onBack = onBack)
   }
 }
 
@@ -456,21 +454,71 @@ private fun V2AppearanceSettingsScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun V2AboutSettingsScreen(onBack: () -> Unit) {
+private fun V2AboutSettingsScreen(
+  viewModel: MainViewModel,
+  onBack: () -> Unit,
+) {
+  val isConnected by viewModel.isConnected.collectAsState()
+  val serverName by viewModel.serverName.collectAsState()
+  val gatewayVersion by viewModel.gatewayVersion.collectAsState()
+  val updateAvailable by viewModel.gatewayUpdateAvailable.collectAsState()
+  val latestVersion = updateAvailable?.latestVersion?.takeIf { it.isNotBlank() }
+  val currentGatewayVersion = updateAvailable?.currentVersion?.takeIf { it.isNotBlank() } ?: gatewayVersion
+
   V2SettingsDetailFrame(title = "About", subtitle = "OpenClaw for Android.", icon = Icons.Default.Info, onBack = onBack) {
     V2SettingsMetricPanel(
       rows =
         listOf(
-          V2SettingsMetric("Version", BuildConfig.VERSION_NAME),
+          V2SettingsMetric("Android App", BuildConfig.VERSION_NAME),
           V2SettingsMetric("Build", BuildConfig.VERSION_CODE.toString()),
           V2SettingsMetric("Channel", "Play"),
+          V2SettingsMetric("Gateway", currentGatewayVersion ?: "Not connected"),
         ),
     )
+    ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+      Column {
+        V2AboutStatusRow(title = "Gateway", value = serverName?.takeIf { it.isNotBlank() } ?: "Home Gateway", healthy = isConnected)
+        HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+        V2AboutStatusRow(title = "Runtime", value = currentGatewayVersion ?: "Waiting", healthy = currentGatewayVersion != null)
+        HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+        V2AboutStatusRow(
+          title = "Update",
+          value = latestVersion?.let { "v$it available" } ?: "Up to date",
+          healthy = latestVersion == null,
+        )
+      }
+    }
     ClawPanel {
-      Text(text = "OpenClaw turns this phone into a clean mobile command surface for your sessions, voice, providers, and Gateway.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      Text(text = aboutUpdateText(latestVersion = latestVersion), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
   }
 }
+
+@Composable
+private fun V2AboutStatusRow(
+  title: String,
+  value: String,
+  healthy: Boolean,
+) {
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
+  ) {
+    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+      Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
+      Text(text = value, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+    ClawStatusPill(text = if (healthy) "OK" else "Check", status = if (healthy) ClawStatus.Success else ClawStatus.Warning)
+  }
+}
+
+private fun aboutUpdateText(latestVersion: String?): String =
+  if (latestVersion == null) {
+    "OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway."
+  } else {
+    "A Gateway update is available. Run the update from the Web UI or CLI when you are ready."
+  }
 
 @Composable
 internal fun V2SettingsDetailFrame(
@@ -806,24 +854,6 @@ internal fun V2SettingsMetricPanel(rows: List<V2SettingsMetric>) {
           HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
         }
       }
-    }
-  }
-}
-
-@Composable
-private fun V2HealthRow(
-  title: String,
-  value: String,
-  healthy: Boolean,
-) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(if (healthy) ClawTheme.colors.success else ClawTheme.colors.warning))
-      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        Text(text = value, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
-      }
-      ClawStatusPill(text = if (healthy) "OK" else "Check", status = if (healthy) ClawStatus.Success else ClawStatus.Warning)
     }
   }
 }
