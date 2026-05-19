@@ -15,7 +15,10 @@
         "primary": "openai/gpt-5.5"
       },
       "thinkingDefault": "low",
-      "skills": ["memory"]
+      "skills": ["memory"],
+      "identity": {
+        "name": "Main"
+      }
     },
     {
       "id": "ops",
@@ -24,7 +27,10 @@
       "model": {
         "primary": "openai/gpt-5.5"
       },
-      "fastModeDefault": true
+      "fastModeDefault": true,
+      "identity": {
+        "name": "Ops"
+      }
     }
   ]
 }
