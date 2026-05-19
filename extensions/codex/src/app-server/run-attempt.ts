@@ -1836,6 +1836,7 @@ export async function runCodexAppServerAttempt(
   let turnCompletionIdleTimeoutMessage: string | undefined;
   let clientClosedPromptError: string | undefined;
   let clientClosedAbort = false;
+  let shouldDelayNativeHookRelayUnregister = false;
   let lifecycleStarted = false;
   let lifecycleTerminalEmitted = false;
   let resolveCompletion: (() => void) | undefined;
@@ -3265,6 +3266,8 @@ export async function runCodexAppServerAttempt(
       },
       ctx: hookContext,
     });
+    shouldDelayNativeHookRelayUnregister =
+      !timedOut && !runAbortController.signal.aborted && !finalAborted && !finalPromptError;
     return {
       ...result,
       timedOut,
@@ -3332,7 +3335,7 @@ export async function runCodexAppServerAttempt(
     requestCleanup();
     closeCleanup?.();
     if (nativeHookRelay) {
-      if (!timedOut && !runAbortController.signal.aborted) {
+      if (shouldDelayNativeHookRelayUnregister) {
         // Codex hook subprocesses can outlive a completed app-server turn by a
         // few seconds. Keep the relay available briefly so late
         // nativeHook.invoke RPCs can still reach before_tool_call enforcement.
