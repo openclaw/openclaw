@@ -17,6 +17,7 @@ import {
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
 } from "../user-identity.ts";
+import { viDashboardText as uiText } from "../vi-dashboard-text.ts";
 import {
   assistantAvatarFallbackUrl,
   resolveChatAvatarRenderUrl,

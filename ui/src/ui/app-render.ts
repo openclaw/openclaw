@@ -1434,13 +1434,23 @@ export function renderApp(state: AppViewState) {
           searchQuery: state.configSearchQuery,
           activeSection: configSelection.activeSection,
           activeSubsection: configSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.configFormMode = mode),
-          onSearchChange: (query) => (state.configSearchQuery = query),
+          onFormModeChange: (mode) => {
+            state.configFormMode = mode;
+            requestHostUpdate?.();
+          },
+          onSearchChange: (query) => {
+            state.configSearchQuery = query;
+            requestHostUpdate?.();
+          },
           onSectionChange: (section) => {
             state.configActiveSection = section;
             state.configActiveSubsection = null;
+            requestHostUpdate?.();
           },
-          onSubsectionChange: (section) => (state.configActiveSubsection = section),
+          onSubsectionChange: (section) => {
+            state.configActiveSubsection = section;
+            requestHostUpdate?.();
+          },
           showModeToggle: true,
           settingsLayout: "accordion",
           onBackToQuick: () => {
@@ -1500,13 +1510,23 @@ export function renderApp(state: AppViewState) {
           searchQuery: state.communicationsSearchQuery,
           activeSection: communicationsSelection.activeSection,
           activeSubsection: communicationsSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.communicationsFormMode = mode),
-          onSearchChange: (query) => (state.communicationsSearchQuery = query),
+          onFormModeChange: (mode) => {
+            state.communicationsFormMode = mode;
+            requestHostUpdate?.();
+          },
+          onSearchChange: (query) => {
+            state.communicationsSearchQuery = query;
+            requestHostUpdate?.();
+          },
           onSectionChange: (section) => {
             state.communicationsActiveSection = section;
             state.communicationsActiveSubsection = null;
+            requestHostUpdate?.();
           },
-          onSubsectionChange: (section) => (state.communicationsActiveSubsection = section),
+          onSubsectionChange: (section) => {
+            state.communicationsActiveSubsection = section;
+            requestHostUpdate?.();
+          },
           navRootLabel: t("tabs.communications"),
           includeSections: [...COMMUNICATION_SECTION_KEYS],
           includeVirtualSections: true,
@@ -1526,13 +1546,23 @@ export function renderApp(state: AppViewState) {
           searchQuery: state.appearanceSearchQuery,
           activeSection: appearanceSelection.activeSection,
           activeSubsection: appearanceSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.appearanceFormMode = mode),
-          onSearchChange: (query) => (state.appearanceSearchQuery = query),
+          onFormModeChange: (mode) => {
+            state.appearanceFormMode = mode;
+            requestHostUpdate?.();
+          },
+          onSearchChange: (query) => {
+            state.appearanceSearchQuery = query;
+            requestHostUpdate?.();
+          },
           onSectionChange: (section) => {
             state.appearanceActiveSection = section;
             state.appearanceActiveSubsection = null;
+            requestHostUpdate?.();
           },
-          onSubsectionChange: (section) => (state.appearanceActiveSubsection = section),
+          onSubsectionChange: (section) => {
+            state.appearanceActiveSubsection = section;
+            requestHostUpdate?.();
+          },
           navRootLabel: t("tabs.appearance"),
           includeSections: [...APPEARANCE_SECTION_KEYS],
           includeVirtualSections: true,
@@ -1543,13 +1573,23 @@ export function renderApp(state: AppViewState) {
           searchQuery: state.automationSearchQuery,
           activeSection: automationSelection.activeSection,
           activeSubsection: automationSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.automationFormMode = mode),
-          onSearchChange: (query) => (state.automationSearchQuery = query),
+          onFormModeChange: (mode) => {
+            state.automationFormMode = mode;
+            requestHostUpdate?.();
+          },
+          onSearchChange: (query) => {
+            state.automationSearchQuery = query;
+            requestHostUpdate?.();
+          },
           onSectionChange: (section) => {
             state.automationActiveSection = section;
             state.automationActiveSubsection = null;
+            requestHostUpdate?.();
           },
-          onSubsectionChange: (section) => (state.automationActiveSubsection = section),
+          onSubsectionChange: (section) => {
+            state.automationActiveSubsection = section;
+            requestHostUpdate?.();
+          },
           navRootLabel: t("tabs.automation"),
           includeSections: [...AUTOMATION_SECTION_KEYS],
         });
@@ -1559,13 +1599,23 @@ export function renderApp(state: AppViewState) {
           searchQuery: state.infrastructureSearchQuery,
           activeSection: infrastructureSelection.activeSection,
           activeSubsection: infrastructureSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.infrastructureFormMode = mode),
-          onSearchChange: (query) => (state.infrastructureSearchQuery = query),
+          onFormModeChange: (mode) => {
+            state.infrastructureFormMode = mode;
+            requestHostUpdate?.();
+          },
+          onSearchChange: (query) => {
+            state.infrastructureSearchQuery = query;
+            requestHostUpdate?.();
+          },
           onSectionChange: (section) => {
             state.infrastructureActiveSection = section;
             state.infrastructureActiveSubsection = null;
+            requestHostUpdate?.();
           },
-          onSubsectionChange: (section) => (state.infrastructureActiveSubsection = section),
+          onSubsectionChange: (section) => {
+            state.infrastructureActiveSubsection = section;
+            requestHostUpdate?.();
+          },
           navRootLabel: t("tabs.infrastructure"),
           includeSections: [...INFRASTRUCTURE_SECTION_KEYS],
         });
@@ -1575,13 +1625,23 @@ export function renderApp(state: AppViewState) {
           searchQuery: state.aiAgentsSearchQuery,
           activeSection: aiAgentsSelection.activeSection,
           activeSubsection: aiAgentsSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.aiAgentsFormMode = mode),
-          onSearchChange: (query) => (state.aiAgentsSearchQuery = query),
+          onFormModeChange: (mode) => {
+            state.aiAgentsFormMode = mode;
+            requestHostUpdate?.();
+          },
+          onSearchChange: (query) => {
+            state.aiAgentsSearchQuery = query;
+            requestHostUpdate?.();
+          },
           onSectionChange: (section) => {
             state.aiAgentsActiveSection = section;
             state.aiAgentsActiveSubsection = null;
+            requestHostUpdate?.();
           },
-          onSubsectionChange: (section) => (state.aiAgentsActiveSubsection = section),
+          onSubsectionChange: (section) => {
+            state.aiAgentsActiveSubsection = section;
+            requestHostUpdate?.();
+          },
           navRootLabel: t("tabs.aiAgents"),
           includeSections: [...AI_AGENTS_SECTION_KEYS],
         });

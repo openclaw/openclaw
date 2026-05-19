@@ -20,6 +20,7 @@ import {
   pathKey,
   REDACTED_PLACEHOLDER,
   schemaType,
+  translateConfigLabel,
   type JsonSchema,
 } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
