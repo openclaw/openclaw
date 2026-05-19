@@ -128,6 +128,40 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     }
   });
 
+  it("releases Telegram Desktop proof leases left by interrupted agents", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const steps = workflow.jobs?.run_telegram_desktop_proof?.steps ?? [];
+    const codexStep = workflowStep("Run Codex Mantis Telegram agent");
+    const cleanupIndex = steps.findIndex(
+      (step) => step.name === "Release leaked Telegram proof leases",
+    );
+    const inspectIndex = steps.findIndex(
+      (step) => step.name === "Inspect Mantis evidence manifest",
+    );
+
+    expect(codexStep.env?.OPENCLAW_QA_CREDENTIAL_OWNER_ID).toContain(
+      "mantis-telegram-desktop-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(workflowStep("Prepare Codex user").run).toContain("OPENCLAW_QA_CREDENTIAL_OWNER_ID");
+    expect(cleanupIndex).toBeGreaterThan(steps.findIndex((step) => step.name === codexStep.name));
+    expect(cleanupIndex).toBeGreaterThanOrEqual(0);
+    expect(inspectIndex).toBeGreaterThan(cleanupIndex);
+
+    const cleanupStep = workflowStep("Release leaked Telegram proof leases");
+    expect(cleanupStep.if).toBe("${{ always() }}");
+    expect(cleanupStep.env?.OPENCLAW_QA_CONVEX_SECRET_CI).toContain(
+      "secrets.OPENCLAW_QA_CONVEX_SECRET_CI",
+    );
+    expect(cleanupStep.env?.OPENCLAW_QA_CONVEX_SITE_URL).toContain(
+      "secrets.OPENCLAW_QA_CONVEX_SITE_URL",
+    );
+    expect(cleanupStep.run).toContain("sudo find .artifacts/qa-e2e");
+    expect(cleanupStep.run).toContain("*/telegram-user-crabbox/*/.session/lease.json");
+    expect(cleanupStep.run).toContain("telegram-user-credential.ts");
+    expect(cleanupStep.run).toContain("release --lease-file");
+    expect(cleanupStep.run).toContain("sudo -u codex env");
+  });
+
   it("uses the OpenClaw Mantis mention as the comment trigger", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const liveWorkflow = readFileSync(LIVE_WORKFLOW, "utf8");

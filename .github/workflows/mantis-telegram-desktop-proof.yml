@@ -426,7 +426,7 @@ jobs:
             printf '%s\n' 'Defaults env_keep += "BASELINE_REF BASELINE_SHA CANDIDATE_REF CANDIDATE_SHA"'
             printf '%s\n' 'Defaults env_keep += "CRABBOX_ACCESS_CLIENT_ID CRABBOX_ACCESS_CLIENT_SECRET CRABBOX_COORDINATOR CRABBOX_COORDINATOR_TOKEN CRABBOX_LEASE_ID CRABBOX_PROVIDER"'
             printf '%s\n' 'Defaults env_keep += "GH_TOKEN MANTIS_CANDIDATE_TRUST MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
-            printf '%s\n' 'Defaults env_keep += "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_QA_CONVEX_SECRET_CI OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN"'
+            printf '%s\n' 'Defaults env_keep += "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_QA_CONVEX_SECRET_CI OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_CREDENTIAL_OWNER_ID OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_USER_CRABBOX_BIN OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT OPENCLAW_TELEGRAM_USER_PROOF_CMD"'
           } | sudo tee /etc/sudoers.d/mantis-codex-env >/dev/null
           sudo chmod 0440 /etc/sudoers.d/mantis-codex-env
@@ -462,6 +462,7 @@ jobs:
           MANTIS_PR_NUMBER: ${{ needs.resolve_request.outputs.pr_number }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CREDENTIAL_OWNER_ID: mantis-telegram-desktop-${{ github.run_id }}-${{ github.run_attempt }}
           OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
           OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
           OPENCLAW_TELEGRAM_USER_CRABBOX_BIN: /usr/local/bin/crabbox
@@ -479,6 +480,29 @@ jobs:
           safety-strategy: unprivileged-user
           codex-user: codex
           allow-bot-users: clawsweeper[bot]
+
+      - name: Release leaked Telegram proof leases
+        if: ${{ always() }}
+        env:
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -d .artifacts/qa-e2e ]]; then
+            exit 0
+          fi
+          mapfile -d '' lease_files < <(sudo find .artifacts/qa-e2e -path '*/telegram-user-crabbox/*/.session/lease.json' -type f -print0)
+          if [[ "${#lease_files[@]}" -eq 0 ]]; then
+            exit 0
+          fi
+          for lease_file in "${lease_files[@]}"; do
+            sudo -u codex env \
+              OPENCLAW_QA_CONVEX_SECRET_CI="$OPENCLAW_QA_CONVEX_SECRET_CI" \
+              OPENCLAW_QA_CONVEX_SITE_URL="$OPENCLAW_QA_CONVEX_SITE_URL" \
+              node --import tsx "$GITHUB_WORKSPACE/scripts/e2e/telegram-user-credential.ts" \
+                release --lease-file "$lease_file"
+          done
 
       - name: Inspect Mantis evidence manifest
         id: inspect
