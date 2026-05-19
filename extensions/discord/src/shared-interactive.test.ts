@@ -157,7 +157,10 @@ describe("buildDiscordInteractiveComponents", () => {
         blocks: [
           {
             type: "buttons",
-            buttons: [{ label: "Already handled", value: "done", disabled: true }],
+            buttons: [
+              { label: "Already handled", value: "done", disabled: true },
+              { label: "Open docs", url: "https://example.com/docs", disabled: true },
+            ],
           },
         ],
       }),
@@ -170,6 +173,12 @@ describe("buildDiscordInteractiveComponents", () => {
               label: "Already handled",
               style: "secondary",
               callbackData: "done",
+              disabled: true,
+            },
+            {
+              label: "Open docs",
+              style: "link",
+              url: "https://example.com/docs",
               disabled: true,
             },
           ],
