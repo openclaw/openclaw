@@ -338,7 +338,9 @@ describe("chrome MCP page parsing", () => {
 
     expect(message).toContain("Chrome MCP existing-session attach failed");
     expect(message).toContain("~/Library/Application Support/Google/Chrome/Profile 1");
-    expect(message).toContain("attach failed for ~/Library/Application Support/Google/Chrome/Profile 1");
+    expect(message).toContain(
+      "attach failed for ~/Library/Application Support/Google/Chrome/Profile 1",
+    );
     expect(message).not.toContain(homeDir);
     expect(message).not.toContain(userDataDir);
   });

@@ -43,8 +43,8 @@ import { materializeRuntimeConfig } from "./materialize.js";
 import { collectConfiguredModelRefs } from "./model-refs.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
-import { OpenClawSchema } from "./zod-schema.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
+import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";

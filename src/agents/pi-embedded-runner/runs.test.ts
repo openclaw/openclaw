@@ -1,10 +1,10 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { diagnosticLogger } from "../../logging/diagnostic.js";
 import {
   testing as replyRunTesting,
   createReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { diagnosticLogger } from "../../logging/diagnostic.js";
 import {
   testing,
   abortAndDrainEmbeddedPiRun,

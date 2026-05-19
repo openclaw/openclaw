@@ -156,10 +156,7 @@ function loadStateFileSync(statePath: string): CronStateFile | null {
 
 function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>): boolean {
   return jobs.some(
-    (job) =>
-      job != null &&
-      isRecord(job.state) &&
-      Object.keys(job.state).length > 0,
+    (job) => job != null && isRecord(job.state) && Object.keys(job.state).length > 0,
   );
 }
 
