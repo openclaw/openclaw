@@ -1278,6 +1278,31 @@ function resolveManagedServiceNodeRunner(
   return isNodeExecutable(runner) ? runner : undefined;
 }
 
+/**
+ * Resolve the node binary baked into the managed gateway service unit,
+ * independent of any package root redirect. This detects when the user's
+ * current PATH-resolved node differs from the service's baked node even
+ * when the package root is the same.
+ */
+async function resolveManagedServiceNodeRunnerOverride(): Promise<string | undefined> {
+  const command = await resolveGatewayService()
+    .readCommand(process.env)
+    .catch(() => null);
+  const serviceNode = resolveManagedServiceNodeRunner(command);
+  if (!serviceNode) {
+    return undefined;
+  }
+  const currentNode = resolveNodeRunner();
+  const [serviceNodeReal, currentNodeReal] = await Promise.all([
+    tryRealpathOrResolve(serviceNode),
+    tryRealpathOrResolve(currentNode),
+  ]);
+  if (serviceNodeReal === currentNodeReal) {
+    return undefined;
+  }
+  return serviceNode;
+}
+
 async function resolveManagedServicePackageUpdateRoot(params: {
   root: string;
 }): Promise<ManagedServiceRootRedirect | null> {
@@ -2963,11 +2988,16 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   let packageInstallSpec: string | null = null;
   let packageAlreadyCurrent = false;
   let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
+  // Resolved independently of the root redirect so it covers the common case
+  // where the package root is the same but the user's PATH-resolved node
+  // differs from the node baked into the managed gateway service unit.
+  let managedServiceNodeRunner: string | undefined;
 
   if (updateInstallKind === "package") {
     managedServiceRootRedirect = await resolveManagedServicePackageUpdateRoot({ root });
     if (managedServiceRootRedirect) {
       root = managedServiceRootRedirect.root;
+      managedServiceNodeRunner = managedServiceRootRedirect.nodeRunner;
       if (!opts.json) {
         defaultRuntime.log(
           theme.muted(
@@ -2984,11 +3014,27 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
             `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
           ),
         );
-        if (managedServiceRootRedirect.nodeRunner) {
+        if (managedServiceNodeRunner) {
           defaultRuntime.log(
-            theme.muted(`Managed gateway service Node: ${managedServiceRootRedirect.nodeRunner}`),
+            theme.muted(`Managed gateway service Node: ${managedServiceNodeRunner}`),
           );
         }
+      }
+    } else {
+      // Roots match but the node binary may still differ (e.g. user switched
+      // nvm/fnm/brew node after gateway install).
+      managedServiceNodeRunner = await resolveManagedServiceNodeRunnerOverride();
+      if (managedServiceNodeRunner && !opts.json) {
+        defaultRuntime.log(
+          theme.warn(
+            `Current Node (${resolveNodeRunner()}) differs from the managed gateway service Node (${managedServiceNodeRunner}).`,
+          ),
+        );
+        defaultRuntime.log(
+          theme.muted(
+            `Using the managed service Node for this update so the gateway can start after the upgrade.`,
+          ),
+        );
       }
     }
   }
@@ -3140,7 +3186,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     const runtimePreflightError = await resolvePackageRuntimePreflightError({
       tag,
       timeoutMs,
-      nodeRunner: managedServiceRootRedirect?.nodeRunner,
+      nodeRunner: managedServiceNodeRunner,
     });
     if (runtimePreflightError) {
       defaultRuntime.error(runtimePreflightError);
@@ -3209,7 +3255,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
             managedServiceEnv: prePackageServiceStop?.serviceEnv,
             invocationCwd,
             honorPackageRoot: managedServiceRootRedirect !== null,
-            nodeRunner: managedServiceRootRedirect?.nodeRunner,
+            nodeRunner: managedServiceNodeRunner,
           })
         : await runGitUpdate({
             root,
@@ -3335,7 +3381,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       opts,
       pluginInstallRecords: preUpdatePluginInstallRecords,
       updateStartedAtMs: startedAt,
-      nodeRunner: managedServiceRootRedirect?.nodeRunner,
+      nodeRunner: managedServiceNodeRunner,
       preUpdateConfig: configSnapshot.valid
         ? {
             sourceConfig: configSnapshot.sourceConfig,
@@ -3461,7 +3507,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     gatewayPort,
     restartScriptPath,
     invocationCwd,
-    nodeRunner: managedServiceRootRedirect?.nodeRunner,
+    nodeRunner: managedServiceNodeRunner,
   });
   if (!restartOk) {
     await markControlPlaneUpdateRestartSentinelFailureBestEffort({
