@@ -321,7 +321,12 @@ private fun V2OverviewScreen(
           V2SectionLabel(
             title = "Recent Sessions",
             action = {
-              Text(text = "View all", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+              Text(
+                text = "View all",
+                modifier = Modifier.clickable { onSelectTab(V2Tab.Sessions) },
+                style = ClawTheme.type.caption,
+                color = ClawTheme.colors.textMuted,
+              )
             },
           )
         }
@@ -900,12 +905,14 @@ private fun V2SettingsListRow(
       row.status?.let { active ->
         Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
       }
-      Icon(
-        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = "Open ${row.title}",
-        modifier = Modifier.size(17.dp),
-        tint = ClawTheme.colors.text,
-      )
+      if (row.route != null) {
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+          contentDescription = "Open ${row.title}",
+          modifier = Modifier.size(17.dp),
+          tint = ClawTheme.colors.text,
+        )
+      }
     }
   }
 }

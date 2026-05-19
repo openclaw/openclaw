@@ -7,6 +7,7 @@ import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -101,13 +102,21 @@ internal fun V2SessionsScreen(
       item {
         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
           V2FilterPill(text = "Recent", icon = Icons.Outlined.AccessTime, active = filter == V2SessionFilter.Recent, onClick = { filter = V2SessionFilter.Recent })
-          V2FilterPill(text = "Live", icon = Icons.Outlined.MicNone, active = filter == V2SessionFilter.Live, live = visibleSessions.any { it.key == chatSessionKey }, onClick = { filter = V2SessionFilter.Live })
+          V2FilterPill(text = "Live", icon = Icons.Outlined.MicNone, active = filter == V2SessionFilter.Live, live = sessions.any { it.key == chatSessionKey }, onClick = { filter = V2SessionFilter.Live })
         }
       }
 
       item {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+          Row(
+            modifier =
+              Modifier
+                .clip(RoundedCornerShape(ClawTheme.radii.row))
+                .clickable { recentFirst = !recentFirst }
+                .padding(horizontal = 2.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
             Text(text = "Sort: ${if (recentFirst) "Newest" else "Oldest"}", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
             Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(11.dp), tint = ClawTheme.colors.textMuted)
           }
