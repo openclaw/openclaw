@@ -19,7 +19,11 @@ import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "../../agents/model-visibility-policy.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
+  listOpenAIAuthProfileProvidersForAgentRuntime,
+} from "../../agents/openai-codex-routing.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -195,6 +199,13 @@ export async function createModelSelectionState(params: {
     primaryProvider: params.primaryProvider,
     primaryModel: params.primaryModel,
   });
+  const staleLegacyOpenAICodexAutoOverride =
+    directStoredModelOverride?.source === "session" &&
+    sessionEntry?.modelOverrideSource === "auto" &&
+    normalizeProviderId(directStoredModelOverride.provider ?? "") === OPENAI_CODEX_PROVIDER_ID &&
+    normalizeProviderId(primaryProvider) === OPENAI_PROVIDER_ID &&
+    normalizeModelRef(OPENAI_PROVIDER_ID, directStoredModelOverride.model).model ===
+      normalizeModelRef(OPENAI_PROVIDER_ID, primaryModel).model;
 
   if (needsModelCatalog) {
     modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
@@ -238,11 +249,16 @@ export async function createModelSelectionState(params: {
       directStoredOverride.model,
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
-    if (staleHeartbeatAutoFallbackOverride || !visibilityPolicy.allowsKey(key)) {
+    if (
+      staleHeartbeatAutoFallbackOverride ||
+      staleLegacyOpenAICodexAutoOverride ||
+      !visibilityPolicy.allowsKey(key)
+    ) {
       const { updated } = applyModelOverrideToSessionEntry({
         entry: sessionEntry,
         selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
-        preserveAuthProfileOverride: staleHeartbeatAutoFallbackOverride,
+        preserveAuthProfileOverride:
+          staleHeartbeatAutoFallbackOverride || staleLegacyOpenAICodexAutoOverride,
       });
       if (updated) {
         sessionStore[sessionKey] = sessionEntry;
@@ -277,6 +293,23 @@ export async function createModelSelectionState(params: {
       model = primaryModel;
     }
   }
+  if (staleLegacyOpenAICodexAutoOverride) {
+    const normalizedCurrentSelection = normalizeModelRef(provider, model);
+    const currentSelectionKey = modelKey(
+      normalizedCurrentSelection.provider,
+      normalizedCurrentSelection.model,
+    );
+    const normalizedDirectOverride = directStoredOverride
+      ? normalizeModelRef(directStoredOverride.provider, directStoredOverride.model)
+      : null;
+    const directStoredOverrideKey = normalizedDirectOverride
+      ? modelKey(normalizedDirectOverride.provider, normalizedDirectOverride.model)
+      : undefined;
+    if (currentSelectionKey === directStoredOverrideKey) {
+      provider = primaryProvider;
+      model = primaryModel;
+    }
+  }
 
   const storedOverride = resolveStoredModelOverride({
     sessionEntry,
@@ -292,7 +325,8 @@ export async function createModelSelectionState(params: {
   const skipStoredOverride =
     params.skipStoredModelOverride === true ||
     params.hasResolvedHeartbeatModelOverride === true ||
-    (staleHeartbeatAutoFallbackOverride && storedOverride?.source === "session");
+    (staleHeartbeatAutoFallbackOverride && storedOverride?.source === "session") ||
+    (staleLegacyOpenAICodexAutoOverride && storedOverride?.source === "session");
 
   if (storedOverride?.model && !skipStoredOverride) {
     const normalizedStoredOverride = normalizeRuntimeModelRef(
