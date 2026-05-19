@@ -283,6 +283,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const prompt = readFileSync(PROMPT, "utf8");
     expect(prompt).toContain("$OPENCLAW_TELEGRAM_USER_PROOF_CMD");
     expect(prompt).toContain("do not run\n   `pnpm qa:telegram-user:crabbox` directly");
+    expect(prompt).toContain("Let `start` return or fail on its\n   own");
+    expect(prompt).toContain(
+      "Use a long\n   command timeout for `start`, `send`, `view`, and `finish`",
+    );
   });
 
   it("runs the Mantis Codex agent in fast medium-effort mode", () => {
