@@ -273,10 +273,16 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
     OPENCLAW_LOG_PREFIX: baseEnv.OPENCLAW_LOG_PREFIX ?? "node",
   } as NodeJS.ProcessEnv;
 
+  // Keep the terse machine-readable status on stderr but route the follow-up
+  // hint lines through stdout — matching the `!loaded` branch above and the
+  // `renderNodeServiceStartHints()` pattern. Mixed routing was making
+  // `openclaw node status 2>/dev/null` print hints in the "service never
+  // installed" path but drop them in the "installed but stopped/unit-missing"
+  // path. See #83925.
   if (runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
     for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.error(errorText(hint));
+      defaultRuntime.log(infoText(hint));
     }
     return;
   }
@@ -284,7 +290,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   if (runtime?.status === "stopped") {
     defaultRuntime.error(errorText("Service is loaded but not running."));
     for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.error(errorText(hint));
+      defaultRuntime.log(infoText(hint));
     }
   }
 }
