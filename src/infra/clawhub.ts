@@ -550,8 +550,8 @@ function normalizeCalVerCorrectionForPluginApi(pluginApiVersion: string): string
   return match?.[1] ?? pluginApiVersion;
 }
 
-function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "search">): URL {
-  const url = new URL(params.path, `${normalizeBaseUrl(params.baseUrl)}/`);
+export function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "search">): URL {
+  const url = new URL(`${normalizeBaseUrl(params.baseUrl)}${params.path}`);
   for (const [key, value] of Object.entries(params.search ?? {})) {
     if (!value) {
       continue;

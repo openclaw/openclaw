@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
+  buildUrl,
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
   fetchClawHubPackageArtifact,
@@ -66,6 +67,8 @@ describe("clawhub helpers", () => {
     delete process.env.CLAWHUB_CONFIG_PATH;
     delete process.env.CLAWDHUB_CONFIG_PATH;
     delete process.env.XDG_CONFIG_HOME;
+    delete process.env.OPENCLAW_CLAWHUB_URL;
+    delete process.env.CLAWHUB_URL;
     if (originalHome == null) {
       delete process.env.HOME;
     } else {
@@ -604,5 +607,34 @@ describe("clawhub helpers", () => {
       await archive.cleanup();
       await expectPathMissing(archiveDir);
     }
+  });
+
+  describe("buildUrl", () => {
+    it("preserves path prefix in base URL", () => {
+      const url = buildUrl({
+        baseUrl: "http://host:8080/clawhub",
+        path: "/api/v1/search",
+      });
+      expect(url.pathname).toBe("/clawhub/api/v1/search");
+    });
+
+    it("works with default base URL (no prefix)", () => {
+      const url = buildUrl({
+        baseUrl: "https://clawhub.openclaw.ai",
+        path: "/api/v1/search",
+      });
+      expect(url.pathname).toBe("/api/v1/search");
+    });
+
+    it("appends search params", () => {
+      const url = buildUrl({
+        baseUrl: "http://host:8080/prefix",
+        path: "/api/v1/search",
+        search: { q: "test", limit: "10" },
+      });
+      expect(url.pathname).toBe("/prefix/api/v1/search");
+      expect(url.searchParams.get("q")).toBe("test");
+      expect(url.searchParams.get("limit")).toBe("10");
+    });
   });
 });
