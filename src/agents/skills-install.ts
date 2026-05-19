@@ -11,7 +11,7 @@ import {
   type SkillInstallSpecMetadata,
 } from "../plugins/install-security-scan.js";
 import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { installDownloadSpec } from "./skills-install-download.js";
 import { formatInstallFailureMessage } from "./skills-install-output.js";
 import type { SkillInstallResult } from "./skills-install.types.js";
@@ -68,9 +68,62 @@ const defaultSkillsInstallDeps: SkillsInstallDeps = {
 let skillsInstallDeps = defaultSkillsInstallDeps;
 
 const trustedInstallSources = new Set(["openclaw-bundled", "openclaw-managed", "openclaw-extra"]);
+type CaseProbeFs = Pick<typeof fs, "existsSync" | "mkdirSync" | "rmSync" | "writeFileSync">;
+let caseInsensitiveToolsFilesystemCache: { toolsDir: string; value: boolean } | undefined;
+
+function resolveDefaultToolsDir(): string {
+  return path.join(resolveConfigDir(), "tools");
+}
+
+function fallbackCaseInsensitivePlatform(platform: NodeJS.Platform): boolean {
+  return platform === "darwin" || platform === "win32";
+}
+
+function probeCaseInsensitiveDirectory(dir: string, fsImpl: CaseProbeFs = fs): boolean | undefined {
+  const probeName = `.openclaw-case-probe-${process.pid}-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}-a`;
+  const alternateName = probeName.toUpperCase();
+  if (alternateName === probeName) {
+    return false;
+  }
+  const probePath = path.join(dir, probeName);
+  const alternatePath = path.join(dir, alternateName);
+  try {
+    fsImpl.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fsImpl.writeFileSync(probePath, "", { flag: "wx", mode: 0o600 });
+    try {
+      return fsImpl.existsSync(alternatePath);
+    } finally {
+      fsImpl.rmSync(probePath, { force: true });
+      fsImpl.rmSync(alternatePath, { force: true });
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveCaseInsensitiveToolsFilesystem(params?: {
+  toolsDir?: string;
+  platform?: NodeJS.Platform;
+  fsImpl?: CaseProbeFs;
+}): boolean {
+  const toolsDir = params?.toolsDir ?? resolveDefaultToolsDir();
+  const probed = probeCaseInsensitiveDirectory(toolsDir, params?.fsImpl);
+  if (probed !== undefined) {
+    return probed;
+  }
+  return fallbackCaseInsensitivePlatform(params?.platform ?? process.platform);
+}
 
 function isCaseInsensitiveToolsFilesystemByDefault(): boolean {
-  return process.platform === "darwin" || process.platform === "win32";
+  const toolsDir = resolveDefaultToolsDir();
+  if (caseInsensitiveToolsFilesystemCache?.toolsDir === toolsDir) {
+    return caseInsensitiveToolsFilesystemCache.value;
+  }
+  const value = resolveCaseInsensitiveToolsFilesystem({ toolsDir });
+  caseInsensitiveToolsFilesystemCache = { toolsDir, value };
+  return value;
 }
 
 function normalizeToolsCollisionValue(value: string, caseInsensitive: boolean): string {
@@ -706,7 +759,9 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 
 export const testing = {
   resolveDefaultNodeInstallStateDir,
+  resolveCaseInsensitiveToolsFilesystemForTest: resolveCaseInsensitiveToolsFilesystem,
   setDepsForTest(overrides?: Partial<SkillsInstallDeps>): void {
+    caseInsensitiveToolsFilesystemCache = undefined;
     skillsInstallDeps = {
       ...defaultSkillsInstallDeps,
       ...overrides,

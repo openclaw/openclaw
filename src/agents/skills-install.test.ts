@@ -132,6 +132,35 @@ function emptyBundledSkillsContext() {
   return { names: new Set<string>(), skillKeys: new Set<string>() };
 }
 
+function createCaseProbeFs(caseInsensitive: boolean) {
+  const files = new Set<string>();
+  const keyFor = (file: unknown) => {
+    const key = String(file);
+    return caseInsensitive ? key.toLowerCase() : key;
+  };
+  return {
+    existsSync: (file: unknown) => files.has(keyFor(file)),
+    mkdirSync: () => undefined,
+    writeFileSync: (file: unknown) => {
+      files.add(keyFor(file));
+    },
+    rmSync: (file: unknown) => {
+      files.delete(keyFor(file));
+    },
+  };
+}
+
+function createFailingCaseProbeFs() {
+  return {
+    existsSync: () => false,
+    mkdirSync: () => {
+      throw new Error("permission denied");
+    },
+    writeFileSync: () => undefined,
+    rmSync: () => undefined,
+  };
+}
+
 function setSkillsInstallTestDeps(
   overrides: NonNullable<Parameters<typeof skillsInstallTesting.setDepsForTest>[0]> = {},
 ) {
@@ -455,6 +484,40 @@ describe("installSkill code safety scanning", () => {
         platform: "linux",
       }),
     ).toBe("/var/lib/openclaw");
+  });
+
+  it("uses the tools directory case probe before platform fallback", () => {
+    expect(
+      skillsInstallTesting.resolveCaseInsensitiveToolsFilesystemForTest({
+        toolsDir: "/mnt/c/.openclaw/tools",
+        platform: "linux",
+        fsImpl: createCaseProbeFs(true),
+      }),
+    ).toBe(true);
+    expect(
+      skillsInstallTesting.resolveCaseInsensitiveToolsFilesystemForTest({
+        toolsDir: "/Volumes/case-sensitive/.openclaw/tools",
+        platform: "darwin",
+        fsImpl: createCaseProbeFs(false),
+      }),
+    ).toBe(false);
+  });
+
+  it("falls back to the platform when the tools directory case probe cannot run", () => {
+    expect(
+      skillsInstallTesting.resolveCaseInsensitiveToolsFilesystemForTest({
+        toolsDir: "/root/.openclaw/tools",
+        platform: "linux",
+        fsImpl: createFailingCaseProbeFs(),
+      }),
+    ).toBe(false);
+    expect(
+      skillsInstallTesting.resolveCaseInsensitiveToolsFilesystemForTest({
+        toolsDir: "/Users/tester/.openclaw/tools",
+        platform: "darwin",
+        fsImpl: createFailingCaseProbeFs(),
+      }),
+    ).toBe(true);
   });
 
   it("blocks install when skill scan fails", async () => {
