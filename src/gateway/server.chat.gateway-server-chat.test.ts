@@ -695,6 +695,103 @@ describe("gateway server chat", () => {
     expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
   });
 
+  test("chat.history mirrors current-session message tool sends before NO_REPLY", async () => {
+    const replyText = "Here, love. Eva, not Evo.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Evo, you there?" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-1",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-1",
+        content: { ok: true, messageId: "24268", chatId: "8455538490" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["Evo, you there?", replyText]);
+    expect(
+      historyMessages.some((message) => {
+        if (!message || typeof message !== "object") {
+          return false;
+        }
+        const entry = message as { role?: unknown; openclawMessageToolMirror?: unknown };
+        return entry.role === "assistant" && Boolean(entry.openclawMessageToolMirror);
+      }),
+    ).toBe(true);
+  });
+
+  test("chat.history does not mirror explicitly routed message tool sends", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "send that elsewhere" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-remote",
+            name: "message",
+            arguments: {
+              action: "send",
+              to: "8455538490",
+              message: "Remote-only reply",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-remote",
+        content: { ok: true, messageId: "24269", chatId: "8455538490" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["send that elsewhere"]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(false);
+  });
+
   test("chat.history hides commentary-only assistant entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages([
       {
