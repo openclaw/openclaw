@@ -196,6 +196,7 @@ class NodeRuntime(
       readSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canReadSms() },
       smsSearchPossible = { SensitiveFeatureConfig.smsEnabled && sms.hasTelephonyFeature() },
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
+      photosAvailable = { SensitiveFeatureConfig.photosEnabled },
       hasRecordAudioPermission = { hasRecordAudioPermission() },
       manualTls = { manualTls.value },
     )
@@ -234,6 +235,7 @@ class NodeRuntime(
       smsFeatureEnabled = { SensitiveFeatureConfig.smsEnabled },
       smsTelephonyAvailable = { sms.hasTelephonyFeature() },
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
+      photosAvailable = { SensitiveFeatureConfig.photosEnabled },
       debugBuild = { BuildConfig.DEBUG },
       onCanvasA2uiPush = {
         _canvasA2uiHydrated.value = true
