@@ -151,8 +151,8 @@ function banner(logStream, s) {
 
 function parseArgs(argv) {
   // Supported:
-  node scripts/polytropos-release.mjs release --run <run-id> [--repo <owner/repo>] [--artifact <name>] [--log <path>]
-  node scripts/polytropos-release.mjs release --run-url <actions-run-url> [--repo <owner/repo>] [--artifact <name>] [--log <path>]
+  //   node scripts/polytropos-release.mjs release --run <run-id> [--repo <owner/repo>] [--artifact <name>] [--log <path>]
+  //   node scripts/polytropos-release.mjs release --run-url <actions-run-url> [--repo <owner/repo>] [--artifact <name>] [--log <path>]
   const args = argv.slice(2);
   const cmd = args[0] || "";
   let logPath = process.env.POLYTROPOS_RELEASE_LOG || defaultLogPath();
