@@ -449,21 +449,20 @@ export class FeishuStreamingSession {
         return;
       }
       const nextText = this.pendingText ?? mergedInput;
-      const mergedText = mergeStreamingText(this.state.currentText, nextText);
-      if (!mergedText || mergedText === this.state.currentText) {
+      if (!nextText || nextText === this.state.currentText) {
         return;
       }
-      const appendContent = resolveStreamingCardAppendContent(this.state.sentText, mergedText);
+      const appendContent = resolveStreamingCardAppendContent(this.state.sentText, nextText);
       if (!appendContent) {
         return;
       }
       this.pendingText = null;
-      this.state.currentText = mergedText;
+      this.state.currentText = nextText;
       const sent = await this.updateCardContent(appendContent, (e) =>
         this.log?.(`Update failed: ${String(e)}`),
       );
       if (sent && this.state) {
-        this.state.sentText = mergedText;
+        this.state.sentText = nextText;
       }
     });
     await this.queue;

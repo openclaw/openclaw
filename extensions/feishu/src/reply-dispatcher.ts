@@ -244,6 +244,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingStartPromise: Promise<void> | null = null;
   let streamingClosedForReply = false;
   let streamingCloseErroredForReply = false;
+  let suppressOnPartialReply = false;
   type StreamTextUpdateMode = "snapshot" | "delta";
 
   const formatReasoningPrefix = (thinking: string): string => {
@@ -516,6 +517,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         deliveredFinalTexts.clear();
         streamingClosedForReply = false;
         streamingCloseErroredForReply = false;
+        suppressOnPartialReply = false;
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
@@ -584,6 +586,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
+              // Suppress onPartialReply updates to avoid racing with block delivery.
+              suppressOnPartialReply = true;
               queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
             }
             if (info?.kind === "final") {
@@ -675,6 +679,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
+              return;
+            }
+            if (suppressOnPartialReply) {
               return;
             }
             const cleaned = stripReasoningTagsFromText(payload.text, {
