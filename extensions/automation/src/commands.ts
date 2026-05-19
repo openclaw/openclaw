@@ -11,10 +11,41 @@ import type { InteractiveReply } from "./telegram-ui/types.js";
 
 /**
  * 將面板轉換為 PluginCommandResult (ReplyPayload) 格式。
- * 使用 `interactive` 欄位讓 Telegram channel renderer 正確渲染按鈕和 HTML。
+ *
+ * 面板的 text blocks 使用 HTML 格式（<b>, <code> 等），
+ * 所以透過 channelData.telegram 直接指定 textMode: "html"，
+ * 讓 Telegram renderer 跳過 markdown→html 轉換，直接用原始 HTML。
+ * 按鈕也從 interactive blocks 提取放進 telegram buttons 格式。
  */
 function toReply(panel: InteractiveReply) {
-  return { interactive: panel };
+  // 提取文字
+  const text = panel.blocks
+    .filter((b): b is { type: "text"; text: string } => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+
+  // 提取按鈕 → Telegram inline keyboard 格式 (2D array)
+  const buttonBlocks = panel.blocks.filter(
+    (b): b is { type: "buttons"; buttons: any[] } => b.type === "buttons",
+  );
+  const buttons = buttonBlocks.length
+    ? buttonBlocks.map((b) =>
+        b.buttons.map((btn: any) => ({
+          text: btn.label,
+          callback_data: btn.value,
+        })),
+      )
+    : undefined;
+
+  return {
+    text: text || " ",
+    channelData: {
+      telegram: {
+        textMode: "html",
+        buttons,
+      },
+    },
+  };
 }
 
 export function registerCommands(api: OpenClawPluginApi) {
@@ -125,9 +156,8 @@ export function registerCommands(api: OpenClawPluginApi) {
         `今日費用: $${usage.costToday.toFixed(2)}\n` +
         `排程: ${snapshot.cronJobsEnabled} 個啟用`;
       return {
-        interactive: {
-          blocks: [{ type: "text" as const, text }],
-        },
+        text,
+        channelData: { telegram: { textMode: "html" } },
       };
     },
   });
@@ -139,11 +169,7 @@ export function registerCommands(api: OpenClawPluginApi) {
     requireAuth: true,
     handler: async () => {
       await rpc.resetSession();
-      return {
-        interactive: {
-          blocks: [{ type: "text" as const, text: "✅ 對話已重置" }],
-        },
-      };
+      return { text: "✅ 對話已重置" };
     },
   });
 }
