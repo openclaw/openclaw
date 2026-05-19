@@ -39,7 +39,7 @@ export const telegramChannelConfigUiHints = {
   },
   dmRecentLimit: {
     label: "Telegram DM Recent Context Limit",
-    help: "Default recent observed Telegram DM messages to include in selected conversation context (default: 0).",
+    help: "Default recent observed Telegram DM messages to include in selected conversation context (default: 10). Set 0 to disable this recent-message window for DMs.",
   },
   "groups.*.recentLimit": {
     label: "Telegram Group Recent Context Limit",

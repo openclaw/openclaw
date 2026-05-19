@@ -1900,7 +1900,7 @@ describe("createTelegramBot", () => {
     expect(payload.UntrustedStructuredContext).toBeUndefined();
   });
 
-  it("does not add the recent observed conversation window for DMs by default", async () => {
+  it("adds the recent observed conversation window for DMs by default", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
 
@@ -1909,6 +1909,69 @@ describe("createTelegramBot", () => {
         telegram: {
           dmPolicy: "open",
           allowFrom: ["*"],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    for (const message of [
+      { text: "previous private message", message_id: 300, date: 1736380800 },
+      { text: "another private message", message_id: 301, date: 1736380860 },
+    ]) {
+      await handler({
+        ...baseCtx,
+        message: {
+          chat: { id: 7, type: "private" },
+          ...message,
+          from: { id: 7, is_bot: false, first_name: "Ada" },
+        },
+      });
+    }
+
+    replySpy.mockClear();
+    await handler({
+      ...baseCtx,
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "current private message",
+        date: 1736380920,
+        message_id: 302,
+        from: { id: 7, is_bot: false, first_name: "Ada" },
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const [conversationContext] = requireArray(
+      payload.UntrustedStructuredContext,
+      "structured context",
+    );
+    const contextPayload = requireRecord(
+      requireRecord(conversationContext, "conversation context").payload,
+      "conversation context payload",
+    );
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+    );
+    expect(messages.map((message) => message.message_id)).toEqual(["300", "301"]);
+  });
+
+  it("omits the recent observed conversation window for DMs when dmRecentLimit is zero", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          dmRecentLimit: 0,
         },
       },
     });
