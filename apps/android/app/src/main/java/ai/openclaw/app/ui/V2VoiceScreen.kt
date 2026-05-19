@@ -353,15 +353,15 @@ private fun V2TalkSessionScreen(
       Modifier
         .fillMaxSize()
         .imePadding()
-        .padding(horizontal = 20.dp, vertical = 12.dp),
-    verticalArrangement = Arrangement.spacedBy(16.dp),
+        .padding(horizontal = 20.dp, vertical = 8.dp),
+    verticalArrangement = Arrangement.spacedBy(11.dp),
   ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
       V2VoicePlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to voice", onClick = onEndTalk)
       Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(text = "Realtime Talk", style = ClawTheme.type.title, color = ClawTheme.colors.text)
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-          Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(if (speaking || listening) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
+        Text(text = "Realtime Talk", style = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 17.sp), color = ClawTheme.colors.text)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+          Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (speaking || listening) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
           Text(
             text =
               if (speaking) {
@@ -371,7 +371,7 @@ private fun V2TalkSessionScreen(
               } else {
                 "Connected"
               },
-            style = ClawTheme.type.body,
+            style = ClawTheme.type.body.copy(fontSize = 9.sp, lineHeight = 11.5.sp),
             color = ClawTheme.colors.textMuted,
           )
         }
@@ -380,7 +380,7 @@ private fun V2TalkSessionScreen(
     }
 
     Surface(
-      modifier = Modifier.fillMaxWidth().height(78.dp),
+      modifier = Modifier.fillMaxWidth().height(58.dp),
       shape = RoundedCornerShape(ClawTheme.radii.pill),
       color = ClawTheme.colors.canvas,
       border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
@@ -390,7 +390,7 @@ private fun V2TalkSessionScreen(
       }
     }
 
-    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text(text = "Live transcript", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       V2TalkTranscript(entries = entries, modifier = Modifier.weight(1f))
     }
@@ -412,7 +412,7 @@ private fun V2TalkTranscript(
   entries: List<VoiceConversationEntry>,
   modifier: Modifier = Modifier,
 ) {
-  LazyColumn(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+  LazyColumn(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
     if (entries.isEmpty()) {
       item {
         V2TalkTranscriptCard(label = "OpenClaw", text = "Listening for your next turn.", muted = true)
@@ -437,13 +437,13 @@ private fun V2TalkTranscriptCard(
 ) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(ClawTheme.radii.sheet),
+    shape = RoundedCornerShape(ClawTheme.radii.panel),
     color = ClawTheme.colors.surface,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
-    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      Text(text = label, style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      Text(text = text, style = ClawTheme.type.body, color = if (muted) ClawTheme.colors.textMuted else ClawTheme.colors.text)
+    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+      Text(text = label, style = ClawTheme.type.section.copy(fontSize = 10.sp, lineHeight = 12.5.sp), color = ClawTheme.colors.text)
+      Text(text = text, style = ClawTheme.type.body.copy(fontSize = 8.8.sp, lineHeight = 11.5.sp), color = if (muted) ClawTheme.colors.textMuted else ClawTheme.colors.text)
     }
   }
 }
@@ -455,20 +455,20 @@ private fun V2TalkControl(
   primary: Boolean = false,
   onClick: () -> Unit,
 ) {
-  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
     Surface(
       onClick = onClick,
-      modifier = Modifier.size(if (primary) 58.dp else 52.dp),
+      modifier = Modifier.size(if (primary) 48.dp else 44.dp),
       shape = CircleShape,
       color = if (primary) ClawTheme.colors.primary else ClawTheme.colors.canvas,
       contentColor = if (primary) ClawTheme.colors.primaryText else ClawTheme.colors.text,
       border = BorderStroke(1.dp, if (primary) ClawTheme.colors.primary else ClawTheme.colors.border),
     ) {
       Box(contentAlignment = Alignment.Center) {
-        Icon(imageVector = icon, contentDescription = label, modifier = Modifier.size(if (primary) 24.dp else 21.dp))
+        Icon(imageVector = icon, contentDescription = label, modifier = Modifier.size(if (primary) 20.dp else 18.dp))
       }
     }
-    Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+    Text(text = label, style = ClawTheme.type.caption.copy(fontSize = 8.4.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textMuted)
   }
 }
 
