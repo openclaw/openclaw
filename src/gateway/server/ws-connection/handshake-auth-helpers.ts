@@ -35,6 +35,7 @@ type HandshakeConnectAuth = {
   bootstrapToken?: string;
   deviceToken?: string;
   password?: string;
+  approvalRuntimeToken?: string;
 };
 
 function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
@@ -83,7 +84,7 @@ export function shouldAllowSilentLocalPairing(params: {
   if (params.locality === "remote") {
     return false;
   }
-  if (params.hasBrowserOriginHeader && !params.isControlUi && !params.isWebchat) {
+  if (params.hasBrowserOriginHeader) {
     return false;
   }
   if (

@@ -60,6 +60,15 @@ function requireEntry<T extends { id?: string }>(entries: T[], id: string): T {
 }
 
 describe("xai provider plugin", () => {
+  it("exposes OAuth and device-code auth choices", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.auth?.map((method) => method.id)).toEqual(["api-key", "oauth", "device-code"]);
+    const deviceCode = provider.auth?.find((method) => method.id === "device-code");
+    expect(deviceCode?.kind).toBe("device_code");
+    expect(deviceCode?.wizard?.choiceId).toBe("xai-device-code");
+  });
+
   it("registers xAI speech providers for batch and streaming STT", async () => {
     const { mediaProviders, realtimeTranscriptionProviders } = await registerProviderPlugin({
       plugin,
@@ -203,8 +212,8 @@ describe("xai provider plugin", () => {
 
     const normalized = provider.normalizeResolvedModel?.({
       provider: "xai",
-      modelId: "grok-4-1-fast",
-      model: createProviderModel({ id: "grok-4-1-fast" }),
+      modelId: "grok-4.3",
+      model: createProviderModel({ id: "grok-4.3" }),
     } as never);
     expect(normalized?.thinkingLevelMap).toEqual({
       off: null,
@@ -213,6 +222,19 @@ describe("xai provider plugin", () => {
       medium: "medium",
       high: "high",
       xhigh: "high",
+    });
+    const olderReasoningModel = provider.normalizeResolvedModel?.({
+      provider: "xai",
+      modelId: "grok-4-1-fast",
+      model: createProviderModel({ id: "grok-4-1-fast" }),
+    } as never);
+    expect(olderReasoningModel?.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: null,
+      low: null,
+      medium: null,
+      high: null,
+      xhigh: null,
     });
     const normalizedCompat = normalized?.compat as
       | {

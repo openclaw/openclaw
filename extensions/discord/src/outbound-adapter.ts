@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { withDiscordDeliveryRetry } from "./delivery-retry.js";
+import { notifyDiscordInboundEventOutboundPayloadSuccess } from "./inbound-event-delivery.js";
 import { isLikelyDiscordVideoMedia } from "./media-detection.js";
 import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
@@ -119,6 +120,24 @@ export const discordOutbound: ChannelOutboundAdapter = {
     selects: true,
     context: true,
     divider: true,
+    limits: {
+      actions: {
+        maxActions: 25,
+        maxActionsPerRow: 5,
+        maxRows: 5,
+        maxLabelLength: 80,
+      },
+      selects: {
+        maxOptions: 25,
+        maxLabelLength: 100,
+        maxValueBytes: 100,
+      },
+      text: {
+        maxLength: DISCORD_TEXT_CHUNK_LIMIT,
+        encoding: "characters",
+        markdownDialect: "discord-markdown",
+      },
+    },
   },
   deliveryCapabilities: {
     durableFinal: {
@@ -287,7 +306,12 @@ export const discordOutbound: ChannelOutboundAdapter = {
           }),
       }),
   }),
-  afterDeliverPayload: async ({ target }) => {
+  afterDeliverPayload: async ({ target, payload }) => {
+    notifyDiscordInboundEventOutboundPayloadSuccess({
+      payload,
+      to: resolveDiscordOutboundTarget({ to: target.to, threadId: target.threadId }),
+      accountId: target.accountId,
+    });
     const threadId = normalizeOptionalStringifiedId(target.threadId);
     if (!threadId) {
       return;

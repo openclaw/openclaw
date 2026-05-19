@@ -92,13 +92,13 @@ function readGatewayMethodOptions(
 }
 
 function readRespondPayload(respond: { mock: { calls: Array<Array<unknown>> } }): unknown {
-  const call = respond.mock.calls.at(0);
+  const call = respond.mock.calls[0];
   expect(call?.[0]).toBe(true);
   return call?.[1];
 }
 
 function readRespondError(respond: { mock: { calls: Array<Array<unknown>> } }): unknown {
-  const call = respond.mock.calls.at(0);
+  const call = respond.mock.calls[0];
   expect(call?.[0]).toBe(false);
   expect(call?.[1]).toBeUndefined();
   return call?.[2];
@@ -486,6 +486,43 @@ describe("memory-wiki gateway methods", () => {
     expect(readRespondPayload(respond)).toEqual({
       items: [],
       total: 0,
+    });
+  });
+
+  it("passes the default agent scope to shared wiki.search gateway calls", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+    const appConfig = {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    registerMemoryWikiGatewayMethods({ api, config, appConfig });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.search");
+    if (!handler) {
+      throw new Error("wiki.search handler missing");
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params: {
+        query: "sessions",
+        corpus: "memory",
+        backend: "shared",
+      },
+      respond,
+    });
+
+    expect(searchMemoryWiki).toHaveBeenCalledWith({
+      config,
+      appConfig,
+      agentId: "main",
+      query: "sessions",
+      maxResults: undefined,
+      searchBackend: "shared",
+      searchCorpus: "memory",
+      mode: undefined,
     });
   });
 

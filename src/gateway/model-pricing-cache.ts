@@ -261,7 +261,12 @@ async function readPricingJsonObject(
   if (buffer.byteLength > MAX_PRICING_CATALOG_BYTES) {
     throw new Error(`${source} pricing response too large: ${buffer.byteLength} bytes`);
   }
-  const payload = JSON.parse(Buffer.from(buffer).toString("utf8")) as unknown;
+  let payload: unknown;
+  try {
+    payload = JSON.parse(Buffer.from(buffer).toString("utf8")) as unknown;
+  } catch {
+    throw new Error(`${source} pricing response is malformed JSON`);
+  }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error(`${source} pricing response is not a JSON object`);
   }
@@ -892,6 +897,12 @@ export function collectConfiguredModelPricingRefs(
     ...normalizationParams,
   });
   addModelListLike({
+    value: config.agents?.defaults?.subagents?.model,
+    aliasIndex,
+    refs,
+    ...normalizationParams,
+  });
+  addModelListLike({
     value: config.agents?.defaults?.imageModel,
     aliasIndex,
     refs,
@@ -911,12 +922,6 @@ export function collectConfiguredModelPricingRefs(
   });
   addResolvedModelRef({
     raw: config.agents?.defaults?.heartbeat?.model,
-    aliasIndex,
-    refs,
-    ...normalizationParams,
-  });
-  addModelListLike({
-    value: config.tools?.subagents?.model,
     aliasIndex,
     refs,
     ...normalizationParams,
@@ -1387,7 +1392,7 @@ export function startGatewayModelPricingRefresh(
   };
 }
 
-export function __resetGatewayModelPricingCacheForTest(): void {
+export function resetGatewayModelPricingCacheForTest(): void {
   clearGatewayModelPricingCacheState();
   clearRefreshTimer();
   inFlightRefresh = null;

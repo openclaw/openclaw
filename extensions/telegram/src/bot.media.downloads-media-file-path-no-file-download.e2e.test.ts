@@ -11,9 +11,19 @@ import {
 } from "./bot.media.test-utils.js";
 
 type ReplyPayload = { Body: string; MediaPaths?: string[] } & Record<string, unknown>;
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function mockCall(mock: MockWithCalls, index: number): unknown[] {
+  const resolvedIndex = index < 0 ? mock.mock.calls.length + index : index;
+  const call = mock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${index}`);
+  }
+  return call;
+}
 
 function replyPayload(replySpy: ReturnType<typeof vi.fn>, index = 0): ReplyPayload {
-  const payload = replySpy.mock.calls.at(index)?.at(0);
+  const payload = mockCall(replySpy, index)[0];
   if (typeof payload !== "object" || payload === null) {
     throw new Error(`expected reply payload ${index}`);
   }
@@ -27,7 +37,7 @@ function downloadRequest(
   filePathHint?: string;
   url?: string;
 } {
-  const request = fetchSpy.mock.calls.at(index)?.at(0);
+  const request = mockCall(fetchSpy, index)[0];
   if (typeof request !== "object" || request === null) {
     throw new Error(`expected download request ${index}`);
   }
@@ -64,11 +74,9 @@ describe("telegram inbound media", () => {
             runtimeError: ReturnType<typeof vi.fn>;
           }) => {
             expect(params.runtimeError).not.toHaveBeenCalled();
-            const downloadRequest = params.fetchSpy.mock.calls.at(-1)?.[0] as
-              | { filePathHint?: string; url?: string }
-              | undefined;
-            expect(downloadRequest?.url).toBe("https://api.telegram.org/file/bottok/photos/1.jpg");
-            expect(downloadRequest?.filePathHint).toBe("photos/1.jpg");
+            const request = downloadRequest(params.fetchSpy, -1);
+            expect(request.url).toBe("https://api.telegram.org/file/bottok/photos/1.jpg");
+            expect(request.filePathHint).toBe("photos/1.jpg");
             expect(params.replySpy).toHaveBeenCalledTimes(1);
             const payload = replyPayload(params.replySpy);
             expect(payload.Body).toContain("<media:image>");
@@ -185,9 +193,9 @@ describe("telegram inbound media", () => {
     });
 
     expect(runtimeError).not.toHaveBeenCalled();
-    const proxyCall = proxyFetch.mock.calls.at(-1);
-    expect(proxyCall?.[0]).toBe("https://api.telegram.org/file/bottok/photos/2.jpg");
-    expect((proxyCall?.[1] as RequestInit | undefined)?.redirect).toBe("manual");
+    const proxyCall = mockCall(proxyFetch, -1);
+    expect(proxyCall[0]).toBe("https://api.telegram.org/file/bottok/photos/2.jpg");
+    expect((proxyCall[1] as RequestInit | undefined)?.redirect).toBe("manual");
 
     globalFetchSpy.mockRestore();
   });
@@ -423,6 +431,97 @@ describe("telegram media groups", () => {
         }
       } finally {
         fetchSpy.mockRestore();
+      }
+    },
+    MEDIA_GROUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "flushes same-id forum topic media groups in parallel",
+    async () => {
+      const originalLoadConfig = telegramBotDepsForTest.getRuntimeConfig;
+      telegramBotDepsForTest.getRuntimeConfig = (() => ({
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      })) as typeof telegramBotDepsForTest.getRuntimeConfig;
+
+      const runtimeError = vi.fn();
+      const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
+      const fetchSpy = mockTelegramPngDownload();
+      let releaseFirstReply: (() => void) | undefined;
+      const firstReplyStarted = new Promise<void>((resolve) => {
+        replySpy.mockImplementationOnce(async (_ctx, opts?: { onReplyStart?: () => unknown }) => {
+          await opts?.onReplyStart?.();
+          resolve();
+          await new Promise<void>((release) => {
+            releaseFirstReply = release;
+          });
+          return undefined;
+        });
+      });
+
+      try {
+        await Promise.all([
+          handler({
+            message: {
+              chat: { id: -10042, type: "supergroup" as const, is_forum: true },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              message_id: 31,
+              message_thread_id: 101,
+              caption: "Topic one album",
+              date: 1736380800,
+              media_group_id: "album-shared-by-telegram",
+              photo: [{ file_id: "topic1photo" }],
+            },
+            me: { username: "openclaw_bot" },
+            getFile: async () => ({ file_path: "photos/topic1.jpg" }),
+          }),
+          handler({
+            message: {
+              chat: { id: -10042, type: "supergroup" as const, is_forum: true },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              message_id: 32,
+              message_thread_id: 202,
+              caption: "Topic two album",
+              date: 1736380801,
+              media_group_id: "album-shared-by-telegram",
+              photo: [{ file_id: "topic2photo" }],
+            },
+            me: { username: "openclaw_bot" },
+            getFile: async () => ({ file_path: "photos/topic2.jpg" }),
+          }),
+        ]);
+
+        await firstReplyStarted;
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        await vi.waitFor(
+          () => {
+            expect(replySpy).toHaveBeenCalledTimes(2);
+          },
+          { timeout: MEDIA_GROUP_WAIT_TIMEOUT_MS, interval: 2 },
+        );
+
+        const firstPayload = replyPayload(replySpy, 0);
+        const secondPayload = replyPayload(replySpy, 1);
+        expect([firstPayload.Body, secondPayload.Body]).toEqual(
+          expect.arrayContaining([
+            expect.stringContaining("Topic one album"),
+            expect.stringContaining("Topic two album"),
+          ]),
+        );
+        expect(firstPayload.MediaPaths).toHaveLength(1);
+        expect(secondPayload.MediaPaths).toHaveLength(1);
+        expect(runtimeError).not.toHaveBeenCalled();
+      } finally {
+        releaseFirstReply?.();
+        fetchSpy.mockRestore();
+        telegramBotDepsForTest.getRuntimeConfig = originalLoadConfig;
       }
     },
     MEDIA_GROUP_TEST_TIMEOUT_MS,

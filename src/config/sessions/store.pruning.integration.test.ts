@@ -17,6 +17,7 @@ vi.mock("../config.js", async () => ({
 
 import { getRuntimeConfig } from "../config.js";
 import { runSessionsCleanup } from "./cleanup-service.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -312,6 +313,88 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(referencedTranscript);
     await expectPathExists(referencedCheckpointPath);
     await expectPathExists(freshOrphanTranscript);
+  });
+
+  it("sessions cleanup fix-missing prunes malformed stored session rows", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const validTranscript = path.join(testDir, "valid-present.jsonl");
+    const legacyPresentTranscript = path.join(testDir, "legacy-present.jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "invalid-no-file": { sessionId: "agent:main:main", updatedAt: now },
+          "invalid-bad-file": {
+            sessionId: "agent:main:main",
+            sessionFile: "../outside.jsonl",
+            updatedAt: now,
+          },
+          "invalid-missing-relative-file": {
+            sessionId: "agent:main:main",
+            sessionFile: "missing.jsonl",
+            updatedAt: now,
+          },
+          "agent:main:metadata": {
+            sessionId: "agent:main:metadata",
+            updatedAt: now,
+            groupActivation: "always",
+          },
+          "legacy-present-invalid-id": {
+            sessionId: "agent:main:main",
+            sessionFile: "legacy-present.jsonl",
+            updatedAt: now,
+          },
+          "valid-present": { sessionId: "valid-present", updatedAt: now },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(validTranscript, "valid", "utf-8");
+    await fs.writeFile(legacyPresentTranscript, "legacy", "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+    const preview = dryRun.previewResults[0];
+    expect(preview?.summary.missing).toBe(3);
+    expect(preview?.summary.beforeCount).toBe(6);
+    expect(preview?.summary.afterCount).toBe(3);
+    expect(preview?.missingKeys.has("invalid-no-file")).toBe(true);
+    expect(preview?.missingKeys.has("invalid-bad-file")).toBe(true);
+    expect(preview?.missingKeys.has("invalid-missing-relative-file")).toBe(true);
+    expect(preview?.missingKeys.has("agent:main:metadata")).toBe(false);
+    expect(preview?.missingKeys.has("legacy-present-invalid-id")).toBe(false);
+    const rawAfterDryRun = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    expect(rawAfterDryRun).toHaveProperty("invalid-no-file");
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.missing).toBe(3);
+    expect(applied.appliedSummaries[0]?.afterCount).toBe(3);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(persisted)).toEqual([
+      "agent:main:metadata",
+      "legacy-present-invalid-id",
+      "valid-present",
+    ]);
+    expect(persisted["agent:main:metadata"]).toMatchObject({ groupActivation: "always" });
+    expect(persisted["agent:main:metadata"]?.sessionId).toBeUndefined();
+    expect(persisted["legacy-present-invalid-id"]?.sessionId).toBe("agent:main:main");
+    await expectPathExists(validTranscript);
+    await expectPathExists(legacyPresentTranscript);
   });
 
   it("sessions cleanup previews stale direct DM rows after dmScope returns to main", async () => {
@@ -714,6 +797,38 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded).toHaveProperty(threadKey);
     expect(loaded).toHaveProperty(topicKey);
     expect(loaded["session-74"]).toBeUndefined();
+  });
+
+  it("explicit loadSessionStore maintenance preserves runtime-provided subagent sessions", async () => {
+    const now = Date.now();
+    const childKey = "agent:main:subagent:pending-delivery";
+    const store = Object.fromEntries(
+      Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+    );
+    store[childKey] = {
+      ...makeEntry(now - 100 * DAY_MS),
+      spawnedBy: "agent:main:slack:direct:U1",
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+    const unregister = registerSessionMaintenancePreserveKeysProvider(() => [childKey]);
+
+    try {
+      const loaded = loadSessionStore(storePath, {
+        skipCache: true,
+        runMaintenance: true,
+        maintenanceConfig: {
+          ...ENFORCED_MAINTENANCE_OVERRIDE,
+          maxEntries: 50,
+          pruneAfterMs: 365 * DAY_MS,
+        },
+      });
+
+      expect(Object.keys(loaded)).toHaveLength(50);
+      expect(loaded).toHaveProperty(childKey);
+      expect(loaded["session-74"]).toBeUndefined();
+    } finally {
+      unregister();
+    }
   });
 
   it("persists quota suspension TTL transitions through writer maintenance", async () => {

@@ -10,9 +10,16 @@ import { callGateway } from "../../gateway/call.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import {
+  findAcpUnsupportedInheritedToolAllow,
+  findAcpUnsupportedInheritedToolDeny,
+  formatAcpInheritedToolAllowError,
+  formatAcpInheritedToolDenyError,
+} from "../inherited-tool-deny.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
+import { resolveSubagentSpawnOwnership } from "../subagent-spawn-ownership.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
@@ -31,11 +38,6 @@ import {
   readStringParam,
   ToolInputError,
 } from "./common.js";
-import {
-  resolveDisplaySessionKey,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-} from "./sessions-helpers.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
@@ -156,7 +158,7 @@ function createSessionsSpawnToolSchema(params: {
     taskName: Type.Optional(
       Type.String({
         description:
-          "Stable optional alias for later subagents targeting. Use lowercase letters, digits, and underscores, starting with a letter.",
+          "Stable alias for later targeting; lowercase letters/digits/underscores, starts letter.",
       }),
     ),
     label: Type.Optional(Type.String()),
@@ -175,7 +177,7 @@ function createSessionsSpawnToolSchema(params: {
           thread: Type.Optional(
             Type.Boolean({
               description:
-                'Bind the spawned session to a new chat thread when the current channel/account supports thread-bound session spawns. `thread=true` defaults mode to "session".',
+                'Bind spawn to new chat thread when supported. `thread=true` defaults mode="session".',
             }),
           ),
         }
@@ -185,12 +187,11 @@ function createSessionsSpawnToolSchema(params: {
     sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
     context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
       description:
-        'Native subagent context mode. Omit or use "isolated" for a clean child session; use "fork" only when the child needs the requester transcript context.',
+        'Native context. Omit/"isolated" for clean child; "fork" only when child needs requester transcript.',
     }),
     lightContext: Type.Optional(
       Type.Boolean({
-        description:
-          "When true, spawned subagent runs use lightweight bootstrap context. Only applies to runtime='subagent'.",
+        description: 'Light bootstrap context; runtime="subagent" only.',
       }),
     ),
 
@@ -219,12 +220,12 @@ function createSessionsSpawnToolSchema(params: {
           resumeSessionId: Type.Optional(
             Type.String({
               description:
-                'ACP-only resume target. Only meaningful with runtime="acp"; ignored for runtime="subagent". Use only an ACP/harness session ID already recorded for this requester so the ACP backend replays conversation history instead of starting fresh.',
+                'ACP-only resume target; ignored for runtime="subagent". Use id already recorded for this requester.',
             }),
           ),
           streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS, {
             description:
-              'ACP-only stream target. Only meaningful with runtime="acp"; ignored for runtime="subagent". Use "parent" to stream the ACP turn back to the requester instead of tracking it as a background sessions_spawn run.',
+              'ACP-only stream target; ignored for runtime="subagent". Use "parent" to stream turn to requester.',
           }),
         }
       : {}),
@@ -245,6 +246,8 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 export function createSessionsSpawnTool(
   opts?: {
     agentSessionKey?: string;
+    /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
+    completionOwnerKey?: string;
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
     agentTo?: string;
@@ -312,6 +315,28 @@ export function createSessionsSpawnTool(
           ...roleContext,
         });
       }
+      const acpUnsupportedInheritedTool =
+        runtime === "acp"
+          ? findAcpUnsupportedInheritedToolDeny(opts?.inheritedToolDenylist)
+          : undefined;
+      if (acpUnsupportedInheritedTool) {
+        return jsonResult({
+          status: "forbidden",
+          error: formatAcpInheritedToolDenyError(acpUnsupportedInheritedTool),
+          ...roleContext,
+        });
+      }
+      const acpUnsupportedInheritedAllow =
+        runtime === "acp"
+          ? findAcpUnsupportedInheritedToolAllow(opts?.inheritedToolAllowlist)
+          : undefined;
+      if (acpUnsupportedInheritedAllow) {
+        return jsonResult({
+          status: "forbidden",
+          error: formatAcpInheritedToolAllowError(acpUnsupportedInheritedAllow),
+          ...roleContext,
+        });
+      }
       if (runtime === "acp" && lightContext) {
         throw new Error("lightContext is only supported for runtime='subagent'.");
       }
@@ -374,6 +399,8 @@ export function createSessionsSpawnTool(
             agentGroupSpace: opts?.agentGroupSpace,
             agentMemberRoleIds: opts?.agentMemberRoleIds,
             sandboxed: opts?.sandboxed,
+            inheritedToolAllowlist: opts?.inheritedToolAllowlist,
+            inheritedToolDenylist: opts?.inheritedToolDenylist,
           },
         );
         const childSessionKey = result.childSessionKey?.trim();
@@ -390,18 +417,10 @@ export function createSessionsSpawnTool(
             threadRequested: thread,
           });
           const trackedCleanup = trackedSpawnMode === "session" ? "keep" : cleanup;
-          const { mainKey, alias } = resolveMainSessionAlias(cfg);
-          const requesterInternalKey = opts?.agentSessionKey
-            ? resolveInternalSessionKey({
-                key: opts.agentSessionKey,
-                alias,
-                mainKey,
-              })
-            : alias;
-          const requesterDisplayKey = resolveDisplaySessionKey({
-            key: requesterInternalKey,
-            alias,
-            mainKey,
+          const ownership = resolveSubagentSpawnOwnership({
+            cfg,
+            agentSessionKey: opts?.agentSessionKey,
+            completionOwnerKey: opts?.completionOwnerKey,
           });
           const requesterOrigin = normalizeDeliveryContext({
             channel: opts?.agentChannel,
@@ -416,9 +435,10 @@ export function createSessionsSpawnTool(
             registerSubagentRun({
               runId: childRunId,
               childSessionKey,
-              requesterSessionKey: requesterInternalKey,
+              controllerSessionKey: ownership.controllerSessionKey,
+              requesterSessionKey: ownership.completionRequesterSessionKey,
               requesterOrigin,
-              requesterDisplayKey,
+              requesterDisplayKey: ownership.completionRequesterDisplayKey,
               task,
               taskName,
               cleanup: trackedCleanup,
@@ -451,6 +471,7 @@ export function createSessionsSpawnTool(
           agentId: requestedAgentId,
           model: modelOverride,
           thinking: thinkingOverrideRaw,
+          cwd,
           runTimeoutSeconds,
           thread,
           mode,
@@ -467,6 +488,7 @@ export function createSessionsSpawnTool(
         },
         {
           agentSessionKey: opts?.agentSessionKey,
+          completionOwnerKey: opts?.completionOwnerKey,
           agentChannel: opts?.agentChannel,
           agentAccountId: opts?.agentAccountId,
           agentTo: opts?.agentTo,
@@ -477,6 +499,8 @@ export function createSessionsSpawnTool(
           agentMemberRoleIds: opts?.agentMemberRoleIds,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
           workspaceDir: opts?.workspaceDir,
+          inheritedToolAllowlist: opts?.inheritedToolAllowlist,
+          inheritedToolDenylist: opts?.inheritedToolDenylist,
         },
       );
 

@@ -71,6 +71,44 @@ describe("normalizeToolParameterSchema", () => {
     expect(normalizeToolParameterSchema(schema)).toEqual(schema);
   });
 
+  it("adds permissive items schemas to arrays missing items", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          entity_hints: { type: "array", description: "Optional entity hints" },
+          nested: {
+            type: "object",
+            properties: {
+              ids: { type: "array" },
+            },
+          },
+          alternatives: {
+            anyOf: [{ type: "array" }, { type: "string" }],
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        entity_hints: {
+          type: "array",
+          description: "Optional entity hints",
+          items: {},
+        },
+        nested: {
+          type: "object",
+          properties: {
+            ids: { type: "array", items: {} },
+          },
+        },
+        alternatives: {
+          anyOf: [{ type: "array", items: {} }, { type: "string" }],
+        },
+      },
+    });
+  });
+
   it("inlines local $ref before removing unsupported keywords", () => {
     const cleaned = cleanToolSchemaForGemini({
       type: "object",
@@ -95,6 +133,123 @@ describe("normalizeToolParameterSchema", () => {
     expect(cleaned.properties?.foo).toEqual({
       type: "string",
       enum: ["a", "b"],
+    });
+  });
+
+  it("inlines nested local $ref schemas for provider-neutral tools", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        required: ["parent"],
+        properties: {
+          parent: {
+            $ref: "#/$defs/Parent",
+            description: "Notion parent",
+          },
+        },
+        $defs: {
+          Parent: {
+            oneOf: [
+              {
+                type: "object",
+                required: ["page_id"],
+                properties: { page_id: { type: "string" } },
+              },
+              {
+                type: "object",
+                required: ["database_id"],
+                properties: { database_id: { type: "string" } },
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      required: ["parent"],
+      properties: {
+        parent: {
+          description: "Notion parent",
+          oneOf: [
+            {
+              type: "object",
+              required: ["page_id"],
+              properties: { page_id: { type: "string" } },
+            },
+            {
+              type: "object",
+              required: ["database_id"],
+              properties: { database_id: { type: "string" } },
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it("inlines local $ref schemas that target nested JSON Pointer paths", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          pageId: { $ref: "#/$defs/Parent/properties/page_id" },
+          legacyDatabaseId: { $ref: "#/definitions/Parent/properties/database_id" },
+        },
+        $defs: {
+          Parent: {
+            type: "object",
+            properties: {
+              page_id: { type: "string", description: "Page id" },
+            },
+          },
+        },
+        definitions: {
+          Parent: {
+            type: "object",
+            properties: {
+              database_id: { type: "string", description: "Database id" },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        pageId: { type: "string", description: "Page id" },
+        legacyDatabaseId: { type: "string", description: "Database id" },
+      },
+    });
+  });
+
+  it("preserves local definitions when a local $ref cannot be resolved", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          missing: { $ref: "#/$defs/Missing/properties/id" },
+        },
+        $defs: {
+          Present: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        missing: { $ref: "#/$defs/Missing/properties/id" },
+      },
+      $defs: {
+        Present: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+        },
+      },
     });
   });
 
@@ -428,7 +583,7 @@ describe("normalizeToolParameters", () => {
     );
 
     expect(streamCalls).toBe(2);
-    const executeCall = execute.mock.calls.at(0);
+    const executeCall = execute.mock.calls[0];
     expect(executeCall?.[0]).toBe("call-null-args");
     expect(executeCall?.[1]).toEqual({});
     expect(executeCall?.[2]).toBeUndefined();
@@ -485,6 +640,50 @@ describe("normalizeToolParameters", () => {
     expect(parameters.properties?.count.type).toBe("integer");
     expect(parameters.properties?.query.minLength).toBeUndefined();
     expect(parameters.properties?.query.type).toBe("string");
+  });
+
+  it("omits empty array items when model compat requires it", () => {
+    const tool: AnyAgentTool = {
+      name: "demo",
+      label: "demo",
+      description: "demo",
+      parameters: {
+        type: "object",
+        properties: Object.fromEntries([
+          ["__proto__", { type: "array", items: {} }],
+          ["emptyItems", { type: "array" }],
+          ["typedItems", { type: "array", items: { type: "string" } }],
+          ["falseItems", { type: "array", items: false }],
+          ["nullItems", { type: "array", items: null }],
+          ["literalDefault", { type: "string", default: { type: "array", items: {} } }],
+          ["literalEnum", { type: "string", enum: [{ type: "array", items: {} }] }],
+        ]),
+      },
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool, {
+      modelCompat: { omitEmptyArrayItems: true } as never,
+    });
+
+    expect(normalized.parameters).toEqual({
+      type: "object",
+      properties: Object.fromEntries([
+        ["__proto__", { type: "array" }],
+        ["emptyItems", { type: "array" }],
+        ["typedItems", { type: "array", items: { type: "string" } }],
+        ["falseItems", { type: "array", items: false }],
+        ["nullItems", { type: "array", items: null }],
+        ["literalDefault", { type: "string", default: { type: "array", items: {} } }],
+        ["literalEnum", { type: "string", enum: [{ type: "array", items: {} }] }],
+      ]),
+    });
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        (normalized.parameters as { properties?: Record<string, unknown> }).properties,
+        "__proto__",
+      ),
+    ).toBe(true);
   });
 
   it("filters required to match properties when flattening anyOf for Gemini", () => {

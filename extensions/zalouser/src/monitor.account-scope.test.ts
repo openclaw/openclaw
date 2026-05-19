@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import "./monitor.send-mocks.js";
-import { __testing } from "./monitor.js";
+import { testing } from "./monitor.js";
 import "./zalo-js.test-mocks.js";
 import { sendMessageZalouserMock } from "./monitor.send-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
@@ -94,7 +94,7 @@ describe("zalouser monitor pairing account scoping", () => {
       raw: { source: "test" },
     };
 
-    await __testing.processMessage({
+    await testing.processMessage({
       message,
       account,
       config,
@@ -103,7 +103,7 @@ describe("zalouser monitor pairing account scoping", () => {
 
     expect(readAllowFromStore).toHaveBeenCalledOnce();
     const allowStoreParams = requireRecord(
-      readAllowFromStore.mock.calls.at(0)?.[0],
+      readAllowFromStore.mock.calls[0]?.[0],
       "allow store params",
     );
     expect(allowStoreParams.channel).toBe("zalouser");
@@ -111,7 +111,7 @@ describe("zalouser monitor pairing account scoping", () => {
 
     expect(upsertPairingRequest).toHaveBeenCalledOnce();
     const pairingRequest = requireRecord(
-      upsertPairingRequest.mock.calls.at(0)?.[0],
+      upsertPairingRequest.mock.calls[0]?.[0],
       "pairing request params",
     );
     expect(pairingRequest.channel).toBe("zalouser");

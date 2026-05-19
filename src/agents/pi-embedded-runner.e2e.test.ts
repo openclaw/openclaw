@@ -293,6 +293,18 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
   });
 };
 
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+function firstRunEmbeddedAttemptParams(): { sessionKey?: string } {
+  return firstMockCall(runEmbeddedAttemptMock, "embedded attempt")[0] as { sessionKey?: string };
+}
+
 describe("runEmbeddedPiAgent", () => {
   it("skips models.json generation when dynamic model resolution succeeds", async () => {
     const sessionFile = nextSessionFile();
@@ -320,9 +332,7 @@ describe("runEmbeddedPiAgent", () => {
       enqueue: immediateEnqueue,
     });
 
-    const resolveModelCall = (
-      resolveModelAsyncMock as unknown as { mock: { calls: unknown[][] } }
-    ).mock.calls.at(0);
+    const resolveModelCall = firstMockCall(resolveModelAsyncMock, "model resolution");
     expect(resolveModelCall?.[0]).toBe("openrouter");
     expect(resolveModelCall?.[1]).toBe("openrouter/auto");
     expect(resolveModelCall?.[2]).toBe(agentDir);
@@ -331,6 +341,82 @@ describe("runEmbeddedPiAgent", () => {
       (resolveModelCall?.[4] as { skipPiDiscovery?: boolean } | undefined)?.skipPiDiscovery,
     ).toBe(true);
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves explicit OpenAI PI runs through Codex when auth order starts with Codex OAuth", async () => {
+    const sessionFile = nextSessionFile();
+    const baseConfig = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    const openAIProvider = baseConfig.models?.providers?.openai;
+    if (!openAIProvider) {
+      throw new Error("expected OpenAI provider test config");
+    }
+    const cfg = {
+      ...baseConfig,
+      models: {
+        providers: {
+          openai: {
+            ...openAIProvider,
+            baseUrl: "https://api.openai.com/v1",
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "openai/mock-1": {
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+      },
+      auth: {
+        order: {
+          openai: ["openai-codex:work", "openai:backup"],
+        },
+      },
+    };
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      sessionId: "codex-first-pi",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("codex-first-pi"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
+      1,
+      "openai",
+      "mock-1",
+      agentDir,
+      cfg,
+      expect.objectContaining({ skipPiDiscovery: true }),
+    );
+    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      "openai-codex",
+      "mock-1",
+      agentDir,
+      cfg,
+      expect.objectContaining({ skipPiDiscovery: true }),
+    );
+    expect(
+      (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
+    ).toBe("openai-codex");
   });
 
   it("backfills a trimmed session key from sessionId when the embedded run omits it", async () => {
@@ -370,8 +456,7 @@ describe("runEmbeddedPiAgent", () => {
       sessionId: "resume-123",
       agentId: undefined,
     });
-    const firstCall = runEmbeddedAttemptMock.mock.calls.at(0)?.[0] as { sessionKey?: string };
-    expect(firstCall.sessionKey).toBe("agent:test:resolved");
+    expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:test:resolved");
   });
 
   it("drops whitespace-only session keys when backfill cannot resolve a session key", async () => {
@@ -411,8 +496,7 @@ describe("runEmbeddedPiAgent", () => {
       sessionId: "resume-124",
       agentId: undefined,
     });
-    const firstCall = runEmbeddedAttemptMock.mock.calls.at(0)?.[0] as { sessionKey?: string };
-    expect(firstCall.sessionKey).toBeUndefined();
+    expect(firstRunEmbeddedAttemptParams().sessionKey).toBeUndefined();
   });
 
   it("logs when embedded session-key backfill resolution fails", async () => {

@@ -49,6 +49,9 @@ vi.mock("./gateway.ts", async (importOriginal) => {
       if (method === "models.authStatus") {
         return { ts: 0, providers: [] };
       }
+      if (method === "sessions.list") {
+        return { count: 0, sessions: [] };
+      }
       return {};
     });
 
@@ -266,6 +269,89 @@ describe("connectGateway", () => {
     secondClient.emitEvent({ event: "presence", payload: { presence: [{ host: "active" }] } });
     expect(host.eventLogBuffer).toHaveLength(1);
     expect(host.eventLogBuffer[0]?.event).toBe("presence");
+  });
+
+  it("marks orphaned run state interrupted after reconnect hello", () => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost() as TestGatewayHost & {
+        chatRunStatus?: unknown;
+        chatStreamStartedAt?: number | null;
+        compactionStatus?: unknown;
+        compactionClearTimer?: ReturnType<typeof setTimeout> | null;
+        fallbackStatus?: unknown;
+        fallbackClearTimer?: ReturnType<typeof setTimeout> | null;
+        sessionsResult?: {
+          ts: number;
+          path: string;
+          count: number;
+          defaults: Record<string, unknown>;
+          sessions: Array<Record<string, unknown>>;
+        };
+      };
+      host.chatRunId = "run-1";
+      host.chatStream = "Working...";
+      host.chatStreamStartedAt = 100;
+      host.compactionStatus = {
+        phase: "active",
+        runId: "run-1",
+        startedAt: 100,
+        completedAt: null,
+      };
+      host.compactionClearTimer = setTimeout(() => undefined, 1_000);
+      host.fallbackStatus = {
+        selected: "openai/gpt-5.5",
+        active: "anthropic/claude-sonnet-4-6",
+        attempts: [],
+        occurredAt: 100,
+      };
+      host.fallbackClearTimer = setTimeout(() => undefined, 1_000);
+      host.toolStreamById.set("tool-1", {} as never);
+      host.toolStreamOrder = ["tool-1"];
+      host.chatToolMessages = [{ role: "assistant" }];
+      host.sessionsResult = {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {},
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: true,
+            status: "running",
+            startedAt: 100,
+          },
+        ],
+      };
+
+      connectGateway(host);
+      const client = requireGatewayClient();
+      client.emitHello();
+
+      expect(host.chatRunId).toBeNull();
+      expect(host.chatStream).toBeNull();
+      expect(host.chatStreamStartedAt).toBeNull();
+      expect(host.compactionStatus).toBeNull();
+      expect(host.compactionClearTimer).toBeNull();
+      expect(host.fallbackStatus).toBeNull();
+      expect(host.fallbackClearTimer).toBeNull();
+      expect(host.toolStreamOrder).toStrictEqual([]);
+      expect(host.chatToolMessages).toStrictEqual([]);
+      expect(host.chatRunStatus).toMatchObject({
+        phase: "interrupted",
+        runId: "run-1",
+        sessionKey: "main",
+      });
+      expect(host.sessionsResult.sessions[0]).toMatchObject({
+        hasActiveRun: false,
+        status: "killed",
+        abortedLastRun: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("applies update.available only from active client", () => {
@@ -847,6 +933,39 @@ describe("connectGateway", () => {
     const { client } = connectHostGateway();
     emitToolResultEvent(client);
 
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("renders session-scoped tool events for externally started runs", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "session.tool",
+      payload: {
+        runId: "external-run-1",
+        seq: 1,
+        stream: "tool",
+        ts: 123,
+        sessionKey: "main",
+        data: {
+          toolCallId: "session-tool-1",
+          name: "exec",
+          phase: "start",
+          args: { command: "pwd" },
+        },
+      },
+    });
+
+    expect(host.toolStreamOrder).toStrictEqual(["session-tool-1"]);
+    const entry = host.toolStreamById.get("session-tool-1") as
+      | { args?: unknown; name?: string; runId?: string; sessionKey?: string }
+      | undefined;
+    expect(entry).toMatchObject({
+      args: { command: "pwd" },
+      name: "exec",
+      runId: "external-run-1",
+      sessionKey: "main",
+    });
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 

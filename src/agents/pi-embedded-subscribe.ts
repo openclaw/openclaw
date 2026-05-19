@@ -9,7 +9,9 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { findFinalTagMatches } from "../shared/text/final-tags.js";
 import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
+import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -26,6 +28,7 @@ import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.han
 import {
   consumePendingAssistantReplyDirectivesIntoReply,
   consumePendingToolMediaIntoReply,
+  hasAssistantVisibleReply,
   readPendingToolMediaReply,
 } from "./pi-embedded-subscribe.handlers.messages.js";
 import {
@@ -42,7 +45,6 @@ import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.t
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
-const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
 const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
   "final",
   "think",
@@ -59,15 +61,17 @@ function isPotentialTrailingBlockTagFragment(fragment: string): boolean {
   if (!fragment.startsWith("<") || fragment.includes(">")) {
     return false;
   }
-  const normalized = fragment.toLowerCase().replace(/\s+/g, "");
-  if (!normalized.startsWith("<")) {
-    return false;
-  }
-  const candidate = normalized.slice(1).replace(/^\//, "");
-  if (!candidate) {
+  const body = fragment.toLowerCase().slice(1).trimStart().replace(/^\//, "").trimStart();
+  if (!body) {
     return true;
   }
-  return STREAM_STRIPPED_BLOCK_TAG_NAMES.some((name) => name.startsWith(candidate));
+  const namePart = body.split(/[\s/>]/, 1)[0] ?? "";
+  if (!namePart) {
+    return true;
+  }
+  return STREAM_STRIPPED_BLOCK_TAG_NAMES.some((name) => {
+    return name.startsWith(namePart) || namePart === name;
+  });
 }
 
 function splitTrailingBlockTagFragment(
@@ -97,10 +101,11 @@ function collectPendingMediaFromInternalEvents(
   const pending: string[] = [];
   const seen = new Set<string>();
   for (const event of events) {
-    if (!Array.isArray(event.mediaUrls)) {
-      continue;
-    }
-    for (const mediaUrl of event.mediaUrls) {
+    const mediaUrls = [
+      ...(Array.isArray(event.mediaUrls) ? event.mediaUrls : []),
+      ...mediaUrlsFromGeneratedAttachments(event.attachments),
+    ];
+    for (const mediaUrl of mediaUrls) {
       const normalized = normalizeOptionalString(mediaUrl) ?? "";
       if (!normalized || seen.has(normalized)) {
         continue;
@@ -182,6 +187,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingToolMediaUrls: initialPendingToolMediaUrls,
     pendingToolAudioAsVoice: false,
     pendingToolTrustedLocalMedia: false,
+    visibleBlockReplyCount: 0,
     pendingAssistantReplyDirectives: undefined,
     deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
@@ -213,9 +219,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedPiSessionParams["onBlockReply"]>>[0],
     options?: { assistantMessageIndex?: number },
-  ) => {
+  ): boolean => {
     if (!params.onBlockReply) {
-      return;
+      return false;
     }
     try {
       const taggedPayload =
@@ -226,7 +232,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
           : payload;
       const maybeTask = params.onBlockReply(taggedPayload);
       if (!isPromiseLike<void>(maybeTask)) {
-        return;
+        return true;
       }
       const task = Promise.resolve(maybeTask).catch((err) => {
         log.warn(`block reply callback failed: ${String(err)}`);
@@ -235,8 +241,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       void task.finally(() => {
         pendingBlockReplyTasks.delete(task);
       });
+      return true;
     } catch (err) {
       log.warn(`block reply callback failed: ${String(err)}`);
+      return false;
     }
   };
   const emitBlockReply = (
@@ -248,7 +256,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       options?.consumePendingToolMedia === false
         ? withAssistantDirectives
         : consumePendingToolMediaIntoReply(state, withAssistantDirectives);
-    emitBlockReplySafely(withToolMedia, options);
+    const emitted = emitBlockReplySafely(withToolMedia, options);
+    if (emitted && !withToolMedia.isReasoning && hasAssistantVisibleReply(withToolMedia)) {
+      state.visibleBlockReplyCount += 1;
+    }
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -634,34 +645,42 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     const finalCodeSpans = buildCodeSpanIndex(processed, inlineStateStart);
     if (!params.enforceFinalTag) {
       state.inlineCode = finalCodeSpans.inlineState;
-      FINAL_TAG_SCAN_RE.lastIndex = 0;
-      return stripTagsOutsideCodeSpans(processed, FINAL_TAG_SCAN_RE, finalCodeSpans.isInside);
+      return stripFinalTagsOutsideCodeSpans(processed, finalCodeSpans.isInside);
     }
 
     // If enforcement is enabled, only return text that appeared inside a <final> block.
     let result = "";
-    FINAL_TAG_SCAN_RE.lastIndex = 0;
     let lastFinalIndex = 0;
     let inFinal = state.final;
     let everInFinal = state.final;
 
-    for (const match of processed.matchAll(FINAL_TAG_SCAN_RE)) {
-      const idx = match.index ?? 0;
+    for (const match of findFinalTagMatches(processed)) {
+      const idx = match.index;
       if (finalCodeSpans.isInside(idx)) {
         continue;
       }
-      const isClose = match[1] === "/";
+      const isClose = match.isClose;
+      const isSelfClosing = match.isSelfClosing;
 
-      if (!inFinal && !isClose) {
+      if (isSelfClosing) {
+        if (inFinal) {
+          result += processed.slice(lastFinalIndex, idx);
+          inFinal = false;
+        } else {
+          inFinal = true;
+          everInFinal = true;
+        }
+        lastFinalIndex = idx + match.text.length;
+      } else if (!inFinal && !isClose) {
         // Found <final> start tag.
         inFinal = true;
         everInFinal = true;
-        lastFinalIndex = idx + match[0].length;
+        lastFinalIndex = idx + match.text.length;
       } else if (inFinal && isClose) {
         // Found </final> end tag.
         result += processed.slice(lastFinalIndex, idx);
         inFinal = false;
-        lastFinalIndex = idx + match[0].length;
+        lastFinalIndex = idx + match.text.length;
       }
     }
 
@@ -681,24 +700,19 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // missed (e.g. nested tags or hallucinations) to prevent leakage.
     const resultCodeSpans = buildCodeSpanIndex(result, inlineStateStart);
     state.inlineCode = resultCodeSpans.inlineState;
-    return stripTagsOutsideCodeSpans(result, FINAL_TAG_SCAN_RE, resultCodeSpans.isInside);
+    return stripFinalTagsOutsideCodeSpans(result, resultCodeSpans.isInside);
   };
 
-  const stripTagsOutsideCodeSpans = (
-    text: string,
-    pattern: RegExp,
-    isInside: (index: number) => boolean,
-  ) => {
+  const stripFinalTagsOutsideCodeSpans = (text: string, isInside: (index: number) => boolean) => {
     let output = "";
     let lastIndex = 0;
-    pattern.lastIndex = 0;
-    for (const match of text.matchAll(pattern)) {
-      const idx = match.index ?? 0;
+    for (const match of findFinalTagMatches(text)) {
+      const idx = match.index;
       if (isInside(idx)) {
         continue;
       }
       output += text.slice(lastIndex, idx);
-      lastIndex = idx + match[0].length;
+      lastIndex = idx + match.text.length;
     }
     output += text.slice(lastIndex);
     return output;
@@ -918,7 +932,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         messagingToolSentMediaUrls,
         messagingToolSentTargets,
       }) ||
-      state.successfulCronAdds > 0;
+      state.successfulCronAdds > 0 ||
+      state.visibleBlockReplyCount > 0;
     assistantTexts.length = 0;
     toolMetas.length = 0;
     toolMetaById.clear();
@@ -934,9 +949,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
     state.successfulCronAdds = 0;
+    state.heartbeatToolResponse = undefined;
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
     state.pendingToolAudioAsVoice = false;
+    state.pendingToolTrustedLocalMedia = false;
+    state.visibleBlockReplyCount = 0;
     state.pendingAssistantReplyDirectives = undefined;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
@@ -1094,6 +1112,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getHeartbeatToolResponse: () =>
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),
+    getVisibleBlockReplyCount: () => state.visibleBlockReplyCount,
     getSuccessfulCronAdds: () => state.successfulCronAdds,
     getReplayState: () => ({ ...state.replayState }),
     // Returns true if any messaging tool successfully sent a message.
