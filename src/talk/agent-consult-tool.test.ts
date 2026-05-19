@@ -41,6 +41,29 @@ describe("realtime voice agent consult tool", () => {
       question: "Send a Discord message.",
       responseStyle: undefined,
     });
+    // Gemini Live (flash-lite especially) routinely fills the request into
+    // `description`, conflating the function's own description metadata with
+    // the parameter name; OpenAI Realtime occasionally uses `text`/`message`.
+    // Without these aliases the tool returns `question required` every call.
+    expect(
+      parseRealtimeVoiceAgentConsultArgs({
+        description: "  What do we know about Happy Dog Tests? ",
+        id: "1",
+      }),
+    ).toMatchObject({ question: "What do we know about Happy Dog Tests?" });
+    expect(
+      parseRealtimeVoiceAgentConsultArgs({ request: "  Look up the account. " }),
+    ).toMatchObject({
+      question: "Look up the account.",
+    });
+    expect(parseRealtimeVoiceAgentConsultArgs({ message: "  How many prospects? " })).toMatchObject(
+      {
+        question: "How many prospects?",
+      },
+    );
+    expect(parseRealtimeVoiceAgentConsultArgs({ text: "  Status update. " })).toMatchObject({
+      question: "Status update.",
+    });
   });
 
   it("builds a delegated voice request prompt with recent transcript", () => {

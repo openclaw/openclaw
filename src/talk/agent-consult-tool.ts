@@ -137,11 +137,20 @@ export function buildRealtimeVoiceAgentConsultPolicyInstructions(config: {
 }
 
 export function parseRealtimeVoiceAgentConsultArgs(args: unknown): RealtimeVoiceAgentConsultArgs {
+  // Realtime providers sometimes invent argument names. Observed in the wild:
+  // Gemini Live (especially flash-lite) routinely fills the request into
+  // `description` — apparently confusing the function's own description metadata
+  // with the parameter name. OpenAI Realtime occasionally uses `text` or
+  // `message`. Accept these as aliases for `question` rather than throwing.
   const question =
     readConsultStringArg(args, "question") ??
     readConsultStringArg(args, "prompt") ??
     readConsultStringArg(args, "query") ??
-    readConsultStringArg(args, "task");
+    readConsultStringArg(args, "task") ??
+    readConsultStringArg(args, "description") ??
+    readConsultStringArg(args, "request") ??
+    readConsultStringArg(args, "message") ??
+    readConsultStringArg(args, "text");
   if (!question) {
     throw new Error("question required");
   }
