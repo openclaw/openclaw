@@ -99,6 +99,55 @@ function mergeObjectSchema(base: JsonSchemaObject, extension: JsonSchemaObject):
   return merged;
 }
 
+function defineSchemaProperty(
+  properties: Record<string, JsonSchemaObject>,
+  key: string,
+  value: JsonSchemaObject,
+): void {
+  Object.defineProperty(properties, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
+function createSchemaProperties(
+  properties?: Record<string, JsonSchemaObject>,
+): Record<string, JsonSchemaObject> {
+  const next = Object.create(null) as Record<string, JsonSchemaObject>;
+  for (const [key, value] of Object.entries(properties ?? {})) {
+    defineSchemaProperty(next, key, value);
+  }
+  return next;
+}
+
+function getOwnSchemaProperty(
+  properties: Record<string, JsonSchemaObject>,
+  key: string,
+): JsonSchemaObject | null {
+  if (!Object.hasOwn(properties, key)) {
+    return null;
+  }
+  return asJsonSchemaObject(properties[key]);
+}
+
+function normalizeExtensionSchemaPropertyMaps(schema: ConfigSchema): ConfigSchema {
+  const root = asJsonSchemaObject(schema);
+  const pluginsNode = asJsonSchemaObject(root?.properties?.plugins);
+  const entriesNode = asJsonSchemaObject(pluginsNode?.properties?.entries);
+  if (entriesNode?.properties) {
+    entriesNode.properties = createSchemaProperties(entriesNode.properties);
+  }
+
+  const channelsNode = asJsonSchemaObject(root?.properties?.channels);
+  if (channelsNode?.properties) {
+    channelsNode.properties = createSchemaProperties(channelsNode.properties);
+  }
+
+  return schema;
+}
+
 export type ConfigSchemaResponse = {
   schema: ConfigSchema;
   uiHints: ConfigUiHints;
@@ -410,7 +459,7 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
   }
 
   const entryBase = asJsonSchemaObject(entriesNode.additionalProperties);
-  const entryProperties = entriesNode.properties ?? {};
+  const entryProperties = createSchemaProperties(entriesNode.properties);
   entriesNode.properties = entryProperties;
 
   for (const plugin of plugins) {
@@ -435,7 +484,7 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
       ...entryObject.properties,
       config: nextConfigSchema,
     };
-    entryProperties[plugin.id] = entryObject;
+    defineSchemaProperty(entryProperties, plugin.id, entryObject);
   }
 
   return next;
@@ -448,19 +497,19 @@ function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]
   if (!channelsNode) {
     return next;
   }
-  const channelProps = channelsNode.properties ?? {};
+  const channelProps = createSchemaProperties(channelsNode.properties);
   channelsNode.properties = channelProps;
 
   for (const channel of channels) {
     if (!channel.configSchema) {
       continue;
     }
-    const existing = asJsonSchemaObject(channelProps[channel.id]);
+    const existing = getOwnSchemaProperty(channelProps, channel.id);
     const incoming = asJsonSchemaObject(channel.configSchema);
     if (existing && incoming && isObjectSchema(existing) && isObjectSchema(incoming)) {
-      channelProps[channel.id] = mergeObjectSchema(existing, incoming);
+      defineSchemaProperty(channelProps, channel.id, mergeObjectSchema(existing, incoming));
     } else {
-      channelProps[channel.id] = cloneSchema(channel.configSchema);
+      defineSchemaProperty(channelProps, channel.id, cloneSchema(channel.configSchema));
     }
   }
 
@@ -556,7 +605,9 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   );
   const next = {
     ...generated,
-    schema: applyChannelSchemas(generated.schema, bundledChannels),
+    schema: normalizeExtensionSchemaPropertyMaps(
+      applyChannelSchemas(generated.schema, bundledChannels),
+    ),
     uiHints: mergedHints,
   };
   cachedBase = next;
@@ -599,7 +650,9 @@ export function buildConfigSchema(params?: {
       extensionHintKeys,
     ),
   );
-  const mergedSchema = applyChannelSchemas(applyPluginSchemas(base.schema, plugins), channels);
+  const mergedSchema = normalizeExtensionSchemaPropertyMaps(
+    applyChannelSchemas(applyPluginSchemas(base.schema, plugins), channels),
+  );
   const merged = {
     ...base,
     schema: mergedSchema,

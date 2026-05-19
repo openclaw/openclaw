@@ -238,6 +238,58 @@ describe("config schema", () => {
     );
   });
 
+  it("stores extension ids matching object prototype keys as own schema entries", () => {
+    const ids = ["__proto__", "constructor", "prototype"];
+    const res = buildConfigSchema({
+      cache: false,
+      plugins: ids.map((id) => ({
+        id,
+        configSchema: {
+          type: "object",
+          properties: {
+            pluginToken: { type: "string" },
+          },
+        },
+      })),
+      channels: ids.map((id) => ({
+        id,
+        configSchema: {
+          type: "object",
+          properties: {
+            channelToken: { type: "string" },
+          },
+        },
+      })),
+    });
+
+    const schema = res.schema as {
+      properties?: Record<string, unknown>;
+    };
+    const pluginsNode = schema.properties?.plugins as Record<string, unknown> | undefined;
+    const entriesNode = pluginsNode?.properties as Record<string, unknown> | undefined;
+    const entriesProps = entriesNode?.entries as Record<string, unknown> | undefined;
+    const pluginEntryProps = entriesProps?.properties as Record<string, unknown> | undefined;
+    const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
+    const channelsProps = channelsNode?.properties as Record<string, unknown> | undefined;
+
+    expect(Object.getPrototypeOf(pluginEntryProps)).toBeNull();
+    expect(Object.getPrototypeOf(channelsProps)).toBeNull();
+
+    for (const id of ids) {
+      expect(Object.hasOwn(pluginEntryProps ?? {}, id)).toBe(true);
+      expect(Object.hasOwn(channelsProps ?? {}, id)).toBe(true);
+
+      const pluginEntry = pluginEntryProps?.[id] as
+        | { properties?: { config?: { properties?: Record<string, unknown> } } }
+        | undefined;
+      const channelEntry = channelsProps?.[id] as
+        | { properties?: Record<string, unknown> }
+        | undefined;
+      expect(pluginEntry?.properties?.config?.properties).toHaveProperty("pluginToken");
+      expect(channelEntry?.properties).toHaveProperty("channelToken");
+    }
+  });
+
   it("omits a single oversized plugin schema from the full schema response", () => {
     const res = buildConfigSchema({
       cache: false,
