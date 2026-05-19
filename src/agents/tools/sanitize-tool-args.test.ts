@@ -183,3 +183,42 @@ describe("sanitizeSearchToolParams / wrapSearchToolArgSanitization (find/grep/ls
     expect(piToolsSrc).toContain("wrapSearchToolArgSanitization(tool)");
   });
 });
+
+// P2.11 — args-start sentinel variants from the 2026-05-19 22:38 KST
+// hallucination-test jsonl (gemma session e8d2bd03), exercised through the
+// file/search param chokepoints to confirm the strengthened sanitize-command
+// propagates to read/grep/ls args, not just bash exec.
+describe("P2.11 args-start sentinel variants (jsonl e8d2bd03, 2026-05-19)", () => {
+  afterEach(() => {
+    vi.mocked(logWarn).mockClear();
+  });
+
+  it('L118 12:18:33 jsonl x61: read file_path "<|\\"|" → "" (sentinel-only)', () => {
+    const out = sanitizeFileToolParams({ file_path: '<|"|' }, "read");
+    expect(out.file_path).toBe("");
+  });
+
+  it('L6 11:22:04 jsonl: read file_path "<|<|" → "" (sentinel-only)', () => {
+    const out = sanitizeFileToolParams({ file_path: "<|<|" }, "read");
+    expect(out.file_path).toBe("");
+  });
+
+  it('L254 13:38:11 jsonl: grep leading-orphan <<|"|> path/pattern stripped', () => {
+    const out = sanitizeSearchToolParams(
+      { pattern: '<|<|"황선아', path: '<<|"|>claude-ref/' },
+      "grep",
+    );
+    expect(out.pattern).toBe("황선아");
+    expect(out.path).toBe("claude-ref/");
+  });
+
+  it('L256 13:38:12 jsonl: ls path leading-orphan <<|"|>journal/ stripped', () => {
+    const out = sanitizeSearchToolParams({ path: '<<|"|>journal/2026-05-18' }, "ls");
+    expect(out.path).toBe("journal/2026-05-18");
+  });
+
+  it("guard: clean search params with quotes/pipe stay untouched", () => {
+    const input = { pattern: 'a | b "c"', path: "memory/", glob: "*.md" };
+    expect(sanitizeSearchToolParams(input, "grep")).toBe(input);
+  });
+});

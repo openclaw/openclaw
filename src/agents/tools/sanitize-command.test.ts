@@ -130,3 +130,78 @@ describe("sentinel residue handling (5/19 황선아 환각 회귀)", () => {
     expect(sanitizeCommandInput("cat <file.txt")).toBe("cat <file.txt");
   });
 });
+
+// P2.11 — args-start sentinel variants observed in the 2026-05-19 22:38 KST
+// hallucination-test jsonl (gemma session e8d2bd03). Each name cites the
+// jsonl line + UTC timestamp the leaked argument was emitted. 471fc7133e
+// sanitize left these as broken bash (`ls -|ls -l`, leading-orphan `<ls ...`).
+describe("P2.11 args-start sentinel variants (jsonl e8d2bd03, 2026-05-19)", () => {
+  it('L252 13:38:10 jsonl: <<|"<<|<|"ls -|<|"ls -l journal/ ... → valid bash', () => {
+    expect(
+      sanitizeCommandInput('<<|"<<|<|"ls -|<|"ls -l journal/ 2>/dev/null | grep 2026-05-18'),
+    ).toBe("ls -ls -l journal/ 2>/dev/null | grep 2026-05-18");
+  });
+
+  it('L254 13:38:11 jsonl: <<|"|>ls -ls -l journal/ | grep ... (leading-orphan <)', () => {
+    expect(sanitizeCommandInput('<<|"|>ls -ls -l journal/ | grep 2026-05-18')).toBe(
+      "ls -ls -l journal/ | grep 2026-05-18",
+    );
+  });
+
+  it('L256 13:38:12 jsonl x7: <<|"|>ls -ls -l journal/2026-05-18*', () => {
+    expect(sanitizeCommandInput('<<|"|>ls -ls -l journal/2026-05-18*')).toBe(
+      "ls -ls -l journal/2026-05-18*",
+    );
+  });
+
+  it('L258 13:38:13 jsonl: <<|"|>ls ... grep "2026-05-18 (trailing model quote kept)', () => {
+    expect(sanitizeCommandInput('<<|"|>ls -ls -l journal/ | grep "2026-05-18')).toBe(
+      'ls -ls -l journal/ | grep "2026-05-18',
+    );
+  });
+
+  it('L116 12:18:32 jsonl: <|<|"|>ls -lls -lt journal/ | head -n 5', () => {
+    expect(sanitizeCommandInput('<|<|"|>ls -lls -lt journal/ | head -n 5')).toBe(
+      "ls -lls -lt journal/ | head -n 5",
+    );
+  });
+
+  it('L14 11:22:08 jsonl x43: <|<|"grep ... || echo "Not found (|| OR preserved)', () => {
+    expect(
+      sanitizeCommandInput('<|<|"grep -r "황선아" claude-ref/ 2>/dev/null || echo "Not found'),
+    ).toBe('grep -r "황선아" claude-ref/ 2>/dev/null || echo "Not found');
+  });
+
+  it('L118 12:18:33 jsonl x61: read file_path <|"| → "" (sentinel-only)', () => {
+    expect(sanitizeCommandInput('<|"|')).toBe("");
+  });
+
+  it('L6 11:22:04 jsonl: read file_path <|<| → "" (sentinel-only)', () => {
+    expect(sanitizeCommandInput("<|<|")).toBe("");
+  });
+
+  // 정상 입력 회귀 안전망 — sanitize 강화가 정당한 bash 를 깨면 안 됨.
+  it("guard: heredoc cat <<EOF is untouched", () => {
+    expect(sanitizeCommandInput("cat <<EOF\nhello\nEOF")).toBe("cat <<EOF\nhello\nEOF");
+  });
+
+  it("guard: quoted heredoc cat << 'EOF' is untouched", () => {
+    expect(sanitizeCommandInput("cat << 'EOF'\nfoo\nEOF")).toBe("cat << 'EOF'\nfoo\nEOF");
+  });
+
+  it("guard: pipe ls -la | grep foo is untouched", () => {
+    expect(sanitizeCommandInput("ls -la | grep foo")).toBe("ls -la | grep foo");
+  });
+
+  it("guard: redirect echo hello > /tmp/x is untouched", () => {
+    expect(sanitizeCommandInput("echo hello > /tmp/x")).toBe("echo hello > /tmp/x");
+  });
+
+  it("guard: unmatched quote is not truncated", () => {
+    expect(sanitizeCommandInput('echo "unclosed quote')).toBe('echo "unclosed quote');
+  });
+
+  it("guard: bash OR || is not stripped", () => {
+    expect(sanitizeCommandInput("grep x f || echo none")).toBe("grep x f || echo none");
+  });
+});
