@@ -281,6 +281,47 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
 });
 
 describe("handleToolExecutionEnd mutating failure recovery", () => {
+  it("marks middleware failures on the last tool error", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-middleware-error",
+        args: { cmd: "echo ok" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-middleware-error",
+        isError: false,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "Tool output unavailable due to post-processing error.",
+            },
+          ],
+          details: {
+            status: "error",
+            middlewareError: true,
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      middlewareError: true,
+    });
+  });
+
   it("clears edit failure when the retry succeeds through common file path aliases", async () => {
     const { ctx } = createTestContext();
 
