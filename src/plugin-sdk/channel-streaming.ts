@@ -97,7 +97,7 @@ function asCommandTextMode(value: unknown): ChannelStreamingCommandTextMode | un
 }
 
 export const DEFAULT_PROGRESS_DRAFT_LABELS = [
-  "Thinking...",
+  "Working...",
   "Shelling...",
   "Scuttling...",
   "Clawing...",
@@ -763,6 +763,19 @@ export function resolveChannelProgressDraftLabel(params: {
   return labels[index] ?? labels[0];
 }
 
+function formatProgressDraftLabel(params: { label: string; frame?: number }): string {
+  const { label } = params;
+  if (!label.endsWith("...")) {
+    return label;
+  }
+  const baseLabel = label.replace(/\.+$/u, "");
+  if (typeof params.frame !== "number" || !Number.isFinite(params.frame)) {
+    return label;
+  }
+  const dotCount = Math.max(0, Math.trunc(params.frame)) % 4;
+  return dotCount === 0 ? baseLabel : `${baseLabel}${".".repeat(dotCount)}`;
+}
+
 export function resolveChannelProgressDraftMaxLines(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = 8,
@@ -942,20 +955,27 @@ export function formatChannelProgressDraftText(params: {
   lines: Array<string | ChannelProgressDraftLine>;
   seed?: string;
   random?: () => number;
+  labelFrame?: number;
   formatLine?: (line: string) => string;
   bullet?: string;
 }): string {
-  const label = resolveChannelProgressDraftLabel({
+  const rawLabel = resolveChannelProgressDraftLabel({
     entry: params.entry,
     seed: params.seed,
     random: params.random,
   });
+  const resolvedLabel = rawLabel
+    ? formatProgressDraftLabel({
+        label: rawLabel,
+        frame: params.labelFrame,
+      })
+    : undefined;
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
   const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
   const bullet = params.bullet ?? "•";
-  const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> = label
-    ? [{ draftLabel: label }, ...params.lines]
+  const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> = resolvedLabel
+    ? [{ draftLabel: resolvedLabel }, ...params.lines]
     : params.lines;
   const lines = rawLines
     .map((line) => {
@@ -972,7 +992,14 @@ export function formatChannelProgressDraftText(params: {
     .slice(-maxLines)
     .map(({ text, isLabelLine }) => {
       const formatted = isLabelLine ? text : formatLine(text);
-      return !isLabelLine && shouldPrefixProgressLine(text) ? `${bullet} ${formatted}` : formatted;
+      return {
+        text: !isLabelLine && shouldPrefixProgressLine(text) ? `${bullet} ${formatted}` : formatted,
+        isLabelLine,
+      };
     });
-  return lines.filter((line): line is string => Boolean(line)).join("\n");
+  const renderedLines = lines.map((line) => line.text).filter((line) => Boolean(line));
+  if (renderedLines.length > 1 && lines[0]?.isLabelLine) {
+    return `${renderedLines[0]}\n\n${renderedLines.slice(1).join("\n")}`;
+  }
+  return renderedLines.join("\n");
 }

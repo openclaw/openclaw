@@ -161,20 +161,25 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
   return blocks.join("\n").trim();
 }
 
-export function formatReasoningMessage(text: string): string {
+export function formatReasoningLabel(frame = 0): string {
+  const dotCount = (Math.max(0, Math.trunc(frame)) % 3) + 1;
+  return `Thinking${".".repeat(dotCount)}`;
+}
+
+export function formatReasoningMessage(text: string, labelFrame = 0): string {
   const trimmed = text.trim();
   if (!trimmed) {
     return "";
   }
   // Show reasoning in italics (cursive) for markdown-friendly surfaces (Discord, etc.).
-  // Keep the plain "Reasoning:" prefix so existing parsing/detection keeps working.
+  // Keep a plain prefix so existing parsing/detection keeps working.
   // Note: Underscore markdown cannot span multiple lines on Telegram, so we wrap
   // each non-empty line separately.
   const italicLines = trimmed
     .split("\n")
     .map((line) => (line ? `_${line}_` : line))
     .join("\n");
-  return `Reasoning:\n${italicLines}`;
+  return `${formatReasoningLabel(labelFrame)}\n\n${italicLines}`;
 }
 
 type ThinkTaggedSplitBlock =
