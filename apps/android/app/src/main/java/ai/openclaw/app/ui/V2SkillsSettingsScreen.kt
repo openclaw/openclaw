@@ -2,33 +2,26 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.ui.design.ClawDetailRow
+import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
+import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTheme
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -96,41 +89,19 @@ internal fun V2SkillsSettingsScreen(
 
 @Composable
 private fun V2SkillsPanel(skills: List<GatewaySkillSummary>) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-    Column {
-      skills.forEachIndexed { index, skill ->
-        V2SkillListRow(skill = skill)
-        if (index != skills.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        }
-      }
-    }
+  ClawListPanel(items = skills) { skill ->
+    V2SkillListRow(skill = skill)
   }
 }
 
 @Composable
 private fun V2SkillListRow(skill: GatewaySkillSummary) {
-  Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(9.dp),
-  ) {
-    Surface(
-      modifier = Modifier.size(30.dp),
-      shape = CircleShape,
-      color = ClawTheme.colors.surfacePressed,
-      border = BorderStroke(1.dp, ClawTheme.colors.border),
-    ) {
-      Box(contentAlignment = Alignment.Center) {
-        Text(text = skillBadge(skill), style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1)
-      }
-    }
-    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-      Text(text = skill.name, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Text(text = skillSubtitle(skill), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-    ClawStatusPill(text = skillStatusText(skill), status = skillStatus(skill))
-  }
+  ClawDetailRow(
+    title = skill.name,
+    subtitle = skillSubtitle(skill),
+    leading = { ClawTextBadge(text = skillBadge(skill)) },
+    trailing = { ClawStatusPill(text = skillStatusText(skill), status = skillStatus(skill)) },
+  )
 }
 
 private fun skillReady(skill: GatewaySkillSummary): Boolean = !skill.disabled && skill.eligible && skill.missingCount == 0

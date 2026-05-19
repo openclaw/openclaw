@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -243,6 +244,82 @@ internal fun ClawPill(
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
     )
+  }
+}
+
+@Composable
+internal fun <T> ClawListPanel(
+  items: List<T>,
+  modifier: Modifier = Modifier,
+  row: @Composable (T) -> Unit,
+) {
+  ClawPanel(modifier = modifier, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+    Column {
+      items.forEachIndexed { index, item ->
+        row(item)
+        if (index != items.lastIndex) {
+          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+internal fun ClawDetailRow(
+  title: String,
+  subtitle: String,
+  modifier: Modifier = Modifier,
+  leading: @Composable () -> Unit,
+  trailing: @Composable () -> Unit,
+) {
+  Row(
+    modifier = modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
+  ) {
+    leading()
+    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+      Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Text(text = subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+    trailing()
+  }
+}
+
+@Composable
+internal fun ClawTextBadge(
+  text: String,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    modifier = modifier.size(30.dp),
+    shape = CircleShape,
+    color = ClawTheme.colors.surfacePressed,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+    contentColor = ClawTheme.colors.text,
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      Text(text = text, style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1)
+    }
+  }
+}
+
+@Composable
+internal fun ClawIconBadge(
+  icon: ImageVector,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    modifier = modifier.size(30.dp),
+    shape = CircleShape,
+    color = ClawTheme.colors.surfacePressed,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+    contentColor = ClawTheme.colors.text,
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
+    }
   }
 }
 
