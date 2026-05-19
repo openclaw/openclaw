@@ -42,6 +42,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,6 +69,7 @@ internal fun V2ProvidersModelsScreen(
   val providerRows = providerRows(providers = providers, models = models)
   val modelGroups = sortedModelGroups(models)
   val setupRows = providerSetupRows(providerRows)
+  var expandedModelProviders by rememberSaveable { mutableStateOf(emptyList<String>()) }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -149,7 +153,20 @@ internal fun V2ProvidersModelsScreen(
           }
         } else {
           items(modelGroups, key = { it.first }) { entry ->
-            V2ModelGroup(provider = entry.first, models = entry.second)
+            val expanded = expandedModelProviders.contains(entry.first)
+            V2ModelGroup(
+              provider = entry.first,
+              models = entry.second,
+              expanded = expanded,
+              onToggle = {
+                expandedModelProviders =
+                  if (expanded) {
+                    expandedModelProviders - entry.first
+                  } else {
+                    expandedModelProviders + entry.first
+                  }
+              },
+            )
           }
         }
       }
@@ -418,24 +435,33 @@ private fun V2ModelCatalogEmpty(
 private fun V2ModelGroup(
   provider: String,
   models: List<GatewayModelSummary>,
+  expanded: Boolean,
+  onToggle: () -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     Column {
-      Row(modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        V2ProviderBadge(text = providerDisplayName(provider))
-        Text(text = providerDisplayName(provider), style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
-        V2ProviderMiniTag(text = "${models.size} models")
-        Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
+      Surface(onClick = onToggle, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+        Row(modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+          V2ProviderBadge(text = providerDisplayName(provider))
+          Text(text = providerDisplayName(provider), style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
+          V2ProviderMiniTag(text = "${models.size} models")
+          Icon(imageVector = if (expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = if (expanded) "Collapse ${providerDisplayName(provider)} models" else "Expand ${providerDisplayName(provider)} models", modifier = Modifier.size(14.dp), tint = ClawTheme.colors.textMuted)
+        }
       }
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-      models.take(3).forEach { model ->
+      val visibleModels = if (expanded) models else models.take(3)
+      visibleModels.forEachIndexed { index, model ->
         V2ModelRow(model)
-        HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+        if (index != visibleModels.lastIndex || models.size > visibleModels.size) {
+          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+        }
       }
-      if (models.size > 3) {
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-          Text(text = "View all models", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, modifier = Modifier.weight(1f))
-          Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
+      if (models.size > visibleModels.size) {
+        Surface(onClick = onToggle, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+          Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(text = "View all models", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, modifier = Modifier.weight(1f))
+            Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "View all models", modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
+          }
         }
       }
     }
