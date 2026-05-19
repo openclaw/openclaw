@@ -202,6 +202,8 @@ Common command routing:
 | Attach the current chat                               | `/codex bind [--cwd <path>]`                                                                          |
 | Resume an existing Codex thread                       | `/codex resume <thread-id>`                                                                           |
 | List or filter Codex threads                          | `/codex threads [filter]`                                                                             |
+| List native Codex plugins                             | `/codex plugins list`                                                                                 |
+| Enable or disable a configured native Codex plugin    | `/codex plugins enable <name>`, `/codex plugins disable <name>`                                       |
 | Attach an existing Codex CLI session on a paired node | `/codex sessions --host <node> [filter]`, then `/codex resume <session-id> --host <node> --bind here` |
 | Send Codex feedback only                              | `/codex diagnostics [note]`                                                                           |
 | Start an ACP/acpx task                                | ACP/acpx session commands, not `/codex`                                                               |
