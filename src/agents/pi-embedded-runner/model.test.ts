@@ -643,6 +643,25 @@ describe("resolveModel", () => {
     expect(model.api).toBe("openai-completions");
   });
 
+  it("does not synthesize unknown models from timeout-only provider overlays", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            timeoutSeconds: 300,
+            baseUrl: "",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai", "typo-model", "/tmp/agent", cfg);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: openai/typo-model");
+  });
+
   it("defaults baseUrl-only local custom fallback models to chat completions", () => {
     const cfg = {
       agents: {
