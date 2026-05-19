@@ -339,6 +339,7 @@ import {
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 import {
+  EmbeddedAttemptSessionTakeoverError,
   createEmbeddedAttemptSessionLockController,
   installPromptSubmissionLockRelease,
   installSessionExternalHookWriteLock,
@@ -1058,6 +1059,16 @@ function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionM
 
 export function shouldRunLlmOutputHooksForAttempt(params: { promptErrorSource: string | null }) {
   return params.promptErrorSource !== "hook:before_agent_run";
+}
+
+function shouldPreservePromptErrorAfterCleanupError(params: {
+  promptError: unknown;
+  cleanupError: unknown;
+}): boolean {
+  return (
+    Boolean(params.promptError) &&
+    params.cleanupError instanceof EmbeddedAttemptSessionTakeoverError
+  );
 }
 
 function hasVisiblePendingToolMediaReply(
@@ -5173,6 +5184,10 @@ export async function runEmbeddedAttempt(
       } catch (err) {
         cleanupError = err;
       }
+      const shouldPreservePromptError = shouldPreservePromptErrorAfterCleanupError({
+        promptError,
+        cleanupError,
+      });
       emitDiagnosticRunCompleted?.(
         cleanupError
           ? "error"
@@ -5183,13 +5198,21 @@ export async function runEmbeddedAttempt(
               : aborted || timedOut || idleTimedOut || timedOutDuringCompaction
                 ? "aborted"
                 : "completed",
-        cleanupError ?? promptError,
+        shouldPreservePromptError ? promptError : (cleanupError ?? promptError),
         beforeAgentRunBlocked
           ? { blockedBy: beforeAgentRunBlockedBy ?? "before_agent_run" }
           : undefined,
       );
       if (cleanupError) {
-        await Promise.reject(cleanupError);
+        if (shouldPreservePromptError) {
+          log.warn(
+            `embedded attempt cleanup detected session takeover after prompt failure; preserving prompt error: ` +
+              `runId=${params.runId} sessionId=${params.sessionId} ` +
+              `promptError=${formatErrorMessage(promptError)} cleanupError=${formatErrorMessage(cleanupError)}`,
+          );
+        } else {
+          await Promise.reject(cleanupError);
+        }
       }
     }
   } finally {
