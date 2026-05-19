@@ -188,8 +188,8 @@ async function findRunIdForTag({ logStream, ghRepo, wf, releaseTag, timeoutMs = 
         "--json",
         "databaseId,headBranch",
         "--jq",
-        // Prefer the tag push run (headBranch==releaseTag); fallback to latest
-        ` (map(select(.headBranch=="${releaseTag}")) | .[0].databaseId) // .[0].databaseId `,
+        // Only accept the tag push run (headBranch==releaseTag); otherwise return empty and retry
+        `.[] | select(.headBranch=="${releaseTag}") | .databaseId`,
       ]);
     } catch (e) {
       // ignore and retry
