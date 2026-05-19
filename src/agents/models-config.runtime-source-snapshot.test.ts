@@ -184,7 +184,8 @@ async function expectGeneratedProviderApiKey(
 
 async function planGeneratedProviders(params: {
   config: OpenClawConfig;
-  sourceConfigForSecrets: OpenClawConfig;
+  sourceConfigForSecrets?: OpenClawConfig;
+  existingParsed?: unknown;
 }) {
   const plan = await planOpenClawModelsJsonWithDeps(
     {
@@ -193,7 +194,7 @@ async function planGeneratedProviders(params: {
       agentDir: "/tmp/openclaw-models-plan",
       env: {},
       existingRaw: "",
-      existingParsed: null,
+      existingParsed: params.existingParsed ?? null,
     },
     {
       resolveImplicitProviders: async () => ({}),
@@ -219,6 +220,76 @@ function expectOpenAiHeaderMarkers(
 }
 
 describe("models-config runtime source snapshot", () => {
+  it("redacts plaintext provider apiKeys before writing models.json", async () => {
+    const providers = await planGeneratedProviders({
+      config: createOpenAiRuntimeConfigWithHeadersAndApiKey(),
+    });
+
+    expect(providers.openai?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(JSON.stringify(providers)).not.toContain("sk-runtime-resolved");
+  });
+
+  it("preserves existing models.json-only apiKeys so merge mode does not remove the only credential", async () => {
+    const providers = await planGeneratedProviders({
+      config: {
+        models: {
+          mode: "merge",
+          providers: {
+            custom: {
+              baseUrl: "https://config.example/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+      existingParsed: {
+        providers: {
+          legacy: {
+            baseUrl: "https://agent.example/v1",
+            apiKey: "sk-stale-existing-key",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(providers.legacy?.apiKey).toBe("sk-stale-existing-key"); // pragma: allowlist secret
+  });
+
+  it("redacts plaintext apiKeys from the active config even when merge mode preserves an older key", async () => {
+    const providers = await planGeneratedProviders({
+      config: {
+        models: {
+          mode: "merge",
+          providers: {
+            custom: {
+              baseUrl: "https://config.example/v1",
+              apiKey: "sk-runtime-custom-key", // pragma: allowlist secret
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+      existingParsed: {
+        providers: {
+          custom: {
+            baseUrl: "https://agent.example/v1",
+            apiKey: "sk-old-existing-key",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(providers.custom?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(JSON.stringify(providers)).not.toContain("sk-old-existing-key");
+    expect(JSON.stringify(providers)).not.toContain("sk-runtime-custom-key");
+  });
+
   it("uses runtime source snapshot markers when passed the active runtime config", () => {
     const sourceConfig: OpenClawConfig = {
       models: {
