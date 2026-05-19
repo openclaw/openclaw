@@ -895,7 +895,8 @@ describe("resolveAgentConfig", () => {
       "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "agent-model")).toEqual([
-      "google/gemini-3-pro",
+      "openai-codex/gpt-5.4",
+      "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "fallback-only-agent-model")).toEqual([
       "openai-codex/gpt-5.4",
@@ -1011,16 +1012,18 @@ describe("resolveAgentConfig", () => {
       },
     };
 
-    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "agent-model" })).toEqual({
-      primary: "anthropic/claude-sonnet-4-6",
-      fallbacks: ["google/gemini-3-pro"],
-    });
+    // per-agent subagents.model wins (highest priority)
     expect(resolveSubagentModelConfigSelection({ cfg, agentId: "subagent-model" })).toEqual({
       primary: "kimi/kimi-code",
       fallbacks: ["openai-codex/gpt-5.4"],
     });
+    // global default wins over the agent's own model (regression: #58822 fixed in agent-scope)
+    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "agent-model" })).toBe(
+      "openai/gpt-5.4",
+    );
+    // fallback-only subagents.model has no primary — global default wins over agent's own model
     expect(resolveSubagentModelConfigSelection({ cfg, agentId: "fallback-only-subagent" })).toBe(
-      "anthropic/claude-sonnet-4-6",
+      "openai/gpt-5.4",
     );
     expect(resolveSubagentModelConfigSelection({ cfg, agentId: "default-subagent" })).toBe(
       "openai/gpt-5.4",
