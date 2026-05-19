@@ -896,7 +896,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   };
 
   let draftPreviewCommitted = false;
-  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+  const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } = createReplyDispatcherWithTyping({
     ...replyPipeline,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload, info) => {
@@ -1284,7 +1284,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         dispatchSettledBeforeStart = true;
         await settleReplyDispatcher({
           dispatcher,
-          onSettled: () => markDispatchIdle(),
+          onSettled: () => {
+            markRunComplete();
+            markDispatchIdle();
+          },
         });
       },
       runDispatch: () =>
@@ -1425,6 +1428,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     progressDraftGate.cancel();
     await draftStream?.discardPending();
     if (!dispatchSettledBeforeStart) {
+      markRunComplete();
       markDispatchIdle();
     }
   }

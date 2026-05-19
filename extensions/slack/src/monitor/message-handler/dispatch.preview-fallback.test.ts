@@ -710,6 +710,7 @@ vi.mock("../reply.runtime.js", () => ({
     },
     replyOptions: {},
     markDispatchIdle: () => {},
+    markRunComplete: () => {},
   }),
   dispatchInboundMessage: async (params: {
     replyOptions?: {
