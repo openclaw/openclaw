@@ -43,9 +43,10 @@ import {
   isTransientHttpError,
 } from "../../agents/pi-embedded-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
-import { isMessagingToolSendAction } from "../../agents/pi-embedded-messaging.js";
+import { isMessagingTool, isMessagingToolSendAction } from "../../agents/pi-embedded-messaging.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
+import { buildToolMutationState } from "../../agents/tool-mutation.js";
 import {
   resolveGroupSessionKey,
   type SessionEntry,
@@ -516,6 +517,55 @@ const CLI_BACKEND_NO_OUTPUT_STALL_RE =
 const CLI_BACKEND_OVERALL_TIMEOUT_RE =
   /\bCLI exceeded timeout\s*\(\s*(\d+)\s*s\s*\)\s+and was terminated\b/iu;
 const CLI_BACKEND_ROUTING_REF_BEFORE_ERROR_RE = /\b([\w.-]+\/[A-Za-z][\w.-]*)\s*:\s*CLI\b/iu;
+const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
+  /\bcodex app-server client closed before turn completed\b/iu;
+const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
+  /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
+
+function isCodexAppServerBridgeFailureBeforeReply(message: string): boolean {
+  return (
+    CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(message) ||
+    CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(message)
+  );
+}
+
+function buildCodexAppServerBridgeFailureText(
+  message: string,
+  options: { didRetry: boolean },
+): string | null {
+  const recoveryText = options.didRetry
+    ? "OpenClaw retried once and it still failed; please try again."
+    : "Some output may already have been delivered; please try again if you need the rest.";
+  if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(message)) {
+    return `⚠️ Codex app-server connection closed before this turn finished. ${recoveryText}`;
+  }
+  if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(message)) {
+    return `⚠️ Codex app-server stopped making progress before this turn finished. ${recoveryText}`;
+  }
+  return null;
+}
+
+function hasCodexAppServerRetryBlockingOutput(params: {
+  blockReplyPipeline: BlockReplyPipeline | null;
+  directlySentBlockKeys: Set<string>;
+  didObserveMessagingToolSideEffect: boolean;
+  didObservePotentialToolSideEffect: boolean;
+  didObserveUserVisibleOutput: boolean;
+  hasPendingMessagingToolSideEffect: boolean;
+  hasPendingPotentialToolSideEffect: boolean;
+  hasRepliedRef?: { value: boolean };
+}): boolean {
+  return (
+    params.hasRepliedRef?.value === true ||
+    params.directlySentBlockKeys.size > 0 ||
+    Boolean(params.blockReplyPipeline?.hasBuffered() || params.blockReplyPipeline?.didStream()) ||
+    params.didObserveMessagingToolSideEffect ||
+    params.didObservePotentialToolSideEffect ||
+    params.didObserveUserVisibleOutput ||
+    params.hasPendingMessagingToolSideEffect ||
+    params.hasPendingPotentialToolSideEffect
+  );
+}
 
 function buildCliBackendTimeoutFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
@@ -1192,6 +1242,7 @@ export async function runAgentTurnWithFallback(params: {
     didNotifyAgentRunStart = true;
     params.opts?.onAgentRunStart?.(runId);
   };
+  let didObserveUserVisibleOutput = false;
   const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
   const shouldNotifyUserAboutCompaction =
     runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
@@ -1213,6 +1264,7 @@ export async function runAgentTurnWithFallback(params: {
     });
     try {
       await params.opts.onBlockReply(noticePayload);
+      didObserveUserVisibleOutput = true;
     } catch (err) {
       // Non-critical notice delivery failure should not bubble out of the
       // fire-and-forget event handler.
@@ -1240,6 +1292,7 @@ export async function runAgentTurnWithFallback(params: {
     });
     try {
       await params.opts.onBlockReply(noticePayload);
+      didObserveUserVisibleOutput = true;
     } catch (err) {
       logVerbose(`compaction hook notice delivery failed (non-fatal): ${String(err)}`);
     }
@@ -1263,7 +1316,16 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
+  let didRetryCodexAppServerBridgeFailure = false;
+  let didObserveMessagingToolSideEffect = false;
+  let didObservePotentialToolSideEffect = false;
+  const pendingMessagingToolSendCallIds = new Set<string>();
+  const pendingMessagingToolItemIds = new Set<string>();
+  const pendingPotentialToolSideEffectCallIds = new Set<string>();
+  const pendingPotentialToolSideEffectItemIds = new Set<string>();
   let liveModelSwitchRetries = 0;
+  let queuedUserMessagePersistedAcrossFallback = false;
+  let assistantErrorPersistedAcrossFallback = false;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
@@ -1446,6 +1508,7 @@ export async function runAgentTurnWithFallback(params: {
     });
   };
 
+  const blockReplyPipeline = params.blockReplyPipeline;
   while (true) {
     try {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
@@ -1505,7 +1568,6 @@ export async function runAgentTurnWithFallback(params: {
         await params.typingSignals.signalTextDelta(text);
         return text;
       };
-      const blockReplyPipeline = params.blockReplyPipeline;
       // Build the delivery handler once so both onAgentEvent (compaction start
       // notice) and the onBlockReply field share the same instance.  This
       // ensures replyToId threading (replyToMode=all|first) is applied to
@@ -1522,6 +1584,9 @@ export async function runAgentTurnWithFallback(params: {
             blockStreamingEnabled: params.blockStreamingEnabled,
             blockReplyPipeline,
             directlySentBlockKeys,
+            onVisibleBlockReplyQueued: () => {
+              didObserveUserVisibleOutput = true;
+            },
           })
         : undefined;
       let messageToolOnlyDeliveryCompleted = false;
@@ -1533,8 +1598,6 @@ export async function runAgentTurnWithFallback(params: {
       const onToolResult = params.opts?.onToolResult;
       const outcomePlan = buildAgentRuntimeOutcomePlan();
       const runLane = CommandLane.Main;
-      let queuedUserMessagePersistedAcrossFallback = false;
-      let assistantErrorPersistedAcrossFallback = false;
       const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
         ...resolveModelFallbackOptions(effectiveRun, runtimeConfig),
         runId,
@@ -1664,9 +1727,13 @@ export async function runAgentTurnWithFallback(params: {
                   return;
                 }
                 await params.opts.onPartialReply({ text: textForTyping });
+                didObserveUserVisibleOutput = true;
               },
               onReasoningText: async (text) => {
                 await params.opts?.onReasoningStream?.({ text });
+                if (params.opts?.onReasoningStream) {
+                  didObserveUserVisibleOutput = true;
+                }
               },
               onErrorBeforeLifecycle: async () => {
                 if (!rollbackFallbackCandidateSelection) {
@@ -1853,6 +1920,7 @@ export async function runAgentTurnWithFallback(params: {
                     text: textForTyping,
                     mediaUrls: payload.mediaUrls,
                   });
+                  didObserveUserVisibleOutput = true;
                 },
                 onAssistantMessageStart: async () => {
                   await params.typingSignals.signalMessageStart();
@@ -1869,6 +1937,9 @@ export async function runAgentTurnWithFallback(params: {
                           text: payload.text,
                           mediaUrls: payload.mediaUrls,
                         });
+                        if (params.opts?.onReasoningStream) {
+                          didObserveUserVisibleOutput = true;
+                        }
                       }
                     : undefined,
                 onReasoningEnd: params.opts?.onReasoningEnd,
@@ -1885,8 +1956,9 @@ export async function runAgentTurnWithFallback(params: {
                   if (evt.stream === "tool") {
                     const phase = readStringValue(evt.data.phase) ?? "";
                     const name = readStringValue(evt.data.name);
-                    const toolCallId = readStringValue(evt.data.toolCallId) ?? "";
-                    const args =
+                    const toolCallId =
+                      readStringValue(evt.data.toolCallId) ?? readStringValue(evt.data.itemId);
+                    const toolArgs =
                       evt.data.args && typeof evt.data.args === "object"
                         ? (evt.data.args as Record<string, unknown>)
                         : undefined;
@@ -1895,10 +1967,49 @@ export async function runAgentTurnWithFallback(params: {
                       toolCallId &&
                       name &&
                       (phase === "start" || phase === "update") &&
-                      args &&
-                      isMessagingToolSendAction(name, args)
+                      toolArgs &&
+                      isMessagingToolSendAction(name, toolArgs)
                     ) {
                       messageToolOnlyDeliveryToolCallIds.add(toolCallId);
+                    }
+                    if (
+                      phase === "start" &&
+                      name &&
+                      toolCallId &&
+                      toolArgs &&
+                      isMessagingTool(name) &&
+                      isMessagingToolSendAction(name, toolArgs)
+                    ) {
+                      pendingMessagingToolSendCallIds.add(toolCallId);
+                    }
+                    if (
+                      phase === "start" &&
+                      name &&
+                      toolCallId &&
+                      buildToolMutationState(name, toolArgs).mutatingAction
+                    ) {
+                      pendingPotentialToolSideEffectCallIds.add(toolCallId);
+                    }
+                    if (phase === "result" && name && toolCallId) {
+                      const wasMessagingSend = pendingMessagingToolSendCallIds.has(toolCallId);
+                      pendingMessagingToolSendCallIds.delete(toolCallId);
+                      const wasPotentialSideEffect =
+                        pendingPotentialToolSideEffectCallIds.has(toolCallId);
+                      pendingPotentialToolSideEffectCallIds.delete(toolCallId);
+                      const toolResult =
+                        evt.data.result && typeof evt.data.result === "object"
+                          ? (evt.data.result as { success?: unknown })
+                          : undefined;
+                      if (
+                        wasMessagingSend &&
+                        evt.data.isError !== true &&
+                        toolResult?.success !== false
+                      ) {
+                        didObserveMessagingToolSideEffect = true;
+                      }
+                      if (wasPotentialSideEffect && evt.data.isError !== true) {
+                        didObservePotentialToolSideEffect = true;
+                      }
                     }
                     if (shouldSuppressProgressAfterMessageToolDelivery()) {
                       return;
@@ -1907,13 +2018,54 @@ export async function runAgentTurnWithFallback(params: {
                       const toolStartProgressPromise = params.opts?.onToolStart?.({
                         name,
                         phase,
-                        args,
+                        args: toolArgs,
                         detailMode: params.toolProgressDetail,
                       });
                       await Promise.all([
                         params.typingSignals.signalToolStart(),
                         toolStartProgressPromise,
                       ]);
+                    }
+                  }
+                  if (evt.stream === "item") {
+                    const phase = readStringValue(evt.data.phase) ?? "";
+                    const name = readStringValue(evt.data.name);
+                    const toolCallId =
+                      readStringValue(evt.data.toolCallId) ?? readStringValue(evt.data.itemId);
+                    if (name && toolCallId && isMessagingTool(name)) {
+                      if (phase === "start") {
+                        pendingMessagingToolItemIds.add(toolCallId);
+                      }
+                      if (phase === "end") {
+                        const wasPendingMessagingTool = pendingMessagingToolItemIds.has(toolCallId);
+                        pendingMessagingToolItemIds.delete(toolCallId);
+                        const status = readStringValue(evt.data.status);
+                        if (
+                          (wasPendingMessagingTool || evt.data.suppressChannelProgress === true) &&
+                          status !== "failed" &&
+                          status !== "blocked"
+                        ) {
+                          didObserveMessagingToolSideEffect = true;
+                        }
+                      }
+                    }
+                    if (
+                      name &&
+                      toolCallId &&
+                      buildToolMutationState(name, undefined).mutatingAction
+                    ) {
+                      if (phase === "start") {
+                        pendingPotentialToolSideEffectItemIds.add(toolCallId);
+                      }
+                      if (phase === "end") {
+                        const wasPotentialSideEffect =
+                          pendingPotentialToolSideEffectItemIds.has(toolCallId);
+                        pendingPotentialToolSideEffectItemIds.delete(toolCallId);
+                        const status = readStringValue(evt.data.status);
+                        if (wasPotentialSideEffect && status !== "failed" && status !== "blocked") {
+                          didObservePotentialToolSideEffect = true;
+                        }
+                      }
                     }
                   }
                   const suppressItemChannelProgress =
@@ -2103,12 +2255,13 @@ export async function runAgentTurnWithFallback(params: {
                       // See: https://github.com/openclaw/openclaw/issues/11044
                       let toolResultChain: Promise<void> = Promise.resolve();
                       return (payload: ReplyPayload) => {
+                        const { text, skip } = normalizeStreamingText(payload);
+                        if (skip) {
+                          return;
+                        }
+                        didObserveUserVisibleOutput = true;
                         toolResultChain = toolResultChain
                           .then(async () => {
-                            const { text, skip } = normalizeStreamingText(payload);
-                            if (skip) {
-                              return;
-                            }
                             if (text !== undefined) {
                               await params.typingSignals.signalTextDelta(text);
                             }
@@ -2270,6 +2423,7 @@ export async function runAgentTurnWithFallback(params: {
       const providerRequestError =
         !isBilling && !shouldSurfaceToControlUi ? classifyProviderRequestError(err) : undefined;
       const isTransientHttp = isTransientHttpError(message);
+      const isCodexAppServerBridgeFailure = isCodexAppServerBridgeFailureBeforeReply(message);
 
       if (isReplyOperationRestartAbort(params.replyOperation)) {
         return {
@@ -2341,6 +2495,45 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
+      const codexAppServerRetryBlockingOutput = isCodexAppServerBridgeFailure
+        ? hasCodexAppServerRetryBlockingOutput({
+            blockReplyPipeline,
+            directlySentBlockKeys,
+            didObserveMessagingToolSideEffect,
+            didObservePotentialToolSideEffect,
+            didObserveUserVisibleOutput,
+            hasPendingMessagingToolSideEffect:
+              pendingMessagingToolSendCallIds.size > 0 || pendingMessagingToolItemIds.size > 0,
+            hasPendingPotentialToolSideEffect:
+              pendingPotentialToolSideEffectCallIds.size > 0 ||
+              pendingPotentialToolSideEffectItemIds.size > 0,
+            hasRepliedRef: params.opts?.hasRepliedRef,
+          })
+        : false;
+      if (
+        isCodexAppServerBridgeFailure &&
+        !didRetryCodexAppServerBridgeFailure &&
+        !codexAppServerRetryBlockingOutput
+      ) {
+        didRetryCodexAppServerBridgeFailure = true;
+        defaultRuntime.error(
+          `Codex app-server bridge error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
+        );
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
+        });
+        continue;
+      }
+      if (
+        isCodexAppServerBridgeFailure &&
+        !didRetryCodexAppServerBridgeFailure &&
+        codexAppServerRetryBlockingOutput
+      ) {
+        defaultRuntime.error(
+          `Codex app-server bridge error after reply output (${message}). Not retrying because output may already have been delivered.`,
+        );
+      }
+
       if (isTransientHttp && !didRetryTransientHttpError) {
         didRetryTransientHttpError = true;
         // Retry the full runWithModelFallback() cycle — transient errors
@@ -2390,21 +2583,28 @@ export async function runAgentTurnWithFallback(params: {
       const genericFallbackText = params.isHeartbeat
         ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
         : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
-      const fallbackText = isBilling
-        ? BILLING_ERROR_USER_MESSAGE
-        : isRateLimit && !isOverloadedErrorMessage(message)
-          ? buildRateLimitCooldownMessage(err)
-          : rateLimitOrOverloadedCopy
-            ? rateLimitOrOverloadedCopy
-            : isContextOverflow
-              ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-              : shouldSurfaceToControlUi
-                ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
-                : (externalRunFailureReply?.text ?? genericFallbackText);
+      const codexAppServerBridgeFailureText = buildCodexAppServerBridgeFailureText(message, {
+        didRetry: didRetryCodexAppServerBridgeFailure,
+      });
+      const fallbackText =
+        codexAppServerBridgeFailureText ??
+        (isBilling
+          ? BILLING_ERROR_USER_MESSAGE
+          : isRateLimit && !isOverloadedErrorMessage(message)
+            ? buildRateLimitCooldownMessage(err)
+            : rateLimitOrOverloadedCopy
+              ? rateLimitOrOverloadedCopy
+              : isContextOverflow
+                ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+                : shouldSurfaceToControlUi
+                  ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
+                  : (externalRunFailureReply?.text ?? genericFallbackText));
       const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
         text: fallbackText,
         sessionCtx: params.sessionCtx,
-        isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
+        isGenericRunnerFailure:
+          codexAppServerBridgeFailureText === null &&
+          (externalRunFailureReply?.isGenericRunnerFailure ?? false),
         cfg: params.followupRun.run.config,
       });
 

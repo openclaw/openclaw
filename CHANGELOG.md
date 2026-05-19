@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 - Cron: keep recovered tool warnings diagnostic for successful scheduled runs so final cron output is delivered instead of being replaced by a post-processing warning. (#84045) Thanks @abnershang.
 - Plugins/perf: thread explicit plugin discovery results through `loadBundledCapabilityRuntimeRegistry`, `resolveBundledPluginSources`, and `listChannelCatalogEntries` so callers that already hold a discovery result skip redundant filesystem walks. Thanks @SebTardif.
 - harden update restart script creation [AI]. (#84088) Thanks @pgondhi987.
+- Codex app-server: retry bridge client-close/turn-completion idle failures only before any visible output, transcript persistence, message send, or mutating tool side effect, and surface repeated/skipped failures visibly instead of silently dropping group replies.
 - Docker: keep the bundled Codex plugin in official release image keep lists so the default OpenAI agent harness remains available after Docker pruning. Fixes #83613. (#83626) Thanks @YuanHanzhong.
 - CLI/channels: preserve the first line of `openclaw channels logs` output when the rolling tail window starts exactly on a line boundary, mirroring the already-fixed `readLogSlice` behavior in `src/logging/log-tail.ts`.
 - Control UI: treat terminal session status as authoritative over stale active-run flags so completed terminal runs stop showing abort/live UI. (#84057)
