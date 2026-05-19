@@ -32,6 +32,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Set up Docker Builder

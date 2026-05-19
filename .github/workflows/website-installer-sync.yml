@@ -38,7 +38,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
 
+          persist-credentials: false
       - name: Install ShellCheck
         run: sudo apt-get update -y && sudo apt-get install -y shellcheck
 
@@ -72,7 +74,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
 
+          persist-credentials: false
       - name: install.sh in Docker
         run: |
           docker run --rm \
@@ -96,7 +100,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
 
+          persist-credentials: false
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -118,7 +124,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
 
+          persist-credentials: false
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -146,6 +154,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           path: openclaw
+          persist-credentials: false
 
       - name: Checkout openclaw.ai
         if: env.OPENCLAW_GH_TOKEN != ''

@@ -85,6 +85,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ inputs.tag }}
           fetch-depth: 0
 
@@ -434,6 +435,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
 

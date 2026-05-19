@@ -28,6 +28,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Checkout ClawHub docs source
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''

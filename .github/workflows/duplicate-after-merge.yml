@@ -36,7 +36,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
 
+          persist-credentials: false
       - name: Close confirmed duplicates
         env:
           APPLY: ${{ inputs.apply }}
