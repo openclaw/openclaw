@@ -36,6 +36,7 @@ export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   changeNotes: string[];
   warningNotes: string[];
+  authProfilesRepaired: boolean;
 }> {
   let state = params.state;
   const changeNotes: string[] = [];
@@ -155,5 +156,8 @@ export async function runDoctorRepairSequence(params: {
     warningNotes.push(sanitizeLines(staleOAuthShadowRepair.warnings));
   }
 
-  return { state, changeNotes, warningNotes };
+  const authProfilesRepaired =
+    legacyOAuthSidecarRepair.changes.length > 0 || staleOAuthShadowRepair.changes.length > 0;
+
+  return { state, changeNotes, warningNotes, authProfilesRepaired };
 }

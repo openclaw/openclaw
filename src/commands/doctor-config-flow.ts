@@ -249,6 +249,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       changeNotes: repairSequence.changeNotes,
       warningNotes: repairSequence.warningNotes,
     });
+    if (repairSequence.authProfilesRepaired) {
+      const { callGateway } = await import("../gateway/call.js");
+      try {
+        await callGateway({
+          method: "models.authStatus",
+          params: { refresh: true },
+          timeoutMs: 3000,
+        });
+      } catch {
+        // Gateway may not be running; auth status cache will expire naturally via TTL.
+      }
+    }
   } else {
     const { collectDoctorPreviewWarnings } = await import("./doctor/shared/preview-warnings.js");
     emitDoctorNotes({

@@ -393,6 +393,40 @@ describe("doctor repair sequencing", () => {
       "Removed stale OAuth auth profile shadow openai-codex.",
     ]);
     expect(result.warningNotes).toEqual(["Sidecar warning"]);
+    expect(result.authProfilesRepaired).toBe(true);
+  });
+
+  it("sets authProfilesRepaired false when no auth profile changes occur", async () => {
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {} as OpenClawConfig,
+        candidate: {} as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.authProfilesRepaired).toBe(false);
+  });
+
+  it("sets authProfilesRepaired true when only stale OAuth shadow repair changes occur", async () => {
+    mocks.repairStaleOAuthProfileShadows.mockResolvedValueOnce({
+      changes: ["Removed stale OAuth auth profile shadow openai-codex."],
+      warnings: [],
+    });
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {} as OpenClawConfig,
+        candidate: {} as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.authProfilesRepaired).toBe(true);
   });
 
   it("emits Discord warnings when unsafe numeric ids block repair", async () => {
