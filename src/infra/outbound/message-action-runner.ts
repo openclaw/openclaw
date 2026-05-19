@@ -540,6 +540,31 @@ function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
   );
 }
 
+function hasExplicitTargetParam(params: Record<string, unknown>): boolean {
+  for (const key of ["target", "to", "channelId"]) {
+    if (normalizeOptionalString(params[key])) {
+      return true;
+    }
+  }
+  return (
+    Array.isArray(params.targets) && params.targets.some((value) => normalizeOptionalString(value))
+  );
+}
+
+function applyImplicitSourceReplySendPolicy(
+  input: RunMessageActionParams,
+  params: Record<string, unknown>,
+) {
+  if (
+    input.action !== "send" ||
+    input.sourceReplyDeliveryMode !== "message_tool_only" ||
+    hasExplicitTargetParam(params)
+  ) {
+    return;
+  }
+  params.bestEffort = true;
+}
+
 function shouldUseInternalSourceReplySink(
   input: RunMessageActionParams,
   params: Record<string, unknown>,
@@ -1252,6 +1277,7 @@ export async function runMessageAction(
   if (shouldUseInternalSourceReplySink(input, params)) {
     return handleInternalSourceReplySendAction({ ...input, agentId: resolvedAgentId }, params);
   }
+  applyImplicitSourceReplySendPolicy(input, params);
   params = normalizeMessageActionInput({
     action,
     args: params,

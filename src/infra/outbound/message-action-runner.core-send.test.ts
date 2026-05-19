@@ -27,6 +27,38 @@ function firstMockArg(
   return arg as Record<string, unknown>;
 }
 
+const slackConfig = {
+  channels: {
+    slack: {
+      enabled: true,
+    },
+  },
+} as OpenClawConfig;
+
+function registerSlackTextPlugin() {
+  const sendText = vi.fn().mockResolvedValue({
+    channel: "slack",
+    messageId: "m1",
+    chatId: "C123",
+  });
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "slack",
+        source: "test",
+        plugin: createOutboundTestPlugin({
+          id: "slack",
+          outbound: {
+            deliveryMode: "direct",
+            sendText,
+          },
+        }),
+      },
+    ]),
+  );
+  return sendText;
+}
+
 describe("runMessageAction core send routing", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
@@ -194,6 +226,53 @@ describe("runMessageAction core send routing", () => {
     expect(result.to).toBe("telegram:-1001234567890:topic:42");
     expect(payload.to).toBe("telegram:-1001234567890:topic:42");
     expect(payload.dryRun).toBe(true);
+  });
+
+  it("uses best-effort delivery for implicit message-tool-only source replies", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        message: "visible source reply",
+        bestEffort: false,
+      },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+      },
+      sessionKey: "agent:main:slack:channel:C123",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(sendText).toHaveBeenCalledOnce();
+  });
+
+  it("preserves required delivery when message-tool-only sends include an explicit target", async () => {
+    const sendText = registerSlackTextPlugin();
+
+    await expect(
+      runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: {
+          target: "channel:C123",
+          message: "explicit durable send",
+          bestEffort: false,
+        },
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "channel:C123",
+        },
+        sessionKey: "agent:main:slack:channel:C123",
+        sourceReplyDeliveryMode: "message_tool_only",
+        dryRun: false,
+      }),
+    ).rejects.toThrow("missing reconcileUnknownSend");
+    expect(sendText).not.toHaveBeenCalled();
   });
 
   it("applies TTS to message-tool sends before core outbound delivery", async () => {
