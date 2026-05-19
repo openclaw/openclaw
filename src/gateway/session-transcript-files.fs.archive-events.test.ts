@@ -130,4 +130,66 @@ describe("archiveSessionTranscriptsDetailed failure surface (#81984)", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("surfaces a REAL EACCES (chmod 0o555 parent dir) through onArchiveError, no fs spy", () => {
+    // clawsweeper feedback on PR #82081: the failure-surface assertion used a
+    // spy on fs.renameSync. This case removes the spy entirely and induces the
+    // EACCES on a real macOS/Linux filesystem by chmod'ing the parent dir to
+    // 0o555 (read+execute, no write) so the in-place sibling rename that
+    // archiveSessionTranscriptsDetailed performs hits the real kernel errno.
+    if (process.platform === "win32") {
+      return;
+    }
+    // realpath resolves the /var → /private/var symlink macOS uses for tmp, so
+    // the assertion against errors[0].sourcePath compares the same shape the
+    // production code would emit.
+    const tmpDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "oc-archive-real-eaccess-")),
+    );
+    try {
+      const sessionId = "33333333-3333-4333-8333-333333333333";
+      const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+      fs.writeFileSync(sessionFile, '{"type":"session-meta","agentId":"main"}\n');
+
+      // Real, on-disk EACCES — no module mocks anywhere in this test.
+      fs.chmodSync(tmpDir, 0o555);
+
+      const errors: Array<{ code?: string; sourcePath: string }> = [];
+      let archived: ReturnType<typeof archiveSessionTranscriptsDetailed>;
+      try {
+        archived = archiveSessionTranscriptsDetailed({
+          sessionId,
+          storePath: path.join(tmpDir, "store.json"),
+          sessionFile,
+          agentId: "main",
+          reason: "reset",
+          onArchiveError: (err, sourcePath) => {
+            const code = (err as NodeJS.ErrnoException | undefined)?.code;
+            errors.push({ code, sourcePath });
+          },
+        });
+      } finally {
+        // Restore writeable mode so afterEach cleanup can rmSync the dir.
+        fs.chmodSync(tmpDir, 0o755);
+      }
+
+      expect(archived).toEqual([]);
+      expect(errors.length).toBeGreaterThan(0);
+      // The exact errno depends on platform/fs; EACCES on macOS/Linux,
+      // sometimes EPERM elsewhere. Assert the source path is the real session
+      // file and the error carries a system errno (i.e. it's not synthesised).
+      expect(errors[0].sourcePath).toBe(sessionFile);
+      expect(errors[0].code).toMatch(/^(EACCES|EPERM)$/);
+      // The original session file is left in place when the archive rename
+      // fails, so downstream code can retry on the next /new rotation.
+      expect(fs.existsSync(sessionFile)).toBe(true);
+    } finally {
+      try {
+        fs.chmodSync(tmpDir, 0o755);
+      } catch {
+        // already restored
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
