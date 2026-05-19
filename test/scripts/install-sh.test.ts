@@ -159,8 +159,11 @@ describe("install.sh", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
       engines?: { node?: string };
     };
-    expect(pkg.engines?.node).toBe(">=22.16.0");
-    expect(script).toContain("NODE_MIN_MINOR=16");
+    const engineMatch = /^>=22\.(\d+)\.0$/.exec(pkg.engines?.node ?? "");
+    expect(engineMatch).not.toBeNull();
+
+    const minMinor = Number(engineMatch?.[1]);
+    expect(script).toContain(`NODE_MIN_MINOR=${minMinor}`);
 
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-node-floor-"));
     const bin = join(tmp, "bin");
@@ -169,11 +172,7 @@ describe("install.sh", () => {
     const nodePath = join(bin, "node");
     writeFileSync(
       nodePath,
-      [
-        "#!/bin/sh",
-        'printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"',
-        "",
-      ].join("\n"),
+      ["#!/bin/sh", 'printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"', ""].join("\n"),
     );
     chmodSync(nodePath, 0o755);
 
@@ -184,15 +183,15 @@ describe("install.sh", () => {
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
           "set +e",
-          'FAKE_NODE_VERSION="v22.14.0"',
+          `FAKE_NODE_VERSION="v22.${minMinor - 1}.0"`,
           "export FAKE_NODE_VERSION",
           "node_is_at_least_required",
-          "node_22_14=$?",
-          'FAKE_NODE_VERSION="v22.16.0"',
+          "node_below_floor=$?",
+          `FAKE_NODE_VERSION="v22.${minMinor}.0"`,
           "export FAKE_NODE_VERSION",
           "node_is_at_least_required",
-          "node_22_16=$?",
-          'printf "node_22_14=%s\\nnode_22_16=%s\\n" "$node_22_14" "$node_22_16"',
+          "node_at_floor=$?",
+          'printf "node_below_floor=%s\\nnode_at_floor=%s\\n" "$node_below_floor" "$node_at_floor"',
           "exit 0",
         ].join("\n"),
         {
@@ -205,8 +204,8 @@ describe("install.sh", () => {
     }
 
     expect(result?.status).toBe(0);
-    expect(result?.stdout).toContain("node_22_14=1");
-    expect(result?.stdout).toContain("node_22_16=0");
+    expect(result?.stdout).toContain("node_below_floor=1");
+    expect(result?.stdout).toContain("node_at_floor=0");
   });
 
   it("persists a supported Linux Node path before noninteractive shell guards", () => {
