@@ -1531,6 +1531,58 @@ describe("runPreparedReply media-only handling", () => {
     );
   });
 
+  it("runs bare mention replies when the reply target is the current-turn context", async () => {
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+      [
+        "Reply target of current user message (untrusted, for context):",
+        "```json",
+        JSON.stringify({ sender_label: "Bot", body: "quoted status body" }, null, 2),
+        "```",
+      ].join("\n"),
+    );
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "@bot",
+          CommandBody: "@bot",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          ReplyToBody: "quoted status body",
+          ReplyToSender: "Bot",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          RawBody: "@bot",
+          CommandBody: "@bot",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          ReplyToBody: "quoted status body",
+          ReplyToSender: "Bot",
+        },
+        command: {
+          ...baseParams().command,
+          rawBodyNormalized: "@bot",
+          commandBodyNormalized: "",
+        } as never,
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.transcriptCommandBody).toBe("");
+    expect(call?.followupRun.prompt).toBe("");
+    expect(call?.followupRun.transcriptPrompt).toBe("");
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
+      "Reply target of current user message",
+    );
+    expect(call?.followupRun.currentInboundContext?.text).toContain("quoted status body");
+  });
+
   it("runs room events as contextual events instead of direct user prompts", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       [
@@ -1871,7 +1923,7 @@ describe("runPreparedReply media-only handling", () => {
     ["/new", "new"],
     ["/reset", "reset"],
   ] as const)(
-    "keeps inbound sender context in the bare %s model prompt while hiding startup instructions from transcript prompt",
+    "keeps inbound sender context in reply-targeted bare %s model prompt while hiding startup instructions from transcript prompt",
     async (commandText, startupAction) => {
       vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
         [
@@ -1891,6 +1943,8 @@ describe("runPreparedReply media-only handling", () => {
             Provider: "webchat",
             Surface: "webchat",
             ChatType: "direct",
+            ReplyToBody: "quoted reset target",
+            ReplyToSender: "Ada Lovelace",
           },
           sessionCtx: {
             Body: "",
@@ -1900,6 +1954,8 @@ describe("runPreparedReply media-only handling", () => {
             ChatType: "direct",
             SenderId: "telegram-user-1",
             SenderName: "Ada Lovelace",
+            ReplyToBody: "quoted reset target",
+            ReplyToSender: "Ada Lovelace",
           },
           command: {
             surface: "webchat",
