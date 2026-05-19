@@ -818,26 +818,32 @@ export async function executePreparedCliRun(
     // Each cleanup awaits in its own try/catch so a rejection in one cannot
     // shortcut the finally and skip the remaining steps. In particular the
     // trajectory flush at the end must always run, otherwise queued
-    // session.ended events for the current run are lost on disk.
+    // session.ended events for the current run are lost on disk. Cleanup
+    // rejections are surfaced via cliBackendLog.warn so that operators see
+    // them in CI/log capture rather than disappearing into a bare catch.
     if (claudeSkillsPlugin && !claudeSkillsPluginCleanupOwned) {
       try {
         await claudeSkillsPlugin.cleanup();
-      } catch {
-        // Swallow so the remaining cleanups (and trajectory flush) still run.
+      } catch (cleanupError) {
+        cliBackendLog.warn(
+          `claudeSkillsPlugin.cleanup() rejected: ${formatErrorMessage(cleanupError)}`,
+        );
       }
     }
     if (systemPromptFile) {
       try {
         await systemPromptFile.cleanup();
-      } catch {
-        // Swallow so the remaining cleanups (and trajectory flush) still run.
+      } catch (cleanupError) {
+        cliBackendLog.warn(
+          `systemPromptFile.cleanup() rejected: ${formatErrorMessage(cleanupError)}`,
+        );
       }
     }
     if (cleanupImages) {
       try {
         await cleanupImages();
-      } catch {
-        // Swallow so the trajectory flush below still runs.
+      } catch (cleanupError) {
+        cliBackendLog.warn(`cleanupImages() rejected: ${formatErrorMessage(cleanupError)}`);
       }
     }
     if (trajectoryRecorder) {
@@ -850,8 +856,12 @@ export async function executePreparedCliRun(
       }
       try {
         await trajectoryRecorder.flush();
-      } catch {
-        // Swallow flush errors so cleanup of other resources still completes.
+      } catch (flushError) {
+        // Swallow flush errors so cleanup of other resources still completes;
+        // record the failure so operators don't silently lose trajectory data.
+        cliBackendLog.warn(
+          `trajectoryRecorder.flush() rejected: ${formatErrorMessage(flushError)}`,
+        );
       }
     }
   }

@@ -177,4 +177,47 @@ describe("executePreparedCliRun trajectory lifecycle", () => {
       error: expect.stringContaining("simulated run failure"),
     });
   });
+
+  it("surfaces cleanup rejections via cliBackendLog.warn instead of silently swallowing", async () => {
+    // Addresses clawsweeper P2 finding on ffefc389c8: the per-cleanup
+    // try/catch wrappers were swallowing cleanup errors before the
+    // trajectory flush, so a successful CLI run could return success even
+    // when prompt/plugin cleanup failed. The wrappers must surface the
+    // rejection via cliBackendLog.warn so operators see the failure in
+    // CI/log capture — the flush itself still has to run.
+    const cliBackendLog = await import("./log.js").then((mod) => mod.cliBackendLog);
+    const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => {});
+
+    try {
+      prepareCliPromptImagePayloadMock.mockImplementationOnce(async () => ({
+        prompt: "hi",
+        imagePaths: [],
+        cleanupImages: async () => {
+          throw new Error("image cleanup blew up");
+        },
+      }));
+      prepareClaudeCliSkillsPluginMock.mockImplementationOnce(async () => ({
+        args: [],
+        env: {},
+        cleanup: async () => {
+          throw new Error("skills cleanup blew up");
+        },
+      }));
+      const runError = new Error("simulated run failure");
+      enqueueCliRunMock.mockImplementationOnce(async () => {
+        throw runError;
+      });
+
+      await expect(executePreparedCliRun(buildPreparedCliRunContext())).rejects.toBe(runError);
+
+      expect(flushMock).toHaveBeenCalledTimes(1);
+      const warnMessages = warnSpy.mock.calls.map((call) => call[0]);
+      expect(
+        warnMessages.some((msg) => msg.includes("claudeSkillsPlugin.cleanup() rejected")),
+      ).toBe(true);
+      expect(warnMessages.some((msg) => msg.includes("cleanupImages() rejected"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
