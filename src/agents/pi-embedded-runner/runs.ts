@@ -601,7 +601,7 @@ export function forceClearEmbeddedPiRun(
   return forceClearReplyRunBySessionId(sessionId, cause) || cleared;
 }
 
-export const __testing = {
+export const testing = {
   resetActiveEmbeddedRuns() {
     for (const waiters of EMBEDDED_RUN_WAITERS.values()) {
       for (const waiter of waiters) {
@@ -616,3 +616,4 @@ export const __testing = {
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.clear();
   },
 };
+export { testing as __testing };

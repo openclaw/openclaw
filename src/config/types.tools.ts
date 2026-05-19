@@ -370,6 +370,8 @@ export type AgentToolsConfig = {
   byProvider?: Record<string, ToolPolicyConfig>;
   /** Per-sender tool policy overrides keyed by sender identity. */
   toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Per-agent code mode override; merges over the top-level tools.codeMode config. */
+  codeMode?: CodeModeConfig;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -690,8 +692,6 @@ export type ToolsConfig = {
   codeMode?: CodeModeConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
-    /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
-    model?: string | { primary?: string; fallbacks?: string[] };
     tools?: {
       allow?: string[];
       /** Additional allowlist entries merged into allow and/or default sub-agent denylist. */

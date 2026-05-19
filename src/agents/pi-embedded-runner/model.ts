@@ -545,11 +545,22 @@ function applyConfiguredProviderOverrides(params: {
       readModelParams(discoveredModel.params),
       defaultModelParams,
     );
+    const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
+      stripSecretRefMarkers: true,
+    });
+    const requestConfig = resolveProviderRequestConfig({
+      provider: params.provider,
+      api: discoveredModel.api,
+      baseUrl: discoveredModel.baseUrl,
+      discoveredHeaders,
+      capability: "llm",
+      transport: "stream",
+    });
     return {
       ...discoveredModel,
       ...(resolvedParams ? { params: resolvedParams } : {}),
       // Discovered models originate from models.json and may contain persistence markers.
-      headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
+      headers: requestConfig.headers,
     };
   }
   const configuredModel =
@@ -572,6 +583,18 @@ function applyConfiguredProviderOverrides(params: {
     stripSecretRefMarkers: true,
   });
   const providerParams = readModelParams(providerConfig.params);
+  const passthroughRequestConfig = resolveProviderRequestConfig({
+    provider: params.provider,
+    api: discoveredModel.api,
+    baseUrl: discoveredModel.baseUrl,
+    discoveredHeaders,
+    providerHeaders,
+    modelHeaders: configuredHeaders,
+    authHeader: providerConfig.authHeader,
+    request: providerRequest,
+    capability: "llm",
+    transport: "stream",
+  });
   if (
     !configuredModel &&
     !providerConfig.baseUrl &&
@@ -593,7 +616,7 @@ function applyConfiguredProviderOverrides(params: {
       ...discoveredModel,
       ...(resolvedParams ? { params: resolvedParams } : {}),
       ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-      headers: discoveredHeaders,
+      headers: passthroughRequestConfig.headers,
     };
   }
   const resolvedParams = mergeModelParams(

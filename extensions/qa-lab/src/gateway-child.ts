@@ -311,7 +311,7 @@ async function waitForQaGatewayRestartBoundary(params: {
   throw new Error(`qa gateway child did not reach restart boundary within ${timeoutMs}ms`);
 }
 
-export const __testing = {
+export const testing = {
   assertQaArtifactDirWithinRepo,
   buildQaRuntimeEnv,
   cleanupQaGatewayTempRoots,
@@ -937,6 +937,12 @@ export async function startQaGatewayChild(params: {
       configPath,
       runtimeEnv: runningEnv,
       logs,
+      signalProcess(signal: NodeJS.Signals) {
+        if (!activeChild.pid) {
+          throw new Error("qa gateway child has no pid");
+        }
+        process.kill(activeChild.pid, signal);
+      },
       async restart(signal: NodeJS.Signals = "SIGUSR1") {
         if (!activeChild.pid) {
           throw new Error("qa gateway child has no pid");
@@ -1050,3 +1056,4 @@ export async function startQaGatewayChild(params: {
     );
   }
 }
+export { testing as __testing };
