@@ -858,6 +858,86 @@ describe("stageSystemdService", () => {
     });
   });
 
+  it("removes stale OpenClaw ExecStart drop-in overrides on re-stage", async () => {
+    await withStageFixture(async ({ env, unitPath }) => {
+      const dropInDir = `${unitPath}.d`;
+      const overridePath = path.join(dropInDir, "override.conf");
+      await fs.mkdir(dropInDir, { recursive: true });
+      await fs.writeFile(
+        overridePath,
+        [
+          "[Service]",
+          "ExecStart=",
+          "ExecStart=/usr/bin/node /home/test/.local/share/pnpm/global/5/.pnpm/openclaw@2026.5.12/node_modules/openclaw/dist/index.js gateway --port 18789",
+          "TimeoutStartSec=45",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: [
+          "/usr/bin/node",
+          "/home/test/.local/share/pnpm/global/5/.pnpm/openclaw@2026.5.18/node_modules/openclaw/dist/index.js",
+          "gateway",
+          "--port",
+          "18789",
+        ],
+        workingDirectory: "/tmp",
+        environment: {},
+      });
+
+      const [unit, override] = await Promise.all([
+        fs.readFile(unitPath, "utf8"),
+        fs.readFile(overridePath, "utf8"),
+      ]);
+
+      expect(unit).toContain("openclaw@2026.5.18");
+      expect(override).not.toContain("ExecStart=");
+      expect(override).not.toContain("openclaw@2026.5.12");
+      expect(override).toContain("TimeoutStartSec=45");
+    });
+  });
+
+  it("preserves Node-launched non-service OpenClaw ExecStart drop-in overrides", async () => {
+    await withStageFixture(async ({ env, unitPath }) => {
+      const dropInDir = `${unitPath}.d`;
+      const overridePath = path.join(dropInDir, "override.conf");
+      await fs.mkdir(dropInDir, { recursive: true });
+      await fs.writeFile(
+        overridePath,
+        [
+          "[Service]",
+          "ExecStart=",
+          "ExecStart=/usr/bin/node /home/test/openclaw/dist/index.js doctor --fix",
+          "TimeoutStartSec=45",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {},
+      });
+
+      const override = await fs.readFile(overridePath, "utf8");
+
+      expect(override).toContain("ExecStart=");
+      expect(override).toContain("/usr/bin/node /home/test/openclaw/dist/index.js doctor --fix");
+      expect(override).toContain("TimeoutStartSec=45");
+    });
+  });
+
   it("clears stale inline-managed keys from env file on re-stage (#76860)", async () => {
     await withStageFixture(async ({ env, stateDir, unitPath, envFilePath }) => {
       // Existing env file carries a stale OPENCLAW_GATEWAY_TOKEN that the

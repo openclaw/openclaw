@@ -650,7 +650,98 @@ async function writeSystemdUnit({
     environmentFiles: environmentFileResult.environmentFiles,
   });
   await fs.writeFile(unitPath, unit, "utf8");
+  await reconcileSystemdExecStartDropIns({ unitPath });
   return { unitPath, backedUp };
+}
+
+function isOpenClawServiceExecStart(value: string): boolean {
+  const programArguments = parseSystemdExecStart(value.trim());
+  if (programArguments.length === 0) {
+    return false;
+  }
+  const openClawIndex = programArguments.findIndex(
+    (arg) =>
+      /(^|[/\\])openclaw(\.mjs)?$/.test(arg) ||
+      /[/\\]node_modules[/\\]openclaw[/\\]/.test(arg) ||
+      /[/\\]openclaw[/\\]dist[/\\](index|entry)\.js$/.test(arg) ||
+      /[/\\]openclaw@[^/\\]+[/\\]node_modules[/\\]openclaw[/\\]/.test(arg),
+  );
+  if (openClawIndex < 0) {
+    return false;
+  }
+  const subcommand = programArguments[openClawIndex + 1];
+  return subcommand === "gateway" || subcommand === "node";
+}
+
+function stripOpenClawExecStartOverrideDropIn(content: string): {
+  changed: boolean;
+  text: string;
+} {
+  const lines = content.split("\n");
+  const output: string[] = [];
+  let changed = false;
+  let pendingExecStartReset: string | null = null;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === "ExecStart=") {
+      if (pendingExecStartReset !== null) {
+        output.push(pendingExecStartReset);
+      }
+      pendingExecStartReset = line;
+      continue;
+    }
+
+    if (trimmed.startsWith("ExecStart=")) {
+      const value = trimmed.slice("ExecStart=".length);
+      if (isOpenClawServiceExecStart(value)) {
+        changed = true;
+        pendingExecStartReset = null;
+        continue;
+      }
+    }
+
+    if (pendingExecStartReset !== null) {
+      output.push(pendingExecStartReset);
+      pendingExecStartReset = null;
+    }
+    output.push(line);
+  }
+
+  if (pendingExecStartReset !== null) {
+    output.push(pendingExecStartReset);
+  }
+
+  return { changed, text: output.join("\n") };
+}
+
+async function reconcileSystemdExecStartDropIns(params: { unitPath: string }): Promise<void> {
+  const dropInDir = `${params.unitPath}.d`;
+  let entries: string[] = [];
+  try {
+    entries = await fs.readdir(dropInDir);
+  } catch {
+    return;
+  }
+
+  await Promise.all(
+    entries
+      .filter((entry) => entry.endsWith(".conf"))
+      .map(async (entry) => {
+        const filePath = path.join(dropInDir, entry);
+        let content = "";
+        try {
+          content = await fs.readFile(filePath, "utf8");
+        } catch {
+          return;
+        }
+        const stripped = stripOpenClawExecStartOverrideDropIn(content);
+        if (!stripped.changed) {
+          return;
+        }
+        await fs.writeFile(filePath, stripped.text, "utf8");
+      }),
+  );
 }
 
 async function writeSystemdGatewayEnvironmentFile(params: {
