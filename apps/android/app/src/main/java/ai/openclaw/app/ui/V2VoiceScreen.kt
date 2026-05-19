@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.VoiceCaptureMode
+import ai.openclaw.app.ui.design.ClawAvatarMark
 import ai.openclaw.app.ui.design.ClawIconButton
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawPanel
@@ -44,6 +45,7 @@ import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PhoneDisabled
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -58,11 +60,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 
 @Composable
@@ -117,11 +121,10 @@ fun V2VoiceScreen(viewModel: MainViewModel) {
         .fillMaxSize()
         .imePadding()
         .padding(horizontal = 20.dp, vertical = 12.dp),
-    verticalArrangement = Arrangement.spacedBy(14.dp),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     V2VoiceHeader(
-      voiceActive = voiceActive,
-      statusText = activeStatus,
+      statusText = if (voiceActive) activeStatus else "Your voice command center.",
       speakerEnabled = speakerEnabled,
       onToggleSpeaker = { viewModel.setSpeakerEnabled(!speakerEnabled) },
     )
@@ -177,35 +180,59 @@ fun V2VoiceScreen(viewModel: MainViewModel) {
 
 @Composable
 private fun V2VoiceHeader(
-  voiceActive: Boolean,
   statusText: String,
   speakerEnabled: Boolean,
   onToggleSpeaker: () -> Unit,
 ) {
-  Row(
-    modifier = Modifier.fillMaxWidth(),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(12.dp),
-  ) {
-    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Text(text = "Voice", style = ClawTheme.type.title, color = ClawTheme.colors.text)
+  Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
       Text(
-        text = statusText,
-        style = ClawTheme.type.body,
-        color = ClawTheme.colors.textMuted,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
+        text = "O P E N C L A W",
+        style = ClawTheme.type.title.copy(fontSize = 13.2.sp, lineHeight = 17.sp),
+        color = ClawTheme.colors.text,
+        modifier = Modifier.weight(1f),
+      )
+      V2VoicePlainIconButton(icon = Icons.Default.Search, contentDescription = "Search voice", onClick = {})
+      ClawAvatarMark(text = "OC")
+    }
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(text = "Voice", style = ClawTheme.type.display, color = ClawTheme.colors.text)
+        Text(
+          text = statusText,
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.textMuted,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      ClawIconButton(
+        icon = if (speakerEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+        contentDescription = if (speakerEnabled) "Mute speaker" else "Unmute speaker",
+        onClick = onToggleSpeaker,
       )
     }
-    ClawStatusPill(
-      text = if (voiceActive) "Live" else "Ready",
-      status = if (voiceActive) ClawStatus.Success else ClawStatus.Neutral,
-    )
-    ClawIconButton(
-      icon = if (speakerEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
-      contentDescription = if (speakerEnabled) "Mute speaker" else "Unmute speaker",
-      onClick = onToggleSpeaker,
-    )
+  }
+}
+
+@Composable
+private fun V2VoicePlainIconButton(
+  icon: androidx.compose.ui.graphics.vector.ImageVector,
+  contentDescription: String,
+  onClick: () -> Unit,
+) {
+  Surface(onClick = onClick, modifier = Modifier.size(34.dp), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+    Box(contentAlignment = Alignment.Center) {
+      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(22.dp))
+    }
   }
 }
 
@@ -220,7 +247,7 @@ private fun V2VoiceHero(
   onStartTalk: () -> Unit,
   onStartDictation: () -> Unit,
 ) {
-  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
     V2VoiceOrb(
       active = micEnabled || talkModeEnabled,
       listening = talkModeListening || voiceCaptureMode == VoiceCaptureMode.ManualMic,
@@ -266,7 +293,7 @@ private fun V2VoiceHero(
       }
     }
 
-    ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
+    ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
       V2VoiceModeRow(
         title = if (talkModeEnabled) "End Talk" else "Realtime Talk",
         subtitle = if (talkModeEnabled) "Conversation is live" else "Natural conversation in real time",
@@ -324,13 +351,13 @@ private fun V2VoiceOrb(
   speaking: Boolean,
 ) {
   Surface(
-    modifier = Modifier.size(136.dp),
+    modifier = Modifier.size(126.dp),
     shape = CircleShape,
     color = if (active) ClawTheme.colors.surfacePressed else ClawTheme.colors.surface,
     border = BorderStroke(1.dp, if (active) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+      Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Icon(
           imageVector =
             when {
@@ -339,7 +366,7 @@ private fun V2VoiceOrb(
               else -> Icons.Default.Mic
             },
           contentDescription = null,
-          modifier = Modifier.size(42.dp),
+          modifier = Modifier.size(38.dp),
           tint = ClawTheme.colors.text,
         )
         V2Waveform(active = active)
@@ -453,11 +480,11 @@ private fun V2VoiceThinkingCard() {
 @Composable
 private fun V2VoicePermissionPanel(onRequestPermission: () -> Unit) {
   ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawStatusPill(text = "Permission needed", status = ClawStatus.Warning)
-      Text(text = "Microphone access is needed for Talk and Dictation.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = "Microphone access is needed.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(
-        text = "OpenClaw only listens when you start a voice mode.",
+        text = "OpenClaw only listens when you start Talk or Dictation.",
         style = ClawTheme.type.body,
         color = ClawTheme.colors.textMuted,
       )
