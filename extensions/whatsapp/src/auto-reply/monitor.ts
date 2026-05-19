@@ -180,6 +180,20 @@ async function clearTerminalWebAuthState(params: {
 }
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 5 * 60 * 1000;
 
+export function formatInboundListenerLog(groups: Record<string, unknown> | undefined): string {
+  const keys = groups ? Object.keys(groups) : [];
+  const hasWildcard = keys.includes("*");
+  const explicit = keys.filter((k) => k !== "*").length;
+  if (hasWildcard) {
+    return "Listening for WhatsApp inbound messages (DM + all groups).";
+  }
+  if (explicit === 0) {
+    return "Listening for WhatsApp inbound messages (DM only).";
+  }
+  const noun = explicit === 1 ? "group" : "groups";
+  return `Listening for WhatsApp inbound messages (DM + ${explicit} ${noun}).`;
+}
+
 export async function monitorWebChannel(
   verbose: boolean,
   listenerFactory: typeof attachWebInboxToSocket | undefined = attachWebInboxToSocket,
@@ -541,7 +555,7 @@ export async function monitorWebChannel(
         );
       });
 
-      whatsappLog.info("Listening for personal WhatsApp inbound messages.");
+      whatsappLog.info(formatInboundListenerLog(account.groups));
       if (process.stdout.isTTY || process.stderr.isTTY) {
         whatsappLog.raw("Ctrl+C to stop.");
       }
