@@ -324,20 +324,24 @@ const createShouldEmitVerboseProgress = (params: {
   storePath?: string;
   fallbackLevel: string;
 }) => {
-  return () => {
+  const resolveLevel = () => {
     if (params.sessionKey && params.storePath) {
       try {
         const store = loadSessionStore(params.storePath);
         const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
         const currentLevel = normalizeVerboseLevel(entry?.verboseLevel ?? "");
         if (currentLevel) {
-          return currentLevel !== "off";
+          return currentLevel;
         }
       } catch {
         // Ignore transient store read failures and fall back to the current dispatch snapshot.
       }
     }
-    return params.fallbackLevel !== "off";
+    return normalizeVerboseLevel(params.fallbackLevel) ?? "off";
+  };
+  return {
+    shouldEmit: () => resolveLevel() !== "off",
+    shouldEmitFull: () => resolveLevel() === "full",
   };
 };
 
@@ -689,7 +693,7 @@ export async function dispatchReplyFromConfig(
     : initialSessionStoreEntry;
   const sessionAgentId = resolveSessionAgentId({ sessionKey: acpDispatchSessionKey, config: cfg });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
-  const shouldEmitVerboseProgress = createShouldEmitVerboseProgress({
+  const verboseProgress = createShouldEmitVerboseProgress({
     sessionKey: acpDispatchSessionKey,
     storePath: sessionStoreEntry.storePath,
     fallbackLevel:
@@ -700,6 +704,8 @@ export async function dispatchReplyFromConfig(
           "",
       ) ?? "off",
   });
+  const shouldEmitVerboseProgress = verboseProgress.shouldEmit;
+  const shouldEmitFullVerboseProgress = verboseProgress.shouldEmitFull;
   const replyRoute = resolveEffectiveReplyRoute({ ctx, entry: sessionStoreEntry.entry });
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
@@ -1252,7 +1258,7 @@ export async function dispatchReplyFromConfig(
     const shouldSuppressMessageToolOnlyTextErrorProgress = (payload: ReplyPayload) => {
       if (
         sourceReplyDeliveryMode !== "message_tool_only" ||
-        !suppressDefaultToolProgressMessages ||
+        shouldEmitFullVerboseProgress() ||
         payload.isError !== true
       ) {
         return false;
