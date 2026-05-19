@@ -38,6 +38,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Microsoft Teams](/channels/msteams) - Bot Framework; enterprise support (bundled plugin).
 - [Nextcloud Talk](/channels/nextcloud-talk) - Self-hosted chat via Nextcloud Talk (bundled plugin).
 - [Nostr](/channels/nostr) - Decentralized DMs via NIP-04 (bundled plugin).
+- [Pinclaw](/channels/pinclaw) - Hardware voice interface via BLE wearable and iOS app (community plugin via ClawHub).
 - [QQ Bot](/channels/qqbot) - QQ Bot API; private chat, group chat, and rich media (bundled plugin).
 - [Signal](/channels/signal) - signal-cli; privacy-focused.
 - [Slack](/channels/slack) - Bolt SDK; workspace apps.
