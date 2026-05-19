@@ -146,7 +146,7 @@ describe("channelsLogsCommand", () => {
     // made of 10_000 lines each exactly 200 bytes (199 payload + "\n"), so the
     // read window starts at byte offset 1_000_000 which is exactly on a line
     // boundary (byte 999_999 is the trailing "\n" of the previous line).
-    // Without the prefix-aware skip, readTailLines drops line 5000 silently.
+    // Without checking the byte before the window, readTailLines drops line 5000 silently.
     const LINE_SIZE = 200;
     const TOTAL_LINES = 10_000;
     const FIRST_INDEX = 5000; // first line of the tail window after alignment
