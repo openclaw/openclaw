@@ -140,6 +140,37 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeTranscriptDeltasAccumulateVoiceConversation() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "assistant", text = "The"))
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "assistant", text = " answer"))
+
+    val entry = manager.conversation.value.single()
+    assertEquals("The answer", entry.text)
+    assertTrue(entry.isStreaming)
+  }
+
+  @Test
+  fun realtimeFinalTranscriptCanCompleteDeltaText() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "assistant", text = "The"))
+    manager.handleGatewayEvent(
+      "talk.event",
+      realtimeTranscriptPayload(role = "assistant", text = " answer", final = true),
+    )
+
+    val entry = manager.conversation.value.single()
+    assertEquals("The answer", entry.text)
+    assertFalse(entry.isStreaming)
+  }
+
+  @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun realtimeStartWithoutGatewayTurnsTalkOff() =
     runTest {
