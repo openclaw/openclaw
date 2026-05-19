@@ -49,6 +49,10 @@ describe("appendProviderCatalogRows", () => {
           api: "openai-codex-responses",
           baseUrl: "https://chatgpt.com/backend-api",
           input: ["text"],
+          reasoning: false,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 4096,
         },
       ],
       context: {
@@ -95,6 +99,10 @@ describe("appendProviderCatalogRows", () => {
           api: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
           input: ["text", "image"],
+          reasoning: false,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 4096,
         },
       ],
       context: {
@@ -140,6 +148,10 @@ describe("appendProviderCatalogRows", () => {
           api: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
           input: ["text", "image"],
+          reasoning: false,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 4096,
         },
       ],
       context: {
