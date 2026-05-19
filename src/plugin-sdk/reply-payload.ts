@@ -1,16 +1,30 @@
 import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
 import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
+export type { ReplyPayloadTtsSupplement } from "../auto-reply/reply-payload.js";
+export {
+  buildTtsSupplementMediaPayload,
+  getReplyPayloadTtsSupplement,
+  isReplyPayloadTtsSupplement,
+  markReplyPayloadAsTtsSupplement,
+} from "../auto-reply/reply-payload.js";
 
 export type OutboundReplyPayload = {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string;
+  presentation?: InternalReplyPayload["presentation"];
+  /**
+   * @deprecated Use presentation. Runtime support remains for legacy producers.
+   */
+  interactive?: InternalReplyPayload["interactive"];
+  channelData?: InternalReplyPayload["channelData"];
   sensitiveMedia?: boolean;
   replyToId?: string;
 };
@@ -37,7 +51,11 @@ type SendPayloadAdapter = Pick<
   "sendMedia" | "sendText" | "chunker" | "textChunkLimit"
 >;
 
-const REASONING_PREFIX = "reasoning:";
+const REASONING_PREFIX_RE = /^(?:reasoning:|thinking\.{0,3}(?=\s*(?:>\s*)?_))/u;
+
+function readObjectValue(value: unknown): object | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
 
 function trimLeadingMarkdownQuoteMarkers(text: string): string {
   let candidate = text.trimStart();
@@ -56,12 +74,11 @@ export function isReasoningReplyPayload(payload: ReasoningReplyPayload): boolean
     return false;
   }
   const normalized = normalizeLowercaseStringOrEmpty(text.trimStart());
-  if (normalized.startsWith(REASONING_PREFIX)) {
+  if (REASONING_PREFIX_RE.test(normalized)) {
     return true;
   }
-  return normalizeLowercaseStringOrEmpty(trimLeadingMarkdownQuoteMarkers(text)).startsWith(
-    REASONING_PREFIX,
-  );
+  const unquoted = normalizeLowercaseStringOrEmpty(trimLeadingMarkdownQuoteMarkers(text));
+  return REASONING_PREFIX_RE.test(unquoted);
 }
 
 /** Extract the supported outbound reply fields from loose tool or agent payload objects. */
@@ -75,12 +92,20 @@ export function normalizeOutboundReplyPayload(
       )
     : undefined;
   const mediaUrl = readStringValue(payload.mediaUrl);
+  const presentation = readObjectValue(
+    payload.presentation,
+  ) as OutboundReplyPayload["presentation"];
+  const interactive = readObjectValue(payload.interactive) as OutboundReplyPayload["interactive"];
+  const channelData = readObjectValue(payload.channelData) as OutboundReplyPayload["channelData"];
   const sensitiveMedia = payload.sensitiveMedia === true ? true : undefined;
   const replyToId = readStringValue(payload.replyToId);
   return {
     text,
     mediaUrls,
     mediaUrl,
+    presentation,
+    interactive,
+    channelData,
     sensitiveMedia,
     replyToId,
   };
@@ -134,12 +159,19 @@ export function hasOutboundText(payload: { text?: string }, options?: { trim?: b
   return Boolean(text);
 }
 
-/** Check whether an outbound payload includes any sendable text or media. */
+/** Check whether an outbound payload includes any sendable text, media, or rich reply content. */
 export function hasOutboundReplyContent(
-  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+  payload: {
+    text?: string;
+    mediaUrls?: string[];
+    mediaUrl?: string;
+    presentation?: unknown;
+    interactive?: unknown;
+    channelData?: unknown;
+  },
   options?: { trimText?: boolean },
 ): boolean {
-  return hasOutboundText(payload, { trim: options?.trimText }) || hasOutboundMedia(payload);
+  return hasReplyPayloadContent(payload, { trimText: options?.trimText });
 }
 
 /** Normalize reply payload text/media into a trimmed, sendable shape for delivery paths. */

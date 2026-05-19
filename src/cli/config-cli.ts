@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { Command } from "commander";
 import JSON5 from "json5";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
@@ -23,7 +24,7 @@ import {
 } from "../config/types.secrets.js";
 import {
   collectUnsupportedSecretRefPolicyIssues,
-  validateConfigObjectRaw,
+  validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
@@ -76,6 +77,7 @@ type ConfigSetOperation = {
   value: unknown;
   mutation?: "set" | "merge" | "replace" | "delete";
   schemaValidated?: boolean;
+  touchesAllSecretRefs?: boolean;
   touchedSecretTargetPath?: string;
   touchedProviderAlias?: string;
   assignedRef?: SecretRef;
@@ -87,6 +89,11 @@ type ConfigPatchOptions = {
   allowExec?: boolean | undefined;
   json?: boolean | undefined;
   replacePath?: string[] | undefined;
+};
+type ConfigUnsetOptions = {
+  dryRun?: boolean | undefined;
+  allowExec?: boolean | undefined;
+  json?: boolean | undefined;
 };
 type ConfigMutationOptions = {
   dryRun?: boolean | undefined;
@@ -116,30 +123,136 @@ function normalizeAgentDefaultModelValueForConfigMutation(value: unknown): unkno
   return next;
 }
 
+function normalizeAgentListModelRefsForConfigMutation(value: unknown): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+
+  let mutated = false;
+  const next = value.map((agent) => {
+    if (!isPlainRecord(agent)) {
+      return agent;
+    }
+
+    let nextAgent = agent;
+    if (Object.prototype.hasOwnProperty.call(agent, "model")) {
+      const model = normalizeAgentDefaultModelValueForConfigMutation(agent.model);
+      if (model !== agent.model) {
+        nextAgent = { ...nextAgent, model };
+        mutated = true;
+      }
+    }
+    if (isPlainRecord(agent.models)) {
+      const models = normalizeAgentModelMapForConfig(agent.models);
+      if (models !== agent.models) {
+        nextAgent = { ...nextAgent, models };
+        mutated = true;
+      }
+    }
+    return nextAgent;
+  });
+
+  return mutated ? next : value;
+}
+
+function normalizeProviderCatalogModelsForConfigMutation(
+  provider: string,
+  models: unknown,
+): unknown {
+  if (!Array.isArray(models)) {
+    return models;
+  }
+
+  let mutated = false;
+  const next = models.map((model) => {
+    if (!isPlainRecord(model) || typeof model.id !== "string") {
+      return model;
+    }
+    const trimmed = model.id.trim();
+    if (!trimmed) {
+      return model;
+    }
+    const id = normalizeConfiguredProviderCatalogModelId(provider, trimmed);
+    if (id === model.id) {
+      return model;
+    }
+    mutated = true;
+    return { ...model, id };
+  });
+
+  return mutated ? next : models;
+}
+
+function normalizeModelProviderRefsForConfigMutation(
+  providers: NonNullable<OpenClawConfig["models"]>["providers"] | undefined,
+): unknown {
+  if (!isPlainRecord(providers)) {
+    return providers;
+  }
+
+  let mutated = false;
+  const nextProviders: Record<string, unknown> = { ...providers };
+  for (const [provider, providerConfig] of Object.entries(providers)) {
+    if (!isPlainRecord(providerConfig)) {
+      continue;
+    }
+    const models = normalizeProviderCatalogModelsForConfigMutation(provider, providerConfig.models);
+    if (models === providerConfig.models) {
+      continue;
+    }
+    nextProviders[provider] = { ...providerConfig, models };
+    mutated = true;
+  }
+
+  return mutated ? nextProviders : providers;
+}
+
 function normalizeConfigMutationModelRefs(cfg: OpenClawConfig): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
-  if (!defaults) {
-    return cfg;
-  }
+  const agentList = cfg.agents?.list;
+  const providers = cfg.models?.providers;
+  const normalizedAgentList = normalizeAgentListModelRefsForConfigMutation(agentList);
+  const normalizedProviders = normalizeModelProviderRefsForConfigMutation(providers) as
+    | typeof providers
+    | undefined;
 
   return {
     ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        ...(defaults.model !== undefined
-          ? {
-              model: normalizeAgentDefaultModelValueForConfigMutation(
-                defaults.model,
-              ) as typeof defaults.model,
-            }
-          : undefined),
-        ...(defaults.models !== undefined
-          ? { models: normalizeAgentModelMapForConfig(defaults.models) }
-          : undefined),
-      },
-    },
+    ...(defaults || normalizedAgentList !== agentList
+      ? {
+          agents: {
+            ...cfg.agents,
+            ...(defaults
+              ? {
+                  defaults: {
+                    ...defaults,
+                    ...(defaults.model !== undefined
+                      ? {
+                          model: normalizeAgentDefaultModelValueForConfigMutation(
+                            defaults.model,
+                          ) as typeof defaults.model,
+                        }
+                      : undefined),
+                    ...(defaults.models !== undefined
+                      ? { models: normalizeAgentModelMapForConfig(defaults.models) }
+                      : undefined),
+                  },
+                }
+              : undefined),
+            ...(normalizedAgentList !== agentList
+              ? { list: normalizedAgentList as typeof agentList }
+              : undefined),
+          },
+        }
+      : undefined),
+    ...(normalizedProviders !== providers
+      ? {
+          models: {
+            ...cfg.models,
+            providers: normalizedProviders,
+          },
+        }
+      : undefined),
   };
 }
 
@@ -346,12 +459,19 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
   return { found: true, value: current };
 }
 
-function setAtPath(root: Record<string, unknown>, path: PathSegment[], value: unknown): void {
+type SetAtPathOptions = { numericObjectKeys?: boolean };
+
+function setAtPath(
+  root: Record<string, unknown>,
+  path: PathSegment[],
+  value: unknown,
+  options?: SetAtPathOptions,
+): void {
   let current: unknown = root;
   for (let i = 0; i < path.length - 1; i += 1) {
     const segment = path[i];
     const next = path[i + 1];
-    const nextIsIndex = Boolean(next && isIndexSegment(next));
+    const nextIsIndex = !options?.numericObjectKeys && Boolean(next && isIndexSegment(next));
     if (Array.isArray(current)) {
       if (!isIndexSegment(segment)) {
         throw new Error(`Expected numeric index for array segment "${segment}"`);
@@ -447,13 +567,18 @@ function mergeConfigValue(existing: unknown, patch: unknown, path: PathSegment[]
   throw new Error(`Cannot merge ${toDotPath(path)}; use --replace to replace intentionally.`);
 }
 
-function mergeAtPath(root: Record<string, unknown>, path: PathSegment[], value: unknown): void {
+function mergeAtPath(
+  root: Record<string, unknown>,
+  path: PathSegment[],
+  value: unknown,
+  options?: SetAtPathOptions,
+): void {
   const existing = getAtPath(root, path);
   if (!existing.found) {
-    setAtPath(root, path, value);
+    setAtPath(root, path, value, options);
     return;
   }
-  setAtPath(root, path, mergeConfigValue(existing.value, value, path));
+  setAtPath(root, path, mergeConfigValue(existing.value, value, path), options);
 }
 
 function isProviderModelListPath(path: PathSegment[]): boolean {
@@ -910,6 +1035,20 @@ function parseProviderAliasFromTargetPath(path: PathSegment[]): string | null {
   return null;
 }
 
+function touchesSecretProviderCollection(path: PathSegment[]): boolean {
+  return (
+    (path.length === 1 && path[0] === "secrets") ||
+    (path.length === 2 && path[0] === "secrets" && path[1] === "providers")
+  );
+}
+
+function touchesSecretDefaults(path: PathSegment[]): boolean {
+  return (
+    (path.length === 1 && path[0] === "secrets") ||
+    (path.length === 2 && path[0] === "secrets" && path[1] === "defaults")
+  );
+}
+
 function buildValueAssignmentOperation(params: {
   requestedPath: PathSegment[];
   value: unknown;
@@ -1031,6 +1170,22 @@ function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {
     setPath: path,
     value: undefined,
     mutation: "delete",
+  };
+}
+
+function buildUnsetOperation(path: PathSegment[]): ConfigSetOperation {
+  const resolved = resolveConfigSecretTargetByPath(path);
+  const providerAlias = parseProviderAliasFromTargetPath(path);
+  const touchesAllSecretRefs = touchesSecretProviderCollection(path) || touchesSecretDefaults(path);
+  return {
+    inputMode: "unset",
+    requestedPath: path,
+    setPath: path,
+    value: undefined,
+    mutation: "delete",
+    ...(touchesAllSecretRefs ? { touchesAllSecretRefs: true } : {}),
+    ...(resolved ? { touchedSecretTargetPath: toDotPath(resolved.pathSegments) } : {}),
+    ...(providerAlias ? { touchedProviderAlias: providerAlias } : {}),
   };
 }
 
@@ -1238,6 +1393,7 @@ function collectDryRunRefs(params: {
   const refsByKey = new Map<string, SecretRef>();
   const targetPaths = new Set<string>();
   const providerAliases = new Set<string>();
+  let includeAllDiscoveredRefs = false;
 
   for (const operation of params.operations) {
     if (operation.assignedRef) {
@@ -1252,9 +1408,10 @@ function collectDryRunRefs(params: {
     if (operation.touchedProviderAlias) {
       providerAliases.add(operation.touchedProviderAlias);
     }
+    includeAllDiscoveredRefs ||= operation.touchesAllSecretRefs === true;
   }
 
-  if (targetPaths.size === 0 && providerAliases.size === 0) {
+  if (!includeAllDiscoveredRefs && targetPaths.size === 0 && providerAliases.size === 0) {
     return [...refsByKey.values()];
   }
 
@@ -1268,7 +1425,7 @@ function collectDryRunRefs(params: {
     if (!ref) {
       continue;
     }
-    if (targetPaths.has(target.path) || providerAliases.has(ref.provider)) {
+    if (includeAllDiscoveredRefs || targetPaths.has(target.path) || providerAliases.has(ref.provider)) {
       refsByKey.set(secretRefKey(ref), ref);
     }
   }
@@ -1472,14 +1629,8 @@ function formatAutoManagedMetaError(paths: readonly PathSegment[][]): string {
   ].join("\n");
 }
 
-function collectDryRunSchemaErrors(params: {
-  config: OpenClawConfig;
-  operations: ReadonlyArray<ConfigSetOperation>;
-}): ConfigSetDryRunError[] {
-  const validated = validateConfigObjectRaw(params.config, {
-    touchedPaths: params.operations.map((operation) => operation.setPath),
-    validateBundledChannels: true,
-  });
+function collectDryRunSchemaErrors(params: { config: OpenClawConfig }): ConfigSetDryRunError[] {
+  const validated = validateConfigObjectRawWithPlugins(params.config);
   if (validated.ok) {
     return [];
   }
@@ -1511,9 +1662,13 @@ function formatDryRunFailureMessage(params: {
   skippedExecRefs: number;
 }): string {
   const { errors, skippedExecRefs } = params;
+  const missingPathErrors = errors.filter((error) => error.kind === "missing-path");
   const schemaErrors = errors.filter((error) => error.kind === "schema");
   const resolveErrors = errors.filter((error) => error.kind === "resolvability");
   const lines: string[] = [];
+  if (missingPathErrors.length > 0) {
+    lines.push(...missingPathErrors.map((error) => error.message));
+  }
   if (schemaErrors.length > 0) {
     lines.push("Dry run failed: config schema validation failed.");
     lines.push(...schemaErrors.map((error) => `- ${error.message}`));
@@ -1574,7 +1729,9 @@ async function runConfigOperations(params: {
     }
     explicitSetPaths.push(operation.setPath);
     if (operation.mutation === "merge" || (options.merge && operation.mutation !== "replace")) {
-      mergeAtPath(next, operation.setPath, operation.value);
+      mergeAtPath(next, operation.setPath, operation.value, {
+        numericObjectKeys: params.successMode === "patch",
+      });
     } else {
       assertNonDestructiveReplacement({
         root: next,
@@ -1582,7 +1739,9 @@ async function runConfigOperations(params: {
         value: operation.value,
         allowReplace: options.replace || operation.mutation === "replace",
       });
-      setAtPath(next, operation.setPath, operation.value);
+      setAtPath(next, operation.setPath, operation.value, {
+        numericObjectKeys: params.successMode === "patch",
+      });
     }
   }
   const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({
@@ -1599,11 +1758,14 @@ async function runConfigOperations(params: {
   if (options.dryRun) {
     const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
     const hasBuilderMode = operations.some((operation) => operation.inputMode === "builder");
+    const hasUnsetMode = operations.some((operation) => operation.inputMode === "unset");
     const requiresFullSchemaValidation = operations.some(
-      (operation) => operation.inputMode === "json" && operation.schemaValidated !== true,
+      (operation) =>
+        operation.inputMode === "unset" ||
+        (operation.inputMode === "json" && operation.schemaValidated !== true),
     );
     const refs =
-      hasJsonMode || hasBuilderMode
+      hasJsonMode || hasBuilderMode || hasUnsetMode
         ? collectDryRunRefs({
             config: nextConfig,
             operations,
@@ -1626,11 +1788,10 @@ async function runConfigOperations(params: {
       errors.push(
         ...collectDryRunSchemaErrors({
           config: nextConfig,
-          operations,
         }),
       );
     }
-    if (hasJsonMode || hasBuilderMode) {
+    if (hasJsonMode || hasBuilderMode || hasUnsetMode) {
       errors.push(
         ...collectDryRunStaticErrorsForSkippedExecRefs({
           refs: selectedDryRunRefs.skippedExecRefs,
@@ -1652,9 +1813,10 @@ async function runConfigOperations(params: {
       inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
       checks: {
         schema: requiresFullSchemaValidation || policyIssueLines.length > 0,
-        resolvability: hasJsonMode || hasBuilderMode,
+        resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode,
         resolvabilityComplete:
-          (hasJsonMode || hasBuilderMode) && selectedDryRunRefs.skippedExecRefs.length === 0,
+          (hasJsonMode || hasBuilderMode || hasUnsetMode) &&
+          selectedDryRunRefs.skippedExecRefs.length === 0,
       },
       refsChecked: selectedDryRunRefs.refsToResolve.length,
       skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
@@ -1870,9 +2032,20 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
   }
 }
 
-export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv }) {
+export async function runConfigUnset(opts: {
+  path: string;
+  cliOptions?: ConfigUnsetOptions;
+  runtime?: RuntimeEnv;
+}) {
   const runtime = opts.runtime ?? defaultRuntime;
+  const cliOptions = opts.cliOptions ?? {};
   try {
+    if (cliOptions.allowExec && !cliOptions.dryRun) {
+      throw new Error("--allow-exec can only be used with --dry-run.");
+    }
+    if (cliOptions.json && !cliOptions.dryRun) {
+      throw new Error("--json can only be used with --dry-run.");
+    }
     const parsedPath = parseRequiredPath(opts.path);
     const autoManagedUnsetTargets = findAutoManagedMetaUnsetTargets(parsedPath);
     if (autoManagedUnsetTargets.length > 0) {
@@ -1885,12 +2058,42 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
     const unsetResult = unsetAtPath(next, parsedPath);
     if (!unsetResult.removed) {
+      if (cliOptions.dryRun && cliOptions.json) {
+        throw new ConfigSetDryRunValidationError({
+          ok: false,
+          operations: 1,
+          configPath: shortenHomePath(snapshot.path),
+          inputModes: ["unset"],
+          checks: {
+            schema: false,
+            resolvability: false,
+            resolvabilityComplete: false,
+          },
+          refsChecked: 0,
+          skippedExecRefs: 0,
+          errors: [
+            {
+              kind: "missing-path",
+              message: `Config path not found: ${opts.path}. Nothing was changed.`,
+            },
+          ],
+        });
+      }
       runtime.error(
         danger(
           `Config path not found: ${opts.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`,
         ),
       );
       runtime.exit(1);
+      return;
+    }
+    if (cliOptions.dryRun) {
+      await runConfigOperations({
+        runtime,
+        operations: [buildUnsetOperation(parsedPath)],
+        options: cliOptions,
+        successMode: "set",
+      });
       return;
     }
     await replaceConfigFile({
@@ -1902,8 +2105,7 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
     });
     runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
   } catch (err) {
-    runtime.error(danger(String(err)));
-    runtime.exit(1);
+    handleConfigMutationError({ err, runtime, options: cliOptions });
   }
 }
 
@@ -2142,8 +2344,11 @@ export function registerConfigCli(program: Command) {
     .command("unset")
     .description("Remove a config value by dot path")
     .argument("<path>", "Config path (dot or bracket notation)")
-    .action(async (path: string) => {
-      await runConfigUnset({ path });
+    .option("--dry-run", "validate the removal without writing the config file")
+    .option("--allow-exec", "allow exec SecretRef providers during --dry-run")
+    .option("--json", "print dry-run result as JSON")
+    .action(async (path: string, options: ConfigUnsetOptions) => {
+      await runConfigUnset({ path, cliOptions: options });
     });
 
   cmd

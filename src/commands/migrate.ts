@@ -1,4 +1,4 @@
-import { cancel, isCancel } from "@clack/prompts";
+import { cancel, isCancel, log } from "@clack/prompts";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { promptYesNo } from "../cli/prompt.js";
@@ -13,7 +13,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { runMigrationApply } from "./migrate/apply.js";
-import { formatMigrationPlan } from "./migrate/output.js";
+import { formatMigrationPreview } from "./migrate/output.js";
 import { createMigrationPlan, resolveMigrationProvider } from "./migrate/providers.js";
 import {
   applyMigrationPluginSelection,
@@ -30,7 +30,7 @@ import {
   getMigrationSkillSelectionValue,
   getSelectableMigrationPluginItems,
   getSelectableMigrationSkillItems,
-  MIGRATION_SELECTION_SKIP,
+  MIGRATION_SELECTION_ACCEPT,
   MIGRATION_SELECTION_TOGGLE_ALL_OFF,
   MIGRATION_SELECTION_TOGGLE_ALL_ON,
   resolveInteractiveMigrationPluginSelection,
@@ -45,45 +45,10 @@ import type {
 
 export type { MigrateApplyOptions, MigrateCommonOptions, MigrateDefaultOptions };
 
-const CODEX_UNVERIFIED_APP_BACKED_PLUGIN_WARNING =
-  "Codex app-backed plugins were planned without source app accessibility verification.";
-
-function isPlannedUnverifiedCodexAppPlugin(item: MigrationPlan["items"][number]): boolean {
-  return (
-    item.kind === "plugin" &&
-    item.action === "install" &&
-    item.status === "planned" &&
-    item.details?.sourceAppVerification === "not_run"
-  );
-}
-
-function filterSelectionScopedWarnings(
-  plan: MigrationPlan,
-  opts: MigrateCommonOptions,
-): MigrationPlan {
-  if (
-    opts.plugins === undefined ||
-    plan.providerId !== "codex" ||
-    !plan.warnings?.some((warning) =>
-      warning.includes(CODEX_UNVERIFIED_APP_BACKED_PLUGIN_WARNING),
-    ) ||
-    plan.items.some(isPlannedUnverifiedCodexAppPlugin)
-  ) {
-    return plan;
-  }
-  const warnings = plan.warnings.filter(
-    (warning) => !warning.includes(CODEX_UNVERIFIED_APP_BACKED_PLUGIN_WARNING),
-  );
-  return {
-    ...plan,
-    ...(warnings.length > 0 ? { warnings } : { warnings: undefined }),
-  };
-}
-
 function selectMigrationItems(plan: MigrationPlan, opts: MigrateCommonOptions): MigrationPlan {
-  return filterSelectionScopedWarnings(
-    applyMigrationPluginSelection(applyMigrationSkillSelection(plan, opts.skills), opts.plugins),
-    opts,
+  return applyMigrationPluginSelection(
+    applyMigrationSkillSelection(plan, opts.skills),
+    opts.plugins,
   );
 }
 
@@ -135,16 +100,9 @@ async function promptCodexMigrationSkillSelection(
     message: stylePromptMessage("Select Codex skills to migrate into this agent"),
     options: [
       {
-        value: MIGRATION_SELECTION_SKIP,
-        label: "Skip for now",
-      },
-      {
-        value: MIGRATION_SELECTION_TOGGLE_ALL_ON,
-        label: "Toggle all on",
-      },
-      {
-        value: MIGRATION_SELECTION_TOGGLE_ALL_OFF,
-        label: "Toggle all off",
+        value: MIGRATION_SELECTION_ACCEPT,
+        label: "Accept recommended",
+        hint: "Migrate every recommended skill",
       },
       ...skillItems.map((item) => {
         const hint = formatMigrationSkillSelectionHint(item);
@@ -154,10 +112,19 @@ async function promptCodexMigrationSkillSelection(
           hint: hint === undefined ? undefined : stylePromptHint(hint),
         };
       }),
+      {
+        value: MIGRATION_SELECTION_TOGGLE_ALL_ON,
+        label: "Toggle all on",
+      },
+      {
+        value: MIGRATION_SELECTION_TOGGLE_ALL_OFF,
+        label: "Toggle all off",
+      },
     ],
     initialValues: getDefaultMigrationSkillSelectionValues(skillItems),
     required: false,
     selectableValues: skillItems.map(getMigrationSkillSelectionValue),
+    cursorAt: MIGRATION_SELECTION_ACCEPT,
   });
   if (isCancel(selected)) {
     cancel(stylePromptTitle("Migration cancelled.") ?? "Migration cancelled.");
@@ -165,10 +132,6 @@ async function promptCodexMigrationSkillSelection(
     return null;
   }
   const selection = resolveInteractiveMigrationSkillSelection(skillItems, selected ?? []);
-  if (selection.action === "skip") {
-    runtime.log("Codex skill migration skipped for now.");
-    return applyMigrationSelectedSkillItemIds(plan, new Set());
-  }
   const selectedPlan = applyMigrationSelectedSkillItemIds(plan, selection.selectedItemIds);
   runtime.log(
     `Selected ${selection.selectedItemIds.size} of ${skillItems.length} Codex skills for migration.`,
@@ -198,16 +161,9 @@ async function promptCodexMigrationPluginSelection(
     message: stylePromptMessage("Select native Codex plugins to activate in this agent"),
     options: [
       {
-        value: MIGRATION_SELECTION_SKIP,
-        label: "Skip for now",
-      },
-      {
-        value: MIGRATION_SELECTION_TOGGLE_ALL_ON,
-        label: "Toggle all on",
-      },
-      {
-        value: MIGRATION_SELECTION_TOGGLE_ALL_OFF,
-        label: "Toggle all off",
+        value: MIGRATION_SELECTION_ACCEPT,
+        label: "Accept recommended",
+        hint: "Migrate every recommended plugin",
       },
       ...pluginItems.map((item) => {
         const hint = formatMigrationPluginSelectionHint(item);
@@ -217,10 +173,19 @@ async function promptCodexMigrationPluginSelection(
           hint: hint === undefined ? undefined : stylePromptHint(hint),
         };
       }),
+      {
+        value: MIGRATION_SELECTION_TOGGLE_ALL_ON,
+        label: "Toggle all on",
+      },
+      {
+        value: MIGRATION_SELECTION_TOGGLE_ALL_OFF,
+        label: "Toggle all off",
+      },
     ],
     initialValues: getDefaultMigrationPluginSelectionValues(pluginItems),
     required: false,
     selectableValues: pluginItems.map(getMigrationPluginSelectionValue),
+    cursorAt: MIGRATION_SELECTION_ACCEPT,
   });
   if (isCancel(selected)) {
     cancel(stylePromptTitle("Migration cancelled.") ?? "Migration cancelled.");
@@ -228,10 +193,6 @@ async function promptCodexMigrationPluginSelection(
     return null;
   }
   const selection = resolveInteractiveMigrationPluginSelection(pluginItems, selected ?? []);
-  if (selection.action === "skip") {
-    runtime.log("Codex plugin migration skipped for now.");
-    return null;
-  }
   const selectedPlan = applyMigrationSelectedPluginItemIds(plan, selection.selectedItemIds);
   runtime.log(
     `Selected ${selection.selectedItemIds.size} of ${pluginItems.length} native Codex plugins for activation.`,
@@ -334,8 +295,8 @@ export async function migratePlanCommand(
   const plan = await createMigrationPlanWithProgress(runtime, { ...opts, provider: providerId });
   if (opts.json) {
     writeRuntimeJson(runtime, redactMigrationPlan(plan));
-  } else {
-    runtime.log(formatMigrationPlan(plan).join("\n"));
+  } else if (opts.suppressPlanLog !== true) {
+    log.message(formatMigrationPreview(plan).join("\n"));
   }
   return plan;
 }
@@ -367,7 +328,7 @@ export async function migrateApplyCommand(
       `openclaw migrate apply requires --yes in non-interactive mode. Preview first with ${formatCliCommand("openclaw migrate plan --provider <provider>")}.`,
     );
   }
-  const provider = resolveMigrationProvider(providerId);
+  const provider = resolveMigrationProvider(providerId, opts.configOverride);
   if (!opts.yes) {
     const plan = await migratePlanCommand(runtime, {
       ...opts,

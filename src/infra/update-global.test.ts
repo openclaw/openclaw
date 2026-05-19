@@ -7,6 +7,11 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  withMockedPlatform,
+  withMockedWindowsPlatform,
+  withRestoredMocks,
+} from "../test-utils/vitest-spies.js";
+import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "./package-dist-inventory.js";
@@ -141,6 +146,10 @@ describe("update global helpers", () => {
   it("defaults corepack download prompts off for global install env", async () => {
     const defaultEnv = await createGlobalInstallEnv({});
     expect(defaultEnv?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("0");
+    expect(defaultEnv?.NPM_CONFIG_BEFORE).toBe("");
+    expect(defaultEnv?.npm_config_before).toBe("");
+    expect(defaultEnv?.["npm_config_min-release-age"]).toBe("");
+    expect(defaultEnv?.npm_config_min_release_age).toBe("0");
 
     const explicitEnv = await createGlobalInstallEnv({
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
@@ -149,26 +158,23 @@ describe("update global helpers", () => {
   });
 
   it("uses an absolute POSIX script shell for npm lifecycle scripts during global installs", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const existsSyncSpy = vi
-      .spyOn(fsSync, "existsSync")
-      .mockImplementation((candidate) => candidate === "/bin/sh");
-    try {
-      const env = await createGlobalInstallEnv({
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-        PATH: "/home/peter/.npm-global/bin",
+    await withMockedPlatform("linux", async () => {
+      const existsSyncSpy = vi
+        .spyOn(fsSync, "existsSync")
+        .mockImplementation((candidate) => candidate === "/bin/sh");
+      await withRestoredMocks([existsSyncSpy], async () => {
+        const env = await createGlobalInstallEnv({
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+          PATH: "/home/peter/.npm-global/bin",
+        });
+        expect(env?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("1");
+        expect(env?.NPM_CONFIG_SCRIPT_SHELL).toBe("/bin/sh");
       });
-      expect(env?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("1");
-      expect(env?.NPM_CONFIG_SCRIPT_SHELL).toBe("/bin/sh");
-    } finally {
-      existsSyncSpy.mockRestore();
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("preserves explicit npm script shell config for global installs", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    try {
+    await withMockedPlatform("linux", async () => {
       const upperEnv = await createGlobalInstallEnv({
         COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
         NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
@@ -180,14 +186,11 @@ describe("update global helpers", () => {
         npm_config_script_shell: "/custom/lower-sh",
       });
       expect(lowerEnv?.npm_config_script_shell).toBe("/custom/lower-sh");
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("resolves portable Git paths from process-local app data only", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
+    await withMockedWindowsPlatform(async () => {
       await withTempDir({ prefix: "openclaw-update-portable-git-" }, async (base) => {
         envSnapshot = captureEnv(["LOCALAPPDATA"]);
         const injectedLocalAppData = path.join(base, "injected-local-app-data");
@@ -224,9 +227,7 @@ describe("update global helpers", () => {
         expect(trustedEnv?.PATH).toContain(trustedGitDir);
         expect(trustedEnv?.PATH).not.toContain(injectedGitDir);
       });
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("classifies main and raw install specs separately from registry selectors", () => {
@@ -280,8 +281,7 @@ describe("update global helpers", () => {
   });
 
   it("prefers the owning npm prefix when PATH npm points at a different global root", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    try {
+    await withMockedPlatform("darwin", async () => {
       await withTempDir({ prefix: "openclaw-update-npm-prefix-" }, async (base) => {
         const brewPrefix = path.join(base, "opt", "homebrew");
         const brewBin = path.join(brewPrefix, "bin");
@@ -319,6 +319,20 @@ describe("update global helpers", () => {
           globalRoot: brewRoot,
           packageRoot: pkgRoot,
         });
+        await expect(
+          resolveGlobalInstallTarget({
+            manager: "npm",
+            runCommand,
+            timeoutMs: 1000,
+            pkgRoot,
+            honorPackageRoot: true,
+          }),
+        ).resolves.toEqual({
+          manager: "npm",
+          command: brewNpm,
+          globalRoot: brewRoot,
+          packageRoot: pkgRoot,
+        });
         expect(globalInstallArgs("npm", "openclaw@latest", pkgRoot)).toEqual([
           brewNpm,
           "i",
@@ -327,6 +341,7 @@ describe("update global helpers", () => {
           "--no-fund",
           "--no-audit",
           "--loglevel=error",
+          "--min-release-age=0",
         ]);
         expect(globalInstallFallbackArgs("npm", "openclaw@latest", pkgRoot)).toEqual([
           brewNpm,
@@ -337,11 +352,10 @@ describe("update global helpers", () => {
           "--no-fund",
           "--no-audit",
           "--loglevel=error",
+          "--min-release-age=0",
         ]);
       });
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("does not infer npm ownership from path shape alone when the owning npm binary is absent", async () => {
@@ -364,13 +378,104 @@ describe("update global helpers", () => {
         "--no-fund",
         "--no-audit",
         "--loglevel=error",
+        "--min-release-age=0",
       ]);
     });
   });
 
+  it("honors an explicitly selected direct npm node_modules package root", async () => {
+    await withTempDir({ prefix: "openclaw-update-managed-service-root-" }, async (base) => {
+      const managedNpmRoot = path.join(base, ".openclaw", "npm", "node_modules");
+      const pkgRoot = path.join(managedNpmRoot, "openclaw");
+      const pathNpmRoot = path.join(base, "shell", "lib", "node_modules");
+      const otherPnpmRoot = path.join(base, "pnpm", "global", "5", "node_modules");
+      const customNpm = path.join(base, "bin", "npm");
+      await fs.mkdir(pkgRoot, { recursive: true });
+      await fs.mkdir(path.join(otherPnpmRoot, "openclaw"), { recursive: true });
+
+      const runCommand: CommandRunner = async (argv) => {
+        if (argv[0] === "npm" || argv[0] === customNpm) {
+          return { stdout: `${pathNpmRoot}\n`, stderr: "", code: 0 };
+        }
+        if (argv[0] === "pnpm") {
+          return { stdout: `${otherPnpmRoot}\n`, stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "pnpm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot,
+          honorPackageRoot: true,
+        }),
+      ).resolves.toEqual({
+        manager: "npm",
+        command: "npm",
+        globalRoot: managedNpmRoot,
+        packageRoot: pkgRoot,
+        directNodeModulesRoot: true,
+      });
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: { manager: "npm", command: customNpm },
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot,
+          honorPackageRoot: true,
+        }),
+      ).resolves.toEqual({
+        manager: "npm",
+        command: customNpm,
+        globalRoot: managedNpmRoot,
+        packageRoot: pkgRoot,
+        directNodeModulesRoot: true,
+      });
+
+      expect(
+        resolveNpmGlobalPrefixLayoutFromGlobalRoot(managedNpmRoot, {
+          allowDirectNodeModulesRoot: true,
+        }),
+      ).toEqual({
+        prefix: path.dirname(managedNpmRoot),
+        globalRoot: managedNpmRoot,
+        binDir: path.join(managedNpmRoot, ".bin"),
+      });
+    });
+  });
+
+  it("preserves bun ownership for direct node_modules package roots", async () => {
+    await withTempDir({ prefix: "openclaw-update-managed-bun-root-" }, async (base) => {
+      envSnapshot = captureEnv(["BUN_INSTALL"]);
+      process.env.BUN_INSTALL = path.join(base, ".bun");
+      const bunRoot = path.join(process.env.BUN_INSTALL, "install", "global", "node_modules");
+      const pkgRoot = path.join(bunRoot, "openclaw");
+      const pathNpmRoot = path.join(base, "shell", "lib", "node_modules");
+      await fs.mkdir(pkgRoot, { recursive: true });
+
+      const runCommand = createNpmRootRunner({ defaultNpmRoot: pathNpmRoot });
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "bun",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot,
+          honorPackageRoot: true,
+        }),
+      ).resolves.toEqual({
+        manager: "bun",
+        command: "bun",
+        globalRoot: bunRoot,
+        packageRoot: pkgRoot,
+      });
+    });
+  });
+
   it("prefers npm.cmd for win32-style global npm roots", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
+    await withMockedWindowsPlatform(async () => {
       await withTempDir({ prefix: "openclaw-update-win32-npm-prefix-" }, async (base) => {
         const npmPrefix = path.join(base, "Roaming", "npm");
         const npmRoot = path.join(npmPrefix, "node_modules");
@@ -398,11 +503,10 @@ describe("update global helpers", () => {
           "--no-fund",
           "--no-audit",
           "--loglevel=error",
+          "--min-release-age=0",
         ]);
       });
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("detects custom pnpm global layouts from the running package root", async () => {
@@ -438,14 +542,15 @@ describe("update global helpers", () => {
       );
       await expect(
         resolveGlobalInstallTarget({
-          manager: "pnpm",
+          manager: { manager: "pnpm", command: "/custom/bin/pnpm" },
           runCommand,
           timeoutMs: 1000,
           pkgRoot,
+          honorPackageRoot: true,
         }),
       ).resolves.toEqual({
         manager: "pnpm",
-        command: "pnpm",
+        command: "/custom/bin/pnpm",
         globalRoot: customGlobalRoot,
         packageRoot: pkgRoot,
       });
@@ -563,12 +668,29 @@ describe("update global helpers", () => {
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
+      "--min-release-age=0",
     ]);
     expect(globalInstallArgs("pnpm", "openclaw@latest")).toEqual([
       "pnpm",
       "add",
       "-g",
       "openclaw@latest",
+    ]);
+    expect(globalInstallArgs("pnpm", "github:openclaw/openclaw#release/2026.5.12")).toEqual([
+      "pnpm",
+      "add",
+      "-g",
+      "--allow-build=openclaw",
+      "github:openclaw/openclaw#release/2026.5.12",
+    ]);
+    expect(
+      globalInstallArgs("pnpm", "openclaw@git+https://github.com/openclaw/openclaw.git"),
+    ).toEqual([
+      "pnpm",
+      "add",
+      "-g",
+      "--allow-build=openclaw",
+      "openclaw@git+https://github.com/openclaw/openclaw.git",
     ]);
     expect(globalInstallArgs("bun", "openclaw@latest")).toEqual([
       "bun",
@@ -586,6 +708,7 @@ describe("update global helpers", () => {
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
+      "--min-release-age=0",
     ]);
     expect(globalInstallFallbackArgs("pnpm", "openclaw@latest")).toBeNull();
     expect(
@@ -598,6 +721,22 @@ describe("update global helpers", () => {
       "--global-dir",
       "/opt/pnpm-global",
       "openclaw@latest",
+    ]);
+    expect(
+      globalInstallArgs(
+        "pnpm",
+        "github:openclaw/openclaw#release/2026.5.12",
+        null,
+        "/opt/pnpm-global",
+      ),
+    ).toEqual([
+      "pnpm",
+      "add",
+      "-g",
+      "--global-dir",
+      "/opt/pnpm-global",
+      "--allow-build=openclaw",
+      "github:openclaw/openclaw#release/2026.5.12",
     ]);
   });
 
@@ -612,6 +751,7 @@ describe("update global helpers", () => {
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
+      "--min-release-age=0",
     ]);
     expect(globalInstallFallbackArgs("npm", "openclaw@latest", null, "/tmp/stage")).toEqual([
       "npm",
@@ -624,6 +764,7 @@ describe("update global helpers", () => {
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
+      "--min-release-age=0",
     ]);
   });
 

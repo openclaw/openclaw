@@ -110,7 +110,7 @@ type SentRealtimeEvent = {
     audio?: {
       input?: {
         format?: Record<string, unknown>;
-        noise_reduction?: Record<string, unknown>;
+        noise_reduction?: Record<string, unknown> | null;
         transcription?: Record<string, unknown>;
         turn_detection?: {
           create_response?: boolean;
@@ -668,7 +668,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const inputAudio = requireNestedRecord(session, ["audio", "input"]);
     expectRecordFields(inputAudio, "session audio input", {
       format: { type: "audio/pcmu" },
-      noise_reduction: { type: "near_field" },
+      noise_reduction: null,
       transcription: { model: "gpt-4o-mini-transcribe" },
     });
     expect(requireNestedRecord(session, ["audio", "output"])).toEqual({
@@ -769,6 +769,48 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
 
     await expect(connecting).rejects.toThrow("invalid realtime session");
+    expect(bridge.isConnected()).toBe(false);
+  });
+
+  it("treats pre-ready auth errors as a single startup failure", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "error",
+          error: { message: "Incorrect API key provided" },
+        }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "error",
+          error: { message: "Incorrect API key provided" },
+        }),
+      ),
+    );
+
+    await expect(connecting).rejects.toThrow("Incorrect API key provided");
+    expect(onError).not.toHaveBeenCalled();
+    expect(socket.closed).toBe(true);
     expect(bridge.isConnected()).toBe(false);
   });
 

@@ -29,7 +29,7 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
 }));
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => ({
-  __testing: {},
+  testing: {},
   prepareProviderExtraParams: vi.fn(() => undefined),
   resolveProviderHookPlugin: vi.fn(() => undefined),
   resolveProviderPluginsForHooks: vi.fn(() => []),
@@ -1215,6 +1215,47 @@ describe("sanitizeSessionHistory", () => {
       { type: "text", text: "visible answer" },
     ]);
   });
+
+  it.each([
+    ["Kimi K2.6", "custom-openai-proxy", "moonshotai/kimi-k2.6"],
+    ["MiMo V2.6 Pro", "custom-openai-proxy", "xiaomi/mimo-v2.6-pro"],
+  ])(
+    "preserves prior assistant reasoning for %s OpenAI-compatible replay",
+    async (_label, provider, modelId) => {
+      setNonGoogleModelApi();
+
+      const messages = castAgentMessages([
+        makeUserMessage("first"),
+        makeAssistantMessage([
+          {
+            type: "thinking",
+            thinking: "private reasoning",
+            thinkingSignature: "reasoning_content",
+          },
+          { type: "text", text: "visible answer" },
+        ]),
+        makeUserMessage("second"),
+      ]);
+
+      const result = await sanitizeSessionHistory({
+        messages,
+        modelApi: "openai-completions",
+        provider,
+        modelId,
+        sessionManager: makeMockSessionManager(),
+        sessionId: TEST_SESSION_ID,
+      });
+
+      expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+        {
+          type: "thinking",
+          thinking: "private reasoning",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "text", text: "visible answer" },
+      ]);
+    },
+  );
 
   it("preserves current OpenAI-compatible tool-call reasoning during tool continuation replay", async () => {
     setNonGoogleModelApi();

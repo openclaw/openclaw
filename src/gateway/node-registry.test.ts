@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -6,19 +7,34 @@ function makeClient(
   connId: string,
   nodeId: string,
   sent: string[] = [],
-  opts: { clientId?: string; platform?: string; version?: string } = {},
+  opts: {
+    clientId?: string;
+    platform?: string;
+    version?: string;
+    caps?: string[];
+    commands?: string[];
+    permissions?: Record<string, boolean>;
+    declaredCaps?: string[];
+    declaredCommands?: string[];
+    declaredPermissions?: Record<string, boolean>;
+    socket?: GatewayWsClient["socket"];
+  } = {},
 ): GatewayWsClient {
   return {
     connId,
     usesSharedGatewayAuth: false,
-    socket: {
-      send(frame: unknown) {
-        if (typeof frame === "string") {
-          sent.push(frame);
-        }
-      },
-    } as unknown as GatewayWsClient["socket"],
+    socket:
+      opts.socket ??
+      ({
+        send(frame: unknown) {
+          if (typeof frame === "string") {
+            sent.push(frame);
+          }
+        },
+      } as unknown as GatewayWsClient["socket"]),
     connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
       client: {
         id: opts.clientId ?? "openclaw-macos",
         version: opts.version ?? "1.0.0",
@@ -32,11 +48,67 @@ function makeClient(
         signedAt: 1,
         nonce: "nonce",
       },
-    } as GatewayWsClient["connect"],
+      caps: opts.caps ?? [],
+      commands: opts.commands ?? [],
+      permissions: opts.permissions,
+      declaredCaps: opts.declaredCaps,
+      declaredCommands: opts.declaredCommands,
+      declaredPermissions: opts.declaredPermissions,
+    } as unknown as GatewayWsClient["connect"],
   };
 }
 
 describe("gateway/node-registry", () => {
+  it("checks node websocket connectivity with ping/pong", async () => {
+    const registry = new NodeRegistry();
+    const socket = new EventEmitter() as EventEmitter & {
+      readyState: number;
+      send: (frame: unknown) => void;
+      ping: (data?: Buffer, mask?: boolean, cb?: (err?: Error) => void) => void;
+    };
+    socket.readyState = 1;
+    socket.send = () => {};
+    socket.ping = (dataValue, _mask, cb) => {
+      cb?.();
+      queueMicrotask(() => socket.emit("pong"));
+    };
+    registry.register(
+      makeClient("conn-1", "node-1", [], {
+        socket: socket as unknown as GatewayWsClient["socket"],
+      }),
+      {},
+    );
+
+    await expect(registry.checkConnectivity("node-1", 50)).resolves.toEqual({ ok: true });
+  });
+
+  it("reports stale node websocket connectivity before invoke timeout", async () => {
+    const registry = new NodeRegistry();
+    const socket = new EventEmitter() as EventEmitter & {
+      readyState: number;
+      send: (frame: unknown) => void;
+      ping: (data?: Buffer, mask?: boolean, cb?: (err?: Error) => void) => void;
+    };
+    socket.readyState = 1;
+    socket.send = () => {};
+    socket.ping = (dataValue, _mask, cb) => {
+      cb?.();
+    };
+    registry.register(
+      makeClient("conn-1", "node-1", [], {
+        socket: socket as unknown as GatewayWsClient["socket"],
+      }),
+      {},
+    );
+
+    const result = await registry.checkConnectivity("node-1", 1);
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
+    });
+  });
+
   it("keeps a reconnected node when the old connection unregisters", async () => {
     const registry = new NodeRegistry();
     const oldFrames: string[] = [];
@@ -432,5 +504,52 @@ describe("gateway/node-registry", () => {
       '{"type":"event","event":"chat","payload":{"foo":"bar"}}',
       '{"type":"event","event":"heartbeat"}',
     ]);
+  });
+
+  it("refreshes effective live surface within the declared surface", () => {
+    const registry = new NodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      caps: [],
+      commands: [],
+      declaredCaps: ["talk"],
+      declaredCommands: ["talk.ptt.start"],
+      declaredPermissions: { microphone: true, camera: false },
+    });
+
+    const session = registry.register(client, {});
+    expect(session.caps).toEqual([]);
+    expect(session.commands).toEqual([]);
+
+    const updated = registry.updateSurface("node-1", {
+      caps: ["talk", "screen"],
+      commands: ["talk.ptt.start", "system.run"],
+      permissions: { microphone: true, camera: true },
+    });
+
+    expect(updated?.caps).toEqual(["talk"]);
+    expect(updated?.commands).toEqual(["talk.ptt.start"]);
+    expect(updated?.permissions).toEqual({ microphone: true, camera: false });
+    expect(client.connect.caps).toEqual(["talk"]);
+    expect((client.connect as { commands?: string[] }).commands).toEqual(["talk.ptt.start"]);
+  });
+
+  it("clears effective permissions when explicitly removed", () => {
+    const registry = new NodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      permissions: { camera: false },
+      declaredPermissions: { camera: false },
+    });
+
+    registry.register(client, {});
+    const updated = registry.updateSurface("node-1", {
+      caps: [],
+      commands: [],
+      permissions: undefined,
+    });
+
+    expect(updated?.permissions).toBeUndefined();
+    expect(
+      (client.connect as { permissions?: Record<string, boolean> }).permissions,
+    ).toBeUndefined();
   });
 });

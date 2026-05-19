@@ -15,8 +15,11 @@ export type NodeSession = {
   deviceFamily?: string;
   modelIdentifier?: string;
   remoteIp?: string;
+  declaredCaps: string[];
   caps: string[];
+  declaredCommands: string[];
   commands: string[];
+  declaredPermissions?: Record<string, boolean>;
   permissions?: Record<string, boolean>;
   pathEnv?: string;
   connectedAtMs: number;
@@ -51,8 +54,24 @@ type NodeInvokeResult = {
   error?: { code?: string; message?: string } | null;
 };
 
+type NodeConnectivityResult =
+  | { ok: true }
+  | { ok: false; error: { code: string; message: string } };
+
+type PingableSocket = {
+  readyState?: number;
+  ping?: (data?: Buffer, mask?: boolean, cb?: (err?: Error) => void) => void;
+  once?: (event: "pong" | "close" | "error", listener: (...args: unknown[]) => void) => unknown;
+  off?: (event: "pong" | "close" | "error", listener: (...args: unknown[]) => void) => unknown;
+  removeListener?: (
+    event: "pong" | "close" | "error",
+    listener: (...args: unknown[]) => void,
+  ) => unknown;
+};
+
 const SERIALIZED_EVENT_PAYLOAD = Symbol("openclaw.serializedEventPayload");
 const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
+const WEBSOCKET_OPEN_READY_STATE = 1;
 
 export type SerializedEventPayload = {
   readonly json: string;
@@ -138,13 +157,27 @@ export class NodeRegistry {
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
     const caps = Array.isArray(connect.caps) ? connect.caps : [];
+    const declaredCaps = Array.isArray((connect as { declaredCaps?: string[] }).declaredCaps)
+      ? ((connect as { declaredCaps?: string[] }).declaredCaps ?? [])
+      : caps;
     const commands = Array.isArray((connect as { commands?: string[] }).commands)
       ? ((connect as { commands?: string[] }).commands ?? [])
       : [];
+    const declaredCommands = Array.isArray(
+      (connect as { declaredCommands?: string[] }).declaredCommands,
+    )
+      ? ((connect as { declaredCommands?: string[] }).declaredCommands ?? [])
+      : commands;
     const permissions =
       typeof (connect as { permissions?: Record<string, boolean> }).permissions === "object"
         ? ((connect as { permissions?: Record<string, boolean> }).permissions ?? undefined)
         : undefined;
+    const declaredPermissions =
+      typeof (connect as { declaredPermissions?: Record<string, boolean> }).declaredPermissions ===
+      "object"
+        ? ((connect as { declaredPermissions?: Record<string, boolean> }).declaredPermissions ??
+          undefined)
+        : permissions;
     const pathEnv =
       typeof (connect as { pathEnv?: string }).pathEnv === "string"
         ? (connect as { pathEnv?: string }).pathEnv
@@ -163,8 +196,11 @@ export class NodeRegistry {
       deviceFamily: connect.client.deviceFamily,
       modelIdentifier: connect.client.modelIdentifier,
       remoteIp: opts.remoteIp,
+      declaredCaps,
       caps,
+      declaredCommands,
       commands,
+      declaredPermissions,
       permissions,
       pathEnv,
       connectedAtMs: Date.now(),
@@ -206,6 +242,153 @@ export class NodeRegistry {
 
   get(nodeId: string): NodeSession | undefined {
     return this.nodesById.get(nodeId);
+  }
+
+  async checkConnectivity(nodeId: string, timeoutMs = 2_000): Promise<NodeConnectivityResult> {
+    const node = this.nodesById.get(nodeId);
+    if (!node) {
+      return {
+        ok: false,
+        error: { code: "NOT_CONNECTED", message: "node not connected" },
+      };
+    }
+    const socket = node.client.socket as PingableSocket;
+    if (socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
+      return {
+        ok: false,
+        error: { code: "NOT_CONNECTED", message: "node socket not open" },
+      };
+    }
+    if (typeof socket.ping !== "function" || typeof socket.once !== "function") {
+      return { ok: true };
+    }
+
+    const timeout = Math.max(1, Math.trunc(timeoutMs));
+    return await new Promise<NodeConnectivityResult>((resolve) => {
+      let settled = false;
+      const cleanup = () => {
+        socket.off?.("pong", onPong);
+        socket.off?.("close", onClose);
+        socket.off?.("error", onError);
+        socket.removeListener?.("pong", onPong);
+        socket.removeListener?.("close", onClose);
+        socket.removeListener?.("error", onError);
+      };
+      const finish = (result: NodeConnectivityResult) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        cleanup();
+        resolve(result);
+      };
+      const onPong = () => finish({ ok: true });
+      const onClose = () =>
+        finish({
+          ok: false,
+          error: { code: "NOT_CONNECTED", message: "node socket closed during connectivity probe" },
+        });
+      const onError = (err: unknown) =>
+        finish({
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message:
+              err instanceof Error ? err.message : "node socket error during connectivity probe",
+          },
+        });
+      const timer = setTimeout(
+        () =>
+          finish({
+            ok: false,
+            error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
+          }),
+        timeout,
+      );
+
+      socket.once?.("pong", onPong);
+      socket.once?.("close", onClose);
+      socket.once?.("error", onError);
+      try {
+        socket.ping?.(undefined, false, (err?: Error) => {
+          if (err) {
+            finish({
+              ok: false,
+              error: { code: "UNAVAILABLE", message: err.message },
+            });
+          }
+        });
+      } catch (err) {
+        finish({
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message: err instanceof Error ? err.message : "node ping failed",
+          },
+        });
+      }
+    });
+  }
+
+  updateCommands(nodeId: string, commands: readonly string[]): NodeSession | null {
+    return this.updateSurface(nodeId, { commands });
+  }
+
+  updateSurface(
+    nodeId: string,
+    surface: {
+      caps?: readonly string[];
+      commands: readonly string[];
+      permissions?: Record<string, boolean> | undefined;
+    },
+  ): NodeSession | null {
+    const node = this.nodesById.get(nodeId);
+    if (!node) {
+      return null;
+    }
+
+    const declaredCommands = new Set(node.declaredCommands);
+    const nextCommands = surface.commands.filter((command) => declaredCommands.has(command));
+    node.commands = nextCommands;
+    (node.client.connect as { commands?: string[] }).commands = nextCommands;
+
+    if ("caps" in surface) {
+      const declaredCaps = new Set(node.declaredCaps);
+      const nextCaps = (surface.caps ?? []).filter((capability) => declaredCaps.has(capability));
+      node.caps = nextCaps;
+      (node.client.connect as { caps?: string[] }).caps = nextCaps;
+    }
+
+    if ("permissions" in surface) {
+      if (surface.permissions === undefined) {
+        node.permissions = undefined;
+        (node.client.connect as { permissions?: Record<string, boolean> }).permissions = undefined;
+        return node;
+      }
+      const declared = node.declaredPermissions ?? {};
+      const nextEntries: Array<[string, boolean]> = [];
+      for (const [key, declaredValue] of Object.entries(declared)) {
+        if (!declaredValue) {
+          nextEntries.push([key, false]);
+          continue;
+        }
+        const approvedValue = surface.permissions?.[key];
+        if (approvedValue) {
+          nextEntries.push([key, true]);
+          continue;
+        }
+        if (approvedValue !== undefined) {
+          nextEntries.push([key, false]);
+        }
+      }
+      const nextPermissions = nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined;
+      node.permissions = nextPermissions;
+      (node.client.connect as { permissions?: Record<string, boolean> }).permissions =
+        nextPermissions;
+    }
+
+    return node;
   }
 
   async invoke(params: {

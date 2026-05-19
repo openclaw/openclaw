@@ -16,6 +16,7 @@ import {
 } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { readLegacyNpmPluginDeclaration } from "./legacy-npm-declaration.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
@@ -24,6 +25,7 @@ import {
   type PluginManifest,
   resolvePackageExtensionEntries,
   type OpenClawPackageManifest,
+  type PackageExtensionResolution,
   type PackageManifest,
 } from "./manifest.js";
 import {
@@ -561,6 +563,30 @@ function derivePackagePluginIdHint(params: {
     : unscoped;
 }
 
+function pushInvalidPackageExtensionDiagnostic(params: {
+  resolution: PackageExtensionResolution;
+  source: string;
+  diagnostics: PluginDiagnostic[];
+}): boolean {
+  if (params.resolution.status === "invalid") {
+    params.diagnostics.push({
+      level: "error",
+      source: params.source,
+      message: params.resolution.error,
+    });
+    return true;
+  }
+  if (params.resolution.status === "empty") {
+    params.diagnostics.push({
+      level: "error",
+      source: params.source,
+      message: "package.json openclaw.extensions is empty",
+    });
+    return true;
+  }
+  return false;
+}
+
 function resolveIdHintManifestId(
   rootDir: string,
   rejectHardlinks: boolean,
@@ -692,6 +718,23 @@ function discoverBundleInRoot(params: {
   return "added";
 }
 
+function addLegacyNpmDeclarationDiagnostic(params: {
+  pluginDir: string;
+  diagnostics: PluginDiagnostic[];
+}): boolean {
+  const declaration = readLegacyNpmPluginDeclaration(params.pluginDir);
+  if (!declaration) {
+    return false;
+  }
+  params.diagnostics.push({
+    level: "warn",
+    pluginId: declaration.pluginId,
+    source: declaration.source,
+    message: `legacy npm plugin declaration ignored for "${declaration.pluginId}"; run "openclaw doctor --fix" to install ${declaration.npmSpec} into the managed plugin root`,
+  });
+  return true;
+}
+
 function discoverInDirectory(params: {
   dir: string;
   origin: PluginOrigin;
@@ -789,6 +832,15 @@ function discoverInDirectory(params: {
       ...(fullPathRealPath !== undefined ? { rootRealPath: fullPathRealPath } : {}),
     });
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
+    if (
+      pushInvalidPackageExtensionDiagnostic({
+        resolution: extensionResolution,
+        source: fullPath,
+        diagnostics: params.diagnostics,
+      })
+    ) {
+      continue;
+    }
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
     const manifestId = resolveIdHintManifestId(fullPath, rejectHardlinks, fullPathRealPath);
     const setupSource = resolvePackageSetupSource({
@@ -875,6 +927,15 @@ function discoverInDirectory(params: {
         packageDir: fullPath,
         realpathCache: params.realpathCache,
       });
+      continue;
+    }
+
+    if (
+      addLegacyNpmDeclarationDiagnostic({
+        pluginDir: fullPath,
+        diagnostics: params.diagnostics,
+      })
+    ) {
       continue;
     }
 
@@ -1014,6 +1075,15 @@ function discoverFromPath(params: {
       ...(resolvedRealPath !== undefined ? { rootRealPath: resolvedRealPath } : {}),
     });
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
+    if (
+      pushInvalidPackageExtensionDiagnostic({
+        resolution: extensionResolution,
+        source: resolved,
+        diagnostics: params.diagnostics,
+      })
+    ) {
+      return;
+    }
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
     const manifestId = resolveIdHintManifestId(resolved, rejectHardlinks, resolvedRealPath);
     const setupSource = resolvePackageSetupSource({
@@ -1101,6 +1171,15 @@ function discoverFromPath(params: {
         packageDir: resolved,
         realpathCache: params.realpathCache,
       });
+      return;
+    }
+
+    if (
+      addLegacyNpmDeclarationDiagnostic({
+        pluginDir: resolved,
+        diagnostics: params.diagnostics,
+      })
+    ) {
       return;
     }
 

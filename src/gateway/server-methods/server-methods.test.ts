@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
@@ -588,11 +589,279 @@ describe("projectRecentChatDisplayMessages", () => {
         { role: "assistant", content: "older answer", timestamp: 2 },
         { role: "assistant", content: "NO_REPLY", timestamp: 3 },
         { role: "assistant", content: "ANNOUNCE_SKIP", timestamp: 4 },
+        {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "hidden runtime context",
+          display: false,
+          timestamp: 5,
+        },
       ],
       { maxMessages: 1 },
     );
 
     expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
+  });
+
+  it("keeps media-only user messages while dropping empty text-only user messages", () => {
+    const mediaOnly = {
+      role: "user",
+      content: "",
+      MediaPath: "/tmp/openclaw/user-upload.png",
+      timestamp: 1,
+    };
+    const multiMediaOnly = {
+      role: "user",
+      content: "",
+      MediaPaths: ["/tmp/openclaw/first.png", "/tmp/openclaw/second.jpg"],
+      timestamp: 2,
+    };
+    const result = projectRecentChatDisplayMessages([
+      mediaOnly,
+      multiMediaOnly,
+      { role: "user", content: "", timestamp: 3 },
+    ]);
+
+    expect(result).toEqual([mediaOnly, multiMediaOnly]);
+  });
+
+  it("merges delayed TTS supplements into their original assistant message", () => {
+    const visibleText = "**Here** is the answer.";
+    const spokenText = "Here is the answer.";
+    const textSha256 = createHash("sha256").update(visibleText).digest("hex");
+
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "first" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: visibleText }],
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "second" }],
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: { textSha256, spokenText },
+        timestamp: 4,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "first" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: visibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "second" }],
+        timestamp: 3,
+      },
+    ]);
+  });
+
+  it("merges delayed TTS supplements when directive tags are stripped for display", () => {
+    const rawVisibleText = "[[reply_to_current]]Visible answer.";
+    const projectedVisibleText = "Visible answer.";
+    const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
+
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: rawVisibleText }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: { textSha256 },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: projectedVisibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("merges delayed TTS supplements before display truncation", () => {
+    const projectedVisibleText = "Visible answer ".repeat(8).trim();
+    const rawVisibleText = `[[reply_to_current]]${projectedVisibleText}`;
+    const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
+
+    const result = projectRecentChatDisplayMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: rawVisibleText }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Audio reply" },
+            {
+              type: "attachment",
+              attachment: {
+                url: "/tmp/tts.mp3",
+                kind: "audio",
+                label: "tts.mp3",
+                mimeType: "audio/mpeg",
+              },
+            },
+          ],
+          openclawTtsSupplement: { textSha256 },
+          timestamp: 2,
+        },
+      ],
+      { maxChars: 24 },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: `${projectedVisibleText.slice(0, 24)}\n...(truncated)...` },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("does not merge visible TTS finals into an older identical assistant message", () => {
+    const visibleText = "Done.";
+    const textSha256 = createHash("sha256").update(visibleText).digest("hex");
+    const ttsSupplement = { textSha256 };
+
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: visibleText }],
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "again" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: visibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: ttsSupplement,
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: visibleText }],
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "again" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: visibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: ttsSupplement,
+        timestamp: 3,
+      },
+    ]);
   });
 });
 
@@ -765,12 +1034,13 @@ describe("exec approval handlers", () => {
     handlers: ExecApprovalHandlers;
     id: string;
     respond: ReturnType<typeof vi.fn>;
+    client?: ExecApprovalGetArgs["client"];
   }) {
     return params.handlers["exec.approval.get"]({
       params: { id: params.id } as ExecApprovalGetArgs["params"],
       respond: params.respond as unknown as ExecApprovalGetArgs["respond"],
       context: {} as ExecApprovalGetArgs["context"],
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-get", type: "req", method: "exec.approval.get" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -779,12 +1049,13 @@ describe("exec approval handlers", () => {
   async function listExecApprovals(params: {
     handlers: ExecApprovalHandlers;
     respond: ReturnType<typeof vi.fn>;
+    client?: ExecApprovalResolveArgs["client"];
   }) {
     return params.handlers["exec.approval.list"]({
       params: {} as never,
       respond: params.respond as never,
       context: {} as never,
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-list", type: "req", method: "exec.approval.list" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -795,6 +1066,7 @@ describe("exec approval handlers", () => {
     respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
     params?: Record<string, unknown>;
+    client?: ExecApprovalRequestArgs["client"];
   }) {
     const requestParams = {
       ...defaultExecApprovalRequestParams,
@@ -838,7 +1110,7 @@ describe("exec approval handlers", () => {
         hasExecApprovalClients: () => true,
         ...params.context,
       }),
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-1", type: "req", method: "exec.approval.request" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -850,6 +1122,7 @@ describe("exec approval handlers", () => {
     decision?: "allow-once" | "allow-always" | "deny";
     respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
+    client?: ExecApprovalResolveArgs["client"];
   }) {
     return params.handlers["exec.approval.resolve"]({
       params: {
@@ -858,7 +1131,7 @@ describe("exec approval handlers", () => {
       } as ExecApprovalResolveArgs["params"],
       respond: params.respond as unknown as ExecApprovalResolveArgs["respond"],
       context: toExecApprovalResolveContext(params.context),
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-2", type: "req", method: "exec.approval.resolve" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -915,7 +1188,7 @@ describe("exec approval handlers", () => {
     });
     const respond = vi.fn();
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => false,
     };
     return {
@@ -1143,6 +1416,83 @@ describe("exec approval handlers", () => {
       context,
     });
     await requestPromise;
+  });
+
+  it("lists and resolves only exec approvals owned by the caller", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const context = {
+      broadcast: (eventValue: string, _payload: unknown) => {},
+    };
+    const ownerClient = {
+      connId: "conn-owner",
+      connect: {
+        client: { id: "client-owner" },
+        device: { id: "device-owner" },
+      },
+    } as unknown as ExecApprovalResolveArgs["client"];
+    const otherClient = {
+      connId: "conn-other",
+      connect: {
+        client: { id: "client-other" },
+        device: { id: "device-other" },
+      },
+    } as unknown as ExecApprovalResolveArgs["client"];
+
+    const visible = manager.create({ command: "echo visible" }, 60_000, "approval-abcd-visible");
+    visible.requestedByDeviceId = "device-owner";
+    visible.requestedByConnId = "conn-owner";
+    visible.requestedByClientId = "client-owner";
+    void manager.register(visible, 60_000);
+
+    const hidden = manager.create({ command: "echo hidden" }, 60_000, "approval-abcd-hidden");
+    hidden.requestedByDeviceId = "device-other";
+    hidden.requestedByConnId = "conn-other";
+    hidden.requestedByClientId = "client-other";
+    void manager.register(hidden, 60_000);
+
+    const listRespond = vi.fn();
+    await listExecApprovals({ handlers, respond: listRespond, client: ownerClient });
+    expect(mockCallArg(listRespond)).toBe(true);
+    const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
+    expect(approvals.map((entry) => entry.id)).toEqual(["approval-abcd-visible"]);
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-abcd",
+      respond: resolveRespond,
+      context,
+      client: ownerClient,
+    });
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot(visible.id)?.decision).toBe("allow-once");
+    expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
+
+    const hiddenRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: hidden.id,
+      respond: hiddenRespond,
+      context,
+      client: ownerClient,
+    });
+    expect(mockCallArg(hiddenRespond)).toBe(false);
+    expectRecordFields(mockCallArg(hiddenRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "unknown or expired approval id",
+    });
+    expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
+
+    const otherRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: hidden.id,
+      respond: otherRespond,
+      context,
+      client: otherClient,
+    });
+    expect(otherRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
   it("returns not found for stale exec.approval.get ids", async () => {
@@ -1691,7 +2041,7 @@ describe("exec approval handlers", () => {
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
     };
 
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-12345678-aaaa");
@@ -1713,7 +2063,7 @@ describe("exec approval handlers", () => {
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
     };
 
     void manager.register(
@@ -1763,7 +2113,7 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const context = {
-      broadcast: (_event: string, _payload: unknown) => {},
+      broadcast: (eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => true,
     };
     const respondOne = vi.fn();
@@ -1972,6 +2322,57 @@ describe("exec approval handlers", () => {
 
     manager.resolve("approval-ios-push", "allow-once");
     await requestPromise;
+  });
+
+  it("does not count iOS push delivery to hidden approval targets as a route", async () => {
+    const iosPushDelivery = {
+      handleRequested: vi.fn(
+        async (
+          _request: unknown,
+          opts?: {
+            isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
+          },
+        ) =>
+          opts?.isTargetVisible?.({
+            deviceId: "device-other",
+            scopes: ["operator.approvals"],
+          }) ?? true,
+      ),
+      handleResolved: vi.fn(async () => {}),
+      handleExpired: vi.fn(async () => {}),
+    };
+    const { manager, handlers, respond, context } = createForwardingExecApprovalFixture({
+      iosPushDelivery,
+    });
+    const expireSpy = vi.spyOn(manager, "expire");
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: {
+        connId: "conn-owner",
+        connect: {
+          client: { id: "client-owner" },
+          device: { id: "device-owner" },
+          scopes: ["operator.approvals"],
+        },
+      } as unknown as ExecApprovalRequestArgs["client"],
+      params: {
+        timeoutMs: 60_000,
+        id: "approval-ios-hidden-push",
+        host: "gateway",
+      },
+    });
+
+    expect(iosPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
+    expect(expireSpy).toHaveBeenCalledWith("approval-ios-hidden-push", "no-approval-route");
+    expect(lastMockCallArg(respond)).toBe(true);
+    expectRecordFields(lastMockCallArg(respond, 1), {
+      id: "approval-ios-hidden-push",
+      decision: null,
+    });
+    expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 
   it("sends iOS cleanup delivery on resolve", async () => {

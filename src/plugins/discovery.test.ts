@@ -1010,6 +1010,32 @@ describe("discoverOpenClawPlugins", () => {
     );
   });
 
+  it("warns on legacy npm declaration stubs without loading workspace node_modules", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "guardrail-bridge");
+    mkdirSafe(pluginDir);
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.extension.json"),
+      JSON.stringify({
+        name: "guardrail-bridge",
+        type: "npm",
+        npmSpec: "@guardrail-bridge/guardrail-bridge@1.0.0",
+      }),
+      "utf-8",
+    );
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expectCandidateIds(result.candidates, { excludes: ["guardrail-bridge"] });
+    expectDiagnostic({
+      diagnostics: result.diagnostics,
+      level: "warn",
+      pluginId: "guardrail-bridge",
+      source: path.join(pluginDir, "openclaw.extension.json"),
+      messageIncludes: 'run "openclaw doctor --fix"',
+    });
+  });
+
   it("keeps explicit runtime extension entries strict for untracked global packages", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "missing-runtime-pack");
@@ -1290,6 +1316,31 @@ describe("discoverOpenClawPlugins", () => {
         (entry) =>
           entry.level === "error" &&
           entry.message.includes("openclaw.runtimeExtensions[0]") &&
+          entry.message.includes("non-empty string"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects blank package extensions instead of falling back to inferred entries", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "extension-blank-pack");
+    mkdirSafe(path.join(pluginDir, "dist"));
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/extension-blank-pack",
+      extensions: ["./dist/index.js", " "],
+    });
+    writePluginEntry(path.join(pluginDir, "dist", "index.js"));
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expectCandidatePresence(result, { absent: ["extension-blank-pack"] });
+    expect(
+      result.diagnostics.some(
+        (entry) =>
+          entry.level === "error" &&
+          entry.message.includes("openclaw.extensions[1]") &&
           entry.message.includes("non-empty string"),
       ),
     ).toBe(true);

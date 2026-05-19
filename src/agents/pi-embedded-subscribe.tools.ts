@@ -365,16 +365,39 @@ function readToolResultDetailsMedia(
 
 function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
   const urls: string[] = [];
+  const pushString = (value: unknown) => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = value.trim();
+    if (normalized) {
+      urls.push(normalized);
+    }
+  };
+  const pushAttachment = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return;
+    }
+    const attachment = value as Record<string, unknown>;
+    pushString(attachment.media);
+    pushString(attachment.path);
+    pushString(attachment.url);
+    pushString(attachment.mediaUrl);
+    pushString(attachment.filePath);
+    pushString(attachment.fileUrl);
+  };
   if (typeof media.mediaUrl === "string" && media.mediaUrl.trim()) {
     urls.push(media.mediaUrl.trim());
   }
   if (Array.isArray(media.mediaUrls)) {
-    urls.push(
-      ...media.mediaUrls
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => value.trim())
-        .filter(Boolean),
-    );
+    for (const value of media.mediaUrls) {
+      pushString(value);
+    }
+  }
+  if (Array.isArray(media.attachments)) {
+    for (const attachment of media.attachments) {
+      pushAttachment(attachment);
+    }
   }
   return Array.from(new Set(urls));
 }
@@ -556,8 +579,21 @@ export function extractMessagingToolSend(
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
     const threadId = normalizeOptionalString(args.threadId);
+    const threadSuppressed = args.topLevel === true || args.threadId === null;
+    const threadImplicit =
+      !threadId &&
+      !threadSuppressed &&
+      Boolean(providerId && getChannelPlugin(providerId)?.threading?.resolveAutoThreadId);
     return to
-      ? { tool: toolName, provider, accountId, to, ...(threadId ? { threadId } : {}) }
+      ? {
+          tool: toolName,
+          provider,
+          accountId,
+          to,
+          ...(threadId ? { threadId } : {}),
+          ...(threadImplicit ? { threadImplicit: true } : {}),
+          ...(threadSuppressed ? { threadSuppressed: true } : {}),
+        }
       : undefined;
   }
   const providerId = normalizeChannelId(toolName);
@@ -570,12 +606,14 @@ export function extractMessagingToolSend(
     return undefined;
   }
   const to = normalizeTargetForProvider(providerId, extracted.to);
+  const threadId = normalizeOptionalString(extracted.threadId);
   return to
     ? {
         tool: toolName,
         provider: providerId,
         accountId: extracted.accountId ?? accountId,
         to,
+        ...(threadId ? { threadId } : {}),
       }
     : undefined;
 }
