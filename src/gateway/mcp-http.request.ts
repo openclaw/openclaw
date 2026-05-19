@@ -10,6 +10,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-utils.js";
+import type { McpLoopbackTokenScope } from "./mcp-http.loopback-runtime.js";
 import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
@@ -78,11 +79,6 @@ function normalizeMcpSourceReplyDeliveryMode(
   return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
 }
 
-function normalizeMcpCurrentInboundAudio(value: string | undefined): boolean | undefined {
-  const trimmed = normalizeOptionalString(value);
-  return trimmed ? isTruthyEnvValue(trimmed) : undefined;
-}
-
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
   const origin = getHeader(req, "origin");
   if (!origin) {
@@ -111,7 +107,8 @@ export function validateMcpLoopbackRequest(params: {
   res: ServerResponse;
   ownerToken: string;
   nonOwnerToken: string;
-}): { senderIsOwner: boolean } | null {
+  resolveScopedTokenContext?: (authHeader: string) => McpLoopbackTokenScope | undefined;
+}): McpLoopbackTokenScope | null {
   let url: URL;
   try {
     url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
@@ -162,10 +159,19 @@ export function validateMcpLoopbackRequest(params: {
   }
 
   const authHeader = getHeader(params.req, "authorization") ?? "";
-  const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
-  const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
-  const senderIsOwner = ownerTokenMatched ? true : nonOwnerTokenMatched ? false : null;
-  if (senderIsOwner === null) {
+  const scopedTokenContext = params.resolveScopedTokenContext?.(authHeader);
+  const ownerTokenMatched =
+    !scopedTokenContext && safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
+  const nonOwnerTokenMatched =
+    !scopedTokenContext && safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
+  const tokenContext =
+    scopedTokenContext ??
+    (ownerTokenMatched
+      ? { senderIsOwner: true }
+      : nonOwnerTokenMatched
+        ? { senderIsOwner: false }
+        : null);
+  if (tokenContext === null) {
     logMcpLoopbackHttp("reject", {
       reason: "unauthorized",
       method: params.req.method ?? "",
@@ -188,7 +194,7 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  return { senderIsOwner };
+  return tokenContext;
 }
 
 export async function readMcpHttpBody(
@@ -295,25 +301,19 @@ export function resolveMcpHttpBodyTimeoutMs(): number {
 }
 
 export function resolveMcpRequestContext(
-  req: IncomingMessage,
   cfg: OpenClawConfig,
-  auth: { senderIsOwner: boolean },
+  auth: McpLoopbackTokenScope,
 ): McpRequestContext {
   return {
-    sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
-    messageProvider:
-      normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
-    currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
-    currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
-    currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
-    currentInboundAudio: normalizeMcpCurrentInboundAudio(
-      getHeader(req, "x-openclaw-current-inbound-audio"),
-    ),
-    accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
-    inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
-    sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(
-      getHeader(req, "x-openclaw-source-reply-delivery-mode"),
-    ),
+    sessionKey: resolveScopedSessionKey(cfg, auth.sessionKey),
+    messageProvider: normalizeMessageChannel(auth.messageProvider) ?? undefined,
+    currentChannelId: normalizeOptionalString(auth.currentChannelId),
+    currentThreadTs: normalizeOptionalString(auth.currentThreadTs),
+    currentMessageId: normalizeOptionalString(auth.currentMessageId),
+    currentInboundAudio: auth.currentInboundAudio,
+    accountId: normalizeOptionalString(auth.accountId),
+    inboundEventKind: normalizeMcpInboundEventKind(auth.inboundEventKind),
+    sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(auth.sourceReplyDeliveryMode),
     senderIsOwner: auth.senderIsOwner,
   };
 }

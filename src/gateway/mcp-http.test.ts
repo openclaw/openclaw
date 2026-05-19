@@ -102,6 +102,7 @@ import {
   createMcpLoopbackServerConfig,
   closeMcpLoopbackServer,
   getActiveMcpLoopbackRuntime,
+  issueMcpLoopbackScopedBearerToken,
   ensureMcpLoopbackServer,
   startMcpLoopbackServer,
 } from "./mcp-http.js";
@@ -393,6 +394,14 @@ function getScopedToolsCall(index: number): ScopedToolsCall {
   return call as ScopedToolsCall;
 }
 
+function issueScopedToken(params: Parameters<typeof issueMcpLoopbackScopedBearerToken>[1]): string {
+  const runtime = getActiveMcpLoopbackRuntime();
+  if (!runtime) {
+    throw new Error("Expected active MCP loopback runtime");
+  }
+  return issueMcpLoopbackScopedBearerToken(runtime, params);
+}
+
 function getBeforeToolCallHookInput(index: number): BeforeToolCallHookInput {
   const call = runBeforeToolCallHookMock.mock.calls[index]?.[0];
   if (typeof call !== "object" || call === null) {
@@ -568,27 +577,29 @@ describe("buildMcpToolSchema", () => {
 });
 
 describe("mcp loopback server", () => {
-  it("passes session, account, message channel, and inbound event headers into shared tool resolution", async () => {
+  it("passes scoped token session, account, message channel, and inbound event into shared tool resolution", async () => {
     const port = await getFreePortBlockWithPermissionFallback({
       offsets: [0],
       fallbackBase: 53_000,
     });
-    const { runtime, port: serverPort } = await startLoopbackServerForTest(port);
+    const { port: serverPort } = await startLoopbackServerForTest(port);
+    const token = issueScopedToken({
+      sessionKey: "agent:main:telegram:group:chat123",
+      accountId: "work",
+      messageProvider: "telegram",
+      currentChannelId: "telegram:chat123",
+      currentThreadTs: "42",
+      currentMessageId: "reply-message-1",
+      currentInboundAudio: true,
+      inboundEventKind: "room_event",
+      sourceReplyDeliveryMode: "message_tool_only",
+      senderIsOwner: false,
+    });
 
     const response = await sendRaw({
       port: serverPort,
-      token: runtime?.nonOwnerToken,
-      headers: jsonHeaders({
-        "x-session-key": "agent:main:telegram:group:chat123",
-        "x-openclaw-account-id": "work",
-        "x-openclaw-message-channel": "telegram",
-        "x-openclaw-current-channel-id": "telegram:chat123",
-        "x-openclaw-current-thread-ts": "42",
-        "x-openclaw-current-message-id": "reply-message-1",
-        "x-openclaw-current-inbound-audio": "true",
-        "x-openclaw-inbound-event-kind": "room_event",
-        "x-openclaw-source-reply-delivery-mode": "message_tool_only",
-      }),
+      token,
+      headers: jsonHeaders(),
       body: mcpToolsListBody(),
     });
 
@@ -614,24 +625,22 @@ describe("mcp loopback server", () => {
     ]);
   });
 
-  it("keeps loopback tool cache entries separate by inbound event kind, delivery mode, and inbound audio", async () => {
-    const { runtime } = await startLoopbackServerForTest();
+  it("keeps loopback tool cache entries separate by scoped inbound event kind, delivery mode, and inbound audio", async () => {
+    await startLoopbackServerForTest();
     const sendToolsList = async (
-      inboundEventKind: string,
-      sourceReplyDeliveryMode?: string,
+      inboundEventKind: "user_request" | "room_event",
+      sourceReplyDeliveryMode?: "message_tool_only",
       currentInboundAudio?: boolean,
     ) =>
       await sendLoopbackToolsList({
-        token: runtime?.ownerToken,
-        headers: {
-          "x-session-key": "agent:main:telegram:group:chat123",
-          "x-openclaw-message-channel": "telegram",
-          "x-openclaw-inbound-event-kind": inboundEventKind,
-          ...(sourceReplyDeliveryMode
-            ? { "x-openclaw-source-reply-delivery-mode": sourceReplyDeliveryMode }
-            : {}),
-          ...(currentInboundAudio ? { "x-openclaw-current-inbound-audio": "true" } : {}),
-        },
+        token: issueScopedToken({
+          sessionKey: "agent:main:telegram:group:chat123",
+          messageProvider: "telegram",
+          inboundEventKind,
+          sourceReplyDeliveryMode,
+          currentInboundAudio,
+          senderIsOwner: false,
+        }),
       });
 
     expect((await sendToolsList("user_request")).status).toBe(200);
@@ -683,6 +692,37 @@ describe("mcp loopback server", () => {
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(258);
   });
 
+  it("does not let spoofed scope headers change resolved loopback context", async () => {
+    server = await startMcpLoopbackServer(0);
+    const token = issueScopedToken({
+      sessionKey: "agent:main:telegram:group:chat123",
+      messageProvider: "telegram",
+      inboundEventKind: "user_request",
+      senderIsOwner: false,
+    });
+    const sendToolsList = async (spoofedInboundEventKind: string) =>
+      await sendRaw({
+        port: server?.port ?? 0,
+        token,
+        headers: {
+          "content-type": "application/json",
+          "x-session-key": "agent:main:telegram:group:spoofed",
+          "x-openclaw-message-channel": "telegram",
+          "x-openclaw-inbound-event-kind": spoofedInboundEventKind,
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+
+    expect((await sendToolsList("room_event")).status).toBe(200);
+    expect((await sendToolsList("user_request")).status).toBe(200);
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
+    expect(getScopedToolsCall(0).sessionKey).toBe("agent:main:telegram:group:chat123");
+    expect(getScopedToolsCall(0).inboundEventKind).toBe("user_request");
+    expect(getScopedToolsCall(1).sessionKey).toBe("agent:main:telegram:group:chat123");
+    expect(getScopedToolsCall(1).inboundEventKind).toBe("user_request");
+  });
+
   it("adds empty properties for object schemas that omit properties", async () => {
     resolveGatewayScopedToolsMock.mockReturnValue({
       agentId: "main",
@@ -720,10 +760,6 @@ describe("mcp loopback server", () => {
     const sendToolsList = async (token?: string) =>
       await sendLoopbackToolsList({
         token,
-        headers: {
-          "x-session-key": "agent:main:matrix:dm:test",
-          "x-openclaw-message-channel": "matrix",
-        },
       });
 
     expect((await sendToolsList(runtime?.ownerToken)).status).toBe(200);
@@ -734,14 +770,22 @@ describe("mcp loopback server", () => {
     expect(getScopedToolsCall(1).senderIsOwner).toBe(false);
   });
 
-  it("ignores spoofed owner headers on loopback requests", async () => {
-    const { runtime } = await startLoopbackServerForTest();
+  it("ignores spoofed owner and scope headers when the bearer token is non-owner scoped", async () => {
+    await startLoopbackServerForTest();
 
     const response = await sendLoopbackToolsList({
-      token: runtime?.nonOwnerToken,
+      token: issueScopedToken({
+        sessionKey: "agent:main:matrix:dm:test",
+        messageProvider: "matrix",
+        accountId: "issued-account",
+        inboundEventKind: "user_request",
+        senderIsOwner: false,
+      }),
       headers: {
-        "x-session-key": "agent:main:matrix:dm:test",
-        "x-openclaw-message-channel": "matrix",
+        "x-session-key": "agent:main:telegram:group:spoofed",
+        "x-openclaw-account-id": "spoofed-account",
+        "x-openclaw-message-channel": "telegram",
+        "x-openclaw-inbound-event-kind": "room_event",
         "x-openclaw-sender-is-owner": "true",
       },
     });
@@ -749,7 +793,9 @@ describe("mcp loopback server", () => {
     expect(response.status).toBe(200);
     const call = getScopedToolsCall(0);
     expect(call.sessionKey).toBe("agent:main:matrix:dm:test");
+    expect(call.accountId).toBe("issued-account");
     expect(call.messageProvider).toBe("matrix");
+    expect(call.inboundEventKind).toBe("user_request");
     expect(call.senderIsOwner).toBe(false);
     expect(call.surface).toBe("loopback");
   });
@@ -1120,7 +1166,7 @@ describe("mcp loopback server", () => {
 });
 
 describe("createMcpLoopbackServerConfig", () => {
-  it("builds a server entry with env-driven headers", () => {
+  it("builds a server entry with only the scoped bearer header", () => {
     const config = createMcpLoopbackServerConfig(23119) as {
       mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
     };
@@ -1128,24 +1174,8 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(config.mcpServers?.openclaw?.headers?.Authorization).toBe(
       "Bearer ${OPENCLAW_MCP_TOKEN}",
     );
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
-      "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
-    );
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-channel-id"]).toBe(
-      "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
-    );
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-thread-ts"]).toBe(
-      "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
-    );
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-message-id"]).toBe(
-      "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
-    );
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-inbound-audio"]).toBe(
-      "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
-    );
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-source-reply-delivery-mode"]).toBe(
-      "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
-    );
-    expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-is-owner");
+    expect(config.mcpServers?.openclaw?.headers).toEqual({
+      Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+    });
   });
 });
