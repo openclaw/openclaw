@@ -8,6 +8,7 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListPanel
@@ -21,8 +22,16 @@ import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -73,8 +82,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 
 internal enum class V2SettingsRoute {
   Home,
@@ -544,6 +555,7 @@ private fun V2NotificationSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
+  val context = LocalContext.current
   val enabled by viewModel.notificationForwardingEnabled.collectAsState()
   val mode by viewModel.notificationForwardingMode.collectAsState()
   val packages by viewModel.notificationForwardingPackages.collectAsState()
@@ -552,12 +564,30 @@ private fun V2NotificationSettingsScreen(
   val quietEnd by viewModel.notificationForwardingQuietEnd.collectAsState()
   val maxEventsPerMinute by viewModel.notificationForwardingMaxEventsPerMinute.collectAsState()
   val modeLabel = if (mode == NotificationPackageFilterMode.Blocklist) "Blocklist" else "Allowlist"
+  var listenerEnabled by remember { mutableStateOf(DeviceNotificationListenerService.isAccessEnabled(context)) }
+  val notificationPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      viewModel.setNotificationForwardingEnabled(granted)
+    }
+
+  fun setForwarding(checked: Boolean) {
+    if (!checked) {
+      viewModel.setNotificationForwardingEnabled(false)
+      return
+    }
+    if (Build.VERSION.SDK_INT >= 33 && !hasV2Permission(context, Manifest.permission.POST_NOTIFICATIONS)) {
+      notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    } else {
+      viewModel.setNotificationForwardingEnabled(true)
+    }
+    listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
+  }
 
   V2SettingsDetailFrame(title = "Notifications", subtitle = "Choose what reaches OpenClaw.", icon = Icons.Default.Notifications, onBack = onBack) {
     V2SettingsTogglePanel(
       rows =
         listOf(
-          V2SettingsToggleRow("Forward Notifications", if (enabled) "OpenClaw can receive selected alerts." else "Alerts stay on this phone.", Icons.Default.Notifications, enabled, viewModel::setNotificationForwardingEnabled),
+          V2SettingsToggleRow("Forward Notifications", if (enabled) "OpenClaw can receive selected alerts." else "Alerts stay on this phone.", Icons.Default.Notifications, enabled, ::setForwarding),
           V2SettingsToggleRow("Quiet Hours", "$quietStart to $quietEnd", Icons.Default.Bolt, quietEnabled) { checked ->
             viewModel.setNotificationForwardingQuietHours(enabled = checked, start = quietStart, end = quietEnd)
           },
@@ -569,8 +599,19 @@ private fun V2NotificationSettingsScreen(
           V2SettingsMetric("Policy", modeLabel),
           V2SettingsMetric("Selected Apps", packages.size.toString()),
           V2SettingsMetric("Rate Limit", "$maxEventsPerMinute/min"),
+          V2SettingsMetric("Access", if (listenerEnabled) "Granted" else "Setup"),
         ),
     )
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      ClawSecondaryButton(
+        text = if (listenerEnabled) "Check Access" else "Open System Access",
+        onClick = {
+          openV2NotificationListenerSettings(context)
+          listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
+        },
+        modifier = Modifier.weight(1f),
+      )
+    }
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = "Forwarding Mode", style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -591,18 +632,66 @@ private fun V2PhoneCapabilitiesScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
+  val context = LocalContext.current
   val cameraEnabled by viewModel.cameraEnabled.collectAsState()
   val locationMode by viewModel.locationMode.collectAsState()
   val locationPreciseEnabled by viewModel.locationPreciseEnabled.collectAsState()
   val preventSleep by viewModel.preventSleep.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
+  val cameraPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      viewModel.setCameraEnabled(granted)
+    }
+  val locationPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+      val granted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true || grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+      viewModel.setLocationMode(if (granted) LocationMode.WhileUsing else LocationMode.Off)
+      viewModel.setLocationPreciseEnabled(grants[Manifest.permission.ACCESS_FINE_LOCATION] == true)
+    }
+
+  fun setCameraAccess(checked: Boolean) {
+    if (!checked) {
+      viewModel.setCameraEnabled(false)
+      return
+    }
+    if (hasV2Permission(context, Manifest.permission.CAMERA)) {
+      viewModel.setCameraEnabled(true)
+    } else {
+      cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+    }
+  }
+
+  fun setLocationAccess(mode: LocationMode) {
+    if (mode == LocationMode.Off) {
+      viewModel.setLocationMode(LocationMode.Off)
+      return
+    }
+    if (hasV2LocationPermission(context)) {
+      viewModel.setLocationMode(LocationMode.WhileUsing)
+    } else {
+      locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+    }
+  }
+
+  fun setPreciseLocation(checked: Boolean) {
+    if (!checked) {
+      viewModel.setLocationPreciseEnabled(false)
+      return
+    }
+    if (hasV2Permission(context, Manifest.permission.ACCESS_FINE_LOCATION)) {
+      viewModel.setLocationPreciseEnabled(true)
+      viewModel.setLocationMode(LocationMode.WhileUsing)
+    } else {
+      locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+    }
+  }
 
   V2SettingsDetailFrame(title = "Phone Capabilities", subtitle = "Choose what this phone can share.", icon = Icons.AutoMirrored.Filled.ScreenShare, onBack = onBack) {
     V2SettingsTogglePanel(
       rows =
         listOf(
-          V2SettingsToggleRow("Camera", "Allow camera tools when requested.", Icons.Default.CameraAlt, cameraEnabled, viewModel::setCameraEnabled),
-          V2SettingsToggleRow("Precise Location", "Share precise location while location is enabled.", Icons.Default.LocationOn, locationPreciseEnabled, viewModel::setLocationPreciseEnabled),
+          V2SettingsToggleRow("Camera", "Allow camera tools when requested.", Icons.Default.CameraAlt, cameraEnabled, ::setCameraAccess),
+          V2SettingsToggleRow("Precise Location", "Share precise location while location is enabled.", Icons.Default.LocationOn, locationPreciseEnabled, ::setPreciseLocation),
           V2SettingsToggleRow("Keep Awake", "Keep the node available during active work.", Icons.Default.Bolt, preventSleep, viewModel::setPreventSleep),
           V2SettingsToggleRow("Canvas Status", "Show screen-sharing debug state.", Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
         ),
@@ -613,7 +702,7 @@ private fun V2PhoneCapabilitiesScreen(
         ClawSegmentedControl(
           options = listOf("Off", "While Using"),
           selected = if (locationMode == LocationMode.WhileUsing) "While Using" else "Off",
-          onSelect = { selected -> viewModel.setLocationMode(if (selected == "While Using") LocationMode.WhileUsing else LocationMode.Off) },
+          onSelect = { selected -> setLocationAccess(if (selected == "While Using") LocationMode.WhileUsing else LocationMode.Off) },
         )
       }
     }
@@ -1025,4 +1114,18 @@ private fun V2SettingsIconMark(icon: ImageVector) {
       Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(15.dp))
     }
   }
+}
+
+private fun hasV2Permission(
+  context: Context,
+  permission: String,
+): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+private fun hasV2LocationPermission(context: Context): Boolean =
+  hasV2Permission(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
+    hasV2Permission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+
+private fun openV2NotificationListenerSettings(context: Context) {
+  val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+  context.startActivity(intent)
 }
