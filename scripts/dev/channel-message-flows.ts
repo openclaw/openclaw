@@ -112,7 +112,7 @@ function usage(): string {
     "",
     "Flows:",
     "  thinking-final      Reasoning/Thinking preview, then a final answer",
-    "  working-final       Working preview with elapsed label, then a final answer",
+    "  working-final       Working preview with tool progress, then a final answer",
     "",
     "Options:",
     "  --account <accountId>   Telegram account id to use",
