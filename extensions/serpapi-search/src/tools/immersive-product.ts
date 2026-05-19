@@ -6,27 +6,9 @@ import { type SerpApiToolCtx, readBooleanArg, resolveToolConfig } from "../utils
 const ALLOWED_PARAMS = ["page_token", "more_stores", "next_page_token", "zero_trace"] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
-  const p = raw.product_results as Record<string, unknown> | undefined;
-  if (!p) return raw;
   return {
     engine: "google_immersive_product",
-    product_results: {
-      title: p.title,
-      brand: p.brand,
-      rating: p.rating,
-      reviews: p.reviews,
-      price_range: p.price_range,
-      thumbnails: p.thumbnails,
-      stores: p.stores,
-      stores_next_page_token: p.stores_next_page_token ?? null,
-      about_the_product: p.about_the_product ?? null,
-      top_insights: p.top_insights ?? null,
-      ratings: p.ratings ?? null,
-      user_reviews: p.user_reviews ?? null,
-      videos: p.videos ?? null,
-      discussions_and_forums: p.discussions_and_forums ?? null,
-      more_options: p.more_options ?? null,
-    },
+    product_results: raw.product_results ?? null,
   };
 }
 
