@@ -363,7 +363,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       opts: {
         message: "go",
         deliver: true,
-        channel: "slack",
+        bestEffortDeliver: true,
         sessionKey: "agent:tester:main",
       } as AgentCommandOpts,
       outboundSession: {
@@ -374,6 +374,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
         sessionId: "session-1",
         updatedAt: 1,
       },
+      expectedSessionIdForFreshDelivery: "session-1",
       resolveFreshSessionEntryForDelivery,
       payloads: [{ text: "final answer" }],
       result: createResult(),
@@ -392,6 +393,59 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       status: "sent",
       succeeded: true,
       resultCount: 1,
+    });
+  });
+
+  it("does not refresh final delivery routing from a different logical session", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    const resolveFreshSessionEntryForDelivery = vi.fn(async () => ({
+      sessionId: "session-2",
+      updatedAt: 2,
+      deliveryContext: {
+        channel: "slack",
+        to: "#fresh",
+        accountId: "workspace-1",
+      },
+    }));
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        bestEffortDeliver: true,
+        sessionKey: "agent:tester:main",
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:main",
+        agentId: "tester",
+      } as never,
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+      },
+      expectedSessionIdForFreshDelivery: "session-1",
+      resolveFreshSessionEntryForDelivery,
+      payloads: [{ text: "final answer" }],
+      result: createResult(),
+    });
+
+    expect(resolveFreshSessionEntryForDelivery).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+    expect(delivered.deliverySucceeded).toBe(false);
+    expectDeliveryStatusFields(delivered, {
+      requested: true,
+      attempted: false,
+      status: "failed",
+      succeeded: false,
+      reason: "channel_resolved_to_internal",
     });
   });
 

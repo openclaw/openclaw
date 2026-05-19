@@ -1533,23 +1533,32 @@ async function agentCommandInternal(
               clone: false,
             });
             const freshEntry = freshStore[sessionKey];
-            if (freshEntry) {
-              sessionStore[sessionKey] = freshEntry;
+            if (!freshEntry || freshEntry.sessionId !== sessionId) {
+              return undefined;
             }
+            sessionStore[sessionKey] = freshEntry;
             return freshEntry;
           }
         : undefined;
-    const deliveryResult = await deliverAgentCommandResult({
+    const deliveryParams = {
       cfg,
       deps: resolvedDeps,
       runtime,
       opts,
       outboundSession,
       sessionEntry,
-      resolveFreshSessionEntryForDelivery,
       result,
       payloads,
-    });
+    };
+    const deliveryResult = await deliverAgentCommandResult(
+      resolveFreshSessionEntryForDelivery
+        ? {
+            ...deliveryParams,
+            expectedSessionIdForFreshDelivery: sessionId,
+            resolveFreshSessionEntryForDelivery,
+          }
+        : deliveryParams,
+    );
 
     // Phase 2: Clear pending delivery payload after successful delivery.
     if (

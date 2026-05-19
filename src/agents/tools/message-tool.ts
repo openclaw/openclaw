@@ -57,8 +57,23 @@ function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
 function stripFormattedReasoningMessage(text: string): string {
   const stripped = stripReasoningTagsFromText(text);
   const lines = stripped.split(/\r?\n/u);
-  if (lines[0]?.trim() !== "Reasoning:") {
+  const prefix = lines[0]?.trim();
+  if (prefix !== "Reasoning:" && !/^Thinking\.{0,3}$/u.test(prefix ?? "")) {
     return stripped;
+  }
+  if (/^Thinking\.{0,3}$/u.test(prefix ?? "")) {
+    const firstBodyLine = lines.slice(1).find((line) => line.trim());
+    const trimmedBodyLine = firstBodyLine?.trim() ?? "";
+    if (
+      !trimmedBodyLine ||
+      !(
+        trimmedBodyLine.startsWith("_") &&
+        trimmedBodyLine.endsWith("_") &&
+        trimmedBodyLine.length >= 2
+      )
+    ) {
+      return stripped;
+    }
   }
 
   let index = 1;
