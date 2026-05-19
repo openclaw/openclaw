@@ -399,6 +399,42 @@ minutes; set `0` to disable). One-shot embedded runs such as auth probes,
 slug generation, and active-memory recall request cleanup at run end so stdio
 children and Streamable HTTP/SSE streams do not outlive the run.
 
+## Reseed history cap
+
+When a fresh CLI session is seeded from a prior OpenClaw transcript (for
+example after a `session_expired` retry), the rendered
+`<conversation_history>` block is capped to keep reseed prompts from
+exploding. The default is `12288` characters (about 3000 tokens) which is
+conservative for long-context backends.
+
+Per-backend override:
+
+```json5
+{
+  agents: {
+    defaults: {
+      cliBackends: {
+        "claude-cli": {
+          maxReseedHistoryChars: 65536, // ~16K tokens
+        },
+      },
+    },
+  },
+}
+```
+
+- `maxReseedHistoryChars` must be a positive integer; omit it to inherit
+  the in-source default of `12288`.
+- Raise it for backends running long-context models (Anthropic Claude
+  200K/1M contexts, Sonnet 4.6, etc.) so multi-topic conversations survive
+  a reseed.
+- Keep it small for small-context local models (Llama 3 8B, Phi-3, etc.)
+  where stuffing a large prelude into the reseed prompt would overflow
+  the model's window.
+- The cap only governs the reseed prompt's prior-history block. Live-session
+  output limits are tuned separately under `reliability.outputLimits`
+  (see [Sessions](#sessions)).
+
 ## Limitations
 
 - **No direct OpenClaw tool calls.** OpenClaw does not inject tool calls into

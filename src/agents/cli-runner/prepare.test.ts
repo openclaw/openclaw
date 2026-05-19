@@ -112,6 +112,7 @@ function createCliBackendConfig(
     systemPromptOverride?: string | null;
     bundleMcp?: boolean;
     reseedFromRawTranscriptWhenUncompacted?: boolean;
+    maxReseedHistoryChars?: number;
   } = {},
 ): OpenClawConfig {
   return {
@@ -134,6 +135,9 @@ function createCliBackendConfig(
               : {}),
             ...(params.bundleMcp
               ? { bundleMcp: true, bundleMcpMode: "claude-config-file" as const }
+              : {}),
+            ...(params.maxReseedHistoryChars !== undefined
+              ? { maxReseedHistoryChars: params.maxReseedHistoryChars }
               : {}),
           },
         },
@@ -1476,6 +1480,150 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(transcriptCheck).not.toHaveBeenCalled();
       expect(context.reusableCliSession).toEqual({ sessionId: "test-cli-sid" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("plumbs cliBackend.maxReseedHistoryChars into the rendered reseed prompt", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      // The reseed path requires a prior compaction entry whose summary
+      // becomes the leading `compactionSummary` of the rendered history.
+      // Pad the summary past the 12288-char in-source default but under
+      // the 40000-char per-backend override below. Without the plumbing,
+      // the rendered history would be truncated to the default cap and
+      // the marker would appear; with the override, the full summary
+      // survives and no truncation marker is emitted.
+      const summaryMarker = "RESEED_SUMMARY_MARKER_KEEP";
+      const padding = "x".repeat(20_000);
+      fs.appendFileSync(
+        sessionFile,
+        `${JSON.stringify({
+          type: "compaction",
+          summary: `${summaryMarker} ${padding}`,
+        })}\n`,
+        "utf-8",
+      );
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-max-reseed-history-chars",
+        config: createCliBackendConfig({
+          systemPromptOverride: null,
+          maxReseedHistoryChars: 40_000,
+        }),
+      });
+
+      expect(context.openClawHistoryPrompt).toBeDefined();
+      expect(context.openClawHistoryPrompt).toContain(summaryMarker);
+      expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the default reseed history cap when no override is configured", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const summaryMarker = "RESEED_SUMMARY_MARKER_DEFAULT";
+      const padding = "x".repeat(20_000);
+      fs.appendFileSync(
+        sessionFile,
+        `${JSON.stringify({
+          type: "compaction",
+          summary: `${summaryMarker} ${padding}`,
+        })}\n`,
+        "utf-8",
+      );
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-default-reseed-history-chars",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+      });
+
+      expect(context.openClawHistoryPrompt).toBeDefined();
+      // Default 12288-char cap kicks in; the rendered summary exceeds it so
+      // the truncation marker is present.
+      expect(context.openClawHistoryPrompt).toContain("OpenClaw reseed history truncated");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("plumbs cliBackend.maxReseedHistoryChars through the raw-tail reseed path", async () => {
+    // Covers the opted-in `reseedFromRawTranscriptWhenUncompacted` path —
+    // session-expired retries on a still-resumable CLI session — to lock
+    // in that the cap override flows through `loadCliSessionReseedMessages`'
+    // raw-tail branch as well as the compaction-summary branch.
+    const { dir, sessionFile } = createSessionFile();
+    const recentMarker = "RAW_RESEED_RECENT_MARKER_KEEP";
+    const padding = "x".repeat(8_000);
+    appendTranscriptEntry(sessionFile, {
+      id: "msg-1",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: { role: "user", content: `EARLIEST_USER ${padding}`, timestamp: 1 },
+    });
+    appendTranscriptEntry(sessionFile, {
+      id: "msg-2",
+      parentId: "msg-1",
+      timestamp: new Date(2).toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `${recentMarker} ${padding}` }],
+        api: "responses",
+        provider: "test-cli",
+        model: "test-model",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 2,
+      },
+    });
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-raw-reseed-cap-override",
+        cliSessionBinding: { sessionId: "cli-session" },
+        config: createCliBackendConfig({
+          systemPromptOverride: null,
+          reseedFromRawTranscriptWhenUncompacted: true,
+          maxReseedHistoryChars: 40_000,
+        }),
+      });
+
+      expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+      expect(context.openClawHistoryPrompt).toBeDefined();
+      expect(context.openClawHistoryPrompt).toContain(recentMarker);
+      expect(context.openClawHistoryPrompt).toContain("EARLIEST_USER");
+      expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
