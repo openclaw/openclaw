@@ -165,4 +165,16 @@ describe("acp cli option collisions", () => {
     await parseAcp(["--token-file", "/tmp/openclaw-acp-missing-token.txt"]);
     expectCliError(/Failed to (inspect|read) Gateway token file/);
   });
+
+  it("formats client errors with formatErrorMessage instead of String(err) (#83904)", async () => {
+    runAcpClientInteractive.mockImplementationOnce(async () => {
+      throw { code: 42, why: "boom" } as unknown as Error;
+    });
+    const program = createAcpProgram();
+    await program.parseAsync(["acp", "client"], { from: "user" });
+
+    const errors = defaultRuntime.error.mock.calls.map(([message]) => String(message));
+    expect(errors).toContain('{"code":42,"why":"boom"}');
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
 });

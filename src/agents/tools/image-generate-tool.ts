@@ -819,15 +819,16 @@ export function createImageGenerateTool(options?: {
       const effectiveCfg =
         applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
+      const prompt = readStringParam(params, "prompt", { required: true });
 
       const duplicateGuardResult = createImageGenerateDuplicateGuardResult(
         options?.agentSessionKey,
+        { prompt },
       );
       if (duplicateGuardResult) {
         return duplicateGuardResult;
       }
 
-      const prompt = readStringParam(params, "prompt", { required: true });
       const imageInputs = normalizeReferenceImages(params);
       const model = readStringParam(params, "model");
       const filename = readStringParam(params, "filename");

@@ -220,16 +220,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 10328
   },
   "openClawDeveloperInstructions": {
-    "chars": 1482,
-    "roughTokens": 371
+    "chars": 1769,
+    "roughTokens": 443
   },
   "totalTextOnly": {
-    "chars": 26004,
-    "roughTokens": 6501
+    "chars": 26291,
+    "roughTokens": 6573
   },
   "totalWithDynamicToolsJson": {
-    "chars": 67317,
-    "roughTokens": 16830
+    "chars": 67604,
+    "roughTokens": 16901
   },
   "userInputText": {
     "chars": 1485,
@@ -415,6 +415,8 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 
 ````text
 Running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes capabilities when available.
+
+Deferred searchable OpenClaw dynamic tools available: agents_list, cron, gateway, heartbeat_respond, nodes, session_status, sessions_history, sessions_list, sessions_send, sessions_spawn, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation; if it is not already loaded, search for `sessions_spawn` in the `openclaw` dynamic tool namespace before calling it.
 
