@@ -13,7 +13,9 @@ If a target does not match these rules, apply fails before mutating configuratio
 
 ## Plan file shape
 
-`openclaw secrets apply --from <plan.json>` expects a `targets` array of plan targets:
+`openclaw secrets apply --from <plan.json>` expects a `targets` array of plan targets.
+
+Plans can also include optional provider mutations (`providerUpserts`, `providerDeletes`) to update `secrets.providers` in the same apply:
 
 ```json5
 {
@@ -36,6 +38,56 @@ If a target does not match these rules, apply fails before mutating configuratio
     },
   ],
 }
+```
+
+## Provider upserts and deletes
+
+In addition to `targets`, a plan may include:
+
+- `providerUpserts` (object): provider definitions to create/update in `secrets.providers`
+- `providerDeletes` (array): provider aliases to delete from `secrets.providers`
+
+Provider mutations let a plan be self-contained: define a provider and then reference it from targets in one apply.
+
+### `providerUpserts`
+
+`providerUpserts` is an object keyed by provider alias. Each value is a full provider config (same shape as `secrets.providers.<alias>` in `openclaw.json`).
+
+```json5
+{
+  providerUpserts: {
+    onepassword_anthropic: {
+      source: "exec",
+      command: "/usr/bin/op",
+      args: ["read", "op://Vault/Anthropic/credential"],
+      passEnv: ["HOME", "OP_SERVICE_ACCOUNT_TOKEN"],
+      jsonOnly: false,
+      allowInsecurePath: true,
+    },
+  },
+}
+```
+
+Provider aliases must be valid secret provider aliases (alphanumeric, underscore, hyphen).
+
+### `providerDeletes`
+
+`providerDeletes` is an array of provider aliases to remove from `secrets.providers`:
+
+```json5
+{
+  providerDeletes: ["legacy_provider_1", "legacy_provider_2"],
+}
+```
+
+Provider deletes run after the plan's targets have been applied. Avoid deleting providers that are still referenced by other configuration.
+
+### Apply-time signal
+
+At apply time, the CLI logs the counts for all three fields:
+
+```text
+Plan: targets=4, providerUpserts=2, providerDeletes=0.
 ```
 
 ## Supported target scope
