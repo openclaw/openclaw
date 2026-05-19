@@ -1,3 +1,4 @@
+import process from "node:process";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
@@ -41,12 +42,10 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
   registerNodesLocationCommands(nodes);
 
   const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
-  await withConsoleLogsRoutedToStderrForJson(
-    argv,
-    async () =>
-      await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
-        mode: "lazy",
-        primary: "nodes",
-      }),
+  await withConsoleLogsRoutedToStderrForJson(argv, async () =>
+    registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+      mode: "lazy",
+      primary: "nodes",
+    }),
   );
 }

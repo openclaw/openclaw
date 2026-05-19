@@ -17,8 +17,9 @@ export async function withConsoleLogsRoutedToStderrForJson<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   if (!hasJsonOutputFlag(argv)) {
-    return run();
+    return await run();
   }
+
   const previousForceStderr = loggingState.forceConsoleToStderr;
   loggingState.forceConsoleToStderr = true;
   try {
