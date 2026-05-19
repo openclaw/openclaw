@@ -69,6 +69,7 @@ describe("Codex app-server config", () => {
           serviceTier: "flex",
           codeModeOnly: true,
           turnCompletionIdleTimeoutMs: 120_000,
+          postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
         },
       },
       env: {
@@ -84,6 +85,7 @@ describe("Codex app-server config", () => {
       serviceTier: "flex",
       codeModeOnly: true,
       turnCompletionIdleTimeoutMs: 120_000,
+      postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
     });
     expectFields(runtime.start, "runtime start", {
       transport: "websocket",
@@ -161,6 +163,17 @@ describe("Codex app-server config", () => {
       readCodexPluginConfig({
         appServer: {
           approvalPolicy: "always",
+        },
+      }),
+    ).toStrictEqual({});
+  });
+
+  it("rejects unknown app-server fields", () => {
+    expect(
+      readCodexPluginConfig({
+        appServer: {
+          postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
+          unknownTimeoutMs: 1,
         },
       }),
     ).toStrictEqual({});
