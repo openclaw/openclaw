@@ -892,7 +892,7 @@ export function pruneLegacyStoreKeys(params: {
   }
 }
 
-function resolvePreservedRawExternalStoreKey(params: {
+function resolvePreservedRawExternalStoreKeyCandidate(params: {
   cfg: OpenClawConfig;
   key: string;
   canonicalKey: string;
@@ -916,6 +916,34 @@ function resolvePreservedRawExternalStoreKey(params: {
   return key;
 }
 
+function resolveAgentSessionRestPreservingSeparators(key: string): string | undefined {
+  const normalized = normalizeSessionKeyPreservingOpaquePeerIds(key);
+  const match = /^agent:([^:]+):(.+)$/.exec(normalized);
+  const rest = match?.[2];
+  return rest ? rest : undefined;
+}
+
+function resolvePreservedRawExternalStoreKey(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  canonicalKey: string;
+}): { key: string; preserveMissingAlias: boolean } | undefined {
+  const directKey = resolvePreservedRawExternalStoreKeyCandidate(params);
+  if (directKey) {
+    return { key: directKey, preserveMissingAlias: true };
+  }
+  const canonicalRest = resolveAgentSessionRestPreservingSeparators(params.canonicalKey);
+  if (!canonicalRest) {
+    return undefined;
+  }
+  const canonicalRawKey = resolvePreservedRawExternalStoreKeyCandidate({
+    cfg: params.cfg,
+    key: canonicalRest,
+    canonicalKey: params.canonicalKey,
+  });
+  return canonicalRawKey ? { key: canonicalRawKey, preserveMissingAlias: false } : undefined;
+}
+
 function normalizeSessionStoreKeys(keys: Iterable<string | undefined>): string[] {
   const normalized = new Set<string>();
   for (const key of keys) {
@@ -929,6 +957,7 @@ function normalizeSessionStoreKeys(keys: Iterable<string | undefined>): string[]
 
 function resolvePreservedRawExternalAliasKeys(params: {
   preservedRawKey: string | undefined;
+  preserveMissingAlias: boolean;
   storeKeys: Iterable<string>;
 }): string[] {
   if (!params.preservedRawKey) {
@@ -937,6 +966,9 @@ function resolvePreservedRawExternalAliasKeys(params: {
   const aliases = Array.from(params.storeKeys).filter(
     (key) => normalizeSessionKeyPreservingOpaquePeerIds(key) === params.preservedRawKey,
   );
+  if (!params.preserveMissingAlias && aliases.length === 0) {
+    return [];
+  }
   aliases.push(params.preservedRawKey);
   return normalizeSessionStoreKeys(aliases);
 }
@@ -997,14 +1029,15 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
     store: params.store,
   });
   const primaryKey = target.canonicalKey;
-  const preservedRawKey = resolvePreservedRawExternalStoreKey({
+  const preservedRaw = resolvePreservedRawExternalStoreKey({
     cfg: params.cfg,
     key: params.key,
     canonicalKey: primaryKey,
   });
   const preservedAliasKeys = resolvePreservedRawExternalAliasKeys({
-    preservedRawKey,
-    storeKeys: target.storeKeys,
+    preservedRawKey: preservedRaw?.key,
+    preserveMissingAlias: preservedRaw?.preserveMissingAlias === true,
+    storeKeys: [...target.storeKeys, ...Object.keys(params.store)],
   });
   const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
     params.store,
@@ -1020,7 +1053,7 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
     store: params.store,
     canonicalKey: primaryKey,
     candidates: target.storeKeys.filter(
-      (key) => normalizeSessionKeyPreservingOpaquePeerIds(key) !== preservedRawKey,
+      (key) => normalizeSessionKeyPreservingOpaquePeerIds(key) !== preservedRaw?.key,
     ),
   });
   syncGatewaySessionStoreAliases({

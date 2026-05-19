@@ -490,15 +490,43 @@ test("sessions.patch and sessions.delete keep raw external aliases in sync", asy
   expect(patched.payload?.entry.sendPolicy).toBe("deny");
   const storeAfterPatch = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
-    { sessionId?: string; sendPolicy?: string }
+    { label?: string; sessionId?: string; sendPolicy?: string }
   >;
   expect(storeAfterPatch[canonicalKey]?.sessionId).toBe("sess-raw");
   expect(storeAfterPatch[canonicalKey]?.sendPolicy).toBe("deny");
   expect(storeAfterPatch[rawKey]?.sessionId).toBe("sess-raw");
   expect(storeAfterPatch[rawKey]?.sendPolicy).toBe("deny");
 
+  const listed = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+    "sessions.list",
+    {},
+  );
+  expect(listed.ok).toBe(true);
+  expect(listed.payload?.sessions.map((session) => session.key)).toEqual([canonicalKey]);
+  const visibleKey = listed.payload?.sessions[0]?.key;
+  expect(visibleKey).toBe(canonicalKey);
+
+  const patchedVisible = await directSessionHandlerReq<{
+    ok: true;
+    key: string;
+    entry: { label?: string; sessionId?: string; sendPolicy?: string };
+  }>("sessions.patch", {
+    key: visibleKey,
+    label: "Canonical visible row",
+  });
+  expect(patchedVisible.ok).toBe(true);
+  expect(patchedVisible.payload?.key).toBe(canonicalKey);
+  expect(patchedVisible.payload?.entry.label).toBe("Canonical visible row");
+  const storeAfterVisiblePatch = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { label?: string; sessionId?: string; sendPolicy?: string }
+  >;
+  expect(storeAfterVisiblePatch[canonicalKey]?.label).toBe("Canonical visible row");
+  expect(storeAfterVisiblePatch[rawKey]?.label).toBe("Canonical visible row");
+  expect(storeAfterVisiblePatch[rawKey]?.sendPolicy).toBe("deny");
+
   const deleted = await directSessionHandlerReq<{ ok: true; deleted: boolean }>("sessions.delete", {
-    key: rawKey,
+    key: visibleKey,
     deleteTranscript: false,
   });
   expect(deleted.ok).toBe(true);

@@ -1282,6 +1282,94 @@ describe("gateway session utils", () => {
     expect(store[rawKey]).toBeUndefined();
   });
 
+  test("preserved raw external aliases are rediscovered from canonical keys", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+    const canonicalKey = `agent:main:${rawKey}`;
+    const store: Record<string, SessionEntry> = {
+      [canonicalKey]: {
+        sessionId: "sess-canonical",
+        updatedAt: 3,
+      } as SessionEntry,
+      [rawKey]: {
+        sessionId: "sess-raw",
+        updatedAt: 2,
+      } as SessionEntry,
+    };
+
+    const migrated = migrateAndPruneGatewaySessionStoreKey({
+      cfg,
+      key: canonicalKey,
+      store,
+    });
+
+    expect(migrated.primaryKey).toBe(canonicalKey);
+    expect(migrated.preservedAliasKeys).toEqual([rawKey]);
+    const nextEntry = {
+      sessionId: "sess-next",
+      updatedAt: 4,
+    } as SessionEntry;
+
+    writeGatewaySessionStoreEntry({
+      store,
+      primaryKey: migrated.primaryKey,
+      aliasKeys: migrated.preservedAliasKeys,
+      entry: nextEntry,
+    });
+
+    expect(store[canonicalKey]).toBe(nextEntry);
+    expect(store[rawKey]).toBe(nextEntry);
+    expect(
+      deleteGatewaySessionStoreEntry({
+        store,
+        primaryKey: migrated.primaryKey,
+        aliasKeys: migrated.preservedAliasKeys,
+      }),
+    ).toBe(true);
+    expect(store[canonicalKey]).toBeUndefined();
+    expect(store[rawKey]).toBeUndefined();
+  });
+
+  test("canonical-only external session keys do not create raw aliases", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+    const canonicalKey = `agent:main:${rawKey}`;
+    const store: Record<string, SessionEntry> = {
+      [canonicalKey]: {
+        sessionId: "sess-canonical",
+        updatedAt: 3,
+      } as SessionEntry,
+    };
+
+    const migrated = migrateAndPruneGatewaySessionStoreKey({
+      cfg,
+      key: canonicalKey,
+      store,
+    });
+
+    expect(migrated.primaryKey).toBe(canonicalKey);
+    expect(migrated.preservedAliasKeys).toEqual([]);
+    const nextEntry = {
+      sessionId: "sess-next",
+      updatedAt: 4,
+    } as SessionEntry;
+    writeGatewaySessionStoreEntry({
+      store,
+      primaryKey: migrated.primaryKey,
+      aliasKeys: migrated.preservedAliasKeys,
+      entry: nextEntry,
+    });
+
+    expect(store[canonicalKey]).toBe(nextEntry);
+    expect(store[rawKey]).toBeUndefined();
+  });
+
   test("listAgentsForGateway rejects avatar symlink escapes outside workspace", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-avatar-outside-"));
     const workspace = path.join(root, "workspace");
