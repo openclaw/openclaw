@@ -30,14 +30,14 @@ import java.util.UUID
 @Config(sdk = [34])
 class GatewayBootstrapAuthTest {
   @Test
-  fun doesNotConnectOperatorSessionWhenOnlyBootstrapAuthExists() {
-    assertFalse(
+  fun connectsOperatorSessionWhenOnlyBootstrapAuthExists() {
+    assertTrue(
       shouldConnectOperatorSession(
         NodeRuntime.GatewayConnectAuth(token = "", bootstrapToken = "bootstrap-1", password = ""),
         storedOperatorToken = "",
       ),
     )
-    assertFalse(
+    assertTrue(
       shouldConnectOperatorSession(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
@@ -85,14 +85,14 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun resolveOperatorSessionConnectAuthIgnoresBootstrapWhenNoStoredOperatorTokenExists() {
+  fun resolveOperatorSessionConnectAuthUsesBootstrapWhenNoStoredOperatorTokenExists() {
     val resolved =
       resolveOperatorSessionConnectAuth(
         auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
       )
 
-    assertNull(resolved)
+    assertEquals(NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null), resolved)
   }
 
   @Test
@@ -183,7 +183,7 @@ class GatewayBootstrapAuthTest {
 
       assertEquals("f1", prefs.loadGatewayTlsFingerprint(endpoint.stableId))
       assertEquals("setup-bootstrap-token", waitForDesiredBootstrapToken(runtime, "nodeSession"))
-      assertNull(desiredBootstrapToken(runtime, "operatorSession"))
+      assertEquals("setup-bootstrap-token", waitForDesiredBootstrapToken(runtime, "operatorSession"))
     }
 
   @Test

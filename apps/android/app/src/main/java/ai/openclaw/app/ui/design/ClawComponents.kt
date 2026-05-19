@@ -103,7 +103,7 @@ internal fun ClawPrimaryButton(
   Button(
     onClick = onClick,
     enabled = enabled,
-    modifier = modifier.heightIn(min = 46.dp),
+    modifier = modifier.heightIn(min = 40.dp),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     colors =
       ButtonDefaults.buttonColors(
@@ -112,12 +112,12 @@ internal fun ClawPrimaryButton(
         disabledContainerColor = ClawTheme.colors.surfacePressed,
         disabledContentColor = ClawTheme.colors.textSubtle,
       ),
-    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
     elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp, pressedElevation = 0.dp),
   ) {
     if (icon != null) {
-      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(17.dp))
-      Spacer(modifier = Modifier.width(7.dp))
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(16.dp))
+      Spacer(modifier = Modifier.width(8.dp))
     }
     Text(text = text, style = ClawTheme.type.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
   }
@@ -134,19 +134,19 @@ internal fun ClawSecondaryButton(
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = modifier.heightIn(min = 44.dp),
+    modifier = modifier.heightIn(min = 38.dp),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = if (enabled) ClawTheme.colors.surfaceRaised else ClawTheme.colors.surface,
     contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
     border = BorderStroke(1.dp, if (enabled) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+      modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.Center,
     ) {
       if (icon != null) {
-        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(17.dp))
+        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(16.dp))
         Spacer(modifier = Modifier.width(7.dp))
       }
       Text(text = text, style = ClawTheme.type.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -165,14 +165,14 @@ internal fun ClawIconButton(
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = modifier.size(40.dp),
+    modifier = modifier.size(36.dp),
     shape = CircleShape,
     color = if (enabled) ClawTheme.colors.surfaceRaised else ClawTheme.colors.surface,
     contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
+      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(17.dp))
     }
   }
 }
@@ -199,7 +199,7 @@ internal fun ClawStatusPill(
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
@@ -268,9 +268,9 @@ internal fun ClawListItem(
       rowModifier
         .fillMaxWidth()
         .clip(RoundedCornerShape(ClawTheme.radii.row))
-        .padding(vertical = 7.dp),
+        .padding(vertical = 4.dp),
     verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(10.dp),
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
   ) {
     leading?.invoke()
     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -354,7 +354,7 @@ internal fun ClawTextField(
         .clip(RoundedCornerShape(ClawTheme.radii.control))
         .background(ClawTheme.colors.surfaceRaised)
         .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.control))
-        .padding(horizontal = 14.dp, vertical = 12.dp),
+        .padding(horizontal = 11.dp, vertical = 8.dp),
     textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
     cursorBrush = SolidColor(ClawTheme.colors.primary),
     minLines = minLines,

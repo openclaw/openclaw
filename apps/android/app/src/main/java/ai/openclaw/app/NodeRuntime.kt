@@ -1715,7 +1715,11 @@ internal fun resolveOperatorSessionConnectAuth(
 
   val explicitBootstrapToken = auth.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() }
   if (explicitBootstrapToken != null) {
-    return null
+    return NodeRuntime.GatewayConnectAuth(
+      token = null,
+      bootstrapToken = explicitBootstrapToken,
+      password = null,
+    )
   }
 
   return NodeRuntime.GatewayConnectAuth(
