@@ -2290,6 +2290,225 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+  it("forces a restart when isolated ingress polling stalls without worker messages", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockImplementation(() => bot);
+
+    let stopWorker: (() => void) | undefined;
+    const workerDone = new Promise<void>((resolve) => {
+      stopWorker = resolve;
+    });
+    let workerStopCalled = false;
+    let cycle = 0;
+    const createWorker = vi.fn(() => {
+      cycle += 1;
+      if (cycle === 1) {
+        return {
+          onMessage: vi.fn(() => () => undefined),
+          stop: vi.fn(async () => {
+            workerStopCalled = true;
+            stopWorker?.();
+          }),
+          task: vi.fn(async () => {
+            await workerDone;
+          }),
+        };
+      }
+      return {
+        onMessage: vi.fn(() => () => undefined),
+        stop: vi.fn(async () => undefined),
+        task: vi.fn(async () => {
+          abort.abort();
+        }),
+      };
+    });
+
+    const log = vi.fn();
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        log,
+        isolatedIngress: {
+          enabled: true,
+          createWorker,
+          drainIntervalMs: 600_000,
+        },
+      });
+
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(150_001);
+      await runPromise;
+
+      expect(workerStopCalled).toBe(true);
+      expect(createWorker).toHaveBeenCalledTimes(2);
+      expectLogIncludes(log, "Polling stall detected");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not restart isolated ingress when worker sends regular poll messages", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValueOnce(bot);
+
+    let onMessage:
+      | ((
+          message:
+            | { type: "poll-start"; startedAt: number; offset: number }
+            | { type: "poll-success"; finishedAt: number; count: number },
+        ) => void)
+      | undefined;
+    let stopWorker: (() => void) | undefined;
+    const workerDone = new Promise<void>((resolve) => {
+      stopWorker = resolve;
+    });
+    const createWorker = vi.fn(() => ({
+      onMessage: vi.fn((handler) => {
+        onMessage = handler;
+        return () => undefined;
+      }),
+      stop: vi.fn(async () => {
+        stopWorker?.();
+      }),
+      task: vi.fn(async () => {
+        await workerDone;
+      }),
+    }));
+
+    const log = vi.fn();
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        log,
+        isolatedIngress: {
+          enabled: true,
+          createWorker,
+          drainIntervalMs: 600_000,
+        },
+      });
+
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(onMessage).toBeTypeOf("function"));
+
+      onMessage?.({ type: "poll-start", startedAt: Date.now(), offset: 0 });
+      onMessage?.({ type: "poll-success", finishedAt: Date.now(), count: 0 });
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      onMessage?.({ type: "poll-start", startedAt: Date.now(), offset: 1 });
+      onMessage?.({ type: "poll-success", finishedAt: Date.now(), count: 0 });
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      onMessage?.({ type: "poll-start", startedAt: Date.now(), offset: 2 });
+      onMessage?.({ type: "poll-success", finishedAt: Date.now(), count: 0 });
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      onMessage?.({ type: "poll-start", startedAt: Date.now(), offset: 3 });
+      onMessage?.({ type: "poll-success", finishedAt: Date.now(), count: 0 });
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      expectLogExcludes(log, "Polling stall detected");
+      expect(createWorker).toHaveBeenCalledTimes(1);
+
+      abort.abort();
+      await runPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors a custom polling stall threshold in isolated ingress mode", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockImplementation(() => bot);
+
+    let stopWorker: (() => void) | undefined;
+    const workerDone = new Promise<void>((resolve) => {
+      stopWorker = resolve;
+    });
+    let cycle = 0;
+    const createWorker = vi.fn(() => {
+      cycle += 1;
+      if (cycle === 1) {
+        return {
+          onMessage: vi.fn(() => () => undefined),
+          stop: vi.fn(async () => {
+            stopWorker?.();
+          }),
+          task: vi.fn(async () => {
+            await workerDone;
+          }),
+        };
+      }
+      return {
+        onMessage: vi.fn(() => () => undefined),
+        stop: vi.fn(async () => undefined),
+        task: vi.fn(async () => {
+          abort.abort();
+        }),
+      };
+    });
+
+    const log = vi.fn();
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        log,
+        stallThresholdMs: 300_000,
+        isolatedIngress: {
+          enabled: true,
+          createWorker,
+          drainIntervalMs: 600_000,
+        },
+      });
+
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(1));
+
+      await vi.advanceTimersByTimeAsync(150_001);
+      expectLogExcludes(log, "Polling stall detected");
+      expect(createWorker).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(180_000);
+      await runPromise;
+
+      expectLogIncludes(log, "Polling stall detected");
+      expect(createWorker).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("forces a restart when polling stalls without getUpdates activity", async () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);

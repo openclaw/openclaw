@@ -686,6 +686,7 @@ export class TelegramPollingSession {
       proxy: ingress.proxy,
     });
     this.opts.log(`[telegram][diag] isolated polling ingress started spool=${spoolDir}`);
+    const liveness = new TelegramPollingLivenessTracker();
     const pollState: {
       startedAt: number | null;
       offset: number | null;
@@ -705,6 +706,7 @@ export class TelegramPollingSession {
         pollState.offset = message.offset;
         pollState.outcome = "started";
         delete pollState.error;
+        liveness.noteGetUpdatesStarted({ offset: message.offset }, message.startedAt);
         return;
       }
       if (message.type === "poll-success") {
@@ -713,11 +715,15 @@ export class TelegramPollingSession {
         }
         this.#drainPendingDeliveriesAfterReconnect();
         pollState.outcome = `ok:${message.count}`;
+        liveness.noteGetUpdatesSuccess(undefined, message.finishedAt);
+        liveness.noteGetUpdatesFinished();
         return;
       }
       if (message.type === "poll-error") {
         pollState.outcome = "error";
         pollState.error = message.message;
+        liveness.noteGetUpdatesError(new Error(message.message), message.finishedAt);
+        liveness.noteGetUpdatesFinished();
       }
     });
     const stopOnAbort = () => {
@@ -780,6 +786,19 @@ export class TelegramPollingSession {
       void drainOnce();
     }, drainIntervalMs);
     drainTimer.unref?.();
+    const watchdog = setInterval(() => {
+      if (this.opts.abortSignal?.aborted || restartRequested) {
+        return;
+      }
+      const stall = liveness.detectStall({ thresholdMs: this.#stallThresholdMs });
+      if (stall) {
+        this.#transportState.markDirty();
+        restartRequested = true;
+        this.opts.log(`[telegram] ${stall.message}`);
+        void worker.stop();
+      }
+    }, POLL_WATCHDOG_INTERVAL_MS);
+    watchdog.unref?.();
     try {
       try {
         await worker.task();
@@ -818,6 +837,7 @@ export class TelegramPollingSession {
       return shouldRestart ? "continue" : "exit";
     } finally {
       clearInterval(drainTimer);
+      clearInterval(watchdog);
       unsubscribe();
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       await worker.stop();
