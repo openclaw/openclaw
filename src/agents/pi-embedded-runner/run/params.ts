@@ -204,6 +204,13 @@ export type RunEmbeddedPiAgentParams = {
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /**
+   * Notified once the message tool successfully delivers a visible source
+   * reply via `action="send"` while `sourceReplyDeliveryMode === "message_tool_only"`.
+   * Wired from the reply runtime so the typing controller can stop the
+   * channel typing keepalive in lockstep with delivery (issue #84276).
+   */
+  onSourceReplyDelivered?: () => void;
   silentReplyPromptMode?: SilentReplyPromptMode;
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;

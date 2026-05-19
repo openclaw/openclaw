@@ -573,6 +573,13 @@ type MessageToolOptions = {
   inboundEventKind?: InboundEventKind;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
+  /**
+   * Invoked after a successful (non-dry-run) `action="send"` when
+   * `sourceReplyDeliveryMode === "message_tool_only"`. Lets the caller stop
+   * channel typing keepalive immediately so the channel-side typing TTL is not
+   * refreshed after the visible reply has already been delivered (issue #84276).
+   */
+  onSourceReplyDelivered?: () => void;
 };
 
 type MessageToolDiscoveryParams = {
@@ -1057,6 +1064,28 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         inboundEventKind: options?.inboundEventKind,
         abortSignal: signal,
       });
+
+      // Issue #84276: when the agent delivers a visible reply through the
+      // message tool in `message_tool_only` mode, the source channel's typing
+      // indicator should stop refreshing immediately. Otherwise the keepalive
+      // loop can issue one more `sendTyping` packet between the in-flight tool
+      // call and the dispatcher's finally block, leaving the bubble visible
+      // for the rest of the channel-side TTL after the reply has already
+      // landed. Notify the caller (which wires this into the typing
+      // controller) so the keepalive can be sealed in lockstep with delivery.
+      if (
+        action === "send" &&
+        options?.sourceReplyDeliveryMode === "message_tool_only" &&
+        result.kind === "send" &&
+        result.dryRun !== true
+      ) {
+        try {
+          options.onSourceReplyDelivered?.();
+        } catch {
+          // Typing-indicator cleanup is best-effort; never fail the tool call
+          // because of a downstream signaling error.
+        }
+      }
 
       const toolResult = getToolResult(result);
       if (toolResult) {

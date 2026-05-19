@@ -1094,6 +1094,7 @@ describe("web auto-reply connection", () => {
       isActive: vi.fn(() => false),
       markRunComplete: vi.fn(),
       markDispatchIdle,
+      markSourceReplyDelivered: vi.fn(),
       cleanup: vi.fn(),
     };
     const reply = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1"));

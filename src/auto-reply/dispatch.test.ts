@@ -204,6 +204,7 @@ describe("withReplyDispatcher", () => {
       isActive: vi.fn(() => true),
       markRunComplete: vi.fn(),
       markDispatchIdle: vi.fn(),
+      markSourceReplyDelivered: vi.fn(),
       cleanup: vi.fn(),
     };
     hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({

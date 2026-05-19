@@ -11,6 +11,16 @@ export type TypingController = {
   isActive: () => boolean;
   markRunComplete: () => void;
   markDispatchIdle: () => void;
+  /**
+   * Signal that a user-visible reply has been delivered through the source channel
+   * (e.g. via a `message(action=send)` tool call in `message_tool_only` mode).
+   *
+   * Stops the keepalive loop immediately and seals the controller so that no
+   * further `sendTyping` packets refresh the channel-side typing TTL after the
+   * reply has already landed. Idempotent: subsequent calls and the existing
+   * markRunComplete/markDispatchIdle finalize flow are no-ops once sealed.
+   */
+  markSourceReplyDelivered: () => void;
   cleanup: () => void;
 };
 
@@ -39,6 +49,7 @@ export function createTypingController(params: {
       isActive: () => false,
       markRunComplete: () => {},
       markDispatchIdle: () => {},
+      markSourceReplyDelivered: () => {},
       cleanup: () => {},
     };
   }
@@ -238,6 +249,27 @@ export function createTypingController(params: {
     maybeStopOnIdle();
   };
 
+  // Issue #84276: in `message_tool_only` source-reply mode the visible reply is
+  // delivered directly through the message(action=send) tool path. Once that
+  // delivery lands the channel will clear its typing indicator on its own when
+  // the actual message arrives, but the keepalive loop may have just refreshed
+  // the typing TTL (Discord ~10s, others similar). Without an explicit signal
+  // the user perceives a lingering typing bubble for the remainder of that TTL
+  // even though the reply is already on screen. Treat a delivered source reply
+  // as a terminal event for typing: stop the keepalive, fire onCleanup, and
+  // seal so late tool/block callbacks (and the dispatcher's grace-timer based
+  // markRunComplete/markDispatchIdle in the finally block) cannot re-engage
+  // typing after the reply is visible.
+  const markSourceReplyDelivered = () => {
+    if (sealed) {
+      return;
+    }
+    log?.("typing: source reply delivered via message tool; stopping keepalive");
+    runComplete = true;
+    dispatchIdle = true;
+    cleanup();
+  };
+
   return {
     onReplyStart: ensureStart,
     startTypingLoop,
@@ -246,6 +278,7 @@ export function createTypingController(params: {
     isActive,
     markRunComplete,
     markDispatchIdle,
+    markSourceReplyDelivered,
     cleanup,
   };
 }

@@ -425,6 +425,124 @@ describe("message tool secret scoping", () => {
     expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
   });
 
+  // Issue #84276: Discord typing indicator lingers ~10s after reply delivery in
+  // the message_tool_only source-reply path. The fix wires an
+  // `onSourceReplyDelivered` callback from the message tool back to the typing
+  // controller so the keepalive can be stopped in lockstep with delivery.
+  describe("onSourceReplyDelivered (issue #84276)", () => {
+    function mockNonDryRunSendResult() {
+      mocks.runMessageAction.mockClear();
+      mocks.runMessageAction.mockResolvedValue({
+        kind: "send",
+        action: "send",
+        channel: "discord",
+        to: "user:123",
+        handledBy: "plugin",
+        payload: {},
+        dryRun: false,
+      } satisfies MessageActionRunResult);
+    }
+
+    it("fires onSourceReplyDelivered after a successful non-dry-run send in message_tool_only mode", async () => {
+      mockNonDryRunSendResult();
+      const onSourceReplyDelivered = vi.fn();
+
+      await executeSend({
+        action: { message: "hello" },
+        toolOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          currentChannelProvider: "discord",
+          agentSessionKey: "agent:main:discord:direct:123",
+          onSourceReplyDelivered,
+        },
+      });
+
+      expect(onSourceReplyDelivered).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not fire onSourceReplyDelivered for dry-run sends", async () => {
+      // mockSendResult() defaults to dryRun: true.
+      mockSendResult({ channel: "discord", to: "user:123" });
+      const onSourceReplyDelivered = vi.fn();
+
+      await executeSend({
+        action: { message: "hello" },
+        toolOptions: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          currentChannelProvider: "discord",
+          agentSessionKey: "agent:main:discord:direct:123",
+          onSourceReplyDelivered,
+        },
+      });
+
+      expect(onSourceReplyDelivered).not.toHaveBeenCalled();
+    });
+
+    it("does not fire onSourceReplyDelivered when sourceReplyDeliveryMode is automatic", async () => {
+      mockNonDryRunSendResult();
+      const onSourceReplyDelivered = vi.fn();
+
+      await executeSend({
+        action: { message: "hello" },
+        toolOptions: {
+          sourceReplyDeliveryMode: "automatic",
+          currentChannelProvider: "discord",
+          agentSessionKey: "agent:main:discord:direct:123",
+          onSourceReplyDelivered,
+        },
+      });
+
+      expect(onSourceReplyDelivered).not.toHaveBeenCalled();
+    });
+
+    it("does not fire onSourceReplyDelivered for non-send actions", async () => {
+      mocks.runMessageAction.mockClear();
+      mocks.runMessageAction.mockResolvedValue({
+        kind: "action",
+        action: "react",
+        channel: "discord",
+        handledBy: "plugin",
+        payload: {},
+        dryRun: false,
+      } satisfies MessageActionRunResult);
+      const onSourceReplyDelivered = vi.fn();
+
+      const tool = createMessageTool({
+        config: {} as never,
+        runMessageAction: mocks.runMessageAction as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "discord",
+        agentSessionKey: "agent:main:discord:direct:123",
+        onSourceReplyDelivered,
+      });
+      await tool.execute("1", { action: "react", emoji: "👍" });
+
+      expect(onSourceReplyDelivered).not.toHaveBeenCalled();
+    });
+
+    it("survives an onSourceReplyDelivered callback that throws", async () => {
+      mockNonDryRunSendResult();
+      const onSourceReplyDelivered = vi.fn(() => {
+        throw new Error("boom");
+      });
+
+      // Should not throw — callback errors must not fail the tool call.
+      await expect(
+        executeSend({
+          action: { message: "hello" },
+          toolOptions: {
+            sourceReplyDeliveryMode: "message_tool_only",
+            currentChannelProvider: "discord",
+            agentSessionKey: "agent:main:discord:direct:123",
+            onSourceReplyDelivered,
+          },
+        }),
+      ).resolves.toBeDefined();
+
+      expect(onSourceReplyDelivered).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("uses a non-webchat session key when ambient current channel drifted to webchat", async () => {
     mockSendResult();
 

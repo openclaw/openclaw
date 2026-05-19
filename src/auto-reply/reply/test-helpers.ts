@@ -13,6 +13,7 @@ export function createMockTypingController(
     isActive: vi.fn(() => false),
     markRunComplete: vi.fn(),
     markDispatchIdle: vi.fn(),
+    markSourceReplyDelivered: vi.fn(),
     cleanup: vi.fn(),
     ...overrides,
   };
