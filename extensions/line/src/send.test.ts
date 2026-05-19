@@ -12,6 +12,7 @@ const {
   recordChannelActivityMock,
   logVerboseMock,
   resolvePinnedHostnameWithPolicyMock,
+  fetchWithSsrFGuardMock,
 } = vi.hoisted(() => {
   const pushMessageMock = vi.fn();
   const replyMessageMock = vi.fn();
@@ -31,6 +32,7 @@ const {
   const recordChannelActivityMock = vi.fn();
   const logVerboseMock = vi.fn();
   const resolvePinnedHostnameWithPolicyMock = vi.fn();
+  const fetchWithSsrFGuardMock = vi.fn();
   return {
     pushMessageMock,
     replyMessageMock,
@@ -43,6 +45,7 @@ const {
     recordChannelActivityMock,
     logVerboseMock,
     resolvePinnedHostnameWithPolicyMock,
+    fetchWithSsrFGuardMock,
   };
 });
 
@@ -78,6 +81,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock,
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
 let sendModule: typeof import("./send.js");
@@ -123,6 +127,15 @@ describe("LINE send helpers", () => {
     recordChannelActivityMock.mockReset();
     logVerboseMock.mockReset();
     resolvePinnedHostnameWithPolicyMock.mockReset();
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock.mockImplementation(async () => ({
+      response: new Response(null, {
+        status: 200,
+        headers: new Headers({ "content-length": "1024" }),
+      }),
+      finalUrl: "https://example.com/asset",
+      release: async () => undefined,
+    }));
 
     MessagingApiClientMock.mockImplementation(function () {
       return {
@@ -449,5 +462,51 @@ describe("LINE send helpers", () => {
       { messages: Array<{ quickReply?: { items: unknown[] } }> },
     ];
     expect(firstCall[0].messages[0].quickReply?.items).toHaveLength(13);
+  });
+
+  it("pushImageMessage does not double-probe when previewImageUrl equals the originalContentUrl", async () => {
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock.mockImplementation(async () => ({
+      response: new Response(null, {
+        status: 200,
+        headers: new Headers({ "content-length": "2048" }),
+      }),
+      finalUrl: "https://example.com/shared.jpg",
+      release: async () => undefined,
+    }));
+
+    await sendModule.pushImageMessage(
+      "line:user:U200",
+      "https://example.com/shared.jpg",
+      "https://example.com/shared.jpg",
+      { cfg: LINE_TEST_CFG },
+    );
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(pushMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  // T12 — sendMessageLine: oversize image URL must reject before client.pushMessage runs.
+  it("does not call LINE pushMessage when an outbound image exceeds the LINE size cap", async () => {
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock.mockImplementation(async () => ({
+      response: new Response(null, {
+        status: 200,
+        headers: new Headers({ "content-length": String(11 * 1024 * 1024) }),
+      }),
+      finalUrl: "https://example.com/over-cap.png",
+      release: async () => undefined,
+    }));
+
+    await expect(
+      sendModule.sendMessageLine("line:user:U999", "", {
+        cfg: LINE_TEST_CFG,
+        mediaUrl: "https://example.com/over-cap.png",
+        mediaKind: "image",
+      }),
+    ).rejects.toThrow(/LINE image media must be ≤10485760 bytes/);
+
+    expect(pushMessageMock).not.toHaveBeenCalled();
+    expect(replyMessageMock).not.toHaveBeenCalled();
   });
 });

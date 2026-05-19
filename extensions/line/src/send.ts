@@ -5,7 +5,7 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveLineAccount } from "./accounts.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
-import { validateLineMediaUrl } from "./outbound-media.js";
+import { precheckLineOutboundMediaSize, validateLineMediaUrl } from "./outbound-media.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 import type { LineSendResult } from "./types.js";
 
@@ -294,11 +294,14 @@ export async function sendMessageLine(
           throw new Error("LINE video messages require previewImageUrl to reference an image URL");
         }
         await validateLineMediaUrl(previewImageUrl);
+        await precheckLineOutboundMediaSize(mediaUrl, "video");
+        await precheckLineOutboundMediaSize(previewImageUrl, "image");
         const trackingId = isLineUserChatId(chatId) ? opts.trackingId : undefined;
         messages.push(createVideoMessage(mediaUrl, previewImageUrl, trackingId));
         break;
       }
       case "audio":
+        await precheckLineOutboundMediaSize(mediaUrl, "audio");
         messages.push(createAudioMessage(mediaUrl, opts.durationMs ?? 60000));
         break;
       case "image":
@@ -307,6 +310,10 @@ export async function sendMessageLine(
         {
           const previewImageUrl = opts.previewImageUrl?.trim() || mediaUrl;
           await validateLineMediaUrl(previewImageUrl);
+          await precheckLineOutboundMediaSize(mediaUrl, "image");
+          if (previewImageUrl !== mediaUrl) {
+            await precheckLineOutboundMediaSize(previewImageUrl, "image");
+          }
           messages.push(createImageMessage(mediaUrl, previewImageUrl));
         }
         break;
@@ -389,6 +396,10 @@ export async function pushImageMessage(
   await validateLineMediaUrl(originalContentUrl);
   if (previewImageUrl) {
     await validateLineMediaUrl(previewImageUrl);
+  }
+  await precheckLineOutboundMediaSize(originalContentUrl, "image");
+  if (previewImageUrl && previewImageUrl !== originalContentUrl) {
+    await precheckLineOutboundMediaSize(previewImageUrl, "image");
   }
   return pushLineMessages(to, [createImageMessage(originalContentUrl, previewImageUrl)], opts, {
     verboseMessage: (chatId) => `line: pushed image to ${chatId}`,
