@@ -255,10 +255,21 @@ function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
 export async function appendSessionTranscriptMessage<TMessage>(
   params: AppendSessionTranscriptMessageParams<TMessage>,
 ): Promise<{ messageId: string; message: TMessage }> {
-  return await withSessionTranscriptWriteLock(params, () =>
-    withTranscriptAppendQueue(params.transcriptPath, () =>
-      appendSessionTranscriptMessageLocked(params),
-    ),
+  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
+    sessionFile: params.transcriptPath,
+  });
+  if (activeLockRunner) {
+    // Active prompt-stream writes must acquire the session lock before joining
+    // the append FIFO; otherwise a hook that already owns the lock can deadlock
+    // behind the prompt append it is blocking.
+    return await activeLockRunner(() =>
+      withTranscriptAppendQueue(params.transcriptPath, () =>
+        appendSessionTranscriptMessageLocked(params),
+      ),
+    );
+  }
+  return await withTranscriptAppendQueue(params.transcriptPath, () =>
+    withSessionTranscriptWriteLock(params, () => appendSessionTranscriptMessageLocked(params)),
   );
 }
 
@@ -266,12 +277,6 @@ async function withSessionTranscriptWriteLock<T>(
   params: Pick<AppendSessionTranscriptMessageParams, "transcriptPath" | "config">,
   run: () => Promise<T> | T,
 ): Promise<T> {
-  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
-    sessionFile: params.transcriptPath,
-  });
-  if (activeLockRunner) {
-    return await activeLockRunner(run);
-  }
   const lock = await acquireSessionWriteLock({
     sessionFile: params.transcriptPath,
     ...resolveSessionWriteLockOptions(params.config),

@@ -22,6 +22,7 @@ import {
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import {
+  collectMessagingToolDeliveredMediaUrls,
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
   hasDeliveredExpectedMedia,
@@ -563,6 +564,24 @@ function hasGatewayAgentDeliveredExpectedMedia(
   return Boolean(result && hasDeliveredExpectedMedia(result, expectedMediaUrls));
 }
 
+function hasGatewayAgentMessagingToolDeliveredExpectedMedia(
+  response: unknown,
+  expectedMediaUrls: readonly string[],
+): boolean {
+  const expected = Array.from(
+    new Set(expectedMediaUrls.map((url) => url.trim()).filter((url) => url.length > 0)),
+  );
+  if (expected.length === 0) {
+    return true;
+  }
+  const result = getGatewayAgentResult(response);
+  if (!result) {
+    return false;
+  }
+  const delivered = new Set(collectMessagingToolDeliveredMediaUrls(result));
+  return expected.every((url) => delivered.has(url));
+}
+
 function getGatewayAgentCommandDeliveryFailure(response: unknown): string | undefined {
   const result = getGatewayAgentResult(response);
   return result ? getAgentCommandDeliveryFailure(result) : undefined;
@@ -617,7 +636,7 @@ async function deliverGeneratedMediaCompletionDirect(params: {
     accountId?: string;
     threadId?: string;
   };
-  expectedMediaUrls: readonly string[];
+  mediaUrls: readonly string[];
   internalEvents?: readonly AgentInternalEvent[];
   sourceTool?: string;
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
@@ -625,7 +644,7 @@ async function deliverGeneratedMediaCompletionDirect(params: {
     !params.deliveryTarget.deliver ||
     !params.deliveryTarget.channel ||
     !params.deliveryTarget.to ||
-    params.expectedMediaUrls.length === 0
+    params.mediaUrls.length === 0
   ) {
     return undefined;
   }
@@ -645,7 +664,7 @@ async function deliverGeneratedMediaCompletionDirect(params: {
       requesterSessionKey: params.requesterSessionKey,
       agentId,
       content: `The generated ${mediaLabel} is ready.`,
-      mediaUrls: Array.from(params.expectedMediaUrls),
+      mediaUrls: Array.from(params.mediaUrls),
       idempotencyKey,
       mirror: {
         sessionKey: params.requesterSessionKey,
@@ -664,6 +683,21 @@ async function deliverGeneratedMediaCompletionDirect(params: {
       error: `generated media direct delivery failed: ${summarizeDeliveryError(err)}`,
     };
   }
+}
+
+function resolveGeneratedMediaDirectFallbackUrls(params: {
+  expectedMediaUrls: readonly string[];
+  announceResponse?: unknown;
+}): string[] {
+  const expected = Array.from(
+    new Set(params.expectedMediaUrls.map((url) => url.trim()).filter((url) => url.length > 0)),
+  );
+  const result = getGatewayAgentResult(params.announceResponse);
+  if (!result) {
+    return expected;
+  }
+  const delivered = new Set(collectMessagingToolDeliveredMediaUrls(result));
+  return expected.filter((url) => !delivered.has(url));
 }
 
 function stripNonDeliverableChannelForCompletionOrigin(
@@ -772,29 +806,31 @@ async function sendSubagentAnnounceDirectly(params: {
           directOrigin: effectiveDirectOrigin,
           requesterSessionOrigin,
         }));
-    const tryGeneratedMediaDirectDelivery = async () =>
-      await deliverGeneratedMediaCompletionDirect({
+    const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
+    const tryGeneratedMediaDirectDelivery = async (announceResponse?: unknown) => {
+      if (requesterActivity.isActive) {
+        return undefined;
+      }
+      const missingMediaUrls = resolveGeneratedMediaDirectFallbackUrls({
+        expectedMediaUrls,
+        announceResponse,
+      });
+      return await deliverGeneratedMediaCompletionDirect({
         cfg,
         requesterSessionKey: canonicalRequesterSessionKey,
         directIdempotencyKey: params.directIdempotencyKey,
         deliveryTarget,
-        expectedMediaUrls,
+        mediaUrls: missingMediaUrls,
         internalEvents: params.internalEvents,
         sourceTool: params.sourceTool,
       });
+    };
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
       : undefined;
     const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
     let completionWakeFailureReason: EmbeddedPiQueueFailureReason | undefined;
     let completionWakeRetriedWithoutTranscriptWait = false;
-    const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
-    if (requesterActivity.isActive && requiresMessageToolDelivery && expectedMediaUrls.length > 0) {
-      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
-      if (generatedMediaDelivery?.delivered) {
-        return generatedMediaDelivery;
-      }
-    }
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
       channel:
@@ -928,7 +964,7 @@ async function sendSubagentAnnounceDirectly(params: {
       requiresMessageToolDelivery &&
       !hasGatewayAgentMessagingToolDelivery(directAnnounceResponse)
     ) {
-      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
+      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery(directAnnounceResponse);
       if (generatedMediaDelivery) {
         return generatedMediaDelivery;
       }
@@ -941,9 +977,14 @@ async function sendSubagentAnnounceDirectly(params: {
     if (
       agentMediatedCompletion &&
       expectedMediaUrls.length > 0 &&
-      !hasGatewayAgentDeliveredExpectedMedia(directAnnounceResponse, expectedMediaUrls)
+      !(requiresMessageToolDelivery
+        ? hasGatewayAgentMessagingToolDeliveredExpectedMedia(
+            directAnnounceResponse,
+            expectedMediaUrls,
+          )
+        : hasGatewayAgentDeliveredExpectedMedia(directAnnounceResponse, expectedMediaUrls))
     ) {
-      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
+      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery(directAnnounceResponse);
       if (generatedMediaDelivery) {
         return generatedMediaDelivery;
       }
