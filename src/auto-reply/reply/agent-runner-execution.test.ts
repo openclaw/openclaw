@@ -2980,6 +2980,77 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("suppresses progress callbacks after message-tool-only delivery completes", async () => {
+    const onItemEvent = vi.fn();
+    const onCommandOutput = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "tool-message-1",
+          phase: "end",
+          kind: "tool",
+          title: "message",
+          name: "message",
+          status: "completed",
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "command_output",
+        data: {
+          itemId: "command:exec-1",
+          phase: "end",
+          title: "command false",
+          toolCallId: "exec-1",
+          name: "exec",
+          output: "failed command output",
+          status: "failed",
+          exitCode: 1,
+        },
+      });
+      return { payloads: [{ text: "NO_REPLY" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "discord",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {
+        onItemEvent,
+        onCommandOutput,
+      } satisfies GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "on",
+    });
+
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "message",
+        phase: "end",
+        status: "completed",
+      }),
+    );
+    expect(onCommandOutput).not.toHaveBeenCalled();
+  });
+
   it("keeps compaction start notices silent by default", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {

@@ -1232,13 +1232,43 @@ export async function dispatchReplyFromConfig(
       !sendPolicyDenied &&
       shouldEmitVerboseProgress() &&
       shouldSendVerboseProgressMessages;
+    let finalReplyDeliveryStarted = false;
+    const hasExecApprovalPayload = (payload: ReplyPayload) => {
+      const execApproval =
+        payload.channelData &&
+        typeof payload.channelData === "object" &&
+        !Array.isArray(payload.channelData)
+          ? payload.channelData.execApproval
+          : undefined;
+      return execApproval && typeof execApproval === "object" && !Array.isArray(execApproval);
+    };
+    const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) => {
+      if (!finalReplyDeliveryStarted) {
+        return false;
+      }
+      const reply = resolveSendableOutboundReplyParts(payload);
+      return !reply.hasMedia && !hasExecApprovalPayload(payload);
+    };
+    const shouldSuppressMessageToolOnlyTextErrorProgress = (payload: ReplyPayload) => {
+      if (
+        sourceReplyDeliveryMode !== "message_tool_only" ||
+        !suppressDefaultToolProgressMessages ||
+        payload.isError !== true
+      ) {
+        return false;
+      }
+      const reply = resolveSendableOutboundReplyParts(payload);
+      return !reply.hasMedia && !hasExecApprovalPayload(payload);
+    };
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
       const sourceReplyTranscriptMirror =
         getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
-      if (hasOutboundReplyContent(payload, { trimText: true })) {
+      const hasVisibleFinalContent = hasOutboundReplyContent(payload, { trimText: true });
+      if (hasVisibleFinalContent) {
         markInboundDedupeReplayUnsafe();
+        finalReplyDeliveryStarted = true;
       }
       const ttsPayload = await maybeApplyTtsToReplyPayload({
         payload,
@@ -1622,17 +1652,15 @@ export async function dispatchReplyFromConfig(
               if (!deliveryPayload) {
                 return;
               }
+              if (shouldSuppressLateTextOnlyToolProgress(deliveryPayload)) {
+                return;
+              }
+              if (shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
+                return;
+              }
               if (shouldSuppressDefaultToolProgressMessages()) {
                 const hasMedia = resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
-                const execApproval =
-                  deliveryPayload.channelData &&
-                  typeof deliveryPayload.channelData === "object" &&
-                  !Array.isArray(deliveryPayload.channelData)
-                    ? deliveryPayload.channelData.execApproval
-                    : undefined;
-                const hasExecApproval =
-                  execApproval && typeof execApproval === "object" && !Array.isArray(execApproval);
-                if (!hasMedia && !hasExecApproval && deliveryPayload.isError !== true) {
+                if (!hasMedia && !hasExecApprovalPayload(deliveryPayload)) {
                   return;
                 }
               }

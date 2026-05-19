@@ -723,6 +723,7 @@ export async function processDiscordMessage(
         });
         replyReference.markSent();
         if (isFinal) {
+          draftPreview.markFinalReplyDelivered();
           observer?.onFinalReplyDelivered?.();
         }
       },
