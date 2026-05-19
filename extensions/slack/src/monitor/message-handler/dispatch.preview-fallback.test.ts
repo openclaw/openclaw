@@ -1451,8 +1451,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(deliverRepliesMock).not.toHaveBeenCalled();
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
-    const call = finalizeSlackPreviewEditMock.mock.calls[0] as [Record<string, unknown>];
-    expect(call[0].text).toBe(FINAL_REPLY_TEXT);
+    expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "preview edit params", {
+      text: FINAL_REPLY_TEXT,
+    });
   });
 
   it("keeps same-content tool and final payloads distinct after preview fallback", async () => {
