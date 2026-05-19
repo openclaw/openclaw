@@ -79,7 +79,7 @@ if (!skipArchive && rotatedSessionFiles.size > 0) {
 }
 
 console.log("# Disk state after rotation");
-const dirEntries = readdirSync(dirname(storePath)).sort();
+const dirEntries = readdirSync(dirname(storePath)).toSorted();
 for (const entry of dirEntries) {
   const stat = statSync(join(dirname(storePath), entry));
   console.log(`  ${entry}  (${stat.size} bytes)`);
