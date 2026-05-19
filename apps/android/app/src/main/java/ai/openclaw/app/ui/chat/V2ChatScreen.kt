@@ -115,8 +115,8 @@ fun V2ChatScreen(
     modifier =
       Modifier
         .fillMaxSize()
-        .padding(horizontal = 18.dp, vertical = 10.dp),
-    verticalArrangement = Arrangement.spacedBy(7.dp),
+        .padding(horizontal = 18.dp, vertical = 7.dp),
+    verticalArrangement = Arrangement.spacedBy(5.dp),
   ) {
     V2ChatHeader(
       sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
@@ -189,7 +189,7 @@ private fun V2ChatHeader(
     ) {
       Text(
         text = sessionTitle,
-        style = ClawTheme.type.title.copy(fontSize = 15.sp, lineHeight = 19.sp),
+        style = ClawTheme.type.title.copy(fontSize = 11.sp, lineHeight = 14.sp),
         color = ClawTheme.colors.text,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
@@ -235,8 +235,8 @@ private fun V2ModelPill(
   ) {
     Text(
       text = text,
-      modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-      style = ClawTheme.type.caption.copy(fontSize = 9.5.sp, lineHeight = 12.sp),
+      modifier = Modifier.padding(horizontal = 7.dp, vertical = 1.5.dp),
+      style = ClawTheme.type.caption.copy(fontSize = 7.8.sp, lineHeight = 9.8.sp),
       maxLines = 1,
     )
   }
@@ -250,13 +250,13 @@ private fun V2HeaderIcon(
 ) {
   Surface(
     onClick = onClick,
-    modifier = Modifier.size(32.dp),
+    modifier = Modifier.size(25.dp),
     shape = CircleShape,
     color = Color.Transparent,
     contentColor = ClawTheme.colors.text,
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(21.dp))
+      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(16.dp))
     }
   }
 }
@@ -288,8 +288,8 @@ private fun V2ChatMessageList(
       modifier = Modifier.fillMaxSize(),
       state = listState,
       reverseLayout = true,
-      verticalArrangement = Arrangement.spacedBy(9.dp),
-      contentPadding = PaddingValues(top = 10.dp, bottom = 6.dp),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
+      contentPadding = PaddingValues(top = 7.dp, bottom = 4.dp),
     ) {
       if (!stream.isNullOrEmpty()) {
         item(key = "stream") {
@@ -364,13 +364,13 @@ private fun V2ChatBubble(
     horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
   ) {
     Surface(
-      modifier = Modifier.fillMaxWidth(if (isUser) 0.72f else 0.74f),
-      shape = RoundedCornerShape(10.dp),
+      modifier = Modifier.fillMaxWidth(if (isUser) 0.64f else 0.60f),
+      shape = RoundedCornerShape(7.dp),
       color = ClawTheme.colors.surfaceRaised,
       contentColor = ClawTheme.colors.text,
       border = BorderStroke(1.dp, if (live) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
     ) {
-      Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      Column(modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
           text =
             when {
@@ -379,7 +379,7 @@ private fun V2ChatBubble(
               normalizedRole == "system" -> "System"
               else -> "OpenClaw"
             },
-          style = ClawTheme.type.caption.copy(fontSize = 9.8.sp, lineHeight = 12.sp, fontWeight = FontWeight.SemiBold),
+          style = ClawTheme.type.caption.copy(fontSize = 7.7.sp, lineHeight = 9.5.sp, fontWeight = FontWeight.SemiBold),
           color = ClawTheme.colors.text,
         )
         displayableContent.forEach { part ->
@@ -392,7 +392,7 @@ private fun V2ChatBubble(
         timestampMs?.let {
           Text(
             text = formatChatTimestamp(it),
-            style = ClawTheme.type.caption.copy(fontSize = 8.6.sp, lineHeight = 10.5.sp),
+            style = ClawTheme.type.caption.copy(fontSize = 6.9.sp, lineHeight = 8.5.sp),
             color = ClawTheme.colors.textMuted,
             modifier = Modifier.align(Alignment.End),
           )
@@ -412,7 +412,7 @@ private fun V2ChatText(
   } else {
     Text(
       text = text,
-      style = ClawTheme.type.body.copy(fontSize = 10.7.sp, lineHeight = 14.4.sp),
+      style = ClawTheme.type.body.copy(fontSize = 8.4.sp, lineHeight = 11.4.sp),
       color = textColor,
     )
   }
@@ -481,10 +481,10 @@ private fun V2ChatComposer(
   onAbort: () -> Unit,
   onSend: () -> Unit,
 ) {
-  Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+  Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
     V2ChatContextMeter(thinkingLevel = thinkingLevel, onClick = { onThinkingLevelChange(nextThinkingValue(thinkingLevel)) })
 
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
       V2ChatInputPill(value = value, onValueChange = onValueChange, onVoice = onVoice, modifier = Modifier.weight(1f))
       V2SendButton(
         enabled = healthOk && pendingRunCount == 0 && value.trim().isNotEmpty(),
@@ -520,7 +520,7 @@ private fun V2ChatContextMeter(
   onClick: () -> Unit,
 ) {
   Row(
-    modifier = Modifier.width(230.dp),
+    modifier = Modifier.width(188.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(9.dp),
   ) {
@@ -531,12 +531,12 @@ private fun V2ChatContextMeter(
       contentColor = ClawTheme.colors.text,
     ) {
       Row(
-        modifier = Modifier.padding(horizontal = 2.dp, vertical = 4.dp),
+        modifier = Modifier.padding(horizontal = 2.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(7.dp),
       ) {
-        Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.textSubtle)
-        Text(text = "Context ${contextPercent(thinkingLevel)}%", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.textSubtle)
+        Text(text = "Context ${contextPercent(thinkingLevel)}%", style = ClawTheme.type.caption.copy(fontSize = 7.8.sp, lineHeight = 9.8.sp), color = ClawTheme.colors.textMuted)
       }
     }
     Box(
@@ -565,23 +565,23 @@ private fun V2ChatInputPill(
   modifier: Modifier = Modifier,
 ) {
   Surface(
-    modifier = modifier.heightIn(min = 42.dp),
-    shape = RoundedCornerShape(15.dp),
+    modifier = modifier.heightIn(min = 33.dp),
+    shape = RoundedCornerShape(13.dp),
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      Icon(imageVector = Icons.Default.AttachFile, contentDescription = "Attach file", modifier = Modifier.size(18.dp), tint = ClawTheme.colors.text)
+      Icon(imageVector = Icons.Default.AttachFile, contentDescription = "Attach file", modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
       Box(modifier = Modifier.weight(1f)) {
         BasicTextField(
           value = value,
           onValueChange = onValueChange,
-          textStyle = ClawTheme.type.body.copy(fontSize = 11.sp, lineHeight = 15.sp, color = ClawTheme.colors.text),
+          textStyle = ClawTheme.type.body.copy(fontSize = 8.8.sp, lineHeight = 11.5.sp, color = ClawTheme.colors.text),
           cursorBrush = SolidColor(ClawTheme.colors.primary),
           minLines = 1,
           maxLines = 4,
@@ -589,7 +589,7 @@ private fun V2ChatInputPill(
           decorationBox = { innerTextField ->
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
               if (value.isEmpty()) {
-                Text(text = "Message OpenClaw", style = ClawTheme.type.body.copy(fontSize = 11.sp, lineHeight = 15.sp), color = ClawTheme.colors.textSubtle)
+                Text(text = "Message OpenClaw", style = ClawTheme.type.body.copy(fontSize = 8.8.sp, lineHeight = 11.5.sp), color = ClawTheme.colors.textSubtle)
               }
               innerTextField()
             }
@@ -598,13 +598,13 @@ private fun V2ChatInputPill(
       }
       Surface(
         onClick = onVoice,
-        modifier = Modifier.size(30.dp),
+        modifier = Modifier.size(24.dp),
         shape = CircleShape,
         color = ClawTheme.colors.surfaceRaised,
         contentColor = ClawTheme.colors.text,
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Mic, contentDescription = "Voice", modifier = Modifier.size(18.dp))
+          Icon(imageVector = Icons.Default.Mic, contentDescription = "Voice", modifier = Modifier.size(14.dp))
         }
       }
     }
@@ -628,14 +628,14 @@ private fun V2SendButton(
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = Modifier.size(44.dp),
+    modifier = Modifier.size(34.dp),
     shape = CircleShape,
     color = if (enabled) ClawTheme.colors.primary else ClawTheme.colors.surfacePressed,
     contentColor = if (enabled) ClawTheme.colors.primaryText else ClawTheme.colors.textSubtle,
     border = BorderStroke(1.dp, if (enabled) ClawTheme.colors.primary else ClawTheme.colors.border),
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(20.dp))
+      Icon(imageVector = Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(15.dp))
     }
   }
 }
