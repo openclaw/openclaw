@@ -37,9 +37,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Phone
@@ -115,6 +117,18 @@ fun V2VoiceScreen(viewModel: MainViewModel) {
       talkModeSpeaking = talkModeSpeaking,
     )
 
+  if (talkModeEnabled) {
+    V2TalkSessionScreen(
+      entries = talkModeConversation,
+      listening = talkModeListening,
+      speaking = talkModeSpeaking,
+      speakerEnabled = speakerEnabled,
+      onToggleSpeaker = { viewModel.setSpeakerEnabled(!speakerEnabled) },
+      onEndTalk = { viewModel.setTalkModeEnabled(false) },
+    )
+    return
+  }
+
   Column(
     modifier =
       Modifier
@@ -175,6 +189,154 @@ fun V2VoiceScreen(viewModel: MainViewModel) {
       showThinking = micIsSending && activeConversation.none { it.role == VoiceConversationRole.Assistant && it.isStreaming },
       modifier = Modifier.weight(1f),
     )
+  }
+}
+
+@Composable
+private fun V2TalkSessionScreen(
+  entries: List<VoiceConversationEntry>,
+  listening: Boolean,
+  speaking: Boolean,
+  speakerEnabled: Boolean,
+  onToggleSpeaker: () -> Unit,
+  onEndTalk: () -> Unit,
+) {
+  Column(
+    modifier =
+      Modifier
+        .fillMaxSize()
+        .imePadding()
+        .padding(horizontal = 20.dp, vertical = 12.dp),
+    verticalArrangement = Arrangement.spacedBy(16.dp),
+  ) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+      V2VoicePlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to voice", onClick = onEndTalk)
+      Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(text = "Realtime Talk", style = ClawTheme.type.title, color = ClawTheme.colors.text)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+          Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(if (speaking || listening) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
+          Text(
+            text =
+              if (speaking) {
+                "OpenClaw speaking"
+              } else if (listening) {
+                "Realtime voice"
+              } else {
+                "Connected"
+              },
+            style = ClawTheme.type.body,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+      }
+      V2VoicePlainIconButton(icon = Icons.Default.Info, contentDescription = "Talk info", onClick = {})
+    }
+
+    Surface(
+      modifier = Modifier.fillMaxWidth().height(78.dp),
+      shape = RoundedCornerShape(ClawTheme.radii.pill),
+      color = ClawTheme.colors.canvas,
+      border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+    ) {
+      Box(contentAlignment = Alignment.Center) {
+        V2TalkWaveform(active = listening || speaking)
+      }
+    }
+
+    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Text(text = "Live transcript", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      V2TalkTranscript(entries = entries, modifier = Modifier.weight(1f))
+    }
+
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceEvenly,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      V2TalkControl(icon = if (speakerEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff, label = if (speakerEnabled) "Mute" else "Unmute", onClick = onToggleSpeaker)
+      V2TalkControl(icon = Icons.Default.PhoneDisabled, label = "End", primary = true, onClick = onEndTalk)
+      V2TalkControl(icon = Icons.Default.GraphicEq, label = "Voice", onClick = {})
+    }
+  }
+}
+
+@Composable
+private fun V2TalkTranscript(
+  entries: List<VoiceConversationEntry>,
+  modifier: Modifier = Modifier,
+) {
+  LazyColumn(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+    if (entries.isEmpty()) {
+      item {
+        V2TalkTranscriptCard(label = "OpenClaw", text = "Listening for your next turn.", muted = true)
+      }
+    } else {
+      items(entries.takeLast(6), key = { it.id }) { entry ->
+        V2TalkTranscriptCard(
+          label = if (entry.role == VoiceConversationRole.User) "You" else "OpenClaw",
+          text = if (entry.isStreaming && entry.text.isBlank()) "Listening response..." else entry.text,
+          muted = entry.isStreaming,
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun V2TalkTranscriptCard(
+  label: String,
+  text: String,
+  muted: Boolean = false,
+) {
+  Surface(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(ClawTheme.radii.sheet),
+    color = ClawTheme.colors.surface,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+  ) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      Text(text = label, style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = text, style = ClawTheme.type.body, color = if (muted) ClawTheme.colors.textMuted else ClawTheme.colors.text)
+    }
+  }
+}
+
+@Composable
+private fun V2TalkControl(
+  icon: androidx.compose.ui.graphics.vector.ImageVector,
+  label: String,
+  primary: Boolean = false,
+  onClick: () -> Unit,
+) {
+  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+    Surface(
+      onClick = onClick,
+      modifier = Modifier.size(if (primary) 58.dp else 52.dp),
+      shape = CircleShape,
+      color = if (primary) ClawTheme.colors.primary else ClawTheme.colors.canvas,
+      contentColor = if (primary) ClawTheme.colors.primaryText else ClawTheme.colors.text,
+      border = BorderStroke(1.dp, if (primary) ClawTheme.colors.primary else ClawTheme.colors.border),
+    ) {
+      Box(contentAlignment = Alignment.Center) {
+        Icon(imageVector = icon, contentDescription = label, modifier = Modifier.size(if (primary) 24.dp else 21.dp))
+      }
+    }
+    Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+  }
+}
+
+@Composable
+private fun V2TalkWaveform(active: Boolean) {
+  Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+    listOf(4, 12, 24, 34, 46, 28, 12, 38, 44, 24, 12, 30, 42, 18, 6).forEachIndexed { index, height ->
+      Box(
+        modifier =
+          Modifier
+            .size(width = 3.dp, height = (if (active) height else 6 + index % 4 * 5).dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (active) ClawTheme.colors.text else ClawTheme.colors.textSubtle),
+      )
+    }
   }
 }
 
