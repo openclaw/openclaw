@@ -80,15 +80,18 @@ async function resolveContextPaths(
 
 // P6-3b: exact system prompt mandated by the spec (do not paraphrase).
 const COMPRESS_SYSTEM_PROMPT =
-  "다음은 사용자와 AI 비서의 최근 대화 기록이다. 이 대화의 내용을 약 8000자 정도로 압축하라.\n" +
+  "다음은 시간순으로 정렬된 사용자와 AI 비서의 최근 대화 메시지들이다.\n" +
+  "이 대화를 이어받을 다른 AI가 사용자의 맥락을 완전히 이해할 수 있도록, 충분히 상세한 인수인계 노트로 정리하라.\n" +
   "\n" +
-  "중요 원칙:\n" +
-  '- 이것은 "요약"이 아니라 "압축"이다. 정보 보존이 매끄러운 문장보다 우선이다.\n' +
-  "- 구체적인 사실, 숫자, 이름, 시간, 결정사항, 진행 중인 일, 약속, 상태 변화는 모두 보존하라.\n" +
-  '- 인삿말이나 군더더기, 단순 확인 응답("응", "OK")만 제거하라.\n' +
+  "요구 사항:\n" +
+  "- 출력 목표 분량: 6000자~10000자 (입력 분량의 약 1/3~1/4).\n" +
+  "- 짧은 출력은 인수인계 실패로 간주된다. 정보 손실보다 길이가 길어지는 것을 선호하라.\n" +
+  "- 주제별로 섹션을 나누어 작성하라 (업무, 프로젝트, 일상, 결정사항, 진행 중인 작업, 약속 등).\n" +
+  "- 구체적인 사실, 숫자, 이름, 시간, 결정사항, 진행 중인 일, 약속, 상태 변화, 우려사항을 모두 보존하라.\n" +
+  '- 인삿말이나 단순 확인 응답("응", "OK")만 제거하라.\n' +
   "- 한국어로 작성하라.\n" +
   "- 시간 순서를 유지하라.\n" +
-  "- 출력은 압축본 본문만. 헤더나 메타 설명 금지.";
+  "- 출력은 노트 본문만. 헤더나 메타 설명 금지.";
 
 // Read the most recent conversation messages for this sender from the agent's
 // session jsonl (read-only). Accumulates from newest backwards up to a 50KB
@@ -180,7 +183,7 @@ async function compressRecentConversation(
     const serialized = messages.map((m) => `[${m.role}] ${m.text}`).join("\n\n");
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000);
+    const timer = setTimeout(() => controller.abort(), 60000);
     let data: { choices?: Array<{ message?: { content?: string } }> };
     try {
       const res = await fetch("http://localhost:8005/v1/chat/completions", {
