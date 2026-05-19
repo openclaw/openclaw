@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
@@ -47,6 +48,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,6 +66,7 @@ internal enum class V2SettingsRoute {
   Home,
   Profile,
   Voice,
+  Agents,
   Notifications,
   PhoneCapabilities,
   Gateway,
@@ -82,12 +85,50 @@ internal fun V2SettingsDetailScreen(
     V2SettingsRoute.Home -> Unit
     V2SettingsRoute.Profile -> V2ProfileSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Voice -> V2VoiceSettingsScreen(viewModel = viewModel, onBack = onBack)
+    V2SettingsRoute.Agents -> V2AgentsSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Notifications -> V2NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.PhoneCapabilities -> V2PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Gateway -> V2GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Appearance -> V2AppearanceSettingsScreen(onBack = onBack)
     V2SettingsRoute.Health -> V2HealthSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.About -> V2AboutSettingsScreen(onBack = onBack)
+  }
+}
+
+@Composable
+private fun V2AgentsSettingsScreen(
+  viewModel: MainViewModel,
+  onBack: () -> Unit,
+) {
+  val agents by viewModel.gatewayAgents.collectAsState()
+  val defaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
+  val isConnected by viewModel.isConnected.collectAsState()
+
+  LaunchedEffect(isConnected) {
+    if (isConnected) {
+      viewModel.refreshAgents()
+    }
+  }
+
+  V2SettingsDetailFrame(title = "Agents", subtitle = "Choose and inspect the assistants available on this gateway.", icon = Icons.Default.Person, onBack = onBack) {
+    V2SettingsMetricPanel(
+      rows =
+        listOf(
+          V2SettingsMetric("Available", agents.size.toString()),
+          V2SettingsMetric("Default", defaultAgentName(agents, defaultAgentId)),
+        ),
+    )
+    when {
+      !isConnected ->
+        ClawPanel {
+          Text(text = "Connect the gateway to load agents.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+      agents.isEmpty() ->
+        ClawPanel {
+          Text(text = "No agents loaded yet.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+      else -> V2AgentsPanel(agents = agents, defaultAgentId = defaultAgentId)
+    }
   }
 }
 
@@ -341,6 +382,70 @@ private data class V2SettingsMetric(
   val title: String,
   val value: String,
 )
+
+@Composable
+private fun V2AgentsPanel(
+  agents: List<GatewayAgentSummary>,
+  defaultAgentId: String?,
+) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+    Column {
+      agents.forEachIndexed { index, agent ->
+        V2AgentListRow(agent = agent, isDefault = agent.id == defaultAgentId)
+        if (index != agents.lastIndex) {
+          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun V2AgentListRow(
+  agent: GatewayAgentSummary,
+  isDefault: Boolean,
+) {
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
+  ) {
+    Surface(modifier = Modifier.size(30.dp), shape = CircleShape, color = ClawTheme.colors.surfacePressed, border = BorderStroke(1.dp, ClawTheme.colors.border)) {
+      Box(contentAlignment = Alignment.Center) {
+        Text(text = agentBadge(agent), style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1)
+      }
+    }
+    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+      Text(text = agent.name?.takeIf { it.isNotBlank() } ?: agent.id, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Text(text = if (isDefault) "Default assistant" else "Ready", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
+    }
+    ClawStatusPill(text = if (isDefault) "Default" else "Ready", status = ClawStatus.Success)
+  }
+}
+
+private fun defaultAgentName(
+  agents: List<GatewayAgentSummary>,
+  defaultAgentId: String?,
+): String {
+  val defaultId = defaultAgentId?.trim().orEmpty()
+  val agent = agents.firstOrNull { it.id == defaultId } ?: agents.firstOrNull()
+  return agent?.name?.takeIf { it.isNotBlank() } ?: agent?.id ?: "None"
+}
+
+private fun agentBadge(agent: GatewayAgentSummary): String {
+  agent.emoji
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+    ?.let { return it }
+  val source = agent.name?.takeIf { it.isNotBlank() } ?: agent.id
+  return source
+    .split(' ', '-', '_')
+    .filter { it.isNotBlank() }
+    .take(2)
+    .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+    .joinToString("")
+    .ifBlank { "A" }
+}
 
 @Composable
 private fun V2SettingsTogglePanel(rows: List<V2SettingsToggleRow>) {
