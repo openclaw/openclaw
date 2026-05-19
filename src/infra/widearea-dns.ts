@@ -37,7 +37,11 @@ export function resolveWideAreaDiscoveryDomain(params?: {
 }): string | null {
   const env = params?.env ?? process.env;
   const candidate = params?.configDomain ?? env.OPENCLAW_WIDE_AREA_DOMAIN ?? null;
-  return normalizeWideAreaDomain(candidate);
+  try {
+    return normalizeWideAreaDomain(candidate);
+  } catch {
+    return null;
+  }
 }
 
 function zoneFilenameForDomain(domain: string): string {

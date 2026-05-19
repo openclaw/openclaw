@@ -88,6 +88,21 @@ describe("wide-area DNS discovery domain helpers", () => {
       },
       expected: null,
     },
+    {
+      name: "returns null for invalid config domains",
+      params: {
+        env: { OPENCLAW_WIDE_AREA_DOMAIN: "env.internal" } as NodeJS.ProcessEnv,
+        configDomain: "foo/bar",
+      },
+      expected: null,
+    },
+    {
+      name: "returns null for invalid env domains",
+      params: {
+        env: { OPENCLAW_WIDE_AREA_DOMAIN: "foo/bar" } as NodeJS.ProcessEnv,
+      },
+      expected: null,
+    },
   ])("$name", ({ params, expected }) => {
     expect(resolveWideAreaDiscoveryDomain(params)).toBe(expected);
   });
