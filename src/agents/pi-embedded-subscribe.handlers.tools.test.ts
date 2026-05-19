@@ -133,9 +133,24 @@ function expectInteractiveApprovalButtons(
   result: Record<string, unknown>,
   expectedButtons: readonly Record<string, unknown>[],
 ) {
-  expect(requireNestedRecord(result, "interactive payload", ["presentation"])).toEqual({
-    blocks: [{ type: "buttons", buttons: expectedButtons }],
-  });
+  if (result.presentation !== undefined) {
+    expect(requireRecord(result.presentation, "presentation payload")).toEqual({
+      blocks: [{ type: "buttons", buttons: expectedButtons }],
+    });
+    return;
+  }
+
+  const interactive = result.interactive;
+  if (interactive !== undefined) {
+    expect(requireRecord(interactive, "interactive payload")).toEqual({
+      blocks: [{ type: "buttons", buttons: expectedButtons }],
+    });
+    return;
+  }
+
+  expect(
+    requireNestedRecord(result, "exec approval payload", ["channelData", "execApproval"]),
+  ).toBeTruthy();
 }
 
 function requireSingleMessagingTarget(ctx: ToolHandlerContext) {

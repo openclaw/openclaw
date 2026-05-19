@@ -1045,7 +1045,9 @@ export async function spawnSubagentDirect(
       config: cfg,
       sandboxed: childRuntime.sandboxed,
     }),
-    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+      surface: "subagent",
+    }),
     childDepth,
     maxSpawnDepth,
   });
@@ -1382,7 +1384,7 @@ export async function spawnSubagentDirect(
   };
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(overrides?: Partial<SubagentSpawnDeps>) {
     subagentSpawnDeps = overrides
       ? {
@@ -1392,3 +1394,4 @@ export const __testing = {
       : defaultSubagentSpawnDeps;
   },
 };
+export { testing as __testing };

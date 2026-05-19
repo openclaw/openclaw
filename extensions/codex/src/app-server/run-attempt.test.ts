@@ -9,13 +9,21 @@ import {
   onAgentEvent,
   queueAgentHarnessMessage,
   resetAgentEventsForTest,
+  wrapToolWithBeforeToolCallHook,
   type AgentEventPayload,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  emitTrustedDiagnosticEvent,
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -30,8 +38,15 @@ import * as approvalBridge from "./approval-bridge.js";
 import * as authBridge from "./auth-bridge.js";
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
-import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
-import { CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE } from "./dynamic-tools.js";
+import {
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+  resolveCodexPluginsPolicy,
+} from "./config.js";
+import {
+  CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+  createCodexDynamicToolBridge,
+} from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import {
   buildCodexPluginAppCacheKey,
@@ -45,7 +60,7 @@ import {
 } from "./rate-limit-cache.js";
 import {
   runCodexAppServerAttempt as runCodexAppServerAttemptImpl,
-  __testing,
+  testing,
 } from "./run-attempt.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -63,6 +78,30 @@ const fastWait = { interval: 1, timeout: 5_000 } as const;
 type RunCodexAppServerAttemptOptions = NonNullable<
   Parameters<typeof runCodexAppServerAttemptImpl>[1]
 >;
+
+function flushDiagnosticEvents() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string> {
+  const active = new Set<string>();
+  for (const event of events) {
+    if (event.type === "tool.execution.started") {
+      active.add(
+        `${event.runId ?? event.sessionId ?? event.sessionKey ?? "unknown"}:${event.toolCallId ?? event.toolName}`,
+      );
+    } else if (
+      event.type === "tool.execution.completed" ||
+      event.type === "tool.execution.error" ||
+      event.type === "tool.execution.blocked"
+    ) {
+      active.delete(
+        `${event.runId ?? event.sessionId ?? event.sessionKey ?? "unknown"}:${event.toolCallId ?? event.toolName}`,
+      );
+    }
+  }
+  return active;
+}
 
 function setCodexAppServerClientFactoryForTest(factory: CodexAppServerClientFactory): void {
   codexAppServerClientFactoryForTest = factory;
@@ -392,6 +431,7 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+    codeModeOnly: false,
   };
 }
 
@@ -430,9 +470,14 @@ function createNamedDynamicTool(
   };
 }
 
-function createRuntimeDynamicTool(name: string) {
+type RuntimeDynamicToolForTest = Parameters<
+  typeof createCodexDynamicToolBridge
+>[0]["tools"][number];
+
+function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTest {
   return {
     name,
+    label: name,
     description: `${name} test tool`,
     parameters: {
       type: "object",
@@ -443,7 +488,7 @@ function createRuntimeDynamicTool(name: string) {
       content: [{ type: "text" as const, text: `${name} done` }],
       details: {},
     })),
-  } as never;
+  };
 }
 
 function createPluginAppConfigPatch() {
@@ -588,6 +633,7 @@ function extractRelayIdFromThreadRequest(params: unknown): string {
 describe("runCodexAppServerAttempt", () => {
   beforeEach(async () => {
     resetAgentEventsForTest();
+    resetDiagnosticEventsForTest();
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
@@ -596,10 +642,12 @@ describe("runCodexAppServerAttempt", () => {
 
   afterEach(async () => {
     resetCodexAppServerClientFactoryForTest();
-    __testing.resetOpenClawCodingToolsFactoryForTests();
+    testing.resetOpenClawCodingToolsFactoryForTests();
     resetCodexRateLimitCacheForTests();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    clearPluginCommands();
     resetAgentEventsForTest();
+    resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
     defaultCodexAppInventoryCache.clear();
     vi.useRealTimers();
@@ -627,7 +675,7 @@ describe("runCodexAppServerAttempt", () => {
       "sessions_spawn",
     ].map((name) => ({ name }));
 
-    expect(__testing.filterCodexDynamicTools(tools, {}).map((tool) => tool.name)).toEqual([
+    expect(testing.filterCodexDynamicTools(tools, {}).map((tool) => tool.name)).toEqual([
       "web_search",
       "message",
       "heartbeat_respond",
@@ -639,7 +687,7 @@ describe("runCodexAppServerAttempt", () => {
     const tools = ["read", "exec", "message", "custom_tool"].map((name) => ({ name }));
 
     expect(
-      __testing
+      testing
         .filterCodexDynamicTools(tools, {
           codexDynamicToolsExclude: ["custom_tool"],
         })
@@ -655,9 +703,180 @@ describe("runCodexAppServerAttempt", () => {
     };
 
     expect(
-      __testing.filterCodexDynamicTools(tools, {}, privateQaCodexEnv).map((tool) => tool.name),
+      testing.filterCodexDynamicTools(tools, {}, privateQaCodexEnv).map((tool) => tool.name),
     ).toEqual(["read", "write", "image_generate", "message"]);
-    expect(__testing.resolveCodexDynamicToolsLoading({}, privateQaCodexEnv)).toBe("direct");
+    expect(testing.resolveCodexDynamicToolsLoading({}, privateQaCodexEnv)).toBe("direct");
+  });
+
+  it("exposes OpenClaw sandbox shell tools under distinct names for non-Docker sandbox backends", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("read"),
+      createRuntimeDynamicTool("write"),
+      createRuntimeDynamicTool("edit"),
+      createRuntimeDynamicTool("apply_patch"),
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    const tools = await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox: { enabled: true, backendId: "ssh" } as never,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message", "sandbox_exec", "sandbox_process"]);
+    expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
+      "configured sandbox backend",
+    );
+    expect(tools.find((tool) => tool.name === "sandbox_process")?.description).toContain(
+      "sandbox_exec sessions",
+    );
+  });
+
+  it("does not expose sandbox shell tools unless non-Docker sandbox routing is available", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    const dockerTools = await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox: { enabled: true, backendId: "docker" } as never,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+    const disabledSandboxTools = await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox: { enabled: false, backendId: "ssh" } as never,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(dockerTools.map((tool) => tool.name)).toEqual(["message"]);
+    expect(disabledSandboxTools.map((tool) => tool.name)).toEqual(["message"]);
+  });
+
+  it("does not expose sandbox_exec without a matching process follow-up tool", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    const tools = await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox: { enabled: true, backendId: "ssh" } as never,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message"]);
+  });
+
+  it("honors Codex dynamic tool excludes for sandbox shell exposure", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    for (const excludedToolName of ["sandbox_exec", "process"]) {
+      const tools = await testing.buildDynamicTools({
+        params,
+        resolvedWorkspace: workspaceDir,
+        effectiveWorkspace: workspaceDir,
+        sandboxSessionKey,
+        sandbox: { enabled: true, backendId: "ssh" } as never,
+        runAbortController: new AbortController(),
+        sessionAgentId: "main",
+        pluginConfig: { codexDynamicToolsExclude: [excludedToolName] },
+        onYieldDetected: () => undefined,
+      });
+
+      expect(tools.map((tool) => tool.name)).toEqual(["message"]);
+    }
+  });
+
+  it("points yielded sandbox_exec follow-up guidance at sandbox_process", async () => {
+    const execTool = createRuntimeDynamicTool("exec");
+    vi.mocked(execTool.execute).mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: "Command still running (session exec-1, pid 123). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+        },
+      ],
+      details: { status: "running" },
+    });
+    const processTool = createRuntimeDynamicTool("process");
+    const tools = testing.addSandboxShellDynamicToolsIfAvailable([], [execTool, processTool], {
+      sandbox: { enabled: true, backendId: "ssh" },
+      pluginConfig: {},
+    } as never);
+
+    const sandboxExec = tools.find((tool) => tool.name === "sandbox_exec");
+    const result = await sandboxExec?.execute("call-1", {}, undefined);
+
+    expect(result?.content).toEqual([
+      {
+        type: "text",
+        text: "Command still running (session exec-1, pid 123). Use sandbox_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+      },
+    ]);
   });
 
   it("starts Codex threads without duplicate OpenClaw workspace tools by default", async () => {
@@ -670,7 +889,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const dynamicTools = __testing.filterCodexDynamicTools(
+    const dynamicTools = testing.filterCodexDynamicTools(
       [
         "read",
         "write",
@@ -757,7 +976,7 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.mcpServersFingerprint).toBe("mcp-v1");
@@ -843,12 +1062,12 @@ describe("runCodexAppServerAttempt", () => {
     params.authProfileStore = authProfileStore;
     params.runtimePlan = createCodexRuntimePlanFixture();
     const factoryOptions: unknown[] = [];
-    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
       factoryOptions.push(options);
       return [];
     });
 
-    await __testing.buildDynamicTools({
+    await testing.buildDynamicTools({
       params,
       resolvedWorkspace: workspaceDir,
       effectiveWorkspace: workspaceDir,
@@ -889,12 +1108,12 @@ describe("runCodexAppServerAttempt", () => {
       },
     };
     const factoryOptions: unknown[] = [];
-    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
       factoryOptions.push(options);
       return [];
     });
 
-    await __testing.buildDynamicTools({
+    await testing.buildDynamicTools({
       params,
       resolvedWorkspace: workspaceDir,
       effectiveWorkspace: workspaceDir,
@@ -920,12 +1139,12 @@ describe("runCodexAppServerAttempt", () => {
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     const factoryOptions: unknown[] = [];
-    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
       factoryOptions.push(options);
       return [createRuntimeDynamicTool("sessions_spawn")];
     });
 
-    const tools = await __testing.buildDynamicTools({
+    const tools = await testing.buildDynamicTools({
       params,
       resolvedWorkspace: workspaceDir,
       effectiveWorkspace: workspaceDir,
@@ -944,13 +1163,44 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("normalizes Codex dynamic toolsAllow entries before filtering", () => {
-    const tools = ["exec", "apply_patch", "read", "message"].map((name) => ({ name }));
+    const tools = ["exec", "sandbox_exec", "sandbox_process", "apply_patch", "read", "message"].map(
+      (name) => ({ name }),
+    );
 
     expect(
-      __testing
+      testing
         .filterCodexDynamicToolsForAllowlist(tools, [" BASH ", "apply-patch", "READ"])
         .map((tool) => tool.name),
-    ).toEqual(["exec", "apply_patch", "read"]);
+    ).toEqual(["exec", "sandbox_exec", "sandbox_process", "apply_patch", "read"]);
+  });
+
+  it("treats an explicit empty Codex dynamic toolsAllow as no tools", () => {
+    const tools = ["message", "web_search"].map((name) => ({ name }));
+
+    expect(testing.filterCodexDynamicToolsForAllowlist(tools, [])).toEqual([]);
+  });
+
+  it("treats wildcard Codex dynamic toolsAllow as unrestricted", () => {
+    const tools = ["message", "web_search"].map((name) => ({ name }));
+
+    expect(testing.filterCodexDynamicToolsForAllowlist(tools, [" * "])).toEqual(tools);
+  });
+
+  it("disables Codex native tool surfaces for restricted runtime allowlists", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+
+    params.toolsAllow = ["*"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+
+    params.toolsAllow = [];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+
+    params.toolsAllow = ["message"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 
   it("forces the message dynamic tool for message-tool-only source replies", () => {
@@ -958,14 +1208,114 @@ describe("runCodexAppServerAttempt", () => {
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.sourceReplyDeliveryMode = "message_tool_only";
 
-    expect(__testing.shouldForceMessageTool(params)).toBe(true);
+    expect(testing.shouldForceMessageTool(params)).toBe(true);
 
     params.sourceReplyDeliveryMode = "automatic";
-    expect(__testing.shouldForceMessageTool(params)).toBe(false);
+    expect(testing.shouldForceMessageTool(params)).toBe(false);
+  });
+
+  it("scopes Codex developer reply instructions to message-tool-only delivery", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.sourceReplyDeliveryMode = "message_tool_only";
+
+    expect(testing.buildDeveloperInstructions(params)).toContain(
+      "Visible channel replies: use `message`",
+    );
+
+    params.sourceReplyDeliveryMode = "automatic";
+    const automaticInstructions = testing.buildDeveloperInstructions(params);
+    expect(automaticInstructions).toContain("active Codex delivery path");
+    expect(automaticInstructions).not.toContain("Visible channel replies: use `message`");
+  });
+
+  it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
+    registerPluginCommand("demo-plugin", {
+      name: "codex_demo",
+      description: "Codex demo command",
+      agentPromptGuidance: [
+        "Legacy global command guidance.",
+        {
+          text: "Codex app-server command guidance.",
+          surfaces: ["codex_app_server"],
+        },
+        {
+          text: "Unscoped structured command guidance.",
+        },
+        {
+          text: "PI main command guidance.",
+          surfaces: ["pi_main"],
+        },
+      ],
+      handler: async () => ({ text: "ok" }),
+    });
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+
+    const instructions = testing.buildDeveloperInstructions(params);
+
+    expect(instructions).toContain("Codex app-server command guidance.");
+    expect(instructions).not.toContain("Legacy global command guidance.");
+    expect(instructions).not.toContain("Unscoped structured command guidance.");
+    expect(instructions).not.toContain("PI main command guidance.");
+  });
+
+  it("keeps OpenClaw skills out of Codex developer instructions", async () => {
+    const llmInput = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "llm_input", handler: llmInput }]),
+    );
+    vi.stubEnv("OPENCLAW_TRAJECTORY", "1");
+    vi.stubEnv("OPENCLAW_TRAJECTORY_DIR", path.join(tempDir, "trajectory"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.skillsSnapshot = {
+      prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+      skills: [],
+    };
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const threadStartParams = threadStart?.params as { developerInstructions?: string };
+    expect(threadStartParams.developerInstructions).not.toContain("<available_skills>");
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      input?: Array<{ text?: string }>;
+    };
+    const inputText = turnStartParams.input?.[0]?.text ?? "";
+    expect(inputText).toContain("## OpenClaw Skills");
+    expect(inputText).toContain("<available_skills>");
+    expect(inputText).toContain("Current user request:\nhello");
+    const [llmInputPayload] = mockCall(llmInput, "llm_input") as [{ prompt?: string }, unknown];
+    expect(llmInputPayload.prompt).toBe(inputText);
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempDir, "trajectory", "session-1.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { data?: { prompt?: string }; type?: string });
+    expect(trajectoryEvents.find((event) => event.type === "context.compiled")?.data?.prompt).toBe(
+      inputText,
+    );
+    expect(trajectoryEvents.find((event) => event.type === "prompt.submitted")?.data?.prompt).toBe(
+      inputText,
+    );
+    expect(result.systemPromptReport?.skills.promptChars).toBe(params.skillsSnapshot.prompt.length);
+    expect(result.systemPromptReport?.skills.entries).toEqual([
+      { name: "demo", blockChars: "<skill><name>demo</name></skill>".length },
+    ]);
   });
 
   it("keeps forced message dynamic tool when toolsAllow omits it", async () => {
-    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("music_generate"),
     ]);
@@ -1003,7 +1353,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("keeps forced message dynamic tool when toolsAllow is empty", async () => {
-    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("music_generate"),
     ]);
@@ -1033,11 +1383,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(dynamicToolNames).toEqual(["message"]);
   });
 
-  it("starts Codex threads with searchable OpenClaw dynamic tools by default", async () => {
-    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+  it("keeps searchable OpenClaw dynamic tools when code-mode-only is enabled", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("web_search"),
       createRuntimeDynamicTool("heartbeat_respond"),
+      createRuntimeDynamicTool("sessions_spawn"),
+      createRuntimeDynamicTool("sessions_yield"),
     ]);
     const harness = createStartedThreadHarness();
     const params = createParams(
@@ -1047,10 +1399,9 @@ describe("runCodexAppServerAttempt", () => {
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.sourceReplyDeliveryMode = "message_tool_only";
-    params.toolsAllow = ["message", "web_search", "heartbeat_respond"];
 
     const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { mode: "yolo" } },
+      pluginConfig: { appServer: { mode: "yolo", codeModeOnly: true } },
     });
     await harness.waitForMethod("turn/start", 120_000);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -1060,9 +1411,13 @@ describe("runCodexAppServerAttempt", () => {
     const dynamicTools =
       (startRequest?.params as { dynamicTools?: Array<Record<string, unknown>> } | undefined)
         ?.dynamicTools ?? [];
+    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
     const message = dynamicTools.find((tool) => tool.name === "message");
     const webSearch = dynamicTools.find((tool) => tool.name === "web_search");
     const heartbeat = dynamicTools.find((tool) => tool.name === "heartbeat_respond");
+    const sessionsSpawn = dynamicTools.find((tool) => tool.name === "sessions_spawn");
+    const sessionsYield = dynamicTools.find((tool) => tool.name === "sessions_yield");
 
     expect(message).not.toHaveProperty("namespace");
     expect(message).not.toHaveProperty("deferLoading");
@@ -1070,10 +1425,130 @@ describe("runCodexAppServerAttempt", () => {
     expect(webSearch?.deferLoading).toBe(true);
     expect(heartbeat?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
     expect(heartbeat?.deferLoading).toBe(true);
+    expect(sessionsSpawn?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
+    expect(sessionsSpawn?.deferLoading).toBe(true);
+    expect(sessionsYield).not.toHaveProperty("namespace");
+    expect(sessionsYield).not.toHaveProperty("deferLoading");
+    expect(startConfig?.["features.code_mode"]).toBe(true);
+    expect(startConfig?.["features.code_mode_only"]).toBe(true);
+  });
+
+  it("disables Codex native tool surfaces when runtime toolsAllow is empty", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("web_search"),
+    ]);
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "app/list") {
+        throw new Error("app/list should not run when runtime toolsAllow is empty.");
+      }
+      return undefined;
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = [];
+    params.extraSystemPrompt = "Tool and file actions are disabled for this sender by chat policy.";
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        appServer: { mode: "yolo" },
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: "openai-curated",
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
+    const startParams = startRequest?.params as
+      | {
+          dynamicTools?: Array<{ name?: string }>;
+          environments?: unknown[];
+          developerInstructions?: string;
+          config?: {
+            "features.code_mode"?: boolean;
+            "features.code_mode_only"?: boolean;
+            apps?: Record<
+              string,
+              { enabled?: boolean; destructive_enabled?: boolean; open_world_enabled?: boolean }
+            >;
+          };
+        }
+      | undefined;
+
+    expect(startParams?.dynamicTools).toEqual([]);
+    expect(startParams?.environments).toEqual([]);
+    expect(startParams?.developerInstructions).toContain(
+      "Tool and file actions are disabled for this sender by chat policy.",
+    );
+    expect(startParams?.config?.["features.code_mode"]).toBe(false);
+    expect(startParams?.config?.["features.code_mode_only"]).toBe(false);
+    expect(startParams?.config?.apps?.["_default"]).toEqual({
+      enabled: false,
+      destructive_enabled: false,
+      open_world_enabled: false,
+    });
+    expect(startParams?.config?.apps?.["google-calendar-app"]?.enabled).toBeUndefined();
+    expect(harness.requests.map((entry) => entry.method)).not.toContain("app/list");
+  });
+
+  it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("message")]);
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "app/list") {
+        throw new Error("app/list should not run when runtime toolsAllow is empty.");
+      }
+      return undefined;
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = [];
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
+    const startParams = startRequest?.params as
+      | {
+          config?: {
+            apps?: Record<
+              string,
+              { enabled?: boolean; destructive_enabled?: boolean; open_world_enabled?: boolean }
+            >;
+          };
+        }
+      | undefined;
+
+    expect(startParams?.config?.apps?.["_default"]).toEqual({
+      enabled: false,
+      destructive_enabled: false,
+      open_world_enabled: false,
+    });
+    expect(harness.requests.map((entry) => entry.method)).not.toContain("app/list");
   });
 
   it("returns a run context report without deferred Codex dynamic tool schemas", async () => {
-    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("web_search"),
     ]);
@@ -1108,9 +1583,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("keeps searchable Codex dynamic tools canonical in mirrored transcript snapshots", async () => {
-    __testing.setOpenClawCodingToolsFactoryForTests(() => [
-      createRuntimeDynamicTool("wiki_status"),
-    ]);
+    testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("wiki_status")]);
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
@@ -1199,7 +1672,7 @@ describe("runCodexAppServerAttempt", () => {
     params.sessionKey = "agent:main:main";
 
     expect(
-      __testing.resolveOpenClawCodingToolsSessionKeys(
+      testing.resolveOpenClawCodingToolsSessionKeys(
         params,
         "agent:main:telegram:default:direct:1234",
       ),
@@ -1208,17 +1681,17 @@ describe("runCodexAppServerAttempt", () => {
       runSessionKey: "agent:main:main",
     });
 
-    expect(__testing.resolveOpenClawCodingToolsSessionKeys(params, "agent:main:main")).toEqual({
+    expect(testing.resolveOpenClawCodingToolsSessionKeys(params, "agent:main:main")).toEqual({
       sessionKey: "agent:main:main",
       runSessionKey: undefined,
     });
   });
 
   it("keeps explicit dynamic tool timeouts above the default bridge deadline", () => {
-    const timeoutMs = __testing.CODEX_DYNAMIC_TOOL_TIMEOUT_MS + 1_000;
+    const timeoutMs = testing.CODEX_DYNAMIC_TOOL_TIMEOUT_MS + 1_000;
 
     expect(
-      __testing.resolveDynamicToolCallTimeoutMs({
+      testing.resolveDynamicToolCallTimeoutMs({
         call: {
           threadId: "thread-1",
           turnId: "turn-1",
@@ -1234,7 +1707,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("uses configured image generation timeouts for Codex dynamic tool calls", () => {
     expect(
-      __testing.resolveDynamicToolCallTimeoutMs({
+      testing.resolveDynamicToolCallTimeoutMs({
         call: {
           threadId: "thread-1",
           turnId: "turn-1",
@@ -1259,7 +1732,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("uses the media image timeout for Codex image dynamic tool calls", () => {
     expect(
-      __testing.resolveDynamicToolCallTimeoutMs({
+      testing.resolveDynamicToolCallTimeoutMs({
         call: {
           threadId: "thread-1",
           turnId: "turn-1",
@@ -1283,7 +1756,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("keeps Codex image dynamic tool calls above the default bridge deadline", () => {
     expect(
-      __testing.resolveDynamicToolCallTimeoutMs({
+      testing.resolveDynamicToolCallTimeoutMs({
         call: {
           threadId: "thread-1",
           turnId: "turn-1",
@@ -1294,12 +1767,12 @@ describe("runCodexAppServerAttempt", () => {
         },
         config: undefined,
       }),
-    ).toBe(__testing.CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS);
+    ).toBe(testing.CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS);
   });
 
   it("caps dynamic tool timeouts at the bridge maximum", () => {
     expect(
-      __testing.resolveDynamicToolCallTimeoutMs({
+      testing.resolveDynamicToolCallTimeoutMs({
         call: {
           threadId: "thread-1",
           turnId: "turn-1",
@@ -1308,19 +1781,19 @@ describe("runCodexAppServerAttempt", () => {
           tool: "image_generate",
           arguments: {
             prompt: "cat",
-            timeoutMs: __testing.CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + 1_000,
+            timeoutMs: testing.CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + 1_000,
           },
         },
         config: undefined,
       }),
-    ).toBe(__testing.CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS);
+    ).toBe(testing.CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS);
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
     vi.useFakeTimers();
     let capturedSignal: AbortSignal | undefined;
     const onTimeout = vi.fn();
-    const response = __testing.handleDynamicToolCallWithTimeout({
+    const response = testing.handleDynamicToolCallWithTimeout({
       call: {
         threadId: "thread-1",
         turnId: "turn-1",
@@ -1358,7 +1831,7 @@ describe("runCodexAppServerAttempt", () => {
   it("logs process poll timeout context separately from session idle", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const response = __testing.handleDynamicToolCallWithTimeout({
+    const response = testing.handleDynamicToolCallWithTimeout({
       call: {
         threadId: "thread-1",
         turnId: "turn-1",
@@ -1405,7 +1878,11 @@ describe("runCodexAppServerAttempt", () => {
     const onRunAgentEvent = vi.fn();
     const onExecutionPhase = vi.fn();
     const globalAgentEvents: AgentEventPayload[] = [];
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
     onAgentEvent((event) => globalAgentEvents.push(event));
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -1424,9 +1901,9 @@ describe("runCodexAppServerAttempt", () => {
         turnId: "turn-1",
         callId: "call-1",
         namespace: null,
-        tool: "message",
+        tool: "lookup",
         arguments: {
-          action: "send",
+          action: "search",
           token: "plain-secret-value-12345",
           text: "hello",
         },
@@ -1437,12 +1914,12 @@ describe("runCodexAppServerAttempt", () => {
     };
     expect(toolResult.success).toBe(false);
     expect(toolResult.contentItems?.[0]?.type).toBe("inputText");
-    expect(toolResult.contentItems?.[0]?.text).toMatch(
-      /^(Unknown OpenClaw tool: message|Action send requires a target\.)$/u,
-    );
+    expect(toolResult.contentItems?.[0]?.text).toMatch(/^Unknown OpenClaw tool: lookup$/u);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+    await flushDiagnosticEvents();
+    unsubscribeDiagnostics();
 
     const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event) as Array<{
       data?: {
@@ -1458,15 +1935,18 @@ describe("runCodexAppServerAttempt", () => {
     const startEvent = agentEvents.find(
       (event) => event.stream === "tool" && event.data?.phase === "start",
     );
-    expect(startEvent?.data?.name).toBe("message");
+    expect(startEvent?.data?.name).toBe("lookup");
     expect(startEvent?.data?.toolCallId).toBe("call-1");
-    expect(startEvent?.data?.args?.action).toBe("send");
+    expect(startEvent?.data?.args?.action).toBe("search");
     expect(startEvent?.data?.args?.token).toBe("plain-…2345");
     expect(startEvent?.data?.args?.text).toBe("hello");
     const resultEvent = agentEvents.find(
-      (event) => event.stream === "tool" && event.data?.phase === "result",
+      (event) =>
+        event.stream === "tool" &&
+        event.data?.phase === "result" &&
+        event.data.result !== undefined,
     );
-    expect(resultEvent?.data?.name).toBe("message");
+    expect(resultEvent?.data?.name).toBe("lookup");
     expect(resultEvent?.data?.toolCallId).toBe("call-1");
     expect(resultEvent?.data?.isError).toBe(true);
     expect(resultEvent?.data?.result?.success).toBe(false);
@@ -1476,7 +1956,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     expect(globalStartEvent?.runId).toBe("run-1");
     expect(globalStartEvent?.sessionKey).toBe("agent:main:session-1");
-    expect(globalStartEvent?.data.name).toBe("message");
+    expect(globalStartEvent?.data.name).toBe("lookup");
     expect(onExecutionPhase).toHaveBeenCalledWith({
       phase: "turn_accepted",
       provider: "codex",
@@ -1488,9 +1968,512 @@ describe("runCodexAppServerAttempt", () => {
       provider: "codex",
       model: "gpt-5.4-codex",
       backend: "codex-app-server",
-      tool: "message",
+      tool: "lookup",
       toolCallId: "call-1",
     });
+    const toolDiagnosticEvents = diagnosticEvents.filter(
+      (
+        event,
+      ): event is Extract<
+        DiagnosticEventPayload,
+        { type: "tool.execution.started" | "tool.execution.completed" | "tool.execution.error" }
+      > => event.type.startsWith("tool.execution."),
+    );
+    expect(
+      toolDiagnosticEvents.map((event) => ({
+        type: event.type,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+      })),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        toolName: "lookup",
+        toolCallId: "call-1",
+      },
+      {
+        type: "tool.execution.error",
+        toolName: "lookup",
+        toolCallId: "call-1",
+      },
+    ]);
+    expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
+  });
+
+  it("clears dynamic tool diagnostics after successful app-server tool responses", async () => {
+    const harness = createStartedThreadHarness();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("echo")]);
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+
+    const toolResult = (await harness.handleServerRequest({
+      id: "request-echo-tool",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-echo-1",
+        namespace: null,
+        tool: "echo",
+        arguments: {},
+      },
+    })) as {
+      contentItems?: Array<{ text?: string; type?: string }>;
+      success?: boolean;
+    };
+
+    expect(toolResult.success).toBe(true);
+    expect(toolResult.contentItems?.[0]).toEqual({
+      type: "inputText",
+      text: "echo done",
+    });
+    await flushDiagnosticEvents();
+    unsubscribeDiagnostics();
+
+    const toolDiagnosticEvents = diagnosticEvents.filter(
+      (
+        event,
+      ): event is Extract<
+        DiagnosticEventPayload,
+        { type: "tool.execution.started" | "tool.execution.completed" | "tool.execution.error" }
+      > => event.type.startsWith("tool.execution."),
+    );
+    const toolDiagnosticEventSummaries = toolDiagnosticEvents.map((event) => ({
+      type: event.type,
+      toolName: event.toolName,
+      toolCallId: event.toolCallId,
+    }));
+    expect(toolDiagnosticEventSummaries).toContainEqual({
+      type: "tool.execution.started",
+      toolName: "echo",
+      toolCallId: "call-echo-1",
+    });
+    expect(toolDiagnosticEventSummaries.at(-1)).toEqual({
+      type: "tool.execution.completed",
+      toolName: "echo",
+      toolCallId: "call-echo-1",
+    });
+    expect(
+      toolDiagnosticEventSummaries.filter((event) => event.type === "tool.execution.started"),
+    ).toHaveLength(1);
+    expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
+
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: Date.now(),
+        item: {
+          type: "dynamicToolCall",
+          id: "call-echo-1",
+          namespace: null,
+          tool: "echo",
+          arguments: {},
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "echo done" }],
+          success: true,
+          durationMs: 1,
+        },
+      },
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
+  it("emits request-boundary terminal diagnostics when a wrapped dynamic tool does not", async () => {
+    const harness = createStartedThreadHarness();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    const rawTool = {
+      name: "echo",
+      description: "echo test tool",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+      execute: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "echo done" }],
+        details: {},
+      })),
+    };
+    rawTool.execute.mockImplementationOnce(async () => {
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.completed",
+        runId: "other-run",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        toolName: "echo",
+        toolCallId: "call-echo-unobserved-terminal",
+        durationMs: 1,
+      });
+      return {
+        content: [{ type: "text" as const, text: "echo done" }],
+        details: {},
+      };
+    });
+    const markedWrappedTool = {
+      ...wrapToolWithBeforeToolCallHook(rawTool as never),
+      execute: rawTool.execute,
+    };
+    testing.setOpenClawCodingToolsFactoryForTests(() => [markedWrappedTool as never]);
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+
+    const toolResult = (await harness.handleServerRequest({
+      id: "request-echo-unobserved-terminal-tool",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-echo-unobserved-terminal",
+        namespace: null,
+        tool: "echo",
+        arguments: {},
+      },
+    })) as {
+      contentItems?: Array<{ text?: string; type?: string }>;
+      success?: boolean;
+    };
+    expect(toolResult.success).toBe(true);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    await flushDiagnosticEvents();
+    unsubscribeDiagnostics();
+
+    const toolDiagnosticEvents = diagnosticEvents.filter(
+      (
+        event,
+      ): event is Extract<
+        DiagnosticEventPayload,
+        { type: "tool.execution.started" | "tool.execution.completed" | "tool.execution.error" }
+      > => event.type.startsWith("tool.execution."),
+    );
+    expect(
+      toolDiagnosticEvents.map((event) => ({
+        runId: event.runId,
+        type: event.type,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+      })),
+    ).toEqual([
+      {
+        runId: "run-1",
+        type: "tool.execution.started",
+        toolName: "echo",
+        toolCallId: "call-echo-unobserved-terminal",
+      },
+      {
+        runId: "other-run",
+        type: "tool.execution.completed",
+        toolName: "echo",
+        toolCallId: "call-echo-unobserved-terminal",
+      },
+      {
+        runId: "run-1",
+        type: "tool.execution.completed",
+        toolName: "echo",
+        toolCallId: "call-echo-unobserved-terminal",
+      },
+    ]);
+  });
+
+  it("does not duplicate terminal diagnostics for wrapped dynamic tool blocks", async () => {
+    const harness = createStartedThreadHarness();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    const beforeToolCall = vi.fn(async () => ({
+      block: true,
+      blockReason: "blocked by policy",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "echo done" }],
+      details: {},
+    }));
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      {
+        name: "echo",
+        description: "echo test tool",
+        parameters: {
+          type: "object",
+          properties: {},
+          additionalProperties: false,
+        },
+        execute,
+      } as never,
+    ]);
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+
+    const toolResult = (await harness.handleServerRequest({
+      id: "request-echo-blocked-tool",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-echo-blocked",
+        namespace: null,
+        tool: "echo",
+        arguments: {},
+      },
+    })) as {
+      contentItems?: Array<{ text?: string; type?: string }>;
+      success?: boolean;
+    };
+    expect(toolResult.success).toBe(false);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    await flushDiagnosticEvents();
+    unsubscribeDiagnostics();
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
+    const toolDiagnosticEvents = diagnosticEvents.filter(
+      (
+        event,
+      ): event is Extract<
+        DiagnosticEventPayload,
+        {
+          type:
+            | "tool.execution.blocked"
+            | "tool.execution.started"
+            | "tool.execution.completed"
+            | "tool.execution.error";
+        }
+      > => event.type.startsWith("tool.execution."),
+    );
+    expect(
+      toolDiagnosticEvents.map((event) => ({
+        type: event.type,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+      })),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        toolName: "echo",
+        toolCallId: "call-echo-blocked",
+      },
+      {
+        type: "tool.execution.blocked",
+        toolName: "echo",
+        toolCallId: "call-echo-blocked",
+      },
+    ]);
+  });
+
+  it("does not duplicate terminal diagnostics for wrapped dynamic tool errors", async () => {
+    const harness = createStartedThreadHarness();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    const execute = vi.fn(async () => {
+      throw new Error("wrapped tool failed");
+    });
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      {
+        name: "echo",
+        description: "echo test tool",
+        parameters: {
+          type: "object",
+          properties: {},
+          additionalProperties: false,
+        },
+        execute,
+      } as never,
+    ]);
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+
+    const toolResult = (await harness.handleServerRequest({
+      id: "request-echo-error-tool",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-echo-error",
+        namespace: null,
+        tool: "echo",
+        arguments: {},
+      },
+    })) as {
+      contentItems?: Array<{ text?: string; type?: string }>;
+      success?: boolean;
+    };
+    expect(toolResult).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "wrapped tool failed" }],
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    await flushDiagnosticEvents();
+    unsubscribeDiagnostics();
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    const toolDiagnosticEvents = diagnosticEvents.filter(
+      (
+        event,
+      ): event is Extract<
+        DiagnosticEventPayload,
+        { type: "tool.execution.started" | "tool.execution.completed" | "tool.execution.error" }
+      > => event.type.startsWith("tool.execution."),
+    );
+    expect(
+      toolDiagnosticEvents.map((event) => ({
+        type: event.type,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+      })),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        toolName: "echo",
+        toolCallId: "call-echo-error",
+      },
+      {
+        type: "tool.execution.error",
+        toolName: "echo",
+        toolCallId: "call-echo-error",
+      },
+    ]);
+  });
+
+  it("does not duplicate terminal diagnostics for wrapped dynamic tool timeout fallbacks", async () => {
+    const harness = createStartedThreadHarness();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    const execute = vi.fn(async () => new Promise<never>(() => {}));
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      {
+        name: "echo",
+        description: "echo test tool",
+        parameters: {
+          type: "object",
+          properties: {},
+          additionalProperties: true,
+        },
+        execute,
+      } as never,
+    ]);
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+
+    const toolResult = (await harness.handleServerRequest({
+      id: "request-echo-timeout-tool",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-echo-timeout",
+        namespace: null,
+        tool: "echo",
+        arguments: { timeoutMs: 1 },
+      },
+    })) as {
+      contentItems?: Array<{ text?: string; type?: string }>;
+      success?: boolean;
+    };
+    expect(toolResult).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: "OpenClaw dynamic tool call timed out after 1ms while running tool echo.",
+        },
+      ],
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    await flushDiagnosticEvents();
+    unsubscribeDiagnostics();
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    const toolDiagnosticEvents = diagnosticEvents.filter(
+      (
+        event,
+      ): event is Extract<
+        DiagnosticEventPayload,
+        { type: "tool.execution.started" | "tool.execution.completed" | "tool.execution.error" }
+      > => event.type.startsWith("tool.execution."),
+    );
+    expect(
+      toolDiagnosticEvents.map((event) => ({
+        type: event.type,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+      })),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        toolName: "echo",
+        toolCallId: "call-echo-timeout",
+      },
+      {
+        type: "tool.execution.error",
+        toolName: "echo",
+        toolCallId: "call-echo-timeout",
+      },
+    ]);
   });
 
   it("passes normalized channel context to app-server dynamic tool result hooks", async () => {
@@ -1499,7 +2482,8 @@ describe("runCodexAppServerAttempt", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
     );
-    __testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("echo")]);
+    testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("echo")]);
+
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -1543,6 +2527,44 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+  });
+
+  it("suppresses normalized tool progress for activity-log dynamic bash requests", async () => {
+    const harness = createStartedThreadHarness();
+    const onRunAgentEvent = vi.fn();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.onAgentEvent = onRunAgentEvent;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+
+    await harness.handleServerRequest({
+      id: "request-tool-activity-log",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-log-activity-1",
+        namespace: null,
+        tool: "bash",
+        arguments: {
+          command:
+            '/bin/bash -lc \'/home/openclaw/.openclaw/workspace/bin/log_activity.sh "web_search" "Grilled salmon research"\'',
+        },
+      },
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const toolEvents = onRunAgentEvent.mock.calls.filter(([event]) => {
+      const record = event as { stream?: string };
+      return record.stream === "tool";
+    });
+    expect(toolEvents).toHaveLength(0);
   });
 
   it("releases the session when Codex never completes after a dynamic tool response", async () => {
@@ -3494,7 +4516,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
-  it("passes OpenClaw bootstrap files through Codex developer instructions", async () => {
+  it("passes OpenClaw bootstrap files through Codex turn context", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -3509,23 +4531,33 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
-    const params = threadStart?.params as {
+    const threadStartParams = threadStart?.params as {
       config?: { instructions?: string };
       developerInstructions?: string;
     };
-    const config = params.config;
+    const config = threadStartParams.config;
 
-    // Regression for #77363: persona/style bootstrap (SOUL.md) must reach the
-    // explicit developerInstructions field, not config.instructions.
-    expect(params.developerInstructions).toContain("Soul voice goes here.");
-    expect(params.developerInstructions).toContain("Codex loads AGENTS.md natively");
-    expect(params.developerInstructions).not.toContain("Follow AGENTS guidance.");
+    expect(threadStartParams.developerInstructions).not.toContain("Soul voice goes here.");
+    expect(threadStartParams.developerInstructions).not.toContain("Codex loads AGENTS.md natively");
+    expect(threadStartParams.developerInstructions).not.toContain("Follow AGENTS guidance.");
     expect(config?.instructions).toBeUndefined();
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      input?: Array<{ text?: string }>;
+    };
+    const inputText = turnStartParams.input?.[0]?.text ?? "";
+    expect(inputText).toContain("OpenClaw runtime context for this turn:");
+    expect(inputText).toContain("not developer policy");
+    expect(inputText).toContain("Soul voice goes here.");
+    expect(inputText).toContain("Codex loads AGENTS.md natively");
+    expect(inputText).not.toContain("Follow AGENTS guidance.");
+    expect(inputText).toContain("Current user request:\nhello");
   });
 
   it("remaps Codex bootstrap files under dot-prefixed workspace directories", () => {
     expect(
-      __testing.remapCodexContextFilePath({
+      testing.remapCodexContextFilePath({
         file: {
           path: "/real/workspace/..context/SOUL.md",
           content: "Soul voice goes here.",
@@ -3538,7 +4570,7 @@ describe("runCodexAppServerAttempt", () => {
       content: "Soul voice goes here.",
     });
     expect(
-      __testing.remapCodexContextFilePath({
+      testing.remapCodexContextFilePath({
         file: {
           path: "/outside/SOUL.md",
           content: "outside",
@@ -3566,12 +4598,16 @@ describe("runCodexAppServerAttempt", () => {
     params.prompt = exactCommand;
     params.bootstrapContextMode = "lightweight";
     params.bootstrapContextRunKind = "cron";
+    params.skillsSnapshot = {
+      prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+      skills: [],
+    };
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await new Promise<void>((resolve) => setImmediate(resolve));
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    const result = await run;
 
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as {
@@ -3581,12 +4617,14 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadStartParams.config?.project_doc_max_bytes).toBe(0);
     expect(threadStartParams.developerInstructions).not.toContain("Soul voice goes here.");
     expect(threadStartParams.developerInstructions).not.toContain("Follow AGENTS guidance.");
+    expect(threadStartParams.developerInstructions).not.toContain("<available_skills>");
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
     };
     expect(turnStartParams.input?.[0]?.text).toBe(exactCommand);
+    expect(result.systemPromptReport?.skills).toEqual({ promptChars: 0, entries: [] });
   });
 
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
@@ -3637,7 +4675,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(llmInputPayload.prompt).toBe("hello");
     expect(llmInputPayload.imagesCount).toBe(0);
     expect(llmInputPayload.historyMessages?.[0]?.role).toBe("assistant");
-    expect(llmInputPayload.systemPrompt).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(llmInputPayload.systemPrompt).toContain("Running inside OpenClaw");
+    expect(llmInputPayload.systemPrompt).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     expect(llmInputContext.runId).toBe("run-1");
     expect(llmInputContext.sessionId).toBe("session-1");
     expect(llmInputContext.sessionKey).toBe("agent:main:session-1");
@@ -3928,7 +4967,7 @@ describe("runCodexAppServerAttempt", () => {
   it("keeps implicit Codex yolo approval policy when untrusted approvals are disallowed", () => {
     const appServer = resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null });
 
-    const resolved = __testing.resolveCodexAppServerForOpenClawToolPolicy({
+    const resolved = testing.resolveCodexAppServerForOpenClawToolPolicy({
       appServer,
       pluginConfig: readCodexPluginConfig({}),
       env: {},
@@ -4268,7 +5307,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("builds deterministic opaque Codex native hook relay ids", () => {
-    const relayId = __testing.buildCodexNativeHookRelayId({
+    const relayId = testing.buildCodexNativeHookRelayId({
       agentId: "dev-codex",
       sessionId: "cu-pr-relay-smoke",
       sessionKey: "agent:dev-codex:cu-pr-relay-smoke",
@@ -4377,9 +5416,9 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("recognizes invalid image payload errors without matching unsupported image input", () => {
-    expect(__testing.isInvalidCodexImagePayloadError("invalid_image_url")).toBe(true);
-    expect(__testing.isInvalidCodexImagePayloadError("malformed-base64 image payload")).toBe(true);
-    expect(__testing.isInvalidCodexImagePayloadError("unsupported image input")).toBe(false);
+    expect(testing.isInvalidCodexImagePayloadError("invalid_image_url")).toBe(true);
+    expect(testing.isInvalidCodexImagePayloadError("malformed-base64 image payload")).toBe(true);
+    expect(testing.isInvalidCodexImagePayloadError("unsupported image input")).toBe(false);
   });
 
   it("preserves Codex usage-limit reset details when turn/start fails", async () => {
@@ -4763,7 +5802,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadStartParams?.approvalPolicy).toBe("never");
     expect(threadStartParams?.sandbox).toBe("danger-full-access");
     expect(threadStartParams?.approvalsReviewer).toBe("user");
-    expect(threadStartParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(threadStartParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const steer = requests.find((entry) => entry.method === "turn/steer");
     expect(steer?.params).toEqual({
       threadId: "thread-1",
@@ -4809,7 +5848,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("resolves queued steering only after turn/steer is accepted", async () => {
     const request = vi.fn(async () => ({ turnId: "turn-1" }));
-    const queue = __testing.createCodexSteeringQueue({
+    const queue = testing.createCodexSteeringQueue({
       client: { request } as never,
       threadId: "thread-1",
       turnId: "turn-1",
@@ -4830,7 +5869,7 @@ describe("runCodexAppServerAttempt", () => {
     const request = vi.fn(async () => {
       throw new Error("cannot steer a compact turn");
     });
-    const queue = __testing.createCodexSteeringQueue({
+    const queue = testing.createCodexSteeringQueue({
       client: { request } as never,
       threadId: "thread-1",
       turnId: "turn-1",
@@ -4852,7 +5891,7 @@ describe("runCodexAppServerAttempt", () => {
   it("rejects queued steering when the run aborts before debounce flush", async () => {
     const controller = new AbortController();
     const request = vi.fn(async () => ({ turnId: "turn-1" }));
-    const queue = __testing.createCodexSteeringQueue({
+    const queue = testing.createCodexSteeringQueue({
       client: { request } as never,
       threadId: "thread-1",
       turnId: "turn-1",
@@ -6145,7 +7184,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
-    expect(resumeRequestParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
   });
 
   it("starts a fresh Codex thread before resume when the native rollout is over budget", async () => {
@@ -6295,7 +7334,7 @@ describe("runCodexAppServerAttempt", () => {
       "x".repeat(2_000_000),
     );
 
-    const binding = await __testing.rotateOversizedCodexAppServerStartupBinding({
+    const binding = await testing.rotateOversizedCodexAppServerStartupBinding({
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
@@ -6333,7 +7372,7 @@ describe("runCodexAppServerAttempt", () => {
     await fs.mkdir(rolloutDir, { recursive: true });
     await fs.writeFile(path.join(rolloutDir, "rollout-thread-existing.jsonl"), "x".repeat(2_000));
 
-    const binding = await __testing.rotateOversizedCodexAppServerStartupBinding({
+    const binding = await testing.rotateOversizedCodexAppServerStartupBinding({
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
@@ -6373,7 +7412,7 @@ describe("runCodexAppServerAttempt", () => {
     await fs.mkdir(rolloutDir, { recursive: true });
     await fs.writeFile(path.join(rolloutDir, "rollout-thread-existing.jsonl"), "x".repeat(2_000));
 
-    const binding = await __testing.rotateOversizedCodexAppServerStartupBinding({
+    const binding = await testing.rotateOversizedCodexAppServerStartupBinding({
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
@@ -6428,7 +7467,7 @@ describe("runCodexAppServerAttempt", () => {
       })}\n`,
     );
 
-    const binding = await __testing.rotateOversizedCodexAppServerStartupBinding({
+    const binding = await testing.rotateOversizedCodexAppServerStartupBinding({
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
@@ -6480,7 +7519,7 @@ describe("runCodexAppServerAttempt", () => {
       })}\n`,
     );
 
-    const binding = await __testing.rotateOversizedCodexAppServerStartupBinding({
+    const binding = await testing.rotateOversizedCodexAppServerStartupBinding({
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
@@ -6533,7 +7572,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     const readFileSpy = vi.spyOn(fs, "readFile");
 
-    const binding = await __testing.rotateOversizedCodexAppServerStartupBinding({
+    const binding = await testing.rotateOversizedCodexAppServerStartupBinding({
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
@@ -6575,7 +7614,7 @@ describe("runCodexAppServerAttempt", () => {
     await fs.writeFile(rolloutFile, "x".repeat(2_000));
     const readFileSpy = vi.spyOn(fs, "readFile");
 
-    const binding = await __testing.rotateOversizedCodexAppServerStartupBinding({
+    const binding = await testing.rotateOversizedCodexAppServerStartupBinding({
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
@@ -6615,7 +7654,7 @@ describe("runCodexAppServerAttempt", () => {
     await fs.mkdir(rolloutDir, { recursive: true });
     await fs.writeFile(path.join(rolloutDir, "rollout-thread-existing.jsonl"), "x".repeat(1_000));
 
-    const binding = await __testing.rotateOversizedCodexAppServerStartupBinding({
+    const binding = await testing.rotateOversizedCodexAppServerStartupBinding({
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
       agentDir,
@@ -6931,6 +7970,105 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("keeps plugin app bindings across transient native-tool-disabled turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const pluginAppPolicyContext = createPluginAppPolicyContext();
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      pluginAppsFingerprint: "plugin-apps-config-1",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext,
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-transient");
+      }
+      if (method === "thread/resume") {
+        return threadStartResult("thread-existing");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const buildDenyAllPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: {
+        apps: {
+          _default: {
+            enabled: false,
+            destructive_enabled: false,
+            open_world_enabled: false,
+          },
+        },
+      },
+      fingerprint: "plugin-apps-deny-all",
+      inputFingerprint: "plugin-apps-input-deny-all",
+      policyContext: { fingerprint: "plugin-policy-deny-all", apps: {}, pluginAppIds: {} },
+      diagnostics: [],
+    }));
+    const buildEnabledPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: createPluginAppConfigPatch(),
+      fingerprint: "plugin-apps-config-1",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: pluginAppPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      nativeCodeModeEnabled: false,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-deny-all",
+        enabledPluginConfigKeys: [],
+        build: buildDenyAllPluginThreadConfig,
+      },
+    });
+    const savedAfterDeny = await readCodexAppServerBinding(sessionFile);
+
+    expect(savedAfterDeny?.threadId).toBe("thread-existing");
+    expect(savedAfterDeny?.pluginAppsFingerprint).toBe("plugin-apps-config-1");
+    expect(savedAfterDeny?.pluginAppsInputFingerprint).toBe("plugin-apps-input-1");
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        enabledPluginConfigKeys: ["google-calendar"],
+        build: buildEnabledPluginThreadConfig,
+      },
+    });
+
+    expect(buildDenyAllPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(buildEnabledPluginThreadConfig).toHaveBeenCalledTimes(1);
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+    expect(requestCalls[0]?.[1].config).toMatchObject({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    const savedAfterAllowed = await readCodexAppServerBinding(sessionFile);
+    expect(savedAfterAllowed?.threadId).toBe("thread-existing");
+    expect(savedAfterAllowed?.pluginAppsFingerprint).toBe("plugin-apps-config-1");
+    expect(savedAfterAllowed?.pluginAppsInputFingerprint).toBe("plugin-apps-input-1");
+    expect(savedAfterAllowed?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
   it("preserves the binding when the app-server closes during thread resume", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -7081,7 +8219,7 @@ describe("runCodexAppServerAttempt", () => {
     const expectedConfig = {
       ...config,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     };
 
     await startOrResumeThread({
@@ -7149,7 +8287,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       hooks: { PreToolUse: [] },
       ...createPluginAppConfigPatch(),
     });
@@ -7227,14 +8365,14 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toMatchObject({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       "hooks.PreToolUse": finalConfigPatch["hooks.PreToolUse"],
       ...createPluginAppConfigPatch(),
     });
     expect(requestCalls[1]?.[1].config).toMatchObject({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       "hooks.PreToolUse": finalConfigPatch["hooks.PreToolUse"],
     });
   });
@@ -7295,13 +8433,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       ...createPluginAppConfigPatch(),
     });
     expect(requestCalls[1]?.[1].config).toEqual({
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
   });
 
@@ -7359,7 +8497,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
       apps: {
         _default: {
           enabled: false,
@@ -7413,7 +8551,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-existing");
@@ -7468,7 +8606,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       ...createPluginAppConfigPatch(),
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
@@ -7529,7 +8667,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
   });
 
@@ -7580,7 +8718,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       ...createTwoPluginAppConfigPatch(),
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
@@ -7640,7 +8778,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       ...createTwoCalendarAppConfigPatch(),
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
@@ -7687,7 +8825,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       ...createPluginAppConfigPatch(),
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-plugins");
@@ -7761,8 +8899,8 @@ describe("runCodexAppServerAttempt", () => {
     const resumeConfig = resumeRequestParams?.config as Record<string, unknown> | undefined;
     expect(resumeConfig?.["features.hooks"]).toBe(true);
     expect(resumeConfig?.["features.code_mode"]).toBe(true);
-    expect(resumeConfig?.["features.code_mode_only"]).toBe(true);
-    expect(resumeRequestParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(resumeConfig?.["features.code_mode_only"]).toBe(false);
+    expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnRequest = requests.find((request) => request.method === "turn/start");
     const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
     expect(turnRequestParams?.approvalPolicy).toBe("on-request");
@@ -7772,7 +8910,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.model).toBe("gpt-5.4-codex");
   });
 
-  it("clamps Codex danger-full-access when OpenClaw sandboxing is active", () => {
+  it("maps active OpenClaw sandbox egress into Codex workspace-write turns", () => {
     const appServer = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {
         appServer: {
@@ -7782,22 +8920,91 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    const sandboxed = __testing.restrictCodexAppServerSandboxForOpenClawSandbox(appServer, {
-      enabled: true,
-    } as never);
-    expect(sandboxed).not.toBe(appServer);
-    expect(sandboxed.approvalPolicy).toBe("never");
-    expect(sandboxed.sandbox).toBe("workspace-write");
-
-    expect(__testing.restrictCodexAppServerSandboxForOpenClawSandbox(appServer, null)).toBe(
-      appServer,
-    );
     expect(
-      __testing.restrictCodexAppServerSandboxForOpenClawSandbox(
+      testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        appServer,
+        {
+          enabled: true,
+          backendId: "docker",
+          docker: { network: "none" },
+        } as never,
+        "/tmp/workspace",
+      ),
+    ).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/workspace"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+
+    expect(
+      testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        { ...appServer, sandbox: "workspace-write" },
+        {
+          enabled: true,
+          backendId: "docker",
+          docker: { network: "bridge" },
+        } as never,
+        "/tmp/workspace",
+      ),
+    ).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/workspace"],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+
+    expect(
+      testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        appServer,
+        {
+          enabled: true,
+          backendId: "docker",
+          docker: { network: "bridge" },
+        } as never,
+        "/tmp/workspace",
+      ),
+    ).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/workspace"],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+
+    expect(
+      testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        appServer,
+        {
+          enabled: true,
+          backendId: "ssh",
+        } as never,
+        "/tmp/workspace",
+      ),
+    ).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/tmp/workspace"],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+
+    expect(
+      testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
+        appServer,
+        null,
+        "/tmp/workspace",
+      ),
+    ).toBeUndefined();
+    expect(
+      testing.resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
         { ...appServer, sandbox: "read-only" },
         { enabled: true } as never,
-      ).sandbox,
-    ).toBe("read-only");
+        "/tmp/workspace",
+      ),
+    ).toBeUndefined();
   });
 
   it("passes current Codex service tier request values through app-server resume and turn requests", async () => {
@@ -7856,6 +9063,84 @@ describe("runCodexAppServerAttempt", () => {
     expect(second).not.toContain("Bearer second");
   });
 
+  it("redacts plugin thread config eligibility log data", () => {
+    const appServer = {
+      start: {
+        transport: "websocket" as const,
+        command: "codex",
+        commandSource: "config" as const,
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        authToken: "token-secret",
+        headers: {
+          Authorization: "Bearer secret",
+          "X-Test-Token": "header-secret",
+        },
+        env: {
+          CODEX_HOME: "/tmp/codex-home",
+          OPENAI_API_KEY: "env-secret",
+        },
+      },
+      codeModeOnly: false,
+      requestTimeoutMs: 60_000,
+      turnCompletionIdleTimeoutMs: 60_000,
+      approvalPolicy: "never" as const,
+      approvalsReviewer: "user" as const,
+      sandbox: "danger-full-access" as const,
+      serviceTier: "priority" as const,
+    };
+    const resolvedPluginPolicy = resolveCodexPluginsPolicy({
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+        },
+      },
+    });
+    const logData = testing.buildCodexPluginThreadConfigEligibilityLogData({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      pluginThreadConfigRequired: true,
+      resolvedPluginPolicy,
+      enabledPluginConfigKeys: ["google-calendar"],
+      pluginAppCacheKey: buildCodexPluginAppCacheKey({
+        appServer,
+        agentDir: "/tmp/agent",
+        authProfileId: "openai-codex:work",
+        accountId: "account-work",
+        envApiKeyFingerprint: "env-key",
+      }),
+      startupAuthProfileId: "openai-codex:work",
+      appServer,
+    });
+
+    expect(logData).toEqual(
+      expect.objectContaining({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        enabled: true,
+        policyConfigured: true,
+        policyEnabled: true,
+        pluginConfigKeys: ["google-calendar"],
+        enabledPluginConfigKeys: ["google-calendar"],
+        appCacheKeyFingerprint: expect.stringMatching(/^sha256:/),
+        authProfileId: "openai-codex:work",
+        appServerTransport: "websocket",
+        appServerCommandSource: "config",
+      }),
+    );
+    expect(logData).not.toHaveProperty("appCacheKeyInput");
+    const serialized = JSON.stringify(logData);
+    expect(serialized).not.toContain("token-secret");
+    expect(serialized).not.toContain("Bearer secret");
+    expect(serialized).not.toContain("header-secret");
+    expect(serialized).not.toContain("env-secret");
+    expect(serialized).not.toContain("/tmp/codex-home");
+  });
+
   it("builds resume and turn params from the currently selected OpenClaw model", () => {
     const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
     const appServer = {
@@ -7865,6 +9150,7 @@ describe("runCodexAppServerAttempt", () => {
         args: ["app-server", "--listen", "stdio://"],
         headers: {},
       },
+      codeModeOnly: false,
       requestTimeoutMs: 60_000,
       turnCompletionIdleTimeoutMs: 60_000,
       approvalPolicy: "on-request" as const,
@@ -7881,14 +9167,14 @@ describe("runCodexAppServerAttempt", () => {
       approvalsReviewer: "guardian_subagent",
       config: {
         "features.code_mode": true,
-        "features.code_mode_only": true,
+        "features.code_mode_only": false,
       },
       sandbox: "danger-full-access",
       serviceTier: "flex",
       developerInstructions: resumeParams.developerInstructions,
       persistExtendedHistory: true,
     });
-    expect(resumeParams.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnParams = buildTurnStartParams(params, {
       threadId: "thread-1",
       cwd: "/tmp/workspace",
@@ -7981,6 +9267,7 @@ describe("runCodexAppServerAttempt", () => {
           args: ["app-server"],
           headers: {},
         },
+        codeModeOnly: false,
         requestTimeoutMs: 60_000,
         turnCompletionIdleTimeoutMs: 60_000,
         approvalPolicy: "never",

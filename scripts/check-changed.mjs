@@ -1,6 +1,6 @@
-import { performance } from "node:perf_hooks";
 import { accessSync, constants } from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import {
   detectChangedLanesForPaths,
   listChangedPathsFromGit,
@@ -66,12 +66,9 @@ function executableExistsOnPath(command, env = process.env) {
 export function shouldSkipAppLintForMissingSwiftlint(options = {}) {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
-  const swiftlintAvailable =
-    options.swiftlintAvailable ?? executableExistsOnPath("swiftlint", env);
+  const swiftlintAvailable = options.swiftlintAvailable ?? executableExistsOnPath("swiftlint", env);
   return (
-    isTruthyEnvFlag(env.OPENCLAW_TESTBOX_REMOTE_RUN) &&
-    platform !== "darwin" &&
-    !swiftlintAvailable
+    isTruthyEnvFlag(env.OPENCLAW_TESTBOX_REMOTE_RUN) && platform !== "darwin" && !swiftlintAvailable
   );
 }
 

@@ -55,6 +55,7 @@ import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-mo
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
+  ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   type ResolvedProviderAuth,
   resolveAuthProfileOrder,
@@ -693,9 +694,14 @@ export async function runEmbeddedPiAgent(
       const authStore =
         pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
           ? createEmptyAuthProfileStore()
-          : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-              allowKeychainPrompt: false,
-            });
+          : pluginHarnessNeedsOpenClawAuthBootstrap
+            ? ensureAuthProfileStore(agentDir, {
+                externalCliProviderIds: [OPENAI_CODEX_PROVIDER_ID],
+                allowKeychainPrompt: false,
+              })
+            : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+                allowKeychainPrompt: false,
+              });
       const attemptAuthProfileStore =
         pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
           ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
@@ -992,14 +998,7 @@ export async function runEmbeddedPiAgent(
         modelId,
       });
       const executionContract = strictAgenticActive ? "strict-agentic" : "default";
-      const configuredExecutionContractForLog = configuredExecutionContract ?? "default";
-      if (strictAgenticActive) {
-        log.info(
-          `strict-agentic execution contract active: runId=${params.runId} sessionId=${params.sessionId} ` +
-            `provider=${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} harness=${sanitizeForLog(agentHarness.id)} ` +
-            `configured=${configuredExecutionContract ?? "unspecified"}`,
-        );
-      }
+      const configuredExecutionContractForLog = configuredExecutionContract ?? "unspecified";
       const maxPlanningOnlyRetryAttempts = resolvePlanningOnlyRetryLimit(executionContract);
       const maxReasoningOnlyRetryAttempts = DEFAULT_REASONING_ONLY_RETRY_LIMIT;
       const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
@@ -1502,7 +1501,9 @@ export async function runEmbeddedPiAgent(
             suppressNextUserMessagePersistence,
             suppressTranscriptOnlyAssistantPersistence:
               params.suppressTranscriptOnlyAssistantPersistence,
+            suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
             onUserMessagePersisted,
+            onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
           })
             .catch((err: unknown): never => {
               throw postCompactionAbortError ?? err;
@@ -2798,9 +2799,14 @@ export async function runEmbeddedPiAgent(
             }
             planningOnlyRetryAttempts += 1;
             planningOnlyRetryInstruction = nextPlanningOnlyRetryInstruction;
+            const planningOnlyRetryLogPrefix =
+              executionContract === "strict-agentic"
+                ? "strict-agentic execution contract triggered"
+                : "planning-only turn detected";
             log.warn(
-              `planning-only turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `provider=${provider}/${modelId} contract=${executionContract} configured=${configuredExecutionContractForLog} — retrying ` +
+              `${planningOnlyRetryLogPrefix}: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} harness=${sanitizeForLog(agentHarness.id)} ` +
+                `contract=${executionContract} configured=${configuredExecutionContractForLog} — retrying ` +
                 `${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} with act-now steer`,
             );
             continue;
