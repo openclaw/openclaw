@@ -62,7 +62,7 @@ type TokenResult =
  * Without this conversion the token appears perpetually expired, triggering
  * a slow OAuth refresh on every request (#83449).
  */
-function normalizeOAuthExpires(expiredIn: number): number {
+export function normalizeOAuthExpires(expiredIn: number): number {
   // If the value is small enough to be a relative duration in seconds
   // (e.g. 86400 for 24h), convert it to an absolute ms timestamp.
   // Threshold: 1_000_000_000 (≈ Sep 2001 in Unix epoch seconds).
