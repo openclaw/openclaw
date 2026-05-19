@@ -191,6 +191,13 @@ export function mergeGroupMessages(batch: QueuedMessage[]): QueuedMessage {
   };
 }
 
+/**
+ * Max number of recent message IDs kept per peer for duplicate detection.
+ * Sized to cover the worst-case burst from a gateway reconnect replay
+ * while staying small enough to not leak memory.
+ */
+const DEFAULT_DEDUP_CACHE_SIZE = 50;
+
 export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
   const { accountId: _accountId, log } = ctx;
   const globalQueueSize = ctx.globalQueueSize ?? DEFAULT_GLOBAL_QUEUE_SIZE;
@@ -200,6 +207,9 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
 
   const userQueues = new Map<string, QueuedMessage[]>();
   const activeUsers = new Set<string>();
+  /** Per-peer recent messageId dedup set — prevents duplicate enqueue
+   *  when the QQ gateway reconnects and replays recent events. */
+  const recentMessageIds = new Map<string, Set<string>>();
   let handleMessageFnRef: ((msg: QueuedMessage) => Promise<void>) | null = null;
   let totalEnqueued = 0;
 
@@ -308,6 +318,34 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
 
   const enqueue = (msg: QueuedMessage): void => {
     const peerId = getMessagePeerId(msg);
+
+    // Dedup: skip if we've seen this messageId for this peer recently.
+    // The QQ gateway may replay recent events on reconnect, and without
+    // this guard the same inbound message gets processed multiple times,
+    // producing duplicate outbound replies.
+    if (msg.messageId) {
+      let seen = recentMessageIds.get(peerId);
+      if (!seen) {
+        seen = new Set();
+        recentMessageIds.set(peerId, seen);
+      }
+      if (seen.has(msg.messageId)) {
+        log?.debug?.(
+          `Dropped duplicate message ${msg.messageId} for ${peerId}`,
+          { accountId: ctx.accountId, peerId, messageId: msg.messageId, reason: "recent_id_dedup" },
+        );
+        return;
+      }
+      seen.add(msg.messageId);
+      // Keep the set bounded — oldest entries are dropped when we exceed
+      // the limit. Since duplicates arrive in quick bursts (seconds),
+      // losing old IDs is safe.
+      if (seen.size > DEFAULT_DEDUP_CACHE_SIZE) {
+        // Re-create to shed all old entries in one O(n) sweep.
+        recentMessageIds.set(peerId, new Set([msg.messageId]));
+      }
+    }
+
     const isGroup = isGroupPeer(peerId);
 
     let queue = userQueues.get(peerId);
