@@ -2190,127 +2190,139 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    // Register before awaited attachment/model preparation so an immediate
+    // chat.abort can still find and stop the active run.
+    const activeRunAbort = registerChatAbortController({
+      chatAbortControllers: context.chatAbortControllers,
+      runId: clientRunId,
+      sessionId: backingSessionId ?? clientRunId,
+      sessionKey: rawSessionKey,
+      timeoutMs,
+      now,
+      ownerConnId: normalizeOptionalText(client?.connId),
+      ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+      providerId: resolvedSessionModel.provider,
+      authProviderId: resolvedSessionAuthProvider,
+      kind: "chat-send",
+    });
+    if (!activeRunAbort.registered) {
+      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+        cached: true,
+        runId: clientRunId,
+      });
+      return;
+    }
+
     const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
       explicitOriginResult.value,
     );
     let modelOverride: string | undefined;
     let modelOverrideFallbacks: string[] | undefined;
-    if (normalizedAttachments.length > 0) {
-      try {
-        await measureDiagnosticsTimelineSpan(
-          "gateway.chat_send.prepare_attachments",
-          async () => {
-            const hasImageAttachments = await hasImageChatAttachments(normalizedAttachments);
-            const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
-              loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-              provider: resolvedSessionModel.provider,
-              model: resolvedSessionModel.model,
-            });
-            const explicitOriginSupportsInlineImages =
-              explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
-              explicitOriginTargetsPlugin;
-            const imageModelPlan = await resolveImageModelOverridePlan({
-              cfg,
-              agentId,
-              defaultProvider: resolvedConfiguredDefaultModel.provider,
-              defaultModel: resolvedConfiguredDefaultModel.model,
-              hasImageAttachments,
-              sessionModelSupportsImages:
-                supportsSessionModelImages || explicitOriginSupportsInlineImages,
-              modelSupportsImages: (ref) =>
-                resolveGatewayModelSupportsImages({
-                  loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-                  provider: ref.provider,
-                  model: ref.model,
-                }),
-            });
-            if (imageModelPlan.kind === "inline-image-model") {
-              modelOverride = imageModelPlan.modelOverride;
-              modelOverrideFallbacks = imageModelPlan.modelOverrideFallbacks;
-            }
-            // Bound plugin sessions own the real recipient model, so keep image
-            // attachments even when the parent OpenClaw session model is text-only.
-            const supportsImages =
-              imageModelPlan.kind === "inline-session" ||
-              imageModelPlan.kind === "inline-image-model" ||
-              explicitOriginSupportsInlineImages;
-            const routeImageOffloadsAsMediaPaths = !supportsImages;
-            const parsed = await parseMessageWithAttachments(
-              inboundMessage,
-              normalizedAttachments,
-              {
-                maxBytes: resolveChatAttachmentMaxBytes(cfg),
-                log: context.logGateway,
-                supportsImages,
-                // chat.send routes selected offloadedRefs into ctx.MediaPaths below
-                // so the auto-reply stage pipeline can surface them to the agent.
-                acceptNonImage: true,
-              },
-            );
-            parsedMessage = stripTrailingOffloadedMediaMarkers(
-              parsed.message,
-              routeImageOffloadsAsMediaPaths
-                ? parsed.offloadedRefs.filter((ref) => ref.mimeType.startsWith("image/"))
-                : [],
-            );
-            parsedImages = parsed.images;
-            imageOrder = routeImageOffloadsAsMediaPaths ? [] : parsed.imageOrder;
-            offloadedRefs = parsed.offloadedRefs;
-            ({
-              paths: mediaPathOffloadPaths,
-              types: mediaPathOffloadTypes,
-              workspaceDir: mediaPathOffloadWorkspaceDir,
-            } = await prestageMediaPathOffloads({
-              offloadedRefs,
-              // Text-only image offloads need ctx.MediaPaths so media-understanding
-              // can describe them via agents.defaults.imageModel. Vision-capable
-              // image offloads stay as prompt refs for native image loading.
-              includeImageRefs: routeImageOffloadsAsMediaPaths,
-              cfg,
-              sessionKey,
-              agentId,
-            }));
-          },
-          {
-            phase: "agent-turn",
-            config: cfg,
-            attributes: {
-              attachmentCount: normalizedAttachments.length,
-              hasExplicitOrigin: explicitOriginResult.value !== undefined,
-            },
-          },
-        );
-      } catch (err) {
-        logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
-        respond(
-          false,
-          undefined,
-          errorShape(
-            err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-            String(err),
-          ),
-        );
-        return;
-      }
-    }
-
+    let dispatchScheduled = false;
     try {
-      const activeRunAbort = registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
-        runId: clientRunId,
-        sessionId: backingSessionId ?? clientRunId,
-        sessionKey: rawSessionKey,
-        timeoutMs,
-        now,
-        ownerConnId: normalizeOptionalText(client?.connId),
-        ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
-        providerId: resolvedSessionModel.provider,
-        authProviderId: resolvedSessionAuthProvider,
-        kind: "chat-send",
-      });
-      if (!activeRunAbort.registered) {
-        respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-          cached: true,
+      if (normalizedAttachments.length > 0) {
+        try {
+          await measureDiagnosticsTimelineSpan(
+            "gateway.chat_send.prepare_attachments",
+            async () => {
+              const hasImageAttachments = await hasImageChatAttachments(normalizedAttachments);
+              const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
+                loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+                provider: resolvedSessionModel.provider,
+                model: resolvedSessionModel.model,
+              });
+              const explicitOriginSupportsInlineImages =
+                explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
+                explicitOriginTargetsPlugin;
+              const imageModelPlan = await resolveImageModelOverridePlan({
+                cfg,
+                agentId,
+                defaultProvider: resolvedConfiguredDefaultModel.provider,
+                defaultModel: resolvedConfiguredDefaultModel.model,
+                hasImageAttachments,
+                sessionModelSupportsImages:
+                  supportsSessionModelImages || explicitOriginSupportsInlineImages,
+                modelSupportsImages: (ref) =>
+                  resolveGatewayModelSupportsImages({
+                    loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+                    provider: ref.provider,
+                    model: ref.model,
+                  }),
+              });
+              if (imageModelPlan.kind === "inline-image-model") {
+                modelOverride = imageModelPlan.modelOverride;
+                modelOverrideFallbacks = imageModelPlan.modelOverrideFallbacks;
+              }
+              // Bound plugin sessions own the real recipient model, so keep image
+              // attachments even when the parent OpenClaw session model is text-only.
+              const supportsImages =
+                imageModelPlan.kind === "inline-session" ||
+                imageModelPlan.kind === "inline-image-model" ||
+                explicitOriginSupportsInlineImages;
+              const routeImageOffloadsAsMediaPaths = !supportsImages;
+              const parsed = await parseMessageWithAttachments(
+                inboundMessage,
+                normalizedAttachments,
+                {
+                  maxBytes: resolveChatAttachmentMaxBytes(cfg),
+                  log: context.logGateway,
+                  supportsImages,
+                  // chat.send routes selected offloadedRefs into ctx.MediaPaths below
+                  // so the auto-reply stage pipeline can surface them to the agent.
+                  acceptNonImage: true,
+                },
+              );
+              parsedMessage = stripTrailingOffloadedMediaMarkers(
+                parsed.message,
+                routeImageOffloadsAsMediaPaths
+                  ? parsed.offloadedRefs.filter((ref) => ref.mimeType.startsWith("image/"))
+                  : [],
+              );
+              parsedImages = parsed.images;
+              imageOrder = routeImageOffloadsAsMediaPaths ? [] : parsed.imageOrder;
+              offloadedRefs = parsed.offloadedRefs;
+              ({
+                paths: mediaPathOffloadPaths,
+                types: mediaPathOffloadTypes,
+                workspaceDir: mediaPathOffloadWorkspaceDir,
+              } = await prestageMediaPathOffloads({
+                offloadedRefs,
+                // Text-only image offloads need ctx.MediaPaths so media-understanding
+                // can describe them via agents.defaults.imageModel. Vision-capable
+                // image offloads stay as prompt refs for native image loading.
+                includeImageRefs: routeImageOffloadsAsMediaPaths,
+                cfg,
+                sessionKey,
+                agentId,
+              }));
+            },
+            {
+              phase: "agent-turn",
+              config: cfg,
+              attributes: {
+                attachmentCount: normalizedAttachments.length,
+                hasExplicitOrigin: explicitOriginResult.value !== undefined,
+              },
+            },
+          );
+        } catch (err) {
+          logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
+          respond(
+            false,
+            undefined,
+            errorShape(
+              err instanceof MediaOffloadError
+                ? ErrorCodes.UNAVAILABLE
+                : ErrorCodes.INVALID_REQUEST,
+              String(err),
+            ),
+          );
+          return;
+        }
+      }
+
+      if (activeRunAbort.controller.signal.aborted) {
+        respond(true, { runId: clientRunId, status: "started" as const }, undefined, {
           runId: clientRunId,
         });
         return;
@@ -2945,9 +2957,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           activeRunAbort.cleanup();
           context.removeChatRun(clientRunId, clientRunId, sessionKey);
         });
+      dispatchScheduled = true;
     } catch (err) {
-      context.chatAbortControllers.delete(clientRunId);
-      context.removeChatRun(clientRunId, clientRunId, sessionKey);
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: clientRunId,
@@ -2968,6 +2979,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         runId: clientRunId,
         error: formatForLog(err),
       });
+    } finally {
+      if (!dispatchScheduled) {
+        activeRunAbort.cleanup();
+        context.removeChatRun(clientRunId, clientRunId, sessionKey);
+      }
     }
   },
   "chat.inject": async ({ params, respond, context }) => {
