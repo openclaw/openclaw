@@ -39,20 +39,20 @@ describe("createOpencodeGoKimiNoReasoningWrapper (#83812)", () => {
         { role: "user", content: "ok" },
       ],
     };
-    const { wrapper } = captureStrippedPayload({ provider: "opencode-go", id: "kimi-k2.6" }, payload);
+    const { wrapper } = captureStrippedPayload(
+      { provider: "opencode-go", id: "kimi-k2.6" },
+      payload,
+    );
     expect(wrapper).toBeDefined();
     await wrapper!({ provider: "opencode-go", id: "kimi-k2.6" } as never, {} as never, {} as never);
 
     expect(payload.reasoning).toBeUndefined();
     expect(payload.reasoning_effort).toBeUndefined();
-    const replayed = (payload.messages as Record<string, unknown>[])[1]!;
-    expect(replayed.reasoning_details).toBeUndefined();
-    expect(replayed.reasoning_content).toBeUndefined();
-    expect(replayed.reasoning).toBeUndefined();
-    expect(replayed.reasoning_text).toBeUndefined();
-    // Non-reasoning fields must survive.
-    expect(replayed.role).toBe("assistant");
-    expect(replayed.content).toBe("let me think");
+    expect(payload.messages).toEqual([
+      { role: "system", content: "you are helpful" },
+      { role: "assistant", content: "let me think" },
+      { role: "user", content: "ok" },
+    ]);
   });
 
   it("walks array-shaped message content parts", async () => {
@@ -67,13 +67,17 @@ describe("createOpencodeGoKimiNoReasoningWrapper (#83812)", () => {
         },
       ],
     };
-    const { wrapper } = captureStrippedPayload({ provider: "opencode-go", id: "kimi-k2.5" }, payload);
+    const { wrapper } = captureStrippedPayload(
+      { provider: "opencode-go", id: "kimi-k2.5" },
+      payload,
+    );
     await wrapper!({ provider: "opencode-go", id: "kimi-k2.5" } as never, {} as never, {} as never);
-    const parts = ((payload.messages as Record<string, unknown>[])[0]!.content as Record<string, unknown>[]);
-    expect(parts[0]!.reasoning_details).toBeUndefined();
-    expect(parts[0]!.text).toBe("answer");
-    expect(parts[1]!.reasoning).toBeUndefined();
-    expect(parts[1]!.type).toBe("tool_use");
+    expect(payload.messages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }, { type: "tool_use" }],
+      },
+    ]);
   });
 
   it("also strips per-message reasoning from input[] (Responses-style payload)", async () => {
@@ -86,12 +90,12 @@ describe("createOpencodeGoKimiNoReasoningWrapper (#83812)", () => {
         },
       ],
     };
-    const { wrapper } = captureStrippedPayload({ provider: "opencode-go", id: "kimi-k2.6" }, payload);
+    const { wrapper } = captureStrippedPayload(
+      { provider: "opencode-go", id: "kimi-k2.6" },
+      payload,
+    );
     await wrapper!({ provider: "opencode-go", id: "kimi-k2.6" } as never, {} as never, {} as never);
-    const item = (payload.input as Record<string, unknown>[])[0]!;
-    expect(item.reasoning_details).toBeUndefined();
-    expect(item.reasoning).toBeUndefined();
-    expect(item.role).toBe("assistant");
+    expect(payload.input).toEqual([{ role: "assistant" }]);
   });
 
   it("does not touch payloads for unrelated opencode-go models", async () => {
@@ -110,6 +114,6 @@ describe("createOpencodeGoKimiNoReasoningWrapper (#83812)", () => {
     );
     // The wrapper short-circuits to underlying for non-Kimi IDs; nothing should be touched.
     expect(payload.reasoning).toBe("kept");
-    expect((payload.messages as Record<string, unknown>[])[0]!.reasoning_details).toBeDefined();
+    expect(payload.messages).toEqual([{ role: "assistant", reasoning_details: [{ type: "x" }] }]);
   });
 });
