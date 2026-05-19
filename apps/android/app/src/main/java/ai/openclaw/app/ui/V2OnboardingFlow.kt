@@ -14,11 +14,14 @@ import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -492,6 +495,7 @@ private fun V2GatewayRecoveryScreen(
   modifier: Modifier = Modifier,
 ) {
   val pairingRequired = gatewayStatusLooksLikePairing(statusText)
+  val context = LocalContext.current
   PairingAutoRetryEffect(enabled = pairingRequired && attemptedConnect && !ready, onRetry = onAutoRetry)
 
   ClawScaffold(modifier = modifier, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
@@ -534,7 +538,7 @@ private fun V2GatewayRecoveryScreen(
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         ClawPrimaryButton(text = if (ready) "Continue" else "Retry connection", icon = if (ready) Icons.Default.CheckCircle else Icons.Default.Refresh, onClick = if (ready) onContinue else onRetry, modifier = Modifier.fillMaxWidth())
         V2OutlinedAction(title = "Edit connection", icon = Icons.Default.Edit, onClick = onEdit)
-        V2OutlinedAction(title = "Copy diagnostic", icon = Icons.Default.ContentCopy, onClick = {})
+        V2OutlinedAction(title = "Copy diagnostic", icon = Icons.Default.ContentCopy, onClick = { copyGatewayDiagnostic(context, statusText, serverName, remoteAddress, ready) })
       }
     }
   }
@@ -688,6 +692,26 @@ private fun V2TogglePill(
 
 @Composable
 private fun V2PermissionTopBar(onBack: () -> Unit) {
+  var showHelp by remember { mutableStateOf(false) }
+  if (showHelp) {
+    AlertDialog(
+      onDismissRequest = { showHelp = false },
+      containerColor = ClawTheme.colors.surfaceRaised,
+      title = { Text("Permissions", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+      text = {
+        Text(
+          "Choose what this phone can share with OpenClaw. You can change these later in Settings.",
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.textMuted,
+        )
+      },
+      confirmButton = {
+        TextButton(onClick = { showHelp = false }) {
+          Text("Done")
+        }
+      },
+    )
+  }
   Box(modifier = Modifier.fillMaxWidth().height(38.dp), contentAlignment = Alignment.Center) {
     Surface(
       onClick = onBack,
@@ -706,7 +730,7 @@ private fun V2PermissionTopBar(onBack: () -> Unit) {
       maxLines = 1,
     )
     Surface(
-      onClick = {},
+      onClick = { showHelp = true },
       modifier = Modifier.align(Alignment.CenterEnd).size(28.dp),
       shape = CircleShape,
       color = Color.Transparent,
@@ -857,6 +881,26 @@ private fun recoveryGatewayDetail(
     } else {
       "Gateway unreachable"
     }
+
+private fun copyGatewayDiagnostic(
+  context: Context,
+  statusText: String,
+  serverName: String?,
+  remoteAddress: String?,
+  ready: Boolean,
+) {
+  val diagnostic =
+    listOf(
+      "OpenClaw Android gateway diagnostic",
+      "Status: $statusText",
+      "Gateway: ${serverName?.takeIf { it.isNotBlank() } ?: "Home Gateway"}",
+      "Address: ${remoteAddress?.takeIf { it.isNotBlank() } ?: "Not available"}",
+      "Ready: ${if (ready) "yes" else "no"}",
+    ).joinToString("\n")
+  val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw gateway diagnostic", diagnostic))
+  Toast.makeText(context, "Diagnostic copied", Toast.LENGTH_SHORT).show()
+}
 
 private data class V2PermissionRowModel(
   val title: String,
