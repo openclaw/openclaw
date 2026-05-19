@@ -210,6 +210,9 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
     restoreSessionManagerOpenSpy.mockRestore();
     restoreSessionManagerForkFromSpy.mockRestore();
   }
+  if (!restored.ok) {
+    throw new Error(`restore failed: ${JSON.stringify(restored.error)}`);
+  }
   expect(restored.ok).toBe(true);
   expect(restored.payload?.key).toBe("agent:main:main");
   expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);
@@ -229,6 +232,80 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   >;
   expect(storeAfterRestore["agent:main:main"]?.sessionId).toBe(restored.payload?.sessionId);
   expect(storeAfterRestore["agent:main:main"]?.compactionCheckpoints).toHaveLength(1);
+
+  ws.close();
+});
+
+test("sessions.compaction.restore synchronizes raw external session aliases", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const fixture = await createCheckpointFixture(dir);
+  const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+  const canonicalKey = `agent:main:${rawKey}`;
+  const checkpointCreatedAt = Date.now();
+  const checkpoint = {
+    checkpointId: "checkpoint-raw",
+    sessionKey: canonicalKey,
+    sessionId: fixture.sessionId,
+    createdAt: checkpointCreatedAt,
+    reason: "manual" as const,
+    tokensBefore: 123,
+    preCompaction: {
+      sessionId: fixture.preCompactionSession.getSessionId(),
+      sessionFile: fixture.preCompactionSessionFile,
+      leafId: fixture.preCompactionLeafId,
+    },
+    postCompaction: {
+      sessionId: fixture.sessionId,
+      sessionFile: fixture.sessionFile,
+      leafId: fixture.postCompactionLeafId,
+    },
+  };
+  const entry = sessionStoreEntry(fixture.sessionId, {
+    sessionFile: fixture.sessionFile,
+    compactionCheckpoints: [checkpoint],
+  });
+  await writeSessionStore({
+    entries: {
+      [canonicalKey]: entry,
+      [rawKey]: { ...entry },
+    },
+  });
+
+  const { ws } = await openClient();
+  const restored = await rpcReq<{
+    ok: true;
+    key: string;
+    sessionId: string;
+    entry: { sessionId: string; compactionCheckpoints?: unknown[] };
+  }>(ws, "sessions.compaction.restore", {
+    key: rawKey,
+    checkpointId: "checkpoint-raw",
+  });
+
+  if (!restored.ok) {
+    throw new Error(`restore failed: ${JSON.stringify(restored.error)}`);
+  }
+  expect(restored.ok).toBe(true);
+  expect(restored.payload?.key).toBe(canonicalKey);
+  expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);
+
+  const storeAfterRestore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { compactionCheckpoints?: unknown[]; sessionId?: string }
+  >;
+  expect(storeAfterRestore[canonicalKey]?.sessionId).toBe(restored.payload?.sessionId);
+  expect(storeAfterRestore[rawKey]?.sessionId).toBe(restored.payload?.sessionId);
+  expect(storeAfterRestore[rawKey]?.compactionCheckpoints).toEqual(
+    storeAfterRestore[canonicalKey]?.compactionCheckpoints,
+  );
+
+  const listedSessions = await rpcReq<{ sessions: Array<{ key: string }> }>(ws, "sessions.list");
+  expect(listedSessions.ok).toBe(true);
+  expect(
+    listedSessions.payload?.sessions
+      .map((session) => session.key)
+      .filter((key) => key === canonicalKey || key === rawKey),
+  ).toEqual([canonicalKey]);
 
   ws.close();
 });

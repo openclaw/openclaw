@@ -492,4 +492,62 @@ describe("session-compaction-checkpoints", () => {
       Object.values(nextStore).find((entry) => entry.compactionCheckpoints)?.compactionCheckpoints,
     ).toHaveLength(25);
   });
+
+  test("persist synchronizes raw external aliases with checkpoint metadata", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-alias-"));
+    tempDirs.push(dir);
+
+    const storePath = path.join(dir, "sessions.json");
+    const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+    const canonicalKey = `agent:main:${rawKey}`;
+    const sessionId = "sess-alias";
+    const now = Date.now();
+    const baseEntry = { sessionId, updatedAt: now };
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [canonicalKey]: baseEntry,
+          [rawKey]: baseEntry,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const snapshotFile = path.join(
+      dir,
+      "sess-alias.checkpoint.99999999-9999-4999-8999-999999999999.jsonl",
+    );
+    await fs.writeFile(snapshotFile, "current", "utf-8");
+
+    const stored = await persistSessionCompactionCheckpoint({
+      cfg: {
+        session: { store: storePath },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig,
+      sessionKey: rawKey,
+      sessionId,
+      reason: "manual",
+      snapshot: {
+        sessionId,
+        sessionFile: snapshotFile,
+        leafId: "current-leaf",
+      },
+      createdAt: now + 100,
+    });
+
+    expect(stored?.sessionKey).toBe(canonicalKey);
+    const nextStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { compactionCheckpoints?: unknown[]; sessionId?: string }
+    >;
+    expect(nextStore[canonicalKey]?.sessionId).toBe(sessionId);
+    expect(nextStore[rawKey]?.sessionId).toBe(sessionId);
+    expect(nextStore[canonicalKey]?.compactionCheckpoints).toHaveLength(1);
+    expect(nextStore[rawKey]?.compactionCheckpoints).toEqual(
+      nextStore[canonicalKey]?.compactionCheckpoints,
+    );
+  });
 });

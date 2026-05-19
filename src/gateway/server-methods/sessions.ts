@@ -108,6 +108,7 @@ import {
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
   syncGatewaySessionStoreAliases,
+  writeGatewaySessionStoreEntry,
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
@@ -1646,7 +1647,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const loaded = loadSessionEntry(key);
-    const { entry, canonicalKey, storePath } = loaded;
+    const { cfg, entry, canonicalKey, storePath } = loaded;
     if (!entry?.sessionId) {
       respond(
         false,
@@ -1699,7 +1700,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     });
 
     await updateSessionStore(storePath, (store) => {
-      store[canonicalKey] = nextEntry;
+      const { preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store,
+      });
+      writeGatewaySessionStoreEntry({
+        store,
+        primaryKey,
+        aliasKeys: preservedAliasKeys,
+        entry: nextEntry,
+      });
     });
 
     respond(

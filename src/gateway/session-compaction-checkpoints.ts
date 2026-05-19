@@ -17,7 +17,11 @@ import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/art
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import {
+  migrateAndPruneGatewaySessionStoreKey,
+  resolveGatewaySessionStoreTarget,
+  writeGatewaySessionStoreEntry,
+} from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
 const MAX_COMPACTION_CHECKPOINTS_PER_SESSION = 25;
@@ -444,18 +448,31 @@ export async function persistSessionCompactionCheckpoint(params: {
       }
     | undefined;
   await updateSessionStore(target.storePath, (store) => {
-    const existing = store[target.canonicalKey];
+    const {
+      entry: existing,
+      preservedAliasKeys,
+      primaryKey,
+    } = migrateAndPruneGatewaySessionStoreKey({
+      cfg: params.cfg,
+      key: params.sessionKey,
+      store,
+    });
     if (!existing?.sessionId) {
       return;
     }
     const checkpoints = sessionStoreCheckpoints(existing);
     checkpoints.push(checkpoint);
     trimmedCheckpoints = trimSessionCheckpoints(checkpoints);
-    store[target.canonicalKey] = {
-      ...existing,
-      updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
-      compactionCheckpoints: trimmedCheckpoints.kept,
-    };
+    writeGatewaySessionStoreEntry({
+      store,
+      primaryKey,
+      aliasKeys: preservedAliasKeys,
+      entry: {
+        ...existing,
+        updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
+        compactionCheckpoints: trimmedCheckpoints.kept,
+      },
+    });
     stored = true;
   });
 
