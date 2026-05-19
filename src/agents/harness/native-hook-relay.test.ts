@@ -207,6 +207,21 @@ describe("native hook relay registry", () => {
         allowedEvents: ["post_tool_use"],
       },
     );
+
+    first.unregister();
+    expectRecordFields(
+      requireRecord(
+        testing.getNativeHookRelayRegistrationForTests(first.relayId),
+        "replacement native hook relay registration",
+      ),
+      {
+        runId: "run-2",
+        allowedEvents: ["post_tool_use"],
+      },
+    );
+
+    second.unregister();
+    expect(testing.getNativeHookRelayRegistrationForTests(first.relayId)).toBeUndefined();
   });
 
   it("exposes registered relays through the direct hook bridge", async () => {

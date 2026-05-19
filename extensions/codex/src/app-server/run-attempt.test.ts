@@ -5,6 +5,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   abortAgentHarnessRun,
   embeddedAgentLog,
+  invokeNativeHookRelay,
   nativeHookRelayTesting,
   onAgentEvent,
   queueAgentHarnessMessage,
@@ -860,6 +861,7 @@ describe("runCodexAppServerAttempt", () => {
     await closeCodexSandboxExecServersForTests();
     resetCodexAppServerClientFactoryForTest();
     testing.resetOpenClawCodingToolsFactoryForTests();
+    testing.clearPendingCodexNativeHookRelayUnregistersForTests();
     resetCodexRateLimitCacheForTests();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     clearPluginCommands();
@@ -6671,6 +6673,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(preToolUseState?.enabled).toBe(true);
     expect(preToolUseState?.trusted_hash).toMatch(/^sha256:[a-f0-9]{64}$/);
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeDefined();
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -6733,6 +6737,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -6836,6 +6841,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -6898,6 +6904,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -6928,6 +6935,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -6960,6 +6968,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -6993,6 +7002,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -7034,6 +7044,7 @@ describe("runCodexAppServerAttempt", () => {
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       completed = true;
       await run;
+      testing.flushPendingCodexNativeHookRelayUnregistersForTests();
       expect(
         nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
       ).toBeUndefined();
@@ -7046,7 +7057,7 @@ describe("runCodexAppServerAttempt", () => {
     }
   });
 
-  it("reuses the Codex native hook relay id across runs for the same session", async () => {
+  it("keeps a replacement Codex native hook relay registered when prior cleanup is pending", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const firstHarness = createStartedThreadHarness();
@@ -7065,9 +7076,22 @@ describe("runCodexAppServerAttempt", () => {
       (request) => request.method === "thread/start",
     );
     const firstRelayId = extractRelayIdFromThreadRequest(firstStartRequest?.params);
-    expect(
-      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId),
-    ).toBeUndefined();
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId)?.runId).toBe(
+      "run-1",
+    );
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: firstRelayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "late-call-1",
+          tool_input: { command: "python3 -c 'print(\"x\")'" },
+        },
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
 
     const secondHarness = createResumeHarness();
     const secondParams = createParams(sessionFile, workspaceDir);
@@ -7090,8 +7114,17 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumedRegistration?.runId).toBe("run-2");
     expect(resumedRegistration?.allowedEvents).toEqual(["pre_tool_use"]);
 
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId)?.runId,
+    ).toBe("run-2");
+
     await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await secondRun;
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId)?.runId,
+    ).toBe("run-2");
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(
       nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId),
     ).toBeUndefined();
@@ -7348,6 +7381,7 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
 
     expect(result.aborted).toBe(true);
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 

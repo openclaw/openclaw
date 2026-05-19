@@ -216,6 +216,7 @@ const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
+const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
 const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
@@ -267,6 +268,46 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
 };
 
 let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
+
+type PendingCodexNativeHookRelayUnregister = {
+  timeout: ReturnType<typeof setTimeout>;
+  unregister: () => void;
+};
+
+const pendingCodexNativeHookRelayUnregisters = new Set<PendingCodexNativeHookRelayUnregister>();
+
+function scheduleCodexNativeHookRelayUnregister(relay: NativeHookRelayRegistrationHandle): void {
+  let pending: PendingCodexNativeHookRelayUnregister | undefined;
+  const unregister = () => {
+    if (!pending) {
+      return;
+    }
+    const current = pending;
+    pending = undefined;
+    if (!pendingCodexNativeHookRelayUnregisters.delete(current)) {
+      return;
+    }
+    relay.unregister();
+  };
+  const timeout = setTimeout(unregister, CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS);
+  pending = { timeout, unregister };
+  pendingCodexNativeHookRelayUnregisters.add(pending);
+  timeout.unref();
+}
+
+function flushPendingCodexNativeHookRelayUnregistersForTests(): void {
+  for (const pending of [...pendingCodexNativeHookRelayUnregisters]) {
+    clearTimeout(pending.timeout);
+    pending.unregister();
+  }
+}
+
+function clearPendingCodexNativeHookRelayUnregistersForTests(): void {
+  for (const pending of pendingCodexNativeHookRelayUnregisters) {
+    clearTimeout(pending.timeout);
+  }
+  pendingCodexNativeHookRelayUnregisters.clear();
+}
 
 function emitCodexAppServerEvent(
   params: EmbeddedRunAttemptParams,
@@ -3286,19 +3327,11 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     closeCleanup?.();
-    // Defer relay unregister so in-flight `nativeHook.invoke` RPCs from
-    // codex's hook subprocess (spawned synchronously during the last
-    // tool dispatch) can still resolve. Without this delay, codex's
-    // subprocess→gateway RPC roundtrip can outlast the run-attempt
-    // teardown — late-arriving invocations then fail with
-    // `errorMessage=native hook relay not found` and the OC
-    // `before_tool_call` chain (firewall, MG, audit) is silently
-    // bypassed for the closing tool call of the run. 10s comfortably
-    // bounds the default 5s `hookTimeoutSec` plus subprocess startup
-    // and WS connect overhead. `unref()` avoids holding the event loop.
+    // Codex hook subprocesses can outlive the app-server turn by a few
+    // seconds. Keep the relay available briefly so late nativeHook.invoke
+    // RPCs can still reach before_tool_call enforcement.
     if (nativeHookRelay) {
-      const relay = nativeHookRelay;
-      setTimeout(() => relay.unregister(), 10_000).unref();
+      scheduleCodexNativeHookRelayUnregister(nativeHookRelay);
     }
     await releaseSandboxExecEnvironment();
     runAbortController.signal.removeEventListener("abort", abortListener);
@@ -5682,5 +5715,7 @@ export const testing = {
   resetOpenClawCodingToolsFactoryForTests(): void {
     openClawCodingToolsFactoryForTests = undefined;
   },
+  flushPendingCodexNativeHookRelayUnregistersForTests,
+  clearPendingCodexNativeHookRelayUnregistersForTests,
 } as const;
 export { testing as __testing };

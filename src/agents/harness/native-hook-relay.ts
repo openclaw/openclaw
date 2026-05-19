@@ -345,12 +345,18 @@ export function registerNativeHookRelay(
         writeNativeHookRelayBridgeRecordForRegistration(current, bridge);
       }
     },
-    unregister: () => unregisterNativeHookRelay(relayId),
+    unregister: () => unregisterNativeHookRelay(relayId, registration),
   };
   return handle;
 }
 
-function unregisterNativeHookRelay(relayId: string): void {
+function unregisterNativeHookRelay(
+  relayId: string,
+  expectedRegistration?: NativeHookRelayRegistration,
+): void {
+  if (expectedRegistration && relays.get(relayId) !== expectedRegistration) {
+    return;
+  }
   unregisterNativeHookRelayBridge(relayId);
   relays.delete(relayId);
   removeNativeHookRelayInvocations(relayId);
