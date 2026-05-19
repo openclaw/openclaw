@@ -1427,6 +1427,34 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(deliverRepliesMock).not.toHaveBeenCalled();
   });
 
+  it("suppresses reasoning payloads in non-streaming deliver path without calling deliverReplies", async () => {
+    mockedNativeStreaming = false;
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "hidden thinking", isReasoning: true } },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers only the non-reasoning payload when mixed in non-streaming path", async () => {
+    mockedNativeStreaming = false;
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "hidden thinking", isReasoning: true } },
+      { kind: "final", payload: { text: FINAL_REPLY_TEXT } },
+    ];
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    const call = finalizeSlackPreviewEditMock.mock.calls[0] as [Record<string, unknown>];
+    expect(call[0].text).toBe(FINAL_REPLY_TEXT);
+  });
+
   it("keeps same-content tool and final payloads distinct after preview fallback", async () => {
     mockedDispatchSequence = [
       { kind: "tool", payload: { text: SAME_TEXT } },

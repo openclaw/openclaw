@@ -284,6 +284,68 @@ describe("createSlackReplyDeliveryPlan", () => {
   });
 });
 
+describe("deliverReplies reasoning suppression", () => {
+  beforeAll(async () => {
+    ({ deliverReplies } = await import("./replies.js"));
+  });
+
+  beforeEach(() => {
+    sendMock.mockReset();
+    sendMock.mockResolvedValue(undefined);
+  });
+
+  it("skips reasoning payloads and does not call sendMessageSlack", async () => {
+    await deliverReplies(baseParams({ replies: [{ text: "Let me think...", isReasoning: true }] }));
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers a non-reasoning payload that follows a reasoning payload", async () => {
+    await deliverReplies(
+      baseParams({
+        replies: [
+          { text: "Let me think...", isReasoning: true },
+          { text: "Here is my answer." },
+        ],
+      }),
+    );
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const [, text] = requireSendCall();
+    expect(text).toBe("Here is my answer.");
+  });
+});
+
+describe("deliverSlackSlashReplies reasoning suppression", () => {
+  it("skips reasoning payloads from slash command responses", async () => {
+    const respond = vi.fn(async () => undefined);
+
+    await deliverSlackSlashReplies({
+      replies: [{ text: "Let me think...", isReasoning: true }],
+      respond,
+      ephemeral: true,
+      textLimit: 4000,
+    });
+
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("delivers only the non-reasoning payload when mixed", async () => {
+    const respond = vi.fn(async () => undefined);
+
+    await deliverSlackSlashReplies({
+      replies: [
+        { text: "Analyzing...", isReasoning: true },
+        { text: "Done." },
+      ],
+      respond,
+      ephemeral: false,
+      textLimit: 4000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith({ text: "Done.", response_type: "in_channel" });
+  });
+});
+
 describe("deliverSlackSlashReplies chunking", () => {
   it("keeps a 4205-character reply in a single slash response by default", async () => {
     const respond = vi.fn(async () => undefined);
