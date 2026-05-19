@@ -215,6 +215,82 @@ describe("gateway session utils", () => {
     expect(rawOnly.totalCount).toBe(1);
   });
 
+  test("preserved Signal group raw aliases keep opaque peer id casing", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const groupId = "GroupOpaqueID-AbC123";
+    const rawKey = `Signal:Group:${groupId}`;
+    const preservedRawKey = `signal:group:${groupId}`;
+    const foldedRawKey = `signal:group:${groupId.toLowerCase()}`;
+    const canonicalKey = `agent:main:${preservedRawKey}`;
+    const store = {
+      [rawKey]: {
+        sessionId: "sess-signal",
+        subject: "Signal Alias",
+        updatedAt: 20,
+      },
+      [canonicalKey]: {
+        sessionId: "sess-older",
+        subject: "Old Signal Alias",
+        updatedAt: 10,
+      },
+      [foldedRawKey]: {
+        sessionId: "sess-folded",
+        subject: "Folded Signal Alias",
+        updatedAt: 5,
+      },
+    } satisfies Record<string, SessionEntry>;
+
+    const { preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+      cfg,
+      key: rawKey,
+      store,
+    });
+
+    expect(primaryKey).toBe(canonicalKey);
+    expect(preservedAliasKeys.toSorted()).toEqual([preservedRawKey, rawKey].toSorted());
+    expect(store[canonicalKey]?.sessionId).toBe("sess-signal");
+    expect(store[preservedRawKey]?.sessionId).toBe("sess-signal");
+    expect(store[rawKey]?.sessionId).toBe("sess-signal");
+    expect(store[foldedRawKey]).toBeUndefined();
+
+    writeGatewaySessionStoreEntry({
+      store,
+      primaryKey,
+      aliasKeys: preservedAliasKeys,
+      entry: {
+        sessionId: "sess-write",
+        subject: "Signal Alias",
+        updatedAt: 30,
+        sendPolicy: "deny",
+      },
+    });
+
+    expect(store[preservedRawKey]).toBe(store[canonicalKey]);
+    expect(store[rawKey]).toBe(store[canonicalKey]);
+    expect(store[preservedRawKey]?.sessionId).toBe("sess-write");
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: {},
+    });
+    expect(listed.sessions.map((session) => session.key)).toEqual([canonicalKey]);
+    expect(listed.count).toBe(1);
+    expect(listed.totalCount).toBe(1);
+
+    expect(
+      deleteGatewaySessionStoreEntry({
+        store,
+        primaryKey,
+        aliasKeys: preservedAliasKeys,
+      }),
+    ).toBe(true);
+    expect(store[canonicalKey]).toBeUndefined();
+    expect(store[preservedRawKey]).toBeUndefined();
+    expect(store[rawKey]).toBeUndefined();
+  });
+
   test("parseGroupKey handles group keys", () => {
     expect(parseGroupKey("discord:group:dev")).toEqual({
       channel: "discord",

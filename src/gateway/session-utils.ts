@@ -64,7 +64,10 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import {
+  isCronRunSessionKey,
+  normalizeSessionKeyPreservingOpaquePeerIds,
+} from "../sessions/session-key-utils.js";
 import {
   AVATAR_MAX_BYTES,
   isAvatarDataUrl,
@@ -894,7 +897,7 @@ function resolvePreservedRawExternalStoreKey(params: {
   key: string;
   canonicalKey: string;
 }): string | undefined {
-  const key = normalizeOptionalString(params.key) ?? "";
+  const key = normalizeSessionKeyPreservingOpaquePeerIds(params.key);
   if (!key || key === params.canonicalKey || !key.includes(":")) {
     return undefined;
   }
@@ -910,7 +913,7 @@ function resolvePreservedRawExternalStoreKey(params: {
   ) {
     return undefined;
   }
-  return lowered;
+  return key;
 }
 
 function normalizeSessionStoreKeys(keys: Iterable<string | undefined>): string[] {
@@ -932,7 +935,7 @@ function resolvePreservedRawExternalAliasKeys(params: {
     return [];
   }
   const aliases = Array.from(params.storeKeys).filter(
-    (key) => normalizeLowercaseStringOrEmpty(key) === params.preservedRawKey,
+    (key) => normalizeSessionKeyPreservingOpaquePeerIds(key) === params.preservedRawKey,
   );
   aliases.push(params.preservedRawKey);
   return normalizeSessionStoreKeys(aliases);
@@ -1017,7 +1020,7 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
     store: params.store,
     canonicalKey: primaryKey,
     candidates: target.storeKeys.filter(
-      (key) => normalizeLowercaseStringOrEmpty(key) !== preservedRawKey,
+      (key) => normalizeSessionKeyPreservingOpaquePeerIds(key) !== preservedRawKey,
     ),
   });
   syncGatewaySessionStoreAliases({
