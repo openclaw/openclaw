@@ -107,6 +107,11 @@ export function createSerpApiMapsReviewsTool(api: OpenClawPluginApi, ctx?: SerpA
       if (dataId && placeId) {
         throw new Error("serpapi_maps_reviews: provide either data_id or place_id, not both");
       }
+      const topicId = readStringParam(args, "topic_id");
+      const query = readStringParam(args, "query");
+      if (topicId && query) {
+        throw new Error("serpapi_maps_reviews: topic_id and query are mutually exclusive");
+      }
       const raw = await callSerpApi({
         cfg,
         engine: "google_maps_reviews",
@@ -116,8 +121,8 @@ export function createSerpApiMapsReviewsTool(api: OpenClawPluginApi, ctx?: SerpA
           place_id: placeId ?? undefined,
           hl: readStringParam(args, "hl") ?? undefined,
           sort_by: readStringParam(args, "sort_by") ?? undefined,
-          topic_id: readStringParam(args, "topic_id") ?? undefined,
-          query: readStringParam(args, "query") ?? undefined,
+          topic_id: topicId ?? undefined,
+          query: query ?? undefined,
           num: readNumberParam(args, "num", { integer: true }) ?? undefined,
           next_page_token: readStringParam(args, "next_page_token") ?? undefined,
         },
