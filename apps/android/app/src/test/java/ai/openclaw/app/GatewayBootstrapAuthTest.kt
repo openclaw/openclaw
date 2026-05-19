@@ -250,7 +250,23 @@ class GatewayBootstrapAuthTest {
 
       runtime.disconnect()
       probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = "aaaaaaaa"))
-      Thread.sleep(100)
+      var staleProbeCleared = false
+      repeat(300) {
+        if (runtime.pendingGatewayTrust.value == null &&
+          desiredBootstrapToken(runtime, "nodeSession") == null
+        ) {
+          staleProbeCleared = true
+          return@repeat
+        }
+        Thread.sleep(10)
+      }
+      if (!staleProbeCleared) {
+        error(
+          "Timed out waiting for stale TLS probe cleanup after disconnect; " +
+            "pendingGatewayTrust=${runtime.pendingGatewayTrust.value}, " +
+            "desiredBootstrapToken=${desiredBootstrapToken(runtime, "nodeSession")}",
+        )
+      }
 
       assertNull(runtime.pendingGatewayTrust.value)
       assertNull(desiredBootstrapToken(runtime, "nodeSession"))
