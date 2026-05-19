@@ -34,6 +34,7 @@ docker_e2e_package_mount_args "$PACKAGE_TGZ"
 
 echo "=== Running multi-node-update Docker E2E ==="
 
+CONTAINER_EXIT=0
 docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e CI=true \
@@ -209,6 +210,8 @@ echo "systemctl shim installed."
 # Now install the gateway service using node-A.
 echo "Installing gateway service..."
 mkdir -p "$(dirname "$GATEWAY_UNIT_PATH")"
+# gateway install may exit non-zero because our systemctl shim cannot fully
+# restart, but the unit file gets written before the restart step.
 openclaw gateway install --json >"$ARTIFACTS/gateway-install.json" 2>"$ARTIFACTS/gateway-install.err" || true
 
 echo ""
@@ -222,11 +225,11 @@ if [ -f "$GATEWAY_UNIT_PATH" ]; then
   BAKED_NODE_BEFORE="$(echo "$EXEC_START_BEFORE" | sed "s/^ExecStart=//" | awk "{print \$1}")"
   echo "Baked node path BEFORE update: $BAKED_NODE_BEFORE"
 else
-  echo "WARNING: Gateway unit file was not created at $GATEWAY_UNIT_PATH"
-  ls -la "$(dirname "$GATEWAY_UNIT_PATH")/" 2>/dev/null || true
+  echo "FAIL: Gateway unit file was not created at $GATEWAY_UNIT_PATH"
   echo "gateway install output:"
   cat "$ARTIFACTS/gateway-install.json" 2>/dev/null || true
   cat "$ARTIFACTS/gateway-install.err" 2>/dev/null || true
+  exit 1
 fi
 
 echo ""
@@ -251,13 +254,23 @@ echo "── Step 6: Run openclaw update (this is the bug) ──"
 # `gateway install --force` and bakes the current process.execPath
 # (now node-B) into the service unit. This is where the split happens.
 echo "Running openclaw update --yes --json..."
+UPDATE_EXIT=0
 openclaw update --yes --json \
   --tag /tmp/openclaw-current.tgz \
-  >"$ARTIFACTS/update.json" 2>"$ARTIFACTS/update.err" || true
+  >"$ARTIFACTS/update.json" 2>"$ARTIFACTS/update.err" || UPDATE_EXIT=$?
 
 echo ""
+echo "Update exit code: $UPDATE_EXIT"
 echo "Update stderr (if any):"
 cat "$ARTIFACTS/update.err" 2>/dev/null | tail -10 || true
+
+# The update may fail during restart (systemctl shim limitations) but it must
+# have at least attempted the package install. Check that it ran past early exit.
+if [ "$UPDATE_EXIT" -ne 0 ] && ! grep -q "gateway" "$ARTIFACTS/update.err" 2>/dev/null; then
+  echo "FAIL: openclaw update failed before reaching the package install step"
+  cat "$ARTIFACTS/update.err" 2>/dev/null || true
+  exit 1
+fi
 
 echo ""
 echo "── Step 7: Inspect the service unit AFTER update ──"
@@ -354,7 +367,24 @@ echo "========================================"
 echo "  Reproduction complete."
 echo "  Artifacts saved to /tmp/artifacts/"
 echo "========================================"
-'
+
+# ── Final exit code ──────────────────────────────────────────────────────────
+# Exit non-zero if any BUG was found, making this usable as a CI gate.
+EXIT_CODE=0
+if [ "$BAKED_NODE_AFTER" = "$NODE_B" ] && [ "$BAKED_NODE_BEFORE" != "$NODE_B" ]; then
+  EXIT_CODE=1
+fi
+if [ -f "$NPM_PREFIX_B/lib/node_modules/openclaw/package.json" ]; then
+  EXIT_CODE=1
+fi
+if [ -f "$GATEWAY_UNIT_PATH" ]; then
+  ENTRYPOINT_PATH_CHECK="$(grep "^ExecStart=" "$GATEWAY_UNIT_PATH" | head -1 | sed "s/^ExecStart=//" | awk "{print \$2}")" || true
+  if [ -n "$ENTRYPOINT_PATH_CHECK" ] && [ ! -f "$ENTRYPOINT_PATH_CHECK" ]; then
+    EXIT_CODE=1
+  fi
+fi
+exit $EXIT_CODE
+' || CONTAINER_EXIT=$?
 
 echo ""
 echo "=== Artifacts ==="
@@ -366,3 +396,9 @@ if [ -f "$ARTIFACT_DIR/run.log" ]; then
   echo "=== Key results ==="
   grep -E "^(BUG|FIXED|OK|CHANGED|WARNING)" "$ARTIFACT_DIR/run.log" || echo "(no key results found)"
 fi
+
+if [ "$CONTAINER_EXIT" -ne 0 ]; then
+  echo ""
+  echo "FAIL: Docker container exited with code $CONTAINER_EXIT"
+fi
+exit "$CONTAINER_EXIT"

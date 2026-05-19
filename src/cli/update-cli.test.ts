@@ -3197,6 +3197,110 @@ describe("update-cli", () => {
     expect(serviceInstallCall?.[0][0]).toBe(serviceNode);
   });
 
+  it("pins package install to the service root when nodes differ and no owning npm exists at the prefix", async () => {
+    const servicePrefix = await createTrackedTempDir("openclaw-no-npm-prefix-");
+    const nodeModules = path.join(servicePrefix, "lib", "node_modules");
+    const root = path.join(nodeModules, "openclaw");
+    const serviceNode = path.join(servicePrefix, "bin", "node");
+    const entrypoint = path.join(root, "dist", "index.js");
+    // Create the node binary but intentionally do NOT create <prefix>/bin/npm
+    // so resolvePreferredNpmCommand returns null and the PATH npm is used.
+    await fs.mkdir(path.dirname(entrypoint), { recursive: true });
+    await fs.mkdir(path.dirname(serviceNode), { recursive: true });
+    await fs.writeFile(serviceNode, "", "utf-8");
+    // No npm binary at servicePrefix/bin/npm!
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.5.18" }),
+      "utf-8",
+    );
+    await fs.writeFile(entrypoint, "", "utf-8");
+    await writePackageDistInventory(root);
+    mockPackageInstallStatus(root);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: [serviceNode, entrypoint, "gateway"],
+    });
+    serviceLoaded.mockResolvedValue(true);
+    pathExists.mockImplementation(async (candidate: string) => {
+      try {
+        await fs.access(candidate);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    // The PATH npm returns a DIFFERENT global root (simulates Node-B's npm).
+    const nodeBGlobalRoot = path.join(
+      await createTrackedTempDir("node-b-global-"),
+      "lib",
+      "node_modules",
+    );
+    await fs.mkdir(nodeBGlobalRoot, { recursive: true });
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[0] === serviceNode && argv[1] === "--version") {
+        return {
+          stdout: "v24.14.0\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+        // PATH npm returns Node-B's root, NOT the service root.
+        return {
+          stdout: `${nodeBGlobalRoot}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "i") {
+        // Install step: create the expected package structure at the target.
+        const prefixIdx = argv.indexOf("--prefix");
+        const stagePrefix = prefixIdx >= 0 ? argv[prefixIdx + 1] : undefined;
+        const stageRoot = stagePrefix
+          ? path.join(stagePrefix, "lib", "node_modules", "openclaw")
+          : root;
+        const stageEntryPoint = path.join(stageRoot, "dist", "index.js");
+        await fs.mkdir(path.dirname(stageEntryPoint), { recursive: true });
+        await fs.writeFile(
+          path.join(stageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.5.20" }),
+          "utf-8",
+        );
+        await fs.writeFile(stageEntryPoint, "export {};\n", "utf-8");
+        await writePackageDistInventory(stageRoot);
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ yes: true });
+
+    // The install command must use --prefix pointing to a location within
+    // the service root's prefix tree, NOT Node-B's global root.
+    const installCall = packageInstallCommandCall();
+    expect(installCall).toBeDefined();
+    const installArgv = installCall![0];
+    const prefixIdx = installArgv.indexOf("--prefix");
+    expect(prefixIdx).toBeGreaterThan(-1);
+    // Staging prefix should be under the service prefix, not Node-B's.
+    expect(installArgv[prefixIdx + 1]).toContain(servicePrefix);
+    expect(installArgv[prefixIdx + 1]).not.toContain(nodeBGlobalRoot);
+    // Follow-up commands use the service node.
+    expect(doctorCommandCall()?.[0][0]).toBe(serviceNode);
+  });
+
   it("repairs legacy config before persisting a requested update channel", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);

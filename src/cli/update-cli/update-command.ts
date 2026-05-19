@@ -3254,7 +3254,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
             jsonMode: Boolean(opts.json),
             managedServiceEnv: prePackageServiceStop?.serviceEnv,
             invocationCwd,
-            honorPackageRoot: managedServiceRootRedirect !== null,
+            honorPackageRoot:
+              managedServiceRootRedirect !== null || managedServiceNodeRunner !== undefined,
             nodeRunner: managedServiceNodeRunner,
           })
         : await runGitUpdate({
