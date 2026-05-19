@@ -22,6 +22,7 @@ export * from "./types.irc.js";
 export * from "./types.messages.js";
 export * from "./types.models.js";
 export * from "./types.node-host.js";
+export * from "./types.notifications.js";
 export * from "./types.msteams.js";
 export * from "./types.plugins.js";
 export * from "./types.provider-request.js";
