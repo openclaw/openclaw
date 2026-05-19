@@ -78,6 +78,12 @@ function clearActiveDeferralPolls(): void {
 export function resetGatewayRestartStateForInProcessRestart(): void {
   clearActiveDeferralPolls();
   clearPendingScheduledRestart();
+  // Align the token so any stale emission from the previous lifecycle does not
+  // permanently block restart requests in the new one.
+  if (emittedRestartToken !== consumedRestartToken) {
+    consumedRestartToken = emittedRestartToken;
+    emittedRestartReason = undefined;
+  }
 }
 
 export type RestartAuditInfo = {

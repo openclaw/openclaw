@@ -721,6 +721,10 @@ export async function runGatewayLoop(params: {
       } = await loadGatewayLifecycleRuntimeModule();
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
       if (restartIntent) {
+        // Mark the emitted token consumed before handing off to request().
+        // Without this, the unconsumed token permanently blocks future restart
+        // requests via hasUnconsumedRestartSignal() for the lifetime of the process.
+        markGatewaySigusr1RestartHandled();
         request("restart", "SIGUSR1", restartIntent.reason ?? "gateway.restart", restartIntent);
         return;
       }
