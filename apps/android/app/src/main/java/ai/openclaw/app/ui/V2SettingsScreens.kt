@@ -78,6 +78,7 @@ internal enum class V2SettingsRoute {
   Skills,
   NodesDevices,
   Channels,
+  Dreaming,
   Canvas,
   Notifications,
   PhoneCapabilities,
@@ -104,6 +105,7 @@ internal fun V2SettingsDetailScreen(
     V2SettingsRoute.Skills -> V2SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.NodesDevices -> V2NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Channels -> V2ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    V2SettingsRoute.Dreaming -> V2DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Canvas -> V2CanvasSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Notifications -> V2NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.PhoneCapabilities -> V2PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)

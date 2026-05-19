@@ -348,6 +348,12 @@ class NodeRuntime(
   val channelsRefreshing: StateFlow<Boolean> = _channelsRefreshing.asStateFlow()
   private val _channelsErrorText = MutableStateFlow<String?>(null)
   val channelsErrorText: StateFlow<String?> = _channelsErrorText.asStateFlow()
+  private val _dreamingSummary = MutableStateFlow(GatewayDreamingSummary())
+  val dreamingSummary: StateFlow<GatewayDreamingSummary> = _dreamingSummary.asStateFlow()
+  private val _dreamingRefreshing = MutableStateFlow(false)
+  val dreamingRefreshing: StateFlow<Boolean> = _dreamingRefreshing.asStateFlow()
+  private val _dreamingErrorText = MutableStateFlow<String?>(null)
+  val dreamingErrorText: StateFlow<String?> = _dreamingErrorText.asStateFlow()
 
   private val _isForeground = MutableStateFlow(true)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
@@ -400,6 +406,7 @@ class NodeRuntime(
             pairedDevices = emptyList(),
           )
         _channelsSummary.value = GatewayChannelsSummary(channels = emptyList())
+        _dreamingSummary.value = GatewayDreamingSummary()
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
         updateStatus()
@@ -671,6 +678,7 @@ class NodeRuntime(
       refreshSkillsFromGateway()
       refreshNodesDevicesFromGateway()
       refreshChannelsFromGateway()
+      refreshDreamingFromGateway()
     }
   }
 
@@ -713,6 +721,12 @@ class NodeRuntime(
   fun refreshChannels() {
     scope.launch {
       refreshChannelsFromGateway()
+    }
+  }
+
+  fun refreshDreaming() {
+    scope.launch {
+      refreshDreamingFromGateway()
     }
   }
 
@@ -1801,6 +1815,32 @@ class NodeRuntime(
     }
   }
 
+  private suspend fun refreshDreamingFromGateway() {
+    _dreamingRefreshing.value = true
+    _dreamingErrorText.value = null
+    if (!operatorConnected) {
+      _dreamingSummary.value = GatewayDreamingSummary()
+      _dreamingRefreshing.value = false
+      return
+    }
+    try {
+      val statusRes = operatorSession.request("doctor.memory.status", "{}")
+      val statusRoot = json.parseToJsonElement(statusRes).asObjectOrNull()
+      val diaryRes = operatorSession.request("doctor.memory.dreamDiary", "{}")
+      val diaryRoot = json.parseToJsonElement(diaryRes).asObjectOrNull()
+      val dreaming = statusRoot?.get("dreaming").asObjectOrNull()
+      _dreamingSummary.value =
+        parseDreamingSummary(
+          dreaming = dreaming,
+          diary = diaryRoot,
+        )
+    } catch (_: Throwable) {
+      _dreamingErrorText.value = "Could not load dreaming."
+    } finally {
+      _dreamingRefreshing.value = false
+    }
+  }
+
   private fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
     models
       ?.mapNotNull { item ->
@@ -2040,6 +2080,85 @@ class NodeRuntime(
           ?.let { key to it }
       }?.toMap()
       .orEmpty()
+
+  private fun parseDreamingSummary(
+    dreaming: JsonObject?,
+    diary: JsonObject?,
+  ): GatewayDreamingSummary {
+    val diaryContent = diary?.get("content").asStringOrNull()
+    val entries = if (diary.boolean("found")) parseDreamDiaryEntries(diaryContent) else emptyList()
+    val timezone =
+      dreaming
+        ?.get("timezone")
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    val storeHealthy =
+      dreaming
+        ?.get("storeError")
+        .asStringOrNull()
+        ?.trim()
+        .isNullOrEmpty()
+    val phaseSignalHealthy =
+      dreaming
+        ?.get("phaseSignalError")
+        .asStringOrNull()
+        ?.trim()
+        .isNullOrEmpty()
+    return GatewayDreamingSummary(
+      enabled = dreaming.boolean("enabled"),
+      timezone = timezone,
+      shortTermCount = dreaming.long("shortTermCount")?.toInt() ?: 0,
+      groundedSignalCount = dreaming.long("groundedSignalCount")?.toInt() ?: 0,
+      totalSignalCount = dreaming.long("totalSignalCount")?.toInt() ?: 0,
+      promotedToday = dreaming.long("promotedToday")?.toInt() ?: 0,
+      promotedTotal = dreaming.long("promotedTotal")?.toInt() ?: 0,
+      nextRunAtMs = dreamingNextRunAtMs(dreaming),
+      storeHealthy = storeHealthy,
+      phaseSignalHealthy = phaseSignalHealthy,
+      diaryFound = diary.boolean("found"),
+      diaryEntries = entries,
+      diaryEntryCount = entries.size,
+    )
+  }
+
+  private fun dreamingNextRunAtMs(dreaming: JsonObject?): Long? {
+    val phases = dreaming?.get("phases").asObjectOrNull()
+    return listOf("light", "deep", "rem")
+      .mapNotNull { phase -> phases?.get(phase).asObjectOrNull().long("nextRunAtMs") }
+      .minOrNull()
+  }
+
+  private fun parseDreamDiaryEntries(content: String?): List<GatewayDreamDiaryEntry> {
+    val raw = content?.trim().orEmpty()
+    if (raw.isEmpty()) return emptyList()
+    val body = raw.substringAfter("<!-- openclaw:dreaming:diary:start -->", raw).substringBefore("<!-- openclaw:dreaming:diary:end -->")
+    return body
+      .split(Regex("\\n---\\n"))
+      .mapNotNull(::parseDreamDiaryEntry)
+      .asReversed()
+      .take(4)
+  }
+
+  private fun parseDreamDiaryEntry(block: String): GatewayDreamDiaryEntry? {
+    val lines = block.trim().lines()
+    val date =
+      lines
+        .firstOrNull { line ->
+          val trimmed = line.trim()
+          trimmed.length > 2 && trimmed.startsWith("*") && trimmed.endsWith("*")
+        }?.trim()
+        ?.trim('*')
+        ?.takeIf { it.isNotEmpty() }
+    val text =
+      lines
+        .map { it.trim() }
+        .filter { line -> line.isNotEmpty() && !line.startsWith("#") && !line.startsWith("<!--") && !(line.startsWith("*") && line.endsWith("*")) }
+        .joinToString(" ")
+        .replace(Regex("\\s+"), " ")
+        .takeIf { it.isNotEmpty() }
+    return text?.let { GatewayDreamDiaryEntry(date = date ?: "Dream", text = it) }
+  }
 
   private fun parseStringArray(items: JsonArray?): List<String> =
     items
@@ -2446,6 +2565,27 @@ private data class GatewayChannelAccountSummary(
   val running: Boolean,
   val connected: Boolean,
   val error: String?,
+)
+
+data class GatewayDreamingSummary(
+  val enabled: Boolean = false,
+  val timezone: String? = null,
+  val shortTermCount: Int = 0,
+  val groundedSignalCount: Int = 0,
+  val totalSignalCount: Int = 0,
+  val promotedToday: Int = 0,
+  val promotedTotal: Int = 0,
+  val nextRunAtMs: Long? = null,
+  val storeHealthy: Boolean = true,
+  val phaseSignalHealthy: Boolean = true,
+  val diaryFound: Boolean = false,
+  val diaryEntries: List<GatewayDreamDiaryEntry> = emptyList(),
+  val diaryEntryCount: Int = 0,
+)
+
+data class GatewayDreamDiaryEntry(
+  val date: String,
+  val text: String,
 )
 
 private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()

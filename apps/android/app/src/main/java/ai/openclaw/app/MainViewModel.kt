@@ -105,6 +105,10 @@ class MainViewModel(
     runtimeState(initial = GatewayChannelsSummary(channels = emptyList())) { it.channelsSummary }
   val channelsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.channelsRefreshing }
   val channelsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.channelsErrorText }
+  val dreamingSummary: StateFlow<GatewayDreamingSummary> =
+    runtimeState(initial = GatewayDreamingSummary()) { it.dreamingSummary }
+  val dreamingRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.dreamingRefreshing }
+  val dreamingErrorText: StateFlow<String?> = runtimeState(initial = null) { it.dreamingErrorText }
   val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
   val seamColorArgb: StateFlow<Long> = runtimeState(initial = 0xFF0EA5E9) { it.seamColorArgb }
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
@@ -405,6 +409,10 @@ class MainViewModel(
 
   fun refreshChannels() {
     ensureRuntime().refreshChannels()
+  }
+
+  fun refreshDreaming() {
+    ensureRuntime().refreshDreaming()
   }
 
   fun loadChat(sessionKey: String) {
