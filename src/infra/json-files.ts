@@ -7,6 +7,10 @@ import {
 import "./fs-safe-defaults.js";
 import { replaceFileAtomic } from "./replace-file.js";
 
+// Tension with src/plugins/CLAUDE.md "no persistent metadata caches" — landed
+// as a pragmatic floor while the redundant read amplifier upstream is still
+// being chased. Remove once the root cause (snapshot/registry rebuild churn,
+// see https://github.com/openclaw/openclaw/pull/84351) is fixed.
 type CacheEntry = { value: unknown; mtimeMs: bigint; size: bigint; ino: bigint };
 const jsonReadCache = new Map<string, CacheEntry>();
 
