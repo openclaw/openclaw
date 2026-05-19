@@ -74,14 +74,6 @@ export class CodexAppInventoryCache {
     const entry = this.entries.get(params.key);
     if (!entry) {
       const refreshScheduled = params.suppressRefresh ? false : this.scheduleRefresh(params);
-      embeddedAgentLog.debug("codex app inventory cache read", {
-        state: "missing",
-        refreshScheduled,
-        forceRefetch: params.forceRefetch === true,
-        suppressRefresh: params.suppressRefresh === true,
-        revision: this.revision,
-        keyFingerprint: fingerprintInventoryCacheKey(params.key),
-      });
       return {
         state: "missing",
         key: params.key,
@@ -97,17 +89,6 @@ export class CodexAppInventoryCache {
       entry.invalidated || entry.expiresAtMs <= nowMs ? "stale" : "fresh";
     const refreshScheduled =
       state === "fresh" && !params.forceRefetch ? false : this.scheduleRefresh(params);
-    embeddedAgentLog.debug("codex app inventory cache read", {
-      state,
-      refreshScheduled,
-      forceRefetch: params.forceRefetch === true,
-      suppressRefresh: params.suppressRefresh === true,
-      revision: entry.revision,
-      appCount: entry.apps.length,
-      enabledCount: entry.apps.filter((app) => app.isEnabled).length,
-      accessibleCount: entry.apps.filter((app) => app.isAccessible).length,
-      keyFingerprint: fingerprintInventoryCacheKey(params.key),
-    });
     return {
       state,
       key: params.key,
@@ -150,16 +131,8 @@ export class CodexAppInventoryCache {
 
   private scheduleRefresh(params: RefreshParams): boolean {
     if (this.inFlight.has(params.key) && !params.forceRefetch) {
-      embeddedAgentLog.debug("codex app inventory refresh already in flight", {
-        forceRefetch: false,
-        keyFingerprint: fingerprintInventoryCacheKey(params.key),
-      });
       return true;
     }
-    embeddedAgentLog.debug("codex app inventory refresh scheduled", {
-      forceRefetch: params.forceRefetch === true,
-      keyFingerprint: fingerprintInventoryCacheKey(params.key),
-    });
     const promise = this.refresh(params);
     this.inFlight.set(params.key, promise);
     promise.catch(() => undefined);
@@ -191,10 +164,6 @@ export class CodexAppInventoryCache {
   ): Promise<CodexAppInventorySnapshot> {
     const nowMs = params.nowMs ?? Date.now();
     try {
-      embeddedAgentLog.debug("codex app inventory refresh started", {
-        forceRefetch: params.forceRefetch === true,
-        keyFingerprint: fingerprintInventoryCacheKey(params.key),
-      });
       const apps = await listAllApps(params.request, params.forceRefetch ?? false);
       this.revision += 1;
       const snapshot: CodexAppInventorySnapshot = {
@@ -210,14 +179,6 @@ export class CodexAppInventoryCache {
         this.entries.set(params.key, { ...snapshot, invalidated: false });
         this.diagnostics.delete(params.key);
       }
-      embeddedAgentLog.debug("codex app inventory refresh completed", {
-        forceRefetch: params.forceRefetch === true,
-        revision: snapshot.revision,
-        appCount: apps.length,
-        enabledCount: apps.filter((app) => app.isEnabled).length,
-        accessibleCount: apps.filter((app) => app.isAccessible).length,
-        keyFingerprint: fingerprintInventoryCacheKey(params.key),
-      });
       return snapshot;
     } catch (error) {
       const diagnostic = {

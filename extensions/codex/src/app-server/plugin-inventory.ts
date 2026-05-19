@@ -92,15 +92,6 @@ export async function readCodexPluginInventory(
   }
 
   const appInventory = readCachedAppInventory(params);
-  embeddedAgentLog.debug("codex plugin inventory read started", {
-    enabledPluginConfigKeys: policy.pluginPolicies
-      .filter((plugin) => plugin.enabled)
-      .map((plugin) => plugin.configKey)
-      .toSorted(),
-    appInventoryState: appInventory?.state,
-    appInventoryRevision: appInventory?.revision,
-    appInventoryAppCount: appInventory?.snapshot?.apps.length,
-  });
   const listed = (await params.request("plugin/list", {
     cwds: [],
   } satisfies v2.PluginListParams)) as v2.PluginListResponse;
@@ -123,10 +114,6 @@ export async function readCodexPluginInventory(
   }
 
   const marketplace = marketplaceRef(marketplaceEntry);
-  embeddedAgentLog.debug("codex plugin inventory marketplace found", {
-    marketplaceName: marketplace.name,
-    pluginCount: marketplaceEntry.plugins.length,
-  });
   const diagnostics: CodexPluginInventoryDiagnostic[] = [];
   const records: CodexPluginInventoryRecord[] = [];
   if (appInventory?.state === "missing") {
@@ -186,21 +173,6 @@ export async function readCodexPluginInventory(
       detail,
       appInventory,
     });
-    embeddedAgentLog.debug("codex plugin inventory record resolved", {
-      configKey: pluginPolicy.configKey,
-      pluginName: pluginPolicy.pluginName,
-      installed: summary.installed,
-      enabled: summary.enabled,
-      activationRequired: !summary.installed || !summary.enabled,
-      appOwnership,
-      ownedAppIds,
-      apps: apps.map((app) => ({
-        id: app.id,
-        accessible: app.accessible,
-        enabled: app.enabled,
-        needsAuth: app.needsAuth,
-      })),
-    });
     records.push({
       policy: pluginPolicy,
       summary,
@@ -220,10 +192,6 @@ export async function readCodexPluginInventory(
     diagnostics,
     ...(appInventory ? { appInventory } : {}),
   };
-  embeddedAgentLog.debug("codex plugin inventory read completed", {
-    recordCount: records.length,
-    diagnostics: diagnostics.map((diagnostic) => diagnostic.code),
-  });
   return inventory;
 }
 

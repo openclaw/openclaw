@@ -169,10 +169,6 @@ export async function buildCodexPluginThreadConfig(
     });
   }
   if (shouldForceRefreshForNotReadyPluginApps(params, policy, inventory)) {
-    embeddedAgentLog.debug("codex plugin thread config forcing app inventory refresh", {
-      reason: "not_ready_plugin_apps",
-      records: summarizePluginAppReadiness(inventory),
-    });
     await refreshAppInventoryNow(params, appCache, {
       forceRefetch: true,
       reason: "not_ready_plugin_apps",
@@ -245,14 +241,6 @@ export async function buildCodexPluginThreadConfig(
 
   const configPatch = { apps };
   const policyContext = buildPluginAppPolicyContext(policyApps, pluginAppIds);
-  embeddedAgentLog.debug("codex plugin thread config built", {
-    enabledAppIds: Object.keys(policyApps).toSorted(),
-    pluginAppIds,
-    diagnostics: diagnostics.map((diagnostic) => diagnostic.code),
-    inventoryState: inventory.appInventory?.state,
-    inventoryRevision: inventory.appInventory?.revision,
-    inputFingerprint,
-  });
   return {
     enabled: true,
     configPatch,
@@ -372,21 +360,11 @@ async function refreshAppInventoryNow(
   const request: CodexAppInventoryRequest = async (method, requestParams) =>
     (await params.request(method, requestParams)) as Awaited<ReturnType<CodexAppInventoryRequest>>;
   try {
-    embeddedAgentLog.debug("codex plugin thread config app inventory refresh starting", {
-      reason: options.reason,
-      forceRefetch: options.forceRefetch === true,
-    });
     const snapshot = await appCache.refreshNow({
       key: appCacheKey,
       request,
       nowMs: params.nowMs,
       forceRefetch: options.forceRefetch,
-    });
-    embeddedAgentLog.debug("codex plugin thread config app inventory refresh completed", {
-      reason: options.reason,
-      forceRefetch: options.forceRefetch === true,
-      revision: snapshot.revision,
-      appCount: snapshot.apps.length,
     });
     return snapshot;
   } catch (error) {
@@ -427,22 +405,6 @@ function shouldForceRefreshForNotReadyPluginApps(
       record.ownedAppIds.length > 0 &&
       (record.apps.length === 0 || record.apps.some((app) => !app.accessible || !app.enabled)),
   );
-}
-
-function summarizePluginAppReadiness(inventory: CodexPluginInventory): JsonValue {
-  return inventory.records
-    .filter((record) => record.appOwnership === "proven" && record.ownedAppIds.length > 0)
-    .map((record) => ({
-      configKey: record.policy.configKey,
-      pluginName: record.policy.pluginName,
-      ownedAppIds: record.ownedAppIds,
-      apps: record.apps.map((app) => ({
-        id: app.id,
-        accessible: app.accessible,
-        enabled: app.enabled,
-        needsAuth: app.needsAuth,
-      })),
-    }));
 }
 
 function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {
