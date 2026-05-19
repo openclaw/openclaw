@@ -1059,14 +1059,9 @@ Notes:
 - Slack expects shortcodes (for example `"eyes"`).
 - Use `""` to disable the reaction for the Slack account or globally.
 
-### Scope (`ackReactionScope`)
+### Scope (`messages.ackReactionScope`)
 
-Resolution order:
-
-- `channels.slack.accounts.<accountId>.ackReactionScope`
-- `channels.slack.ackReactionScope`
-- `messages.ackReactionScope`
-- default: `"group-mentions"`
+The Slack provider reads scope from `messages.ackReactionScope` (default `"group-mentions"`). There is no Slack-account or Slack-channel-level override today; the value is global to the gateway.
 
 Values:
 
@@ -1077,7 +1072,7 @@ Values:
 - `"off"` / `"none"`: never react.
 
 <Note>
-The default scope (`"group-mentions"`) does not fire ack reactions in direct messages. If you want to see the configured `ackReaction` (for example `"eyes"`) on inbound Slack DMs, set scope to `"direct"` or `"all"` at the Slack channel level, account level, or under `messages.ackReactionScope`. `messages.ackReactionScope` is read at Slack provider startup, so a gateway restart is needed for the change to take effect.
+The default scope (`"group-mentions"`) does not fire ack reactions in direct messages. To see the configured `ackReaction` (for example `"eyes"`) on inbound Slack DMs, set `messages.ackReactionScope` to `"direct"` or `"all"`. `messages.ackReactionScope` is read at Slack provider startup, so a gateway restart is needed for the change to take effect.
 </Note>
 
 ```json5

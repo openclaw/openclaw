@@ -806,17 +806,14 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - Telegram expects unicode emoji (for example "👀").
     - Use `""` to disable the reaction for a channel or account.
 
-    **Scope (`ackReactionScope`) resolution order:**
+    **Scope (`messages.ackReactionScope`):**
 
-    - `channels.telegram.accounts.<accountId>.ackReactionScope`
-    - `channels.telegram.ackReactionScope`
-    - `messages.ackReactionScope`
-    - default: `"group-mentions"`
+    The Telegram provider reads scope from `messages.ackReactionScope` (default `"group-mentions"`). There is no Telegram-account or Telegram-channel-level override today.
 
     Values: `"all"` (DMs + groups), `"direct"` (DMs only), `"group-all"` (every group message, no DMs), `"group-mentions"` (groups when the bot is mentioned; **no DMs** — this is the default), `"off"` / `"none"` (disabled).
 
     <Note>
-    The default scope (`"group-mentions"`) does not fire ack reactions in direct messages. To get an ack reaction on inbound Telegram DMs, set the scope to `"direct"` or `"all"`. `messages.ackReactionScope` is read at provider startup, so a gateway restart is needed for the change to take effect.
+    The default scope (`"group-mentions"`) does not fire ack reactions in direct messages. To get an ack reaction on inbound Telegram DMs, set `messages.ackReactionScope` to `"direct"` or `"all"`. The value is read at Telegram provider startup, so a gateway restart is needed for the change to take effect.
     </Note>
 
   </Accordion>
