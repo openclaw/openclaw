@@ -456,6 +456,74 @@ describe("AcpSessionManager", () => {
     });
   }, 300_000);
 
+  it("detects native hook relay unavailable in blocked terminal outcomes", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      runtimeState.runTurn.mockImplementation(async function* () {
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "OpenClaw native hook relay unavailable for Codex app-server approval",
+        };
+        yield { type: "done" as const };
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-1") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              label: "Hook relay test",
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "parent-1",
+              updatedAt: Date.now(),
+            },
+          };
+        }
+        return null;
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "Test native hook relay",
+        mode: "prompt",
+        requestId: "native-hook-relay-test-run",
+      });
+      await flushMicrotasks();
+
+      expectRecordFields(requireTaskByRunId("native-hook-relay-test-run"), {
+        runtime: "acp",
+        ownerKey: "agent:quant:telegram:quant:direct:822430204",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child-1",
+        label: "Hook relay test",
+        task: "Test native hook relay",
+        status: "succeeded",
+        progressSummary: "OpenClaw native hook relay unavailable for Codex app-server approval",
+        terminalOutcome: "blocked",
+        terminalSummary: "Native hook relay unavailable.",
+      });
+    });
+  }, 300_000);
+
   it("preserves token-streamed ACP progress boundaries in parented task summaries", async () => {
     await withAcpManagerTaskStateDir(async () => {
       const runtimeState = createRuntime();

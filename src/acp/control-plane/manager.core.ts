@@ -129,13 +129,18 @@ function resolveBackgroundTaskTerminalResult(progressSummary: string): {
   if (!normalized) {
     return {};
   }
-  // Native hook relay unavailable
-  if (/\bnative hook relay unavailable\b/i.test(normalized)) {
+
+  // Native hook relay issues (enhanced detection)
+  const nativeHookRelayMatch = normalized.match(
+    /\b(?:openclaw\s+)?native\s+hook\s+relay\s+(unavailable|not\s+found)\b/i
+  );
+  if (nativeHookRelayMatch) {
     return {
       terminalOutcome: "blocked",
       terminalSummary: "Native hook relay unavailable.",
     };
   }
+
   // Permission denied
   const permissionDeniedMatch = normalized.match(
     /\b(?:write failed:\s*)?permission denied(?: for (?<path>\S+))?\.?/i,
@@ -147,6 +152,8 @@ function resolveBackgroundTaskTerminalResult(progressSummary: string): {
       terminalSummary: path ? `Permission denied for ${path}.` : "Permission denied.",
     };
   }
+
+  // Writable session required
   if (
     /\bneed a writable session\b/i.test(normalized) ||
     /\bfilesystem authorization\b/i.test(normalized) ||
@@ -157,6 +164,7 @@ function resolveBackgroundTaskTerminalResult(progressSummary: string): {
       terminalSummary: "Writable session or apply_patch authorization required.",
     };
   }
+
   return {};
 }
 
