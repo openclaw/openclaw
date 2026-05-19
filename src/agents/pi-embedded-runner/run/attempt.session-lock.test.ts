@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
+import * as sessionWriteLock from "../../session-write-lock.js";
 import {
   createEmbeddedAttemptSessionLockController,
   EmbeddedAttemptSessionTakeoverError,
@@ -458,5 +459,135 @@ describe("embedded attempt session lock lifecycle", () => {
     await hookPromise;
 
     expect(events).toEqual(["queue-drained", "lock", "hook-start", "hook-end"]);
+  });
+});
+
+describe("co-tenant write epoch fence", () => {
+  it("allows co-tenant writes that go through acquireSessionWriteLock", async () => {
+    const sessionFile = await createTempSessionFile();
+    let epoch = 0;
+    const epochSpy = vi
+      .spyOn(sessionWriteLock, "getSessionWriteEpoch")
+      .mockImplementation(() => epoch);
+    const acquireSessionWriteLock = vi.fn(async () => {
+      epoch += 1;
+      return { release: vi.fn(async () => {}) };
+    });
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+
+    // Simulate co-tenant acquiring lock and writing
+    epoch += 1;
+    await fs.appendFile(sessionFile, '{"type":"heartbeat"}\n', "utf8");
+
+    const result = await controller.withSessionWriteLock(async () => "ok");
+    expect(result).toBe("ok");
+    expect(controller.hasSessionTakeover()).toBe(false);
+
+    epochSpy.mockRestore();
+  });
+
+  it("detects external writes that bypass the write lock", async () => {
+    const sessionFile = await createTempSessionFile();
+    let epoch = 0;
+    const epochSpy = vi
+      .spyOn(sessionWriteLock, "getSessionWriteEpoch")
+      .mockImplementation(() => epoch);
+    const acquireSessionWriteLock = vi.fn(async () => {
+      epoch += 1;
+      return { release: vi.fn(async () => {}) };
+    });
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await fs.appendFile(sessionFile, '{"type":"takeover"}\n', "utf8");
+
+    await expect(controller.withSessionWriteLock(() => "late")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+
+    epochSpy.mockRestore();
+  });
+
+  it("detects external write after accepting a legitimate co-tenant write", async () => {
+    const sessionFile = await createTempSessionFile();
+    let epoch = 0;
+    const epochSpy = vi
+      .spyOn(sessionWriteLock, "getSessionWriteEpoch")
+      .mockImplementation(() => epoch);
+    const acquireSessionWriteLock = vi.fn(async () => {
+      epoch += 1;
+      return { release: vi.fn(async () => {}) };
+    });
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+
+    // Co-tenant acquires lock and writes — should be accepted
+    epoch += 1;
+    await fs.appendFile(sessionFile, '{"type":"heartbeat"}\n', "utf8");
+
+    const result = await controller.withSessionWriteLock(async () => "ok");
+    expect(result).toBe("ok");
+    expect(controller.hasSessionTakeover()).toBe(false);
+
+    // External write without lock — should be detected
+    await fs.appendFile(sessionFile, '{"type":"takeover"}\n', "utf8");
+
+    await expect(controller.withSessionWriteLock(() => "late")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+
+    epochSpy.mockRestore();
+  });
+
+  it("allows multiple co-tenant writes without false takeover", async () => {
+    const sessionFile = await createTempSessionFile();
+    let epoch = 0;
+    const epochSpy = vi
+      .spyOn(sessionWriteLock, "getSessionWriteEpoch")
+      .mockImplementation(() => epoch);
+    const acquireSessionWriteLock = vi.fn(async () => {
+      epoch += 1;
+      return { release: vi.fn(async () => {}) };
+    });
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+
+    // Simulate 3 co-tenant lock acquisitions with writes
+    epoch += 3;
+    await fs.appendFile(sessionFile, '{"type":"heartbeat1"}\n', "utf8");
+    await fs.appendFile(sessionFile, '{"type":"heartbeat2"}\n', "utf8");
+    await fs.appendFile(sessionFile, '{"type":"cron"}\n', "utf8");
+
+    const result = await controller.withSessionWriteLock(async () => "ok");
+    expect(result).toBe("ok");
+    expect(controller.hasSessionTakeover()).toBe(false);
+
+    const result2 = await controller.withSessionWriteLock(async () => "ok2");
+    expect(result2).toBe("ok2");
+    expect(controller.hasSessionTakeover()).toBe(false);
+
+    epochSpy.mockRestore();
   });
 });

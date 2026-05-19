@@ -64,7 +64,12 @@ type LockInspectionDetails = Pick<
 >;
 
 const SESSION_LOCKS = createFileLockManager("openclaw.session-write-lock");
+const SESSION_WRITE_EPOCHS = new Map<string, number>();
 let resolveProcessStartTimeForLock = getProcessStartTime;
+
+export function getSessionWriteEpoch(sessionFile: string): number {
+  return SESSION_WRITE_EPOCHS.get(path.resolve(sessionFile)) ?? 0;
+}
 
 function isFileLockError(error: unknown, code: string): boolean {
   return (error as { code?: unknown } | null)?.code === code;
@@ -764,6 +769,8 @@ export async function acquireSessionWriteLock(params: {
           return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
         },
       });
+      const resolved = path.resolve(sessionFile);
+      SESSION_WRITE_EPOCHS.set(resolved, (SESSION_WRITE_EPOCHS.get(resolved) ?? 0) + 1);
       return { release: lock.release };
     } catch (err) {
       if (isFileLockError(err, "file_lock_stale")) {
@@ -810,5 +817,6 @@ export function resetSessionWriteLockStateForTest(): void {
   stopWatchdogTimer();
   unregisterCleanupHandlers();
   resolveProcessStartTimeForLock = getProcessStartTime;
+  SESSION_WRITE_EPOCHS.clear();
 }
 export { testing as __testing };

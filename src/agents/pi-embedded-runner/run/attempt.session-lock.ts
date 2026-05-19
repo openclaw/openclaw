@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import { isSessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
+import { getSessionWriteEpoch } from "../../session-write-lock.js";
 
 type SessionLock = Awaited<ReturnType<typeof acquireSessionWriteLock>>;
 type AcquireSessionWriteLock = typeof acquireSessionWriteLock;
@@ -265,6 +266,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   const activeWriteLock = new AsyncLocalStorage<SessionLock>();
   let fenceFingerprint: SessionFileFingerprint | undefined;
   let fenceActive = false;
+  let fenceWriteEpoch = 0;
   let takeoverDetected = false;
 
   async function acquireWriteLock(): Promise<{ lock: SessionLock; owned: boolean }> {
@@ -286,15 +288,23 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return;
     }
     const current = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-    if (!sameSessionFileFingerprint(fenceFingerprint, current)) {
-      takeoverDetected = true;
-      throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+    if (sameSessionFileFingerprint(fenceFingerprint, current)) {
+      return;
     }
+    const currentEpoch = getSessionWriteEpoch(params.lockOptions.sessionFile);
+    if (currentEpoch > fenceWriteEpoch + 1) {
+      fenceFingerprint = current;
+      fenceWriteEpoch = currentEpoch;
+      return;
+    }
+    takeoverDetected = true;
+    throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
   }
 
   async function refreshSessionFileFence(): Promise<void> {
     if (fenceActive && !takeoverDetected) {
       fenceFingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+      fenceWriteEpoch = getSessionWriteEpoch(params.lockOptions.sessionFile);
     }
   }
 
@@ -308,6 +318,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       const lock = heldLock;
       heldLock = undefined;
       fenceFingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+      fenceWriteEpoch = getSessionWriteEpoch(params.lockOptions.sessionFile);
       fenceActive = true;
       await lock.release();
     },
