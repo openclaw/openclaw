@@ -963,13 +963,20 @@ export async function processDiscordMessage(
     throw err;
   } finally {
     endDiscordInboundEventDeliveryCorrelation();
-    try {
+    if (dispatchSettledBeforeStart) {
       await draftPreview.cleanup();
-    } finally {
-      if (!dispatchSettledBeforeStart) {
-        markRunComplete();
-        markDispatchIdle();
-      }
+    } else {
+      await settleReplyDispatcher({
+        dispatcher,
+        onSettled: async () => {
+          try {
+            await draftPreview.cleanup();
+          } finally {
+            markRunComplete();
+            markDispatchIdle();
+          }
+        },
+      });
     }
     const finalDeliveryFailed = (dispatchResult?.failedCounts?.final ?? 0) > 0;
     if (statusReactionsActive) {

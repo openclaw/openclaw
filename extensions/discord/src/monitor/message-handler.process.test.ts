@@ -2129,6 +2129,48 @@ describe("processDiscordMessage draft streaming", () => {
     expect(toolDelivery.kind).toBe("tool");
   });
 
+  it("waits for queued tool error delivery before cleaning up draft previews", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    let markToolDeliveryStarted!: () => void;
+    let releaseToolDelivery!: () => void;
+    const toolDeliveryStarted = new Promise<void>((resolve) => {
+      markToolDeliveryStarted = resolve;
+    });
+    const toolDeliveryReleased = new Promise<void>((resolve) => {
+      releaseToolDelivery = resolve;
+    });
+    deliverDiscordReply.mockImplementationOnce(async () => {
+      markToolDeliveryStarted();
+      await toolDeliveryReleased;
+    });
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({ text: "partial answer..." });
+      await params?.dispatcher.sendToolResult({
+        text: "Canvas failed",
+        isError: true,
+      } as never);
+      return { queuedFinal: false, counts: { final: 0, tool: 1, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    const processing = runProcessDiscordMessage(ctx);
+    await toolDeliveryStarted;
+    await Promise.resolve();
+
+    expect(draftStream.update).toHaveBeenCalledWith("partial answer...");
+    expect(draftStream.clear).not.toHaveBeenCalled();
+
+    releaseToolDelivery();
+    await processing;
+
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
   it("suppresses reasoning payload delivery to Discord", async () => {
     mockDispatchSingleBlockReply({ text: "thinking...", isReasoning: true });
     await processStreamOffDiscordMessage();
