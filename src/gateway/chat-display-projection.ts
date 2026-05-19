@@ -568,6 +568,17 @@ function readMessageToolVisibleText(args: Record<string, unknown>): string | und
   return undefined;
 }
 
+function isDryRunMessageToolRecord(record: Record<string, unknown>): boolean {
+  if (record.dryRun === true || record.dry_run === true) {
+    return true;
+  }
+  const deliveryStatus =
+    normalizeOptionalString(record.deliveryStatus) ??
+    normalizeOptionalString(record.delivery_status) ??
+    normalizeOptionalString(record.status);
+  return deliveryStatus?.toLowerCase() === "dry_run";
+}
+
 function extractMessageToolVisibleReplies(
   message: Record<string, unknown>,
 ): Array<Omit<PendingMessageToolVisibleReply, "anchor" | "succeeded">> {
@@ -589,6 +600,9 @@ function extractMessageToolVisibleReplies(
     }
     const args = readToolBlockArguments(record);
     if (normalizeOptionalString(args.action)?.toLowerCase() !== "send") {
+      continue;
+    }
+    if (isDryRunMessageToolRecord(args)) {
       continue;
     }
     if (hasExplicitMessageToolRoute(args)) {
@@ -670,6 +684,28 @@ function readToolResultOkValue(value: unknown): boolean | undefined {
   return undefined;
 }
 
+function hasDryRunToolResultValue(value: unknown): boolean {
+  const record = readMaybeJsonRecord(value);
+  if (record && isDryRunMessageToolRecord(record)) {
+    return true;
+  }
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((block) => {
+    if (hasDryRunToolResultValue(block)) {
+      return true;
+    }
+    const recordBlock = readRecord(block);
+    if (typeof recordBlock?.text === "string" && hasDryRunToolResultValue(recordBlock.text)) {
+      return true;
+    }
+    return (
+      typeof recordBlock?.content === "string" && hasDryRunToolResultValue(recordBlock.content)
+    );
+  });
+}
+
 function isSuccessfulMessageToolResult(
   message: Record<string, unknown>,
   pending: PendingMessageToolVisibleReply,
@@ -687,6 +723,14 @@ function isSuccessfulMessageToolResult(
     return false;
   }
   if (message.isError === true || (message.error != null && message.error !== false)) {
+    return false;
+  }
+  if (
+    hasDryRunToolResultValue(message.result) ||
+    hasDryRunToolResultValue(message.output) ||
+    hasDryRunToolResultValue(message.content) ||
+    hasDryRunToolResultValue(message.text)
+  ) {
     return false;
   }
   const ok =
