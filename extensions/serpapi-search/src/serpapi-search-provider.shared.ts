@@ -16,7 +16,7 @@ export function createSerpApiWebSearchProviderBase() {
     credentialPath: SERPAPI_CREDENTIAL_PATH,
     ...createWebSearchProviderContractFields({
       credentialPath: SERPAPI_CREDENTIAL_PATH,
-      searchCredential: { type: "scoped", scopeId: "serpapi-search" },
+      searchCredential: { type: "scoped", scopeId: "serpapi" },
       configuredCredential: { pluginId: "serpapi-search" },
       selectionPluginId: "serpapi-search",
     }),
