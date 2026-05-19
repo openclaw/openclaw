@@ -1091,6 +1091,13 @@ export function createOpenClawCodingTools(options?: {
         sessionId: options?.sessionId,
         runId: options?.runId,
         channelId: options?.hookChannelId ?? options?.currentChannelId,
+        // Carry turn-source so plugin before_tool_call requireApproval can be
+        // delivered back to the originating chat (parity with bash exec
+        // approval, see bash-tools.exec.ts turnSource* wiring).
+        turnSourceChannel: options?.messageProvider,
+        turnSourceTo: options?.currentChannelId,
+        turnSourceAccountId: options?.agentAccountId,
+        turnSourceThreadId: options?.currentThreadTs,
         ...(options?.trace ? { trace: options.trace } : {}),
         loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
         onToolOutcome: options?.onToolOutcome,

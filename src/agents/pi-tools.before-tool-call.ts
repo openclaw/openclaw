@@ -62,6 +62,17 @@ export type HookContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
+  /**
+   * Turn-source routing so a plugin `before_tool_call` requireApproval can be
+   * delivered back to the originating chat (e.g. Telegram) from the embedded
+   * runner. Without these, `plugin.approval.request` has no delivery route and
+   * resolves `decision: null` ("no approval route") — exec/bash approvals
+   * already carry the same fields. See requestPluginToolApproval below.
+   */
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
   sandbox?: {
@@ -196,6 +207,13 @@ async function requestPluginToolApproval(params: {
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
         sessionKey: params.ctx?.sessionKey,
+        // Turn-source so the gateway can route the approval back to the
+        // originating chat (mirrors bash exec approval delivery). Without
+        // this, embedded-runner plugin approvals have no delivery route.
+        turnSourceChannel: params.ctx?.turnSourceChannel,
+        turnSourceTo: params.ctx?.turnSourceTo,
+        turnSourceAccountId: params.ctx?.turnSourceAccountId,
+        turnSourceThreadId: params.ctx?.turnSourceThreadId,
         timeoutMs: approval.timeoutMs ?? 120_000,
         twoPhase: true,
       },
