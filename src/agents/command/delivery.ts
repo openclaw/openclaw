@@ -73,6 +73,42 @@ export type AgentCommandDeliveryResult = {
 
 const NESTED_LOG_PREFIX = "[agent:nested]";
 
+type FreshSessionEntryForDeliveryResolver = () => Promise<SessionEntry | undefined>;
+
+type FreshSessionDeliveryRefreshParams =
+  | {
+      expectedSessionIdForFreshDelivery: string;
+      resolveFreshSessionEntryForDelivery: FreshSessionEntryForDeliveryResolver;
+    }
+  | {
+      expectedSessionIdForFreshDelivery?: string;
+      resolveFreshSessionEntryForDelivery?: undefined;
+    };
+
+type DeliverAgentCommandResultParams = {
+  cfg: OpenClawConfig;
+  deps: CliDeps;
+  runtime: RuntimeEnv;
+  opts: AgentCommandOpts;
+  outboundSession: OutboundSessionContext | undefined;
+  sessionEntry: SessionEntry | undefined;
+  result: RunResult;
+  payloads: RunResult["payloads"];
+} & FreshSessionDeliveryRefreshParams;
+
+function normalizeDeliverySessionId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function isFreshDeliverySessionMatch(
+  freshSessionEntry: SessionEntry,
+  expectedSessionId: string | undefined,
+): boolean {
+  const normalizedExpected = normalizeDeliverySessionId(expectedSessionId);
+  return Boolean(normalizedExpected && freshSessionEntry.sessionId === normalizedExpected);
+}
+
 function formatNestedLogPrefix(opts: AgentCommandOpts, sessionKey?: string): string {
   const parts = [NESTED_LOG_PREFIX];
   const session = sessionKey ?? opts.sessionKey ?? opts.sessionId;
@@ -331,17 +367,9 @@ export function normalizeAgentCommandReplyPayloads(params: {
   return normalizedPayloads;
 }
 
-export async function deliverAgentCommandResult(params: {
-  cfg: OpenClawConfig;
-  deps: CliDeps;
-  runtime: RuntimeEnv;
-  opts: AgentCommandOpts;
-  outboundSession: OutboundSessionContext | undefined;
-  sessionEntry: SessionEntry | undefined;
-  resolveFreshSessionEntryForDelivery?: () => Promise<SessionEntry | undefined>;
-  result: RunResult;
-  payloads: RunResult["payloads"];
-}): Promise<AgentCommandDeliveryResult> {
+export async function deliverAgentCommandResult(
+  params: DeliverAgentCommandResultParams,
+): Promise<AgentCommandDeliveryResult> {
   const { cfg, deps, runtime, opts, outboundSession, sessionEntry, payloads, result } = params;
   const effectiveSessionKey = outboundSession?.key ?? opts.sessionKey;
   const deliver = opts.deliver === true;
@@ -467,7 +495,13 @@ export async function deliverAgentCommandResult(params: {
   let deliveryRouting = await resolveDeliveryRouting(sessionEntry);
   if (isRetryableFreshSessionRoutingFailure(deliveryRouting)) {
     const freshSessionEntry = await params.resolveFreshSessionEntryForDelivery?.();
-    if (freshSessionEntry && freshSessionEntry !== sessionEntry) {
+    const expectedFreshSessionId =
+      params.expectedSessionIdForFreshDelivery ?? sessionEntry?.sessionId;
+    if (
+      freshSessionEntry &&
+      freshSessionEntry !== sessionEntry &&
+      isFreshDeliverySessionMatch(freshSessionEntry, expectedFreshSessionId)
+    ) {
       const freshRouting = await resolveDeliveryRouting(freshSessionEntry);
       if (!deliveryRoutingFailureReason(freshRouting)) {
         if (!opts.json) {
