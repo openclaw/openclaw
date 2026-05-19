@@ -1,42 +1,42 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { getSubCliDescriptors, getSubCliEntries } from "./subcli-descriptors.js";
 
-const isPrivateQaCliEnabledMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./private-qa-cli.js", () => ({
-  isPrivateQaCliEnabled: isPrivateQaCliEnabledMock,
-}));
-
 describe("getSubCliDescriptors (#83927)", () => {
+  const originalPrivateQaFlag = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+
   afterEach(() => {
-    isPrivateQaCliEnabledMock.mockReset();
+    if (originalPrivateQaFlag === undefined) {
+      delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+    } else {
+      process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = originalPrivateQaFlag;
+    }
   });
 
   it("hides the qa command when the private-qa flag is disabled", () => {
-    isPrivateQaCliEnabledMock.mockReturnValue(false);
+    delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
     const descriptors = getSubCliDescriptors();
     expect(descriptors.find((d) => d.name === "qa")).toBeUndefined();
   });
 
   it("includes the qa command when the private-qa flag is enabled", () => {
-    isPrivateQaCliEnabledMock.mockReturnValue(true);
+    process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
     const descriptors = getSubCliDescriptors();
     expect(descriptors.find((d) => d.name === "qa")).toBeDefined();
   });
 
   it("agrees with getSubCliEntries on qa visibility under both flag states", () => {
-    isPrivateQaCliEnabledMock.mockReturnValue(false);
+    delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
     const offDescriptors = getSubCliDescriptors();
     const offEntries = getSubCliEntries();
-    expect(offDescriptors.map((d) => d.name).sort()).toEqual(
-      offEntries.map((d) => d.name).sort(),
+    expect(offDescriptors.map((d) => d.name).toSorted()).toEqual(
+      offEntries.map((d) => d.name).toSorted(),
     );
 
-    isPrivateQaCliEnabledMock.mockReturnValue(true);
+    process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
     const onDescriptors = getSubCliDescriptors();
     const onEntries = getSubCliEntries();
-    expect(onDescriptors.map((d) => d.name).sort()).toEqual(
-      onEntries.map((d) => d.name).sort(),
+    expect(onDescriptors.map((d) => d.name).toSorted()).toEqual(
+      onEntries.map((d) => d.name).toSorted(),
     );
   });
 });
