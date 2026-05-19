@@ -16,6 +16,26 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+
+async function shRetry(logStream, label, fn, { tries = 5, baseDelayMs = 1000 } = {}) {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try {
+      return await fn(attempt);
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e && e.message ? e.message : e);
+      // Retry only for known transient install races
+      const transient = msg.includes("ETXTBSY") || msg.includes("ENOTEMPTY") || msg.includes("EEXIST");
+      if (!transient || attempt == tries) throw e;
+      const delay = Math.min(8000, baseDelayMs * attempt);
+      banner(logStream, `${label} failed (attempt ${attempt}/${tries}) with transient error; retrying in ${delay}ms`);
+      await sleepMs(delay);
+    }
+  }
+  throw lastErr;
+}
+
 function sh(cmd, args, opts = {}) {
   return execFileSync(cmd, args, {
     encoding: "utf8",
@@ -438,7 +458,9 @@ banner(logStream, `Installing globally into prefix: ${prefix}`);
     }
   }
 
-await shTee(logStream, "npm", ["install", "-g", "--prefix", prefix, currentTgz]);
+await shRetry(logStream, "npm install -g", async () => {
+  await shTee(logStream, "npm", ["install", "-g", "--prefix", prefix, currentTgz]);
+});
 
 // Run bundled deps helper
 banner(logStream, "Running Polytropos bundled plugin deps helper...");
@@ -449,7 +471,9 @@ banner(logStream, "Running Polytropos bundled plugin deps helper...");
   if (!fs.existsSync(helperPath)) {
     fail(`Polytropos helper not found at ${helperPath}`);
   }
-  await shTee(logStream, "node", [helperPath]);
+  await shRetry(logStream, "bundled deps helper", async () => {
+    await shTee(logStream, "node", [helperPath]);
+  });
   banner(logStream, "Bundled plugin deps helper completed.");
 }
 
