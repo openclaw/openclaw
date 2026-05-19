@@ -354,6 +354,12 @@ class NodeRuntime(
   val dreamingRefreshing: StateFlow<Boolean> = _dreamingRefreshing.asStateFlow()
   private val _dreamingErrorText = MutableStateFlow<String?>(null)
   val dreamingErrorText: StateFlow<String?> = _dreamingErrorText.asStateFlow()
+  private val _healthLogsSummary = MutableStateFlow(GatewayHealthLogsSummary())
+  val healthLogsSummary: StateFlow<GatewayHealthLogsSummary> = _healthLogsSummary.asStateFlow()
+  private val _healthLogsRefreshing = MutableStateFlow(false)
+  val healthLogsRefreshing: StateFlow<Boolean> = _healthLogsRefreshing.asStateFlow()
+  private val _healthLogsErrorText = MutableStateFlow<String?>(null)
+  val healthLogsErrorText: StateFlow<String?> = _healthLogsErrorText.asStateFlow()
 
   private val _isForeground = MutableStateFlow(true)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
@@ -407,6 +413,7 @@ class NodeRuntime(
           )
         _channelsSummary.value = GatewayChannelsSummary(channels = emptyList())
         _dreamingSummary.value = GatewayDreamingSummary()
+        _healthLogsSummary.value = GatewayHealthLogsSummary()
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
         updateStatus()
@@ -679,6 +686,7 @@ class NodeRuntime(
       refreshNodesDevicesFromGateway()
       refreshChannelsFromGateway()
       refreshDreamingFromGateway()
+      refreshHealthLogsFromGateway()
     }
   }
 
@@ -727,6 +735,12 @@ class NodeRuntime(
   fun refreshDreaming() {
     scope.launch {
       refreshDreamingFromGateway()
+    }
+  }
+
+  fun refreshHealthLogs() {
+    scope.launch {
+      refreshHealthLogsFromGateway()
     }
   }
 
@@ -1841,6 +1855,39 @@ class NodeRuntime(
     }
   }
 
+  private suspend fun refreshHealthLogsFromGateway() {
+    _healthLogsRefreshing.value = true
+    _healthLogsErrorText.value = null
+    if (!operatorConnected) {
+      _healthLogsSummary.value = GatewayHealthLogsSummary()
+      _healthLogsRefreshing.value = false
+      return
+    }
+    try {
+      val res = operatorSession.request("logs.tail", """{"limit":40,"maxBytes":65536}""")
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      val lines = (root?.get("lines") as? JsonArray)?.mapNotNull { it.asStringOrNull() }.orEmpty()
+      _healthLogsSummary.value =
+        GatewayHealthLogsSummary(
+          fileName =
+            root
+              ?.get("file")
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf { it.isNotEmpty() }
+              ?.substringAfterLast('/')
+              ?.substringAfterLast('\\'),
+          cursor = root.long("cursor"),
+          truncated = root.boolean("truncated"),
+          entries = lines.map { parseGatewayLogEntry(it) },
+        )
+    } catch (_: Throwable) {
+      _healthLogsErrorText.value = "Could not load gateway logs."
+    } finally {
+      _healthLogsRefreshing.value = false
+    }
+  }
+
   private fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
     models
       ?.mapNotNull { item ->
@@ -1860,6 +1907,58 @@ class NodeRuntime(
           contextTokens = obj["contextWindow"].toString().toLongOrNull() ?: obj["contextTokens"].toString().toLongOrNull(),
         )
       }.orEmpty()
+
+  private fun parseGatewayLogEntry(line: String): GatewayLogEntry {
+    val root =
+      try {
+        json.parseToJsonElement(line).asObjectOrNull()
+      } catch (_: Throwable) {
+        null
+      } ?: return GatewayLogEntry(time = null, level = null, subsystem = null, message = line.trim().ifEmpty { "Empty log entry" })
+    val meta = root["_meta"].asObjectOrNull()
+    val time = root["time"].asStringOrNull() ?: meta?.get("date").asStringOrNull()
+    val level = normalizeLogLevel(meta?.get("logLevelName").asStringOrNull() ?: meta?.get("level").asStringOrNull())
+    val contextCandidate = root["0"].asStringOrNull() ?: meta?.get("name").asStringOrNull()
+    val contextObject = parseMaybeJsonObject(contextCandidate)
+    val subsystem =
+      contextObject?.get("subsystem").asStringOrNull()
+        ?: contextObject?.get("module").asStringOrNull()
+        ?: contextCandidate?.takeIf { it.length < 80 && contextObject == null }
+    val contextMessage = if (contextObject == null) root["0"].asStringOrNull() else null
+    val message =
+      root["1"].asStringOrNull()
+        ?: root["2"].asStringOrNull()
+        ?: contextMessage
+        ?: root["message"].asStringOrNull()
+        ?: line
+    val normalizedMessage =
+      message
+        .trim()
+        .replace(Regex("\\s+"), " ")
+        .take(240)
+        .ifEmpty { "Log entry" }
+    return GatewayLogEntry(
+      time = time,
+      level = level,
+      subsystem = subsystem?.trim()?.takeIf { it.isNotEmpty() },
+      message = normalizedMessage,
+    )
+  }
+
+  private fun parseMaybeJsonObject(value: String?): JsonObject? {
+    val trimmed = value?.trim().orEmpty()
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null
+    return try {
+      json.parseToJsonElement(trimmed).asObjectOrNull()
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  private fun normalizeLogLevel(value: String?): String? {
+    val level = value?.trim()?.lowercase().orEmpty()
+    return if (level in setOf("trace", "debug", "info", "warn", "error", "fatal")) level else null
+  }
 
   private fun parseGatewayModelProviders(providers: JsonArray?): List<GatewayModelProviderSummary> =
     providers
@@ -2586,6 +2685,20 @@ data class GatewayDreamingSummary(
 data class GatewayDreamDiaryEntry(
   val date: String,
   val text: String,
+)
+
+data class GatewayHealthLogsSummary(
+  val fileName: String? = null,
+  val cursor: Long? = null,
+  val truncated: Boolean = false,
+  val entries: List<GatewayLogEntry> = emptyList(),
+)
+
+data class GatewayLogEntry(
+  val time: String?,
+  val level: String?,
+  val subsystem: String?,
+  val message: String,
 )
 
 private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()

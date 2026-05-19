@@ -45,7 +45,6 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -111,7 +110,7 @@ internal fun V2SettingsDetailScreen(
     V2SettingsRoute.PhoneCapabilities -> V2PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Gateway -> V2GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Appearance -> V2AppearanceSettingsScreen(onBack = onBack)
-    V2SettingsRoute.Health -> V2HealthSettingsScreen(viewModel = viewModel, onBack = onBack)
+    V2SettingsRoute.Health -> V2HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.About -> V2AboutSettingsScreen(onBack = onBack)
   }
 }
@@ -453,29 +452,6 @@ private fun V2AppearanceSettingsScreen(onBack: () -> Unit) {
     ClawPanel {
       Text(text = "The v2 app uses a fixed premium dark theme so it stays consistent across devices.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
-  }
-}
-
-@Composable
-private fun V2HealthSettingsScreen(
-  viewModel: MainViewModel,
-  onBack: () -> Unit,
-) {
-  val isConnected by viewModel.isConnected.collectAsState()
-  val isNodeConnected by viewModel.isNodeConnected.collectAsState()
-  val chatHealthOk by viewModel.chatHealthOk.collectAsState()
-  val statusText by viewModel.statusText.collectAsState()
-  val modelCount by viewModel.modelCatalog.collectAsState()
-  val pendingRunCount by viewModel.pendingRunCount.collectAsState()
-  val talkStatus by viewModel.talkModeStatusText.collectAsState()
-
-  V2SettingsDetailFrame(title = "Health", subtitle = "Current app, Gateway, chat, and voice status.", icon = Icons.Default.Settings, onBack = onBack) {
-    V2HealthRow(title = "Gateway", value = statusText, healthy = isConnected)
-    V2HealthRow(title = "Phone Node", value = if (isNodeConnected) "Online" else "Waiting", healthy = isNodeConnected)
-    V2HealthRow(title = "Chat", value = if (chatHealthOk) "Ready" else "Needs connection", healthy = chatHealthOk)
-    V2HealthRow(title = "Models", value = "${modelCount.size} available", healthy = modelCount.isNotEmpty())
-    V2HealthRow(title = "Voice", value = talkStatus, healthy = talkStatus.lowercase() != "off")
-    V2HealthRow(title = "Runs", value = if (pendingRunCount > 0) "$pendingRunCount active" else "Idle", healthy = true)
   }
 }
 

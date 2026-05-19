@@ -109,6 +109,10 @@ class MainViewModel(
     runtimeState(initial = GatewayDreamingSummary()) { it.dreamingSummary }
   val dreamingRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.dreamingRefreshing }
   val dreamingErrorText: StateFlow<String?> = runtimeState(initial = null) { it.dreamingErrorText }
+  val healthLogsSummary: StateFlow<GatewayHealthLogsSummary> =
+    runtimeState(initial = GatewayHealthLogsSummary()) { it.healthLogsSummary }
+  val healthLogsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.healthLogsRefreshing }
+  val healthLogsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.healthLogsErrorText }
   val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
   val seamColorArgb: StateFlow<Long> = runtimeState(initial = 0xFF0EA5E9) { it.seamColorArgb }
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
@@ -413,6 +417,10 @@ class MainViewModel(
 
   fun refreshDreaming() {
     ensureRuntime().refreshDreaming()
+  }
+
+  fun refreshHealthLogs() {
+    ensureRuntime().refreshHealthLogs()
   }
 
   fun loadChat(sessionKey: String) {
