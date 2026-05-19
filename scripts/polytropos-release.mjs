@@ -326,7 +326,7 @@ function usage() {
   console.log(`polytropos-release.mjs
 
 Usage:
-  node scripts/polytropos-release.mjs release --tgz <path> [--log <path>]
+  node scripts/polytropos-release.mjs release --tag v<ver>+poly.<N> --tgz /path/to/openclaw-<ver>.tgz [--log <path>]
 
 Behavior:
   - Requires clean git working tree
@@ -362,36 +362,14 @@ if (currentBranch !== "main") {
   fail(`refusing to release from branch ${currentBranch}; releases must be cut from main`);
 }
 const repoRoot = getRepoRoot();
-const nearestReleaseTag = getNearestReachableReleaseTag();
-const { baseUpstreamTag } = parseReleaseTag(nearestReleaseTag);
-
-const maxPoly = getMaxPolyBuildNumber();
-const nextPoly = maxPoly + 1;
-const polyTag = `${baseUpstreamTag}+poly.${nextPoly}`;
-
-banner(logStream, `Nearest reachable release tag: ${nearestReleaseTag}`);
-banner(logStream, `Upstream base tag (derived): ${baseUpstreamTag}`);
-banner(logStream, `Next release tag: ${polyTag}`);
-
-// Create annotated tag
-banner(logStream, `git tag -a ${polyTag}`);
-await shTee(logStream, "git", ["tag", "-a", polyTag, "-m", `Polytropos release ${polyTag}`]);
-
-if (!tgzPath) {
-  fail("release requires --tgz <path to CI-built tarball>; local builds on the gateway host are disabled");
-}
-
 // Produce tarball into releases
 const relRoot = releasesRoot();
 fs.mkdirSync(relRoot, { recursive: true });
 assertReleaseStoreConsistent(relRoot);
 
-const tarName = `${polyTag}.tgz`;
+const tarName = `${releaseTag}.tgz`;
 let tarPath;
-if (!tgzPath) {
-  tarPath = npmPack(repoRoot, relRoot, tarName);
-  banner(logStream, `Packed tarball: ${tarPath}`);
-} else {
+{
   const srcAbs = path.resolve(tgzPath);
   if (!fs.existsSync(srcAbs)) {
     fail(`release: tgz not found at ${srcAbs}`);
@@ -424,7 +402,6 @@ const currentTarget = readlinkAbs(currentTgz);
 if (currentTarget) {
   banner(logStream, `Setting previous.tgz -> ${currentTarget}`);
   lnSfn(currentTarget, previousTgz);
-} else {
   banner(
     logStream,
     "No existing current.tgz symlink; setting previous.tgz to this tarball as bootstrap",
