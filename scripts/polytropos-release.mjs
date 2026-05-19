@@ -143,6 +143,49 @@ async function shTee(logStream, cmd, args, opts = {}) {
   });
 }
 
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function findRunIdForTag({ logStream, ghRepo, wf, releaseTag, timeoutMs = 180000 }) {
+  const started = Date.now();
+  let attempt = 0;
+  while (Date.now() - started < timeoutMs) {
+    attempt++;
+    let runId = "";
+    try {
+      runId = sh("gh", [
+        "run",
+        "list",
+        "--repo",
+        ghRepo,
+        "--workflow",
+        wf,
+        "--event",
+        "push",
+        "--branch",
+        releaseTag,
+        "--limit",
+        "1",
+        "--json",
+        "databaseId",
+        "--jq",
+        ".[0].databaseId",
+      ]);
+    } catch (e) {
+      // ignore and retry
+    }
+    if (runId) {
+      banner(logStream, `Found run id: ${runId}`);
+      return runId;
+    }
+    const delay = Math.min(5000, 500 + attempt * 250);
+    banner(logStream, `Run not visible yet (attempt ${attempt}); retrying in ${delay}ms`);
+    await sleepMs(delay);
+  }
+  fail(`could not find workflow run for tag ${releaseTag} within ${timeoutMs}ms`);
+}
+
 function banner(logStream, s) {
   const line = `\n==> ${s}\n`;
   process.stdout.write(line);
@@ -286,29 +329,9 @@ try {
 banner(logStream, `Pushing tag: ${releaseTag}`);
 await shTee(logStream, "git", ["push", "origin", releaseTag]);
 
-// Locate workflow run for tag push
+// Locate workflow run for tag push (eventual consistency: retry)
 banner(logStream, "Locating workflow run for tag...");
-const runId = sh("gh", [
-  "run",
-  "list",
-  "--repo",
-  ghRepo,
-  "--workflow",
-  wf,
-  "--event",
-  "push",
-  "--branch",
-  releaseTag,
-  "--limit",
-  "1",
-  "--json",
-  "databaseId",
-  "--jq",
-  ".[0].databaseId",
-]);
-if (!runId) {
-  fail(`could not find workflow run for tag ${releaseTag}`);
-}
+const runId = await findRunIdForTag({ logStream, ghRepo, wf, releaseTag });
 
 banner(logStream, `Watching run: ${runId}`);
 await shTee(logStream, "gh", ["run", "watch", runId, "--repo", ghRepo, "--exit-status"]);
