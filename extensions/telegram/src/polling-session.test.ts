@@ -249,6 +249,7 @@ function createPollingSessionWithTransportRestart(params: {
 
 function createPollingSession(params: {
   abortSignal: AbortSignal;
+  config?: ConstructorParameters<typeof TelegramPollingSession>[0]["config"];
   log?: (message: string) => void;
   telegramTransport?: ReturnType<typeof makeTelegramTransport>;
   createTelegramTransport?: () => ReturnType<typeof makeTelegramTransport>;
@@ -259,7 +260,7 @@ function createPollingSession(params: {
 }) {
   return new TelegramPollingSession({
     token: "tok",
-    config: {},
+    config: params.config ?? {},
     accountId: "default",
     runtime: undefined,
     proxyFetch: undefined,
@@ -985,7 +986,7 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("lets isolated ingress drain interleave different Telegram topic lanes", async () => {
+  it("lets isolated ingress drain interleave configured Telegram topic lanes when flags are omitted", async () => {
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
     const events: string[] = [];
@@ -1030,7 +1031,6 @@ describe("TelegramPollingSession", () => {
           message: {
             text,
             message_thread_id: threadId,
-            is_topic_message: true,
             chat: { id: -100, type: "supergroup" },
           },
         },
@@ -1053,6 +1053,20 @@ describe("TelegramPollingSession", () => {
     try {
       const session = createPollingSession({
         abortSignal: abort.signal,
+        config: {
+          channels: {
+            telegram: {
+              groups: {
+                "-100": {
+                  topics: {
+                    "10": {},
+                    "11": {},
+                  },
+                },
+              },
+            },
+          },
+        },
         isolatedIngress: {
           enabled: true,
           spoolDir: tempDir,

@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { mergeTelegramAccountConfig } from "./account-config.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { type TelegramTransport } from "./fetch.js";
@@ -17,7 +18,8 @@ import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
 import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
-import { getTelegramSequentialKey } from "./sequential-key.js";
+import { createTelegramSequentialKeyOptions } from "./sequential-key-options.js";
+import { getTelegramSequentialKey, type TelegramSequentialKeyOptions } from "./sequential-key.js";
 import {
   claimTelegramSpooledUpdate,
   deleteTelegramSpooledUpdate,
@@ -222,9 +224,12 @@ export class TelegramPollingSession {
   #stallThresholdMs: number;
   #spooledUpdateHandlerTimeoutMs: number;
   #spooledUpdateHandlerAbortGraceMs: number;
+  #sequentialKeyOptions: TelegramSequentialKeyOptions;
   #deliveryDrainInFlight = false;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
+    const telegramCfg = mergeTelegramAccountConfig(opts.config, opts.accountId);
+    this.#sequentialKeyOptions = createTelegramSequentialKeyOptions(telegramCfg);
     this.#transportState = new TelegramPollingTransportState({
       log: opts.log,
       initialTransport: opts.telegramTransport,
@@ -479,10 +484,13 @@ export class TelegramPollingSession {
   }
 
   #spooledUpdateLaneKey(update: TelegramSpooledUpdate): string {
-    return getTelegramSequentialKey({
-      update: update.update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
-      ...(this.opts.botInfo ? { me: this.opts.botInfo } : {}),
-    });
+    return getTelegramSequentialKey(
+      {
+        update: update.update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
+        ...(this.opts.botInfo ? { me: this.opts.botInfo } : {}),
+      },
+      this.#sequentialKeyOptions,
+    );
   }
 
   #activeSpooledUpdateLaneKeysForSpool(spoolDir: string): Set<string> {

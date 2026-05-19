@@ -51,7 +51,6 @@ const {
 const { resolveTelegramFetch } = await import("./fetch.js");
 const {
   createTelegramBotCore: createTelegramBotBase,
-  getTelegramSequentialKey,
   resolveTelegramScopedGroupConfig,
   setTelegramBotRuntimeForTest,
 } = await import("./bot-core.js");
@@ -375,7 +374,7 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
-    expect(harness.sequentializeKey).toBe(getTelegramSequentialKey);
+    expect(harness.sequentializeKey).toEqual(expect.any(Function));
   });
 
   it("lets /status bypass a busy Telegram topic lane", async () => {
@@ -500,6 +499,137 @@ describe("createTelegramBot", () => {
     releaseFirstTopic();
     await firstPromise;
     expect(events).toEqual(["first:start", "second", "first:end"]);
+  });
+
+  it("uses configured topic lanes when Telegram omits forum flags", async () => {
+    installPerKeySequentializer();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: {
+            "-1001234567890": {
+              requireMention: false,
+              topics: {
+                "10": {},
+                "20": {},
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const events: string[] = [];
+    let releaseFirstTopic!: () => void;
+    const firstTopicGate = new Promise<void>((resolve) => {
+      releaseFirstTopic = resolve;
+    });
+
+    createTelegramBot({ token: "tok" });
+    const sequentializer = sequentializeSpy.mock.results[0]?.value as
+      | TelegramMiddleware
+      | undefined;
+    if (!sequentializer) {
+      throw new Error("Expected sequentialize middleware");
+    }
+
+    const topicCtx = (threadId: number, updateId: number) => ({
+      message: {
+        message_id: updateId,
+        date: 0,
+        text: `topic ${threadId}`,
+        message_thread_id: threadId,
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Forum Group",
+        },
+      },
+      update: { update_id: updateId },
+    });
+
+    const firstPromise = sequentializer(topicCtx(10, 303), async () => {
+      events.push("first:start");
+      await firstTopicGate;
+      events.push("first:end");
+    });
+
+    await flushTelegramTestMicrotasks();
+    expect(events).toEqual(["first:start"]);
+
+    await sequentializer(topicCtx(20, 304), async () => {
+      events.push("second");
+    });
+
+    expect(events).toEqual(["first:start", "second"]);
+
+    releaseFirstTopic();
+    await firstPromise;
+    expect(events).toEqual(["first:start", "second", "first:end"]);
+  });
+
+  it("keeps unconfigured supergroup reply threads serialized on the chat lane", async () => {
+    installPerKeySequentializer();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: { "-1001234567890": { requireMention: false } },
+        },
+      },
+    });
+
+    const events: string[] = [];
+    let releaseFirstReply!: () => void;
+    const firstReplyGate = new Promise<void>((resolve) => {
+      releaseFirstReply = resolve;
+    });
+
+    createTelegramBot({ token: "tok" });
+    const sequentializer = sequentializeSpy.mock.results[0]?.value as
+      | TelegramMiddleware
+      | undefined;
+    if (!sequentializer) {
+      throw new Error("Expected sequentialize middleware");
+    }
+
+    const replyCtx = (threadId: number, updateId: number) => ({
+      message: {
+        message_id: updateId,
+        date: 0,
+        text: `reply ${threadId}`,
+        message_thread_id: threadId,
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Regular Group",
+        },
+      },
+      update: { update_id: updateId },
+    });
+
+    const firstPromise = sequentializer(replyCtx(10, 305), async () => {
+      events.push("first:start");
+      await firstReplyGate;
+      events.push("first:end");
+    });
+
+    await flushTelegramTestMicrotasks();
+    expect(events).toEqual(["first:start"]);
+
+    const secondPromise = sequentializer(replyCtx(20, 306), async () => {
+      events.push("second");
+    });
+
+    await flushTelegramTestMicrotasks();
+    expect(events).toEqual(["first:start"]);
+
+    releaseFirstReply();
+    await Promise.all([firstPromise, secondPromise]);
+    expect(events).toEqual(["first:start", "first:end", "second"]);
   });
 
   it("keeps ordinary Telegram messages serialized within the same topic", async () => {

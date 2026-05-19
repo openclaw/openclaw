@@ -21,7 +21,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
-import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
+import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
@@ -43,39 +43,17 @@ import {
 import { resolveTelegramTransport } from "./fetch.js";
 import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
+import {
+  createTelegramSequentialKeyOptions,
+  resolveTelegramScopedGroupConfig,
+} from "./sequential-key-options.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 export type { TelegramBotOptions } from "./bot.types.js";
 
 export { getTelegramSequentialKey };
-
-export function resolveTelegramScopedGroupConfig(
-  telegramCfg: ResolvedTelegramAccount["config"],
-  chatId: string | number,
-  messageThreadId?: number,
-) {
-  const groups = telegramCfg.groups;
-  const direct = telegramCfg.direct;
-  const chatIdStr = String(chatId);
-  const isDm = !chatIdStr.startsWith("-");
-
-  if (isDm) {
-    const groupConfig = direct?.[chatIdStr] ?? direct?.["*"];
-    const topicConfig =
-      groupConfig && messageThreadId != null
-        ? groupConfig.topics?.[String(messageThreadId)]
-        : undefined;
-    return { groupConfig, topicConfig };
-  }
-
-  const groupConfig = groups?.[chatIdStr] ?? groups?.["*"];
-  const topicConfig =
-    groupConfig && messageThreadId != null
-      ? groupConfig.topics?.[String(messageThreadId)]
-      : undefined;
-  return { groupConfig, topicConfig };
-}
+export { resolveTelegramScopedGroupConfig } from "./sequential-key-options.js";
 
 type TelegramBotRuntime = {
   Bot: typeof Bot;
@@ -197,6 +175,7 @@ export function createTelegramBotCore(
   });
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) =>
     updateTracker.shouldSkipHandlerDispatch(ctx);
+  const sequentialKeyOptions = createTelegramSequentialKeyOptions(telegramCfg);
 
   bot.use(async (ctx, next) => {
     const begin = updateTracker.beginUpdate(ctx);
@@ -212,7 +191,7 @@ export function createTelegramBotCore(
     }
   });
 
-  bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
+  bot.use(botRuntime.sequentialize((ctx) => getTelegramSequentialKey(ctx, sequentialKeyOptions)));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;

@@ -2638,6 +2638,69 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await Promise.all([firstPromise, sidePromise]);
   });
 
+  it("registers configured forum dispatches on topic reply-fence lanes when flags are omitted", async () => {
+    const historyKey = "telegram:group:-100123:topic:10";
+    const groupHistories = new Map([[historyKey, []]]);
+    let started: (() => void) | undefined;
+    const startGate = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let abortSignal: AbortSignal | undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async ({ replyOptions }) => {
+      abortSignal = replyOptions?.abortSignal;
+      started?.();
+      await gate;
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+      };
+    });
+
+    const promise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:group:-100123:topic:10",
+          ChatType: "group",
+          MessageSid: "99",
+          RawBody: "@bot first request",
+          BodyForAgent: "@bot first request",
+          CommandBody: "@bot first request",
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -100123, type: "supergroup" },
+          message_id: 99,
+          message_thread_id: 10,
+          text: "@bot first request",
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: -100123,
+        isGroup: true,
+        historyKey,
+        historyLimit: 10,
+        groupHistories,
+        threadSpec: { id: 10, scope: "forum" },
+      }),
+      streamMode: "off",
+    });
+    await startGate;
+
+    const { buildTelegramReplyFenceLaneKey, supersedeTelegramReplyFenceLane } =
+      await import("./telegram-reply-fence.js");
+    supersedeTelegramReplyFenceLane(
+      buildTelegramReplyFenceLaneKey({
+        accountId: "default",
+        sequentialKey: "telegram:-100123:topic:10",
+      }),
+    );
+    expect(abortSignal?.aborted).toBe(true);
+    release?.();
+    await promise;
+  });
+
   it("lets authorized /stop abort active non-interrupting side dispatch", async () => {
     const historyKey = "telegram:group:-100123";
     const groupHistories = new Map([[historyKey, []]]);

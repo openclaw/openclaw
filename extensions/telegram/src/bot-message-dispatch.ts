@@ -110,7 +110,7 @@ import {
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
 import { editMessageTelegram } from "./send.js";
-import { getTelegramSequentialKey } from "./sequential-key.js";
+import { getTelegramSequentialKey, type TelegramSequentialKeyOptions } from "./sequential-key.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 import {
   beginTelegramReplyFence,
@@ -131,6 +131,7 @@ export { getTelegramReplyFenceSizeForTests, resetTelegramReplyFenceForTests };
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
+const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -452,10 +453,20 @@ export const dispatchTelegramMessage = async ({
     chatId,
     threadSpec,
   });
-  const replyFenceLaneKey = getTelegramSequentialKey({
-    message: msg,
-    ...(context.primaryCtx.me ? { me: context.primaryCtx.me } : {}),
-  });
+  const replyFenceLaneOptions: TelegramSequentialKeyOptions = {
+    isConfiguredForumThread: ({ chatId: laneChatId, messageThreadId }) =>
+      laneChatId === chatId &&
+      threadSpec.scope === "forum" &&
+      (messageThreadId ?? TELEGRAM_GENERAL_TOPIC_ID) ===
+        (threadSpec.id ?? TELEGRAM_GENERAL_TOPIC_ID),
+  };
+  const replyFenceLaneKey = getTelegramSequentialKey(
+    {
+      message: msg,
+      ...(context.primaryCtx.me ? { me: context.primaryCtx.me } : {}),
+    },
+    replyFenceLaneOptions,
+  );
   const scopedReplyFenceLaneKey = buildTelegramReplyFenceLaneKey({
     accountId: route.accountId,
     sequentialKey: replyFenceLaneKey,

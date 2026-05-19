@@ -41,6 +41,13 @@ type TelegramSequentialKeyContext = {
   };
 };
 
+export type TelegramSequentialKeyOptions = {
+  isConfiguredForumThread?: (params: {
+    chatId: number;
+    messageThreadId: number | undefined;
+  }) => boolean;
+};
+
 export function isTelegramReadOnlyControlLaneText(params: {
   rawText?: string;
   botUsername?: string;
@@ -97,7 +104,37 @@ export function isTelegramControlLaneText(params: {
   return isTelegramReadOnlyControlLaneText(params);
 }
 
-export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
+function resolveSequentialKeyForumFlag(
+  msg: Message | undefined,
+  chatId: number | undefined,
+  options: TelegramSequentialKeyOptions | undefined,
+): boolean {
+  const forumHint = resolveTelegramMessageForumFlagHint({
+    chatType: msg?.chat?.type,
+    isForum: msg?.chat?.is_forum,
+    isTopicMessage: msg?.is_topic_message,
+  });
+  if (typeof forumHint === "boolean") {
+    return forumHint;
+  }
+  if (msg?.chat?.type !== "supergroup") {
+    return false;
+  }
+  if (typeof chatId !== "number") {
+    return false;
+  }
+  return (
+    options?.isConfiguredForumThread?.({
+      chatId,
+      messageThreadId: msg?.message_thread_id,
+    }) === true
+  );
+}
+
+export function getTelegramSequentialKey(
+  ctx: TelegramSequentialKeyContext,
+  options?: TelegramSequentialKeyOptions,
+): string {
   const reaction = ctx.update?.message_reaction;
   if (reaction?.chat?.id) {
     return `telegram:${reaction.chat.id}`;
@@ -140,11 +177,7 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   }
   const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
   const messageThreadId = msg?.message_thread_id;
-  const isForum = resolveTelegramMessageForumFlagHint({
-    chatType: msg?.chat?.type,
-    isForum: msg?.chat?.is_forum,
-    isTopicMessage: msg?.is_topic_message,
-  });
+  const isForum = resolveSequentialKeyForumFlag(msg, chatId, options);
   const threadId = isGroup
     ? resolveTelegramForumThreadId({ isForum, messageThreadId })
     : messageThreadId;

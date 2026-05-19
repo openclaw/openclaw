@@ -1,5 +1,6 @@
 import type { Chat, Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
+import { createTelegramSequentialKeyOptions } from "./sequential-key-options.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 
 const mockChat = (chat: Pick<Chat, "id"> & Partial<Pick<Chat, "type" | "is_forum">>): Chat =>
@@ -253,5 +254,56 @@ describe("getTelegramSequentialKey", () => {
     ],
   ])("resolves key %#", (input, expected) => {
     expect(getTelegramSequentialKey(input)).toBe(expected);
+  });
+
+  it("uses configured topic metadata when Telegram omits forum flags", () => {
+    const input = {
+      message: mockMessage({
+        chat: mockChat({ id: 123, type: "supergroup" }),
+        message_thread_id: 9,
+      }),
+    };
+    const options = {
+      isConfiguredForumThread: ({
+        chatId,
+        messageThreadId,
+      }: {
+        chatId: number;
+        messageThreadId?: number;
+      }) => chatId === 123 && messageThreadId === 9,
+    };
+
+    expect(getTelegramSequentialKey(input, options)).toBe("telegram:123:topic:9");
+  });
+
+  it("uses configured General topic metadata when Telegram omits forum flags and thread id", () => {
+    const input = {
+      message: mockMessage({
+        chat: mockChat({ id: -100123, type: "supergroup" }),
+      }),
+    };
+    const options = createTelegramSequentialKeyOptions({
+      groups: {
+        "-100123": {
+          topics: { "1": {} },
+        },
+      },
+    });
+
+    expect(getTelegramSequentialKey(input, options)).toBe("telegram:-100123:topic:1");
+  });
+
+  it("keeps explicit non-forum supergroup replies on the chat lane", () => {
+    const input = {
+      message: mockMessage({
+        chat: mockChat({ id: 123, type: "supergroup", is_forum: false }),
+        message_thread_id: 9,
+      }),
+    };
+    const options = {
+      isConfiguredForumThread: () => true,
+    };
+
+    expect(getTelegramSequentialKey(input, options)).toBe("telegram:123");
   });
 });
