@@ -1,6 +1,8 @@
 import {
+  DEFAULT_SEARCH_COUNT,
   readNumberParam,
   readStringParam,
+  resolveSearchCount,
   wrapWebContent,
 } from "openclaw/plugin-sdk/provider-web-search";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
@@ -102,7 +104,10 @@ export function createSerpApiWebSearchProvider(): WebSearchProviderPlugin {
       parameters: SerpApiGoogleLightSearchSchema,
       execute: async (args, context) => {
         const { callSerpApi: call } = await loadClientModule();
-        const count = readNumberParam(args, "count", { integer: true }) ?? 5;
+        const count = resolveSearchCount(
+          readNumberParam(args, "count", { integer: true }),
+          DEFAULT_SEARCH_COUNT,
+        );
         const location = readStringParam(args, "location") ?? undefined;
         const uule = readStringParam(args, "uule") ?? undefined;
         if (location != null && uule != null) {
