@@ -35,6 +35,11 @@ type FollowState = {
   selection: TailSelection;
 };
 
+type TrajectorySnapshot = {
+  lines: string[];
+  offset: number;
+};
+
 const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
 const EVENT_TYPE_PAD = 16;
@@ -172,13 +177,16 @@ function formatProgressLine(event: TrajectoryEvent): string {
   return [formatTimestamp(event.ts), typeLabel, sessionLabel, preview].join(" ").trimEnd();
 }
 
-function readTrajectoryLines(filePath: string): string[] {
+function readTrajectorySnapshot(filePath: string): TrajectorySnapshot {
   try {
     const text = fs.readFileSync(filePath, "utf8");
-    return text.split(/\r?\n/u).filter((line) => line.trim().length > 0);
+    return {
+      lines: text.split(/\r?\n/u).filter((line) => line.trim().length > 0),
+      offset: Buffer.byteLength(text, "utf8"),
+    };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
+      return { lines: [], offset: 0 };
     }
     throw error;
   }
@@ -281,9 +289,13 @@ function readNewFollowLines(state: FollowState): string[] {
   }
 }
 
-async function followSelections(selections: TailSelection[], runtime: RuntimeEnv): Promise<void> {
+async function followSelections(
+  selections: TailSelection[],
+  runtime: RuntimeEnv,
+  initialOffsets: Map<string, number>,
+): Promise<void> {
   const states = selections.map((selection) => ({
-    offset: statFileSize(selection.trajectoryPath),
+    offset: initialOffsets.get(selection.trajectoryPath) ?? statFileSize(selection.trajectoryPath),
     pending: "",
     selection,
   }));
@@ -364,12 +376,15 @@ export async function sessionsTailCommand(
     return;
   }
 
+  const followOffsets = new Map<string, number>();
   for (const selection of selected) {
-    const lines = readTrajectoryLines(selection.trajectoryPath);
+    const snapshot = readTrajectorySnapshot(selection.trajectoryPath);
+    followOffsets.set(selection.trajectoryPath, snapshot.offset);
+    const lines = snapshot.lines;
     renderLines(tailCount > 0 ? lines.slice(-tailCount) : [], runtime);
   }
 
   if (opts.follow) {
-    await followSelections(selected, runtime);
+    await followSelections(selected, runtime, followOffsets);
   }
 }

@@ -43,6 +43,31 @@ function writeJsonl(filePath: string, events: TrajectoryEvent[]): void {
   fs.writeFileSync(filePath, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
 }
 
+function appendJsonl(filePath: string, event: TrajectoryEvent): void {
+  fs.appendFileSync(filePath, `${JSON.stringify(event)}\n`);
+}
+
+function runtimeOutput(runtime: RuntimeEnv): string {
+  return vi
+    .mocked(runtime.log)
+    .mock.calls.map((call) => String(call[0]))
+    .join("\n");
+}
+
+async function waitForRuntimeOutput(
+  runtime: RuntimeEnv,
+  pattern: string,
+  timeoutMs = 3_000,
+): Promise<void> {
+  const startedAt = Date.now();
+  while (!runtimeOutput(runtime).includes(pattern)) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`Timed out waiting for output containing ${pattern}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 describe("sessionsTailCommand", () => {
   let tmpDir: string;
   let storePath: string;
@@ -146,6 +171,41 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("tool.result");
   });
 
+  it("preserves events appended while follow mode starts", async () => {
+    const runtime = makeRuntime();
+    writeJsonl(trajectoryPath, [
+      makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" }),
+    ]);
+    const appendedEvent = makeEvent({
+      type: "tool.result",
+      ts: "2026-05-18T12:04:21.000Z",
+      data: { name: "bash", success: true },
+    });
+    let appended = false;
+    vi.mocked(runtime.log).mockImplementation((message) => {
+      if (!appended && String(message).includes("session.started")) {
+        appended = true;
+        appendJsonl(trajectoryPath, appendedEvent);
+      }
+    });
+
+    const run = sessionsTailCommand(
+      { store: storePath, sessionKey, tail: "1", follow: true },
+      runtime,
+    );
+    try {
+      await waitForRuntimeOutput(runtime, "bash ok");
+    } finally {
+      process.emit("SIGTERM", "SIGTERM");
+      await run;
+    }
+
+    const output = runtimeOutput(runtime);
+    expect(output).toContain("session.started");
+    expect(output).toContain("tool.result");
+    expect(output).toContain("bash ok");
+  });
+
   it("resolves the target store from a fully qualified non-default agent session key", async () => {
     const runtime = makeRuntime();
     const opsSessionKey = "agent:ops:telegram:direct:owner";
@@ -174,10 +234,7 @@ describe("sessionsTailCommand", () => {
 
     await sessionsTailCommand({ sessionKey: opsSessionKey }, runtime);
 
-    const output = vi
-      .mocked(runtime.log)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
+    const output = runtimeOutput(runtime);
     expect(output).toContain("agent:ops:telegram:direct:own…");
     expect(output).toContain("tool.result");
     expect(output).toContain("bash ok");
