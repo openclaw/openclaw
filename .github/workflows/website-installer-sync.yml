@@ -154,6 +154,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           path: openclaw
+          persist-credentials: false
 
       - name: Checkout openclaw.ai
         if: env.OPENCLAW_GH_TOKEN != ''
