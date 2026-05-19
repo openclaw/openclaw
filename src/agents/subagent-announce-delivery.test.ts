@@ -849,12 +849,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
   it("keeps direct external delivery for dormant completion requesters", async () => {
     const callGateway = createGatewayMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(false);
     await deliverSlackThreadAnnouncement({
       callGateway,
       sessionId: "requester-session-2",
       isActive: false,
       expectsCompletionMessage: true,
       directIdempotencyKey: "announce-1b",
+      queueEmbeddedPiMessageWithOutcome,
     });
 
     expectGatewayAgentParams(callGateway, {
@@ -865,6 +867,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: "171.222",
       bestEffortDeliver: true,
     });
+    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
   });
 
   it("uses in-process agent dispatch for dormant completion requesters", async () => {
@@ -1389,7 +1392,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
       sessionId: "requester-session-channel",
-      isActive: false,
+      isActive: true,
       expectsCompletionMessage: true,
       directIdempotencyKey: "announce-channel-empty-direct-steer-fallback",
       queueEmbeddedPiMessageWithOutcome,

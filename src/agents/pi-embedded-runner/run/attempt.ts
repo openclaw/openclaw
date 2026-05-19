@@ -3632,7 +3632,7 @@ export async function runEmbeddedAttempt(
               : "runtime-event",
           });
           const promptForModel = buildCurrentInboundPrompt({
-            context: promptSubmission.runtimeOnly ? undefined : params.currentInboundContext,
+            context: params.currentInboundContext,
             prompt: promptSubmission.prompt,
           });
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
