@@ -288,9 +288,16 @@ async function deliverTelegramDirectMessageCompletion(params: {
     to: "123456789",
     accountId: "bot-1",
   };
-  const requesterSessionKey = params.requesterSessionKey ?? "agent:main:telegram:123456789";
+  const requesterSessionKey = params.requesterSessionKey ?? "agent:main:telegram:direct:123456789";
   testing.setDepsForTest({
     callGateway: params.callGateway,
+    dispatchGatewayMethodInProcess: (async (method, agentParams, options) =>
+      await params.callGateway({
+        method,
+        params: agentParams,
+        expectFinal: options?.expectFinal,
+        timeoutMs: options?.timeoutMs,
+      })) as typeof runtimeDispatchGatewayMethodInProcess,
     getRequesterSessionActivity: () => ({
       sessionId:
         params.requesterSessionId === null
@@ -298,7 +305,11 @@ async function deliverTelegramDirectMessageCompletion(params: {
           : (params.requesterSessionId ?? "requester-session-telegram"),
       isActive: params.isActive === true,
     }),
-    getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
+    getRuntimeConfig: () =>
+      (params.runtimeConfig ?? {
+        plugins: { enabled: false },
+        session: { store: "/tmp/openclaw-subagent-announce-delivery-empty-sessions.json" },
+      }) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
     ...(params.queueEmbeddedAgentMessageWithOutcome
       ? { queueEmbeddedAgentMessageWithOutcome: params.queueEmbeddedAgentMessageWithOutcome }
@@ -2014,6 +2025,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         accountId: "bot-1",
       },
       runtimeConfig: {
+        plugins: { enabled: false },
+        session: { store: "/tmp/openclaw-subagent-announce-delivery-empty-sessions.json" },
         agents: {
           defaults: {
             subagents: {

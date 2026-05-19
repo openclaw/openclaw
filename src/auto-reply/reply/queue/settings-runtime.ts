@@ -12,10 +12,16 @@ function resolvePluginDebounce(channelKey: string | undefined): number | undefin
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
 }
 
+function shouldResolvePluginDebounce(params: ResolveQueueSettingsParams): boolean {
+  return params.pluginDebounceMs === undefined && params.cfg.plugins?.enabled !== false;
+}
+
 export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueSettings {
   const channelKey = normalizeOptionalLowercaseString(params.channel);
   return resolveQueueSettingsCore({
     ...params,
-    pluginDebounceMs: params.pluginDebounceMs ?? resolvePluginDebounce(channelKey),
+    pluginDebounceMs: shouldResolvePluginDebounce(params)
+      ? resolvePluginDebounce(channelKey)
+      : params.pluginDebounceMs,
   });
 }
