@@ -3285,7 +3285,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       resolvedWorkspace: input.resolvedWorkspace,
     }),
     config: params.config,
-    authProfileStore: params.authProfileStore,
+    authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
     abortSignal: input.runAbortController.signal,
     emitBeforeToolCallDiagnostics: false,
     modelProvider: params.model.provider,

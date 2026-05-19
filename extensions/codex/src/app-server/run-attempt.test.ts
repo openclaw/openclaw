@@ -1142,6 +1142,69 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("uses the tool auth profile store for Codex dynamic tool construction", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const transportAuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:work": {
+          provider: "openai-codex",
+          type: "oauth",
+          access: "transport-token",
+          refresh: "transport-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    } satisfies EmbeddedRunAttemptParams["authProfileStore"];
+    const toolAuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:work": {
+          provider: "openai-codex",
+          type: "oauth",
+          access: "transport-token",
+          refresh: "transport-refresh",
+          expires: Date.now() + 60_000,
+        },
+        "xai:work": {
+          provider: "xai",
+          type: "oauth",
+          access: "xai-token",
+          refresh: "xai-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    } satisfies EmbeddedRunAttemptParams["authProfileStore"];
+    params.disableTools = false;
+    params.authProfileStore = transportAuthProfileStore;
+    params.toolAuthProfileStore = toolAuthProfileStore;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const factoryOptions: unknown[] = [];
+    testing.setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [];
+    });
+
+    await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: params.sessionKey!,
+      sandbox: null as never,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(factoryOptions).toHaveLength(1);
+    expect((factoryOptions[0] as { authProfileStore?: unknown }).authProfileStore).toBe(
+      toolAuthProfileStore,
+    );
+  });
+
   it("keeps canonical OpenAI Codex runs on OpenAI dynamic tool policy", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
