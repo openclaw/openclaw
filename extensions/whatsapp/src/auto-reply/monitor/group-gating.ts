@@ -46,8 +46,20 @@ type ApplyGroupGatingParams = {
   groupMemberNames: Map<string, Map<string, string>>;
   selfChatMode?: boolean;
   logVerbose: (msg: string) => void;
-  replyLogger: { debug: (obj: unknown, msg: string) => void };
+  replyLogger: {
+    debug: (obj: unknown, msg: string) => void;
+    warn: (obj: unknown, msg: string) => void;
+  };
 };
+
+// One-shot diagnostic so users learn why a group inbound was dropped without
+// enabling verbose mode. Keyed by `${accountId}:${conversationId}` to avoid log
+// spam in active groups. See issue #83777.
+const groupDropWarned = new Set<string>();
+
+export function resetGroupDropWarningsForTests() {
+  groupDropWarned.clear();
+}
 
 function isOwnerSender(baseMentionConfig: MentionConfig, msg: WebInboundMsg) {
   const sender = normalizeE164(getSenderIdentity(msg).e164 ?? "");
@@ -114,6 +126,19 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     params.conversationId,
   );
   if (conversationGroupPolicy.allowlistEnabled && !conversationGroupPolicy.allowed) {
+    const accountId = params.msg.accountId;
+    const warnKey = `${accountId ?? "default"}:${params.conversationId}`;
+    if (!groupDropWarned.has(warnKey)) {
+      groupDropWarned.add(warnKey);
+      const groupsPath =
+        accountId && accountId !== "default"
+          ? `channels.whatsapp.accounts.${accountId}.groups`
+          : "channels.whatsapp.groups";
+      params.replyLogger.warn(
+        { conversationId: params.conversationId, accountId, groupsPath },
+        `WhatsApp group ${params.conversationId} not in ${groupsPath} — inbound dropped. Add the group JID to ${groupsPath} (or add "*" there to admit all groups). Sender authorization still applies.`,
+      );
+    }
     params.logVerbose(
       `Dropping message from unregistered WhatsApp group ${params.conversationId}. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.`,
     );
