@@ -5,12 +5,14 @@ import {
   collectTelegramApiRootWarnings,
   collectTelegramEmptyAllowlistExtraWarnings,
   collectTelegramGroupPolicyWarnings,
+  collectTelegramMalformedGroupsWarnings,
   collectTelegramMissingEnvTokenWarnings,
   collectTelegramSelectedQuoteToolProgressWarnings,
   maybeRepairTelegramApiRoots,
   maybeRepairTelegramAllowFromUsernames,
   scanTelegramBotEndpointApiRoots,
   scanTelegramInvalidAllowFromEntries,
+  scanTelegramMalformedGroupsConfig,
   scanTelegramSelectedQuoteToolProgressWarnings,
   telegramDoctor,
 } from "./doctor.js";
@@ -204,6 +206,42 @@ describe("telegram doctor", () => {
         prefix: "channels.telegram",
       }),
     ).toHaveLength(1);
+  });
+
+  it("warns when Telegram groups use a non-object shape", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groups: ["-1001234567890"],
+          accounts: {
+            work: {
+              groups: null,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const hits = scanTelegramMalformedGroupsConfig(cfg);
+    expect(hits).toEqual([
+      { path: "channels.telegram.groups", actualType: "array" },
+      { path: "channels.telegram.accounts.work.groups", actualType: "null" },
+    ]);
+
+    const warnings = collectTelegramMalformedGroupsWarnings({
+      hits,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+    expect(warnings[0]).toContain("object map keyed by Telegram group/chat id");
+    expect(warnings[1]).toContain('channels.telegram.groups."-1001234567890".topics."99"');
+    expect(warnings[1]).toContain("openclaw doctor --fix");
+
+    expect(
+      await telegramDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+      }),
+    ).toEqual(expect.arrayContaining(warnings));
   });
 
   it("repairs @username entries to numeric ids", async () => {
