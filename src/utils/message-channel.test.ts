@@ -3,7 +3,10 @@ import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
   INTERNAL_NON_DELIVERY_CHANNELS,
+  isInternalChatSurfaceClient,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
   resolveGatewayMessageChannel,
@@ -68,6 +71,54 @@ describe("message-channel", () => {
     expect(isInternalNonDeliveryChannel("webchat")).toBe(false);
     expect(isInternalNonDeliveryChannel("")).toBe(false);
     expect(isInternalNonDeliveryChannel("HEARTBEAT")).toBe(false);
+  });
+
+  it("recognises internal chat surface clients", () => {
+    expect(isInternalChatSurfaceClient({ mode: GATEWAY_CLIENT_MODES.WEBCHAT })).toBe(true);
+    expect(
+      isInternalChatSurfaceClient({
+        mode: GATEWAY_CLIENT_MODES.UI,
+        id: GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+      }),
+    ).toBe(true);
+    expect(isInternalChatSurfaceClient({ id: GATEWAY_CLIENT_NAMES.WEBCHAT_UI })).toBe(true);
+    expect(
+      isInternalChatSurfaceClient({
+        mode: GATEWAY_CLIENT_MODES.UI,
+        id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+      }),
+    ).toBe(true);
+    expect(
+      isInternalChatSurfaceClient({
+        mode: GATEWAY_CLIENT_MODES.UI,
+        id: GATEWAY_CLIENT_NAMES.TUI,
+      }),
+    ).toBe(true);
+    expect(
+      isInternalChatSurfaceClient({
+        mode: GATEWAY_CLIENT_MODES.UI,
+        id: GATEWAY_CLIENT_NAMES.MACOS_APP,
+      }),
+    ).toBe(true);
+    expect(
+      isInternalChatSurfaceClient({
+        mode: GATEWAY_CLIENT_MODES.NODE,
+        id: GATEWAY_CLIENT_NAMES.MACOS_APP,
+      }),
+    ).toBe(false);
+    expect(isInternalChatSurfaceClient({ id: GATEWAY_CLIENT_NAMES.MACOS_APP })).toBe(false);
+    expect(
+      isInternalChatSurfaceClient({
+        mode: GATEWAY_CLIENT_MODES.NODE,
+        id: GATEWAY_CLIENT_NAMES.TUI,
+      }),
+    ).toBe(true);
+    expect(
+      isInternalChatSurfaceClient({
+        mode: GATEWAY_CLIENT_MODES.UI,
+        id: GATEWAY_CLIENT_NAMES.TEST,
+      }),
+    ).toBe(false);
   });
 
   it("reads markdown capability from channel metadata", () => {

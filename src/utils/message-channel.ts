@@ -1,6 +1,7 @@
 import { getChatChannelMeta } from "../channels/chat-meta.js";
 import { getRegisteredChannelPluginMeta, normalizeChatChannelId } from "../channels/registry.js";
 import {
+  GATEWAY_INTERNAL_CHAT_SURFACE_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   type GatewayClientMode,
@@ -33,6 +34,15 @@ import { normalizeMessageChannel } from "./message-channel-normalize.js";
 export { GATEWAY_CLIENT_NAMES, GATEWAY_CLIENT_MODES };
 export type { GatewayClientName, GatewayClientMode };
 export { normalizeGatewayClientName, normalizeGatewayClientMode };
+
+const INTERNAL_CHAT_SURFACE_CLIENT_ID_SET = new Set<string>(
+  GATEWAY_INTERNAL_CHAT_SURFACE_CLIENT_IDS,
+);
+const DUAL_MODE_INTERNAL_CHAT_SURFACE_CLIENT_ID_SET = new Set<string>([
+  GATEWAY_CLIENT_NAMES.MACOS_APP,
+  GATEWAY_CLIENT_NAMES.IOS_APP,
+  GATEWAY_CLIENT_NAMES.ANDROID_APP,
+]);
 
 type GatewayClientInfoLike = {
   mode?: string | null;
@@ -69,8 +79,18 @@ export function isTuiClient(client?: GatewayClientInfoLike | null): boolean {
   return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.TUI;
 }
 
-export function isInternalSourceSurfaceClient(client?: GatewayClientInfoLike | null): boolean {
-  return isWebchatClient(client) || isTuiClient(client);
+export function isInternalChatSurfaceClient(client?: GatewayClientInfoLike | null): boolean {
+  const mode = normalizeGatewayClientMode(client?.mode);
+  if (mode === GATEWAY_CLIENT_MODES.WEBCHAT) {
+    return true;
+  }
+  const clientId = normalizeGatewayClientName(client?.id);
+  if (!clientId || !INTERNAL_CHAT_SURFACE_CLIENT_ID_SET.has(clientId)) {
+    return false;
+  }
+  return (
+    !DUAL_MODE_INTERNAL_CHAT_SURFACE_CLIENT_ID_SET.has(clientId) || mode === GATEWAY_CLIENT_MODES.UI
+  );
 }
 
 export function isMarkdownCapableMessageChannel(raw?: string | null): boolean {

@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import {
-  GATEWAY_CLIENT_IDS,
+  GATEWAY_CURRENT_SESSION_CLIENT_IDS,
   normalizeGatewayClientId,
 } from "../../gateway/protocol/client-info.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -19,15 +19,7 @@ const defaultSessionsResolutionDeps = {
   callGateway,
 };
 
-const CURRENT_SESSION_CLIENT_ALIAS_IDS = new Set<string>([
-  GATEWAY_CLIENT_IDS.TUI,
-  GATEWAY_CLIENT_IDS.CLI,
-  GATEWAY_CLIENT_IDS.WEBCHAT_UI,
-  GATEWAY_CLIENT_IDS.CONTROL_UI,
-  GATEWAY_CLIENT_IDS.MACOS_APP,
-  GATEWAY_CLIENT_IDS.IOS_APP,
-  GATEWAY_CLIENT_IDS.ANDROID_APP,
-]);
+const CURRENT_SESSION_CLIENT_ALIAS_IDS = new Set<string>(GATEWAY_CURRENT_SESSION_CLIENT_IDS);
 
 let sessionsResolutionDeps: {
   callGateway: GatewayCaller;

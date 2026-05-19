@@ -2335,22 +2335,32 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(transcriptContent)).not.toContain(blockedMediaUrl);
   });
 
-  it("waits for the source reply media mirror before upgrading durable chat history", async () => {
-    createTranscriptFixture("openclaw-chat-send-agent-source-media-delayed-mirror-");
-    const sourceReplyIdempotencyKey = "idem-agent-source-media-fallback:internal-source-reply:0";
-    const audioPath = path.join(path.dirname(mockState.transcriptPath), "fallback.mp3");
-    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+  it("waits for the source reply image mirror before broadcasting managed image URLs", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-source-image-delayed-mirror-");
+    const sourceReplyIdempotencyKey = "idem-agent-source-image-fallback:internal-source-reply:0";
+    const imagePath = path.join(path.dirname(mockState.transcriptPath), "fallback.png");
+    fs.writeFileSync(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    mockState.savedMediaResults = [
+      { path: imagePath, contentType: "image/png" },
+      { path: imagePath, contentType: "image/png" },
+    ];
     let mirrorAppendError: Error | undefined;
     mockState.onAfterAgentRunStart = () => {
       setTimeout(() => {
         void (async () => {
           const mirror = await appendInjectedAssistantMessageToTranscript({
             transcriptPath: mockState.transcriptPath,
-            message: `Fallback audio visible in the TUI.\nMEDIA:${audioPath}\n[[audio_as_voice]]`,
+            message: `Fallback image visible in the TUI.\nMEDIA:${imagePath}`,
             content: [
               {
                 type: "text",
-                text: `Fallback audio visible in the TUI.\nMEDIA:${audioPath}\n[[audio_as_voice]]`,
+                text: `Fallback image visible in the TUI.\nMEDIA:${imagePath}`,
               },
             ],
             idempotencyKey: sourceReplyIdempotencyKey,
@@ -2370,19 +2380,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         kind: "final",
         payload: setReplyPayloadMetadata(
           {
-            text: "Fallback audio visible in the TUI.",
-            mediaUrl: audioPath,
-            mediaUrls: [audioPath],
+            text: "Fallback image visible in the TUI.",
+            mediaUrl: imagePath,
+            mediaUrls: [imagePath],
             trustedLocalMedia: true,
-            audioAsVoice: true,
           },
           {
             deliverDespiteSourceReplySuppression: true,
             sourceReplyTranscriptMirror: {
               sessionKey: "main",
               agentId: "main",
-              text: "Fallback audio visible in the TUI.",
-              mediaUrls: [audioPath],
+              text: "Fallback image visible in the TUI.",
+              mediaUrls: [imagePath],
               idempotencyKey: sourceReplyIdempotencyKey,
             },
           },
@@ -2399,29 +2408,26 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(payload?.runId).toBe(sourceReplyIdempotencyKey);
-    await waitForAssertion(async () => {
-      if (mirrorAppendError) {
-        throw mirrorAppendError;
-      }
-      const index = await readSessionTranscriptIndex(mockState.transcriptPath);
-      const sourceEntries = index?.entries.filter((entry) => {
-        const message = entry.record.message as { idempotencyKey?: unknown } | undefined;
-        return message?.idempotencyKey === sourceReplyIdempotencyKey;
-      });
-      expect(sourceEntries).toHaveLength(1);
-      const transcriptMessage = sourceEntries?.[0]?.record.message as
-        | Record<string, any>
-        | undefined;
-      const transcriptContent = transcriptMessage?.content as
-        | Array<Record<string, any>>
-        | undefined;
-      expect(transcriptContent?.some((block) => block.type === "attachment")).toBe(true);
-    }, 2_000);
+    if (mirrorAppendError) {
+      throw mirrorAppendError;
+    }
+    const liveContent = getMessageContent(payload);
+    const liveImage = liveContent.find((block) => block.type === "image");
+    expect(liveImage?.url).toContain("/api/chat/media/outgoing/");
+    const index = await readSessionTranscriptIndex(mockState.transcriptPath);
+    const sourceEntries = index?.entries.filter((entry) => {
+      const message = entry.record.message as { idempotencyKey?: unknown } | undefined;
+      return message?.idempotencyKey === sourceReplyIdempotencyKey;
+    });
+    expect(sourceEntries).toHaveLength(1);
+    const transcriptMessage = sourceEntries?.[0]?.record.message as Record<string, any> | undefined;
+    const transcriptContent = transcriptMessage?.content as Array<Record<string, any>> | undefined;
+    expect(transcriptContent?.some((block) => block.type === "image")).toBe(true);
   });
 
   it("upgrades each media-bearing internal source reply mirror in the same agent run", async () => {
     createTranscriptFixture("openclaw-chat-send-agent-source-multi-media-reply-");
-    const sourceReplies = [
+    const sourceReplySpecs = [
       {
         key: "idem-agent-source-multi:internal-source-reply:0",
         text: "First audio visible in the TUI.",
@@ -2432,8 +2438,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         text: "Second audio visible in the TUI.",
         file: "second.mp3",
       },
-    ].map((reply) => ({
-      ...reply,
+    ];
+    const sourceReplies = sourceReplySpecs.map((reply) => ({
+      key: reply.key,
+      text: reply.text,
+      file: reply.file,
       audioPath: path.join(path.dirname(mockState.transcriptPath), reply.file),
     }));
     for (const reply of sourceReplies) {
@@ -3323,8 +3332,62 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("chat.send does not inherit external routes for webchat clients on channel-scoped sessions", async () => {
-    createTranscriptFixture("openclaw-chat-send-webchat-channel-scoped-no-inherit-");
+  it.each([
+    ["legacy WebChat", GATEWAY_CLIENT_MODES.WEBCHAT, GATEWAY_CLIENT_NAMES.WEBCHAT],
+    ["WebChat UI", GATEWAY_CLIENT_MODES.UI, GATEWAY_CLIENT_NAMES.WEBCHAT_UI],
+    ["Control UI", GATEWAY_CLIENT_MODES.UI, GATEWAY_CLIENT_NAMES.CONTROL_UI],
+    ["TUI", GATEWAY_CLIENT_MODES.UI, GATEWAY_CLIENT_NAMES.TUI],
+    ["macOS app UI", GATEWAY_CLIENT_MODES.UI, GATEWAY_CLIENT_NAMES.MACOS_APP],
+    ["iOS app UI", GATEWAY_CLIENT_MODES.UI, GATEWAY_CLIENT_NAMES.IOS_APP],
+    ["Android app UI", GATEWAY_CLIENT_MODES.UI, GATEWAY_CLIENT_NAMES.ANDROID_APP],
+  ])(
+    "chat.send does not inherit external routes for %s clients on channel-scoped sessions",
+    async (_label, mode, id) => {
+      createTranscriptFixture("openclaw-chat-send-internal-chat-surface-no-inherit-");
+      mockState.finalText = "ok";
+      mockState.sessionEntry = {
+        deliveryContext: {
+          channel: "imessage",
+          to: "+8619800001234",
+          accountId: "default",
+        },
+        lastChannel: "imessage",
+        lastTo: "+8619800001234",
+        lastAccountId: "default",
+      };
+      const respond = vi.fn();
+      const context = createChatContext();
+
+      // Internal chat surfaces inspect the transcript through Gateway chat
+      // events; they must not reuse the external channel route.
+      await runNonStreamingChatSend({
+        context,
+        respond,
+        idempotencyKey: `idem-${id}-channel-scoped-no-inherit`,
+        client: {
+          connect: {
+            client: {
+              mode,
+              id,
+            },
+          },
+        } as unknown,
+        sessionKey: "agent:main:imessage:direct:+8619800001234",
+        deliver: true,
+        expectBroadcast: false,
+      });
+
+      expectDispatchContextFields({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        ExplicitDeliverRoute: false,
+        AccountId: undefined,
+      });
+    },
+  );
+
+  it("chat.send still inherits external routes for native node clients on channel-scoped sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-native-node-channel-scoped-inherit-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
       deliveryContext: {
@@ -3339,17 +3402,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    // Webchat client accessing an iMessage channel-scoped session should NOT
-    // inherit the external delivery route. Fixes #38957.
     await runNonStreamingChatSend({
       context,
       respond,
-      idempotencyKey: "idem-webchat-channel-scoped-no-inherit",
+      idempotencyKey: "idem-native-node-channel-scoped-inherit",
       client: {
         connect: {
           client: {
-            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-            id: "openclaw-webchat",
+            mode: GATEWAY_CLIENT_MODES.NODE,
+            id: GATEWAY_CLIENT_NAMES.MACOS_APP,
           },
         },
       } as unknown,
@@ -3359,55 +3420,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expectDispatchContextFields({
-      OriginatingChannel: "webchat",
-      OriginatingTo: undefined,
-      ExplicitDeliverRoute: false,
-      AccountId: undefined,
+      OriginatingChannel: "imessage",
+      OriginatingTo: "+8619800001234",
+      ExplicitDeliverRoute: true,
+      AccountId: "default",
     });
   });
 
-  it("chat.send does not inherit external routes for TUI clients on channel-scoped sessions", async () => {
-    createTranscriptFixture("openclaw-chat-send-tui-channel-scoped-no-inherit-");
-    mockState.finalText = "ok";
-    mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "imessage",
-        to: "+8619800001234",
-        accountId: "default",
-      },
-      lastChannel: "imessage",
-      lastTo: "+8619800001234",
-      lastAccountId: "default",
-    };
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey: "idem-tui-channel-scoped-no-inherit",
-      client: {
-        connect: {
-          client: {
-            mode: GATEWAY_CLIENT_MODES.UI,
-            id: GATEWAY_CLIENT_NAMES.TUI,
-          },
-        },
-      } as unknown,
-      sessionKey: "agent:main:imessage:direct:+8619800001234",
-      deliver: true,
-      expectBroadcast: false,
-    });
-
-    expectDispatchContextFields({
-      OriginatingChannel: "webchat",
-      OriginatingTo: undefined,
-      ExplicitDeliverRoute: false,
-      AccountId: undefined,
-    });
-  });
-
-  it("chat.send still inherits external routes for non-source UI clients on channel-scoped sessions", async () => {
+  it("chat.send still inherits external routes for generic UI clients on channel-scoped sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-generic-ui-channel-scoped-inherit-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {

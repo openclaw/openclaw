@@ -67,7 +67,7 @@ import {
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayCliClient,
-  isInternalSourceSurfaceClient,
+  isInternalChatSurfaceClient,
   isOperatorUiClient,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
@@ -855,7 +855,7 @@ function resolveChatSendOriginatingRoute(params: {
     !isChannelScopedSession &&
     typeof sessionScopeParts[1] === "string" &&
     sessionChannelHint === routeChannelCandidate;
-  const isFromInternalSourceSurfaceClient = isInternalSourceSurfaceClient(params.client);
+  const isFromInternalChatSurfaceClient = isInternalChatSurfaceClient(params.client);
   const isFromGatewayCliClient = isGatewayCliClient(params.client);
   const hasClientMetadata =
     (typeof params.client?.mode === "string" && params.client.mode.trim().length > 0) ||
@@ -868,11 +868,11 @@ function resolveChatSendOriginatingRoute(params: {
     params.hasConnectedClient &&
     (isFromGatewayCliClient || !hasClientMetadata);
 
-  // Internal source surfaces never inherit external delivery routes. Configured-main
+  // Internal chat surfaces never inherit external delivery routes. Configured-main
   // sessions are stricter than channel-scoped sessions: only CLI callers, or
   // legacy callers with no client metadata, may inherit the last external route.
   const canInheritDeliverableRoute = Boolean(
-    !isFromInternalSourceSurfaceClient &&
+    !isFromInternalChatSurfaceClient &&
     sessionChannelHint &&
     sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
     ((!isChannelAgnosticSessionScope && (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
@@ -3138,7 +3138,6 @@ export const chatHandlers: GatewayRequestHandlers = {
           `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
         );
       };
-      const pendingSourceReplyMirrorUpgradeKeys = new Set<string>();
       const rewriteInternalSourceReplyMirrorContent = async (params: {
         transcriptPath: string;
         sourceReplyRunId: string;
@@ -3170,9 +3169,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
         if (!rewritten.changed && rewritten.reason) {
           context.logGateway.warn(
-            `webchat source reply transcript rewrite failed: ${rewritten.reason}`,
+            `internal chat source reply transcript rewrite failed: ${rewritten.reason}`,
           );
-          return true;
+          return false;
         }
         const rewrittenTarget = rewritten.changed
           ? findAssistantTranscriptEntryByIdempotencyKey(
@@ -3188,32 +3187,22 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
         return true;
       };
-      const queueInternalSourceReplyMirrorContentUpgrade = (params: {
+      const waitAndRewriteInternalSourceReplyMirrorContent = async (params: {
         transcriptPath: string;
         sourceReplyRunId: string;
         content: AssistantDisplayContentBlock[];
-      }) => {
-        if (pendingSourceReplyMirrorUpgradeKeys.has(params.sourceReplyRunId)) {
-          return;
+      }): Promise<boolean> => {
+        const target = await waitForAssistantTranscriptEntryByIdempotencyKey(
+          params.transcriptPath,
+          params.sourceReplyRunId,
+        );
+        if (!target) {
+          context.logGateway.warn(
+            "internal chat source reply transcript rewrite skipped: mirror not found",
+          );
+          return false;
         }
-        pendingSourceReplyMirrorUpgradeKeys.add(params.sourceReplyRunId);
-        void (async () => {
-          try {
-            const target = await waitForAssistantTranscriptEntryByIdempotencyKey(
-              params.transcriptPath,
-              params.sourceReplyRunId,
-            );
-            if (!target) {
-              context.logGateway.warn(
-                "webchat source reply transcript rewrite skipped: mirror not found",
-              );
-              return;
-            }
-            await rewriteInternalSourceReplyMirrorContent(params);
-          } finally {
-            pendingSourceReplyMirrorUpgradeKeys.delete(params.sourceReplyRunId);
-          }
-        })();
+        return await rewriteInternalSourceReplyMirrorContent(params);
       };
       let internalSourceReplyBroadcastCount = 0;
       const broadcastInternalSourceReplyIfNeeded = async (payload: ReplyPayload) => {
@@ -3249,16 +3238,16 @@ export const chatHandlers: GatewayRequestHandlers = {
           managedImageLocalRoots: mediaLocalRoots,
           includeSensitiveMedia: displayPayload.sensitiveMedia !== true,
           onLocalAudioAccessDenied: (message) => {
-            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
+            context.logGateway.warn(`internal chat audio embedding denied local path: ${message}`);
           },
           onManagedImagePrepareError: (message) => {
-            context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
+            context.logGateway.warn(`internal chat image embedding skipped attachment: ${message}`);
           },
         });
         const mediaMessage = await buildWebchatAssistantMediaMessage([displayPayload], {
           localRoots: mediaLocalRoots,
           onLocalAudioAccessDenied: (message) => {
-            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
+            context.logGateway.warn(`internal chat audio embedding denied local path: ${message}`);
           },
         });
         const broadcastAssistantContent = hasAssistantDisplayMediaContent(assistantContent)
@@ -3304,15 +3293,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           content: transcriptContent,
           richSourceReplyFallback,
         });
-        let message: Record<string, unknown> = {
-          role: "assistant",
-          ...(broadcastContent?.length ? { content: broadcastContent } : {}),
-          ...(displayReply ? { text: displayReply } : {}),
-          timestamp: Date.now(),
-          stopReason: "stop",
-          usage: { input: 0, output: 0, totalTokens: 0 },
-        };
         let durableMirrorFound = false;
+        let managedOutgoingImagesAttached = false;
         if (
           metadataHasDurableMirrorContent &&
           needsMirrorUpgrade &&
@@ -3325,13 +3307,27 @@ export const chatHandlers: GatewayRequestHandlers = {
             content: transcriptContent,
           });
           if (!durableMirrorFound) {
-            queueInternalSourceReplyMirrorContentUpgrade({
+            durableMirrorFound = await waitAndRewriteInternalSourceReplyMirrorContent({
               transcriptPath: resolvedTranscriptPath,
               sourceReplyRunId,
               content: transcriptContent,
             });
           }
         }
+        if (durableMirrorFound) {
+          managedOutgoingImagesAttached = true;
+        }
+        const broadcastContentForMessage = managedOutgoingImagesAttached
+          ? broadcastContent
+          : (stripManagedOutgoingAssistantContentBlocks(broadcastContent) ?? broadcastContent);
+        let message: Record<string, unknown> = {
+          role: "assistant",
+          ...(broadcastContentForMessage?.length ? { content: broadcastContentForMessage } : {}),
+          ...(displayReply ? { text: displayReply } : {}),
+          timestamp: Date.now(),
+          stopReason: "stop",
+          usage: { input: 0, output: 0, totalTokens: 0 },
+        };
         if (displayReply && !metadataHasDurableMirrorContent) {
           const appended = await appendAssistantTranscriptMessage({
             message: displayReply,
@@ -3350,13 +3346,17 @@ export const chatHandlers: GatewayRequestHandlers = {
                 messageId: appended.messageId,
                 blocks: transcriptContent,
               });
+              managedOutgoingImagesAttached = true;
             }
-            message = broadcastContent?.length
-              ? { ...appended.message, content: broadcastContent }
+            const appendedBroadcastContent = managedOutgoingImagesAttached
+              ? broadcastContent
+              : (stripManagedOutgoingAssistantContentBlocks(broadcastContent) ?? broadcastContent);
+            message = appendedBroadcastContent?.length
+              ? { ...appended.message, content: appendedBroadcastContent }
               : appended.message;
           } else {
             context.logGateway.warn(
-              `webchat source reply transcript append failed: ${appended.error ?? "unknown error"}`,
+              `internal chat source reply transcript append failed: ${appended.error ?? "unknown error"}`,
             );
           }
         }
