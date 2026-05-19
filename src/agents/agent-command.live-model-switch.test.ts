@@ -486,6 +486,7 @@ vi.mock("./model-selection.js", () => {
     };
   };
   return {
+    buildModelAliasIndex,
     buildAllowedModelSet,
     createModelVisibilityPolicy: (params: {
       cfg?: unknown;
@@ -649,6 +650,7 @@ vi.mock("./model-selection.js", () => {
       const [provider, ...modelParts] = (primary ?? "anthropic/claude").split("/");
       return { provider, model: modelParts.join("/") || "claude" };
     },
+    resolveModelRefFromString,
     resolveThinkingDefault: (args: unknown) => state.resolveThinkingDefaultMock(args),
   };
 });
@@ -2250,6 +2252,66 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       id: "gpt-5.4",
       compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
     });
+  });
+
+  it("resolves explicit model aliases before thinking validation", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "openai/*": {},
+            "openai-codex/gpt-5.5": { alias: "code" },
+          },
+        },
+      },
+      models: {
+        providers: {
+          "openai-codex": {
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT 5.5 Codex",
+                reasoning: true,
+                compat: { supportedReasoningEfforts: ["xhigh"] },
+              },
+            ],
+          },
+        },
+      },
+    };
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai-codex", "gpt-5.5"));
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      senderIsOwner: true,
+      model: "code",
+      thinking: "xhigh",
+    });
+
+    const fallbackArgs = requireRecord(
+      mockCallArg(state.runWithModelFallbackMock),
+      "fallback args",
+    );
+    expect(fallbackArgs.provider).toBe("openai-codex");
+    expect(fallbackArgs.model).toBe("gpt-5.5");
+    const thinkingArgs = requireRecord(
+      mockCallArg(state.isThinkingLevelSupportedMock),
+      "thinking args",
+    );
+    expect(thinkingArgs.provider).toBe("openai-codex");
+    expect(thinkingArgs.model).toBe("gpt-5.5");
+    expect(thinkingArgs.level).toBe("xhigh");
   });
 
   it("validates explicit thinking against allowlisted configured model compat when manifest catalog is empty", async () => {
