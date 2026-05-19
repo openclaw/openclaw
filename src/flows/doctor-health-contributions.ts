@@ -170,7 +170,10 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
 
 async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { resolveSecretInputRef } = await import("../config/types.secrets.js");
+  const { buildGatewayTokenSecretRefFixHint, buildGatewayTokenSecretRefUnavailableMessage } =
+    await import("./doctor-core-checks.js");
   const { resolveGatewayAuth } = await import("../gateway/auth.js");
+  const { resolveGatewayAuthToken } = await import("../gateway/auth-token-resolution.js");
   const { note } = await import("../terminal/note.js");
   const { randomToken } = await import("../commands/onboard-helpers.js");
   if (resolveDoctorMode(ctx.cfg) !== "local" || !ctx.sourceConfigValid) {
@@ -196,12 +199,49 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (!needsToken) {
     return;
   }
+  let unresolvedRefReason: string | undefined;
+  if (gatewayTokenRef && gatewayTokenRef.source === "exec") {
+    const { getSkippedExecRefStaticError } = await import("../secrets/exec-resolution-policy.js");
+    const staticError = getSkippedExecRefStaticError({ ref: gatewayTokenRef, config: ctx.cfg });
+    if (staticError) {
+      unresolvedRefReason = undefined;
+    } else if (ctx.options.allowExec !== true) {
+      return;
+    } else {
+      const resolvedToken = await resolveGatewayAuthToken({
+        cfg: ctx.cfg,
+        env: ctx.env ?? process.env,
+        unresolvedReasonStyle: "detailed",
+        envFallback: "always",
+      });
+      if (resolvedToken.token) {
+        return;
+      }
+      unresolvedRefReason = resolvedToken.unresolvedRefReason;
+    }
+  } else {
+    const resolvedToken = await resolveGatewayAuthToken({
+      cfg: ctx.cfg,
+      env: ctx.env ?? process.env,
+      unresolvedReasonStyle: "detailed",
+      envFallback: "always",
+    });
+    if (resolvedToken.token) {
+      return;
+    }
+    unresolvedRefReason = resolvedToken.unresolvedRefReason;
+  }
   if (gatewayTokenRef) {
+    const reason = buildGatewayTokenSecretRefUnavailableMessage({
+      cfg: ctx.cfg,
+      ref: gatewayTokenRef,
+      unresolvedRefReason,
+    });
     note(
       [
-        "Gateway token is managed via SecretRef and is currently unavailable.",
+        reason,
         "Doctor will not overwrite gateway.auth.token with a plaintext value.",
-        "Resolve/rotate the external secret source, then rerun doctor.",
+        buildGatewayTokenSecretRefFixHint(gatewayTokenRef),
       ].join("\n"),
       "Gateway auth",
     );

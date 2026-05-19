@@ -301,6 +301,171 @@ describe("registerCoreHealthChecks", () => {
     expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg, readOnly: true });
   });
 
+  it("skips gateway auth warning when SecretRef-managed token resolves in lint checks", async () => {
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
+    const previousToken = process.env.OPENCLAW_TEST_GATEWAY_TOKEN;
+    process.env.OPENCLAW_TEST_GATEWAY_TOKEN = "resolved-test-token";
+    try {
+      const findings = await check?.detect({
+        mode: "lint",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_TEST_GATEWAY_TOKEN",
+              },
+            },
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+        },
+        cwd: tmp,
+      });
+
+      expect(findings).toEqual([]);
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_TEST_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_TEST_GATEWAY_TOKEN = previousToken;
+      }
+    }
+  });
+
+  it("does not execute or warn for valid exec SecretRefs during default gateway auth lint checks", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-exec-ref-"));
+    const markerPath = join(tmp, "exec-ran");
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
+
+    const findings = await check?.detect({
+      mode: "lint",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: {
+              source: "exec",
+              provider: "default",
+              id: "value",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: {
+              source: "exec",
+              command: "/bin/sh",
+              args: ["-c", `cat >/dev/null; printf executed > ${JSON.stringify(markerPath)}`],
+              jsonOnly: false,
+              allowInsecurePath: true,
+            },
+          },
+        },
+      },
+      cwd: tmp,
+    });
+
+    expect(findings).toEqual([]);
+    await expect(fs.readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("executes exec SecretRefs when gateway auth lint explicitly allows exec checks", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-exec-ref-"));
+    const markerPath = join(tmp, "exec-ran");
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
+
+    const findings = await check?.detect({
+      mode: "lint",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: {
+              source: "exec",
+              provider: "default",
+              id: "value",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: {
+              source: "exec",
+              command: "/bin/sh",
+              args: [
+                "-c",
+                `cat >/dev/null; printf executed > ${JSON.stringify(markerPath)}; printf resolved-token`,
+              ],
+              jsonOnly: false,
+              allowInsecurePath: true,
+            },
+          },
+        },
+      },
+      cwd: tmp,
+      allowExecSecretRefs: true,
+    });
+
+    expect(findings).toEqual([]);
+    await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("executed");
+  });
+
+  it("reports exec SecretRef failures when gateway auth lint explicitly allows exec checks", async () => {
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
+
+    const findings = await check?.detect({
+      mode: "lint",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: {
+              source: "exec",
+              provider: "default",
+              id: "value",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: {
+              source: "exec",
+              command: "/bin/sh",
+              args: ["-c", "cat >/dev/null; exit 12"],
+              jsonOnly: false,
+              allowInsecurePath: true,
+            },
+          },
+        },
+      },
+      allowExecSecretRefs: true,
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-auth",
+        severity: "warning",
+        message: expect.stringContaining("Gateway token SecretRef could not be resolved:"),
+        fixHint:
+          "Run `openclaw doctor --allow-exec` to verify exec SecretRefs during doctor, or `openclaw secrets audit --allow-exec` to audit all exec SecretRefs.",
+      }),
+    );
+  });
+
   it("converts workspace suggestions into info findings", async () => {
     const check = getCheck(
       createCoreHealthChecks(

@@ -385,4 +385,50 @@ describe("doctor command", () => {
       "Doctor will not overwrite gateway.auth.token with a plaintext value.",
     );
   });
+
+  it("skips gateway auth warning when SecretRef-managed token resolves", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_TOKEN",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+    });
+
+    const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "resolved-token-1234567890";
+    try {
+      await doctorCommand(createDoctorRuntime(), {
+        nonInteractive: true,
+        workspaceSuggestions: false,
+      });
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+      }
+    }
+
+    const warned = terminalNoteMock.mock.calls.some(([message, title]) => {
+      return (
+        title === "Gateway auth" &&
+        String(message).includes("Gateway token is managed via SecretRef")
+      );
+    });
+    expect(warned).toBe(false);
+  });
 });
