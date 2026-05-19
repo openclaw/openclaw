@@ -3,7 +3,8 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 
 const TELEGRAM_NATIVE_DRAFT_MAX_CHARS = 4096;
-const TELEGRAM_NATIVE_DRAFT_MIN_UPDATE_INTERVAL_MS = 5_000;
+const TELEGRAM_NATIVE_DRAFT_IDLE_UPDATE_DELAY_MS = 1_200;
+const TELEGRAM_NATIVE_DRAFT_MAX_UPDATE_INTERVAL_MS = 5_000;
 const TELEGRAM_DRAFT_ID_STATE_KEY = Symbol.for("openclaw.telegramNativeDraftIdState");
 
 type TelegramSendMessageDraft = (
@@ -54,6 +55,7 @@ export function createNativeTelegramToolProgressDraft(params: {
   chatId: Parameters<Bot["api"]["sendMessage"]>[0];
   thread?: TelegramThreadSpec | null;
   log?: (message: string) => void;
+  idleUpdateDelayMs?: number;
   minUpdateIntervalMs?: number;
 }): NativeTelegramToolProgressDraft | undefined {
   const sendMessageDraft = resolveSendMessageDraftApi(params.api);
@@ -63,14 +65,24 @@ export function createNativeTelegramToolProgressDraft(params: {
 
   const draftId = allocateTelegramDraftId();
   const threadParams = buildTelegramThreadParams(params.thread) ?? {};
-  const rawMinUpdateIntervalMs =
-    params.minUpdateIntervalMs ?? TELEGRAM_NATIVE_DRAFT_MIN_UPDATE_INTERVAL_MS;
-  const minUpdateIntervalMs = Math.max(
+  const rawIdleUpdateDelayMs =
+    params.idleUpdateDelayMs ?? TELEGRAM_NATIVE_DRAFT_IDLE_UPDATE_DELAY_MS;
+  const idleUpdateDelayMs = Math.max(
     0,
     Math.trunc(
-      Number.isFinite(rawMinUpdateIntervalMs)
-        ? rawMinUpdateIntervalMs
-        : TELEGRAM_NATIVE_DRAFT_MIN_UPDATE_INTERVAL_MS,
+      Number.isFinite(rawIdleUpdateDelayMs)
+        ? rawIdleUpdateDelayMs
+        : TELEGRAM_NATIVE_DRAFT_IDLE_UPDATE_DELAY_MS,
+    ),
+  );
+  const rawMaxUpdateIntervalMs =
+    params.minUpdateIntervalMs ?? TELEGRAM_NATIVE_DRAFT_MAX_UPDATE_INTERVAL_MS;
+  const maxUpdateIntervalMs = Math.max(
+    0,
+    Math.trunc(
+      Number.isFinite(rawMaxUpdateIntervalMs)
+        ? rawMaxUpdateIntervalMs
+        : TELEGRAM_NATIVE_DRAFT_MAX_UPDATE_INTERVAL_MS,
     ),
   );
   let stopped = false;
@@ -80,12 +92,18 @@ export function createNativeTelegramToolProgressDraft(params: {
   let inFlightText: string | undefined;
   let inFlightAbortController: AbortController | undefined;
   let queuedText: string | undefined;
-  let queuedTimer: ReturnType<typeof setTimeout> | undefined;
+  let firstQueuedAt = 0;
+  let idleQueuedTimer: ReturnType<typeof setTimeout> | undefined;
+  let maxQueuedTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const clearQueuedTimer = () => {
-    if (queuedTimer !== undefined) {
-      clearTimeout(queuedTimer);
-      queuedTimer = undefined;
+  const clearQueuedTimers = () => {
+    if (idleQueuedTimer !== undefined) {
+      clearTimeout(idleQueuedTimer);
+      idleQueuedTimer = undefined;
+    }
+    if (maxQueuedTimer !== undefined) {
+      clearTimeout(maxQueuedTimer);
+      maxQueuedTimer = undefined;
     }
   };
 
@@ -116,7 +134,8 @@ export function createNativeTelegramToolProgressDraft(params: {
         }
         stopped = true;
         queuedText = undefined;
-        clearQueuedTimer();
+        firstQueuedAt = 0;
+        clearQueuedTimers();
         params.log?.(`telegram native tool-progress draft disabled: ${formatErrorMessage(err)}`);
         return false;
       })
@@ -126,17 +145,18 @@ export function createNativeTelegramToolProgressDraft(params: {
         }
         inFlight = undefined;
         inFlightText = undefined;
-        scheduleQueuedSend();
+        scheduleQueuedSendAfterInFlight();
       });
   };
 
   const flushQueuedSend = (): boolean => {
-    clearQueuedTimer();
+    clearQueuedTimers();
     if (stopped || inFlight || !queuedText) {
       return false;
     }
     const nextText = queuedText;
     queuedText = undefined;
+    firstQueuedAt = 0;
     if (nextText === lastSentText) {
       return true;
     }
@@ -144,16 +164,52 @@ export function createNativeTelegramToolProgressDraft(params: {
     return true;
   };
 
-  function scheduleQueuedSend() {
-    if (stopped || inFlight || queuedTimer !== undefined || !queuedText) {
+  function scheduleQueuedSend(options?: { resetIdle?: boolean }) {
+    if (stopped || inFlight || !queuedText) {
       return;
     }
-    const elapsedMs = lastSendStartedAt > 0 ? Date.now() - lastSendStartedAt : minUpdateIntervalMs;
-    const delayMs = Math.max(0, minUpdateIntervalMs - elapsedMs);
-    queuedTimer = setTimeout(() => {
-      queuedTimer = undefined;
+    const now = Date.now();
+    if (firstQueuedAt <= 0) {
+      firstQueuedAt = now;
+    }
+    if (options?.resetIdle && idleQueuedTimer !== undefined) {
+      clearTimeout(idleQueuedTimer);
+      idleQueuedTimer = undefined;
+    }
+    if (idleQueuedTimer === undefined) {
+      idleQueuedTimer = setTimeout(() => {
+        idleQueuedTimer = undefined;
+        flushQueuedSend();
+      }, idleUpdateDelayMs);
+    }
+    if (maxQueuedTimer === undefined) {
+      const elapsedMs = now - firstQueuedAt;
+      const delayMs = Math.max(0, maxUpdateIntervalMs - elapsedMs);
+      maxQueuedTimer = setTimeout(() => {
+        maxQueuedTimer = undefined;
+        flushQueuedSend();
+      }, delayMs);
+    }
+  }
+
+  function queueSend(text: string) {
+    queuedText = text;
+    if (firstQueuedAt <= 0) {
+      firstQueuedAt = Date.now();
+    }
+    scheduleQueuedSend({ resetIdle: true });
+  }
+
+  function scheduleQueuedSendAfterInFlight() {
+    if (stopped || !queuedText) {
+      return;
+    }
+    const elapsedMs = lastSendStartedAt > 0 ? Date.now() - lastSendStartedAt : maxUpdateIntervalMs;
+    if (elapsedMs >= maxUpdateIntervalMs) {
       flushQueuedSend();
-    }, delayMs);
+      return;
+    }
+    scheduleQueuedSend();
   }
 
   return {
@@ -175,14 +231,14 @@ export function createNativeTelegramToolProgressDraft(params: {
         sendNow(normalizedText);
         return true;
       }
-      queuedText = normalizedText;
-      scheduleQueuedSend();
+      queueSend(normalizedText);
       return true;
     },
     stop: () => {
       stopped = true;
       queuedText = undefined;
-      clearQueuedTimer();
+      firstQueuedAt = 0;
+      clearQueuedTimers();
       inFlightAbortController?.abort();
       inFlightAbortController = undefined;
     },

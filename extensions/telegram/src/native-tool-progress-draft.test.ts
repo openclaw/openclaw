@@ -100,7 +100,7 @@ describe("createNativeTelegramToolProgressDraft", () => {
     );
   });
 
-  it("uses a conservative default cadence for visible native draft refreshes", async () => {
+  it("flushes the latest native draft update after a short quiet window", async () => {
     vi.useFakeTimers();
     const sendMessageDraft = createSendMessageDraftMock();
     const draft = createNativeTelegramToolProgressDraft({
@@ -113,7 +113,7 @@ describe("createNativeTelegramToolProgressDraft", () => {
     await expect(draft?.update("Running checks")).resolves.toBe(true);
 
     expect(sendMessageDraft).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(1_199);
     expect(sendMessageDraft).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1);
@@ -122,6 +122,40 @@ describe("createNativeTelegramToolProgressDraft", () => {
       123,
       expect.any(Number),
       "Running checks",
+      undefined,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("forces an occasional native draft refresh when progress never goes quiet", async () => {
+    vi.useFakeTimers();
+    const sendMessageDraft = createSendMessageDraftMock();
+    const draft = createNativeTelegramToolProgressDraft({
+      api: { sendMessageDraft },
+      chatId: 123,
+      idleUpdateDelayMs: 1_200,
+      minUpdateIntervalMs: 5_000,
+    } as never);
+
+    expect(draft).toBeDefined();
+    await expect(draft?.update("Starting")).resolves.toBe(true);
+    await expect(draft?.update("Step 1")).resolves.toBe(true);
+
+    for (let index = 2; index <= 5; index += 1) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(draft?.update(`Step ${index}`)).resolves.toBe(true);
+      expect(sendMessageDraft).toHaveBeenCalledTimes(1);
+    }
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(sendMessageDraft).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sendMessageDraft).toHaveBeenCalledTimes(2);
+    expect(sendMessageDraft).toHaveBeenLastCalledWith(
+      123,
+      expect.any(Number),
+      "Step 5",
       undefined,
       expect.any(AbortSignal),
     );
