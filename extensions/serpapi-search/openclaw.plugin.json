@@ -19,13 +19,13 @@
     ]
   },
   "uiHints": {
-    "apiKey": {
+    "webSearch.apiKey": {
       "label": "SerpApi API Key",
       "help": "SerpApi API key for all search engines (fallback: SERPAPI_API_KEY env var).",
       "sensitive": true,
       "placeholder": "..."
     },
-    "hl": {
+    "webSearch.hl": {
       "label": "Default Language",
       "help": "Default language code for all searches (e.g. en, de, uk). Defaults to en."
     }
@@ -69,19 +69,16 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "apiKey": {
-        "type": "string"
-      },
-      "hl": {
-        "type": "string",
-        "description": "Default language code for all searches (e.g. en, de, ja). Defaults to en."
-      },
       "webSearch": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "apiKey": {
-            "type": "string"
+            "type": ["string", "object"]
+          },
+          "hl": {
+            "type": "string",
+            "description": "Default language code for all searches (e.g. en, de, ja). Defaults to en."
           }
         }
       }

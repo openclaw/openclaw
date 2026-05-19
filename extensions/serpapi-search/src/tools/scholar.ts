@@ -4,8 +4,18 @@ import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
-  "q", "hl", "lr", "as_ylo", "as_yhi", "scisbd",
-  "cites", "cluster", "as_sdt", "start", "num", "zero_trace",
+  "q",
+  "hl",
+  "lr",
+  "as_ylo",
+  "as_yhi",
+  "scisbd",
+  "cites",
+  "cluster",
+  "as_sdt",
+  "start",
+  "num",
+  "zero_trace",
 ] as const;
 
 function extract(raw: Record<string, unknown>, maxCount: number): Record<string, unknown> {
@@ -29,8 +39,16 @@ export function createSerpApiScholarTool(api: OpenClawPluginApi, ctx?: SerpApiTo
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Academic search query. Optional when using cites or cluster." },
-        count: { type: "number", description: "Number of results (1-20).", minimum: 1, maximum: 20 },
+        query: {
+          type: "string",
+          description: "Academic search query. Optional when using cites or cluster.",
+        },
+        count: {
+          type: "number",
+          description: "Number of results (1-20).",
+          minimum: 1,
+          maximum: 20,
+        },
         as_ylo: { type: "number", description: "Filter from this year (e.g. 2020)." },
         as_yhi: { type: "number", description: "Filter until this year." },
         scisbd: {
@@ -38,19 +56,26 @@ export function createSerpApiScholarTool(api: OpenClawPluginApi, ctx?: SerpApiTo
           description: "Sort by date: 1=date, 0=relevance (default).",
           enum: [0, 1],
         },
-        cites: { type: "string", description: "Article ID to find citing papers (Cited By search)." },
-        cluster: { type: "string", description: "Article ID to find all versions. Cannot use with q+cites." },
+        cites: {
+          type: "string",
+          description: "Article ID to find citing papers (Cited By search).",
+        },
+        cluster: {
+          type: "string",
+          description: "Article ID to find all versions. Cannot use with q+cites.",
+        },
         as_sdt: {
           type: "string",
-          description: "Search type: 0=exclude patents (default), 7=include patents, 4=case law (US).",
+          description:
+            "Search type: 0=exclude patents (default), 7=include patents, 4=case law (US).",
         },
         lr: {
           type: "string",
-          description: "Language restriction, pipe-separated (e.g. \"lang_en|lang_de\").",
+          description: 'Language restriction, pipe-separated (e.g. "lang_en|lang_de").',
         },
         start: { type: "number", description: "Result offset for pagination (0, 10, 20...)." },
       },
-      required: ["query"],
+      required: [],
       additionalProperties: false,
     },
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {

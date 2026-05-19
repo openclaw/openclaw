@@ -7,7 +7,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const SERPAPI_BASE_URL = "https://serpapi.com/search";
-export const SERPAPI_CREDENTIAL_PATH = "plugins.entries.serpapi-search.config.apiKey";
+export const SERPAPI_CREDENTIAL_PATH = "plugins.entries.serpapi-search.config.webSearch.apiKey";
 export const DEFAULT_SERPAPI_TIMEOUT_SECONDS = 30;
 
 type SerpApiConfig = {

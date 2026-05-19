@@ -35,7 +35,7 @@ describe("serpapi web search provider", () => {
 
     expect(provider.id).toBe("serpapi");
     expect(provider.label).toBe("SerpApi Search");
-    expect(provider.credentialPath).toBe("plugins.entries.serpapi-search.config.apiKey");
+    expect(provider.credentialPath).toBe("plugins.entries.serpapi-search.config.webSearch.apiKey");
 
     const pluginEntry = applied.plugins?.entries?.["serpapi-search"];
     if (!pluginEntry) {
