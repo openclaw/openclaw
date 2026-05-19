@@ -350,6 +350,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   - `defaultSpawnContext`: native subagent context for thread-bound spawns (`"fork"` by default)
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for channels and threads (use channel/thread id in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
+- `channels.discord.agentComponents.ttlMs` controls how long sent Discord component callbacks remain registered. The default is `1800000` (30 minutes), the maximum is `604800000` (7 days), and per-account overrides live under `channels.discord.accounts.<accountId>.agentComponents.ttlMs`. Longer values keep old buttons/selects/forms usable longer, so prefer the shortest TTL that fits the workflow.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + LLM + TTS overrides. Text-only Discord configs leave voice off by default; set `channels.discord.voice.enabled=true` to opt in.
 - `channels.discord.voice.model` optionally overrides the LLM model used for Discord voice channel responses.
 - `channels.discord.voice.daveEncryption` and `channels.discord.voice.decryptionFailureTolerance` pass through to `@discordjs/voice` DAVE options (`true` and `24` by default).
