@@ -520,6 +520,7 @@ private fun V2SettingsShellScreen(
   val notificationForwardingEnabled by viewModel.notificationForwardingEnabled.collectAsState()
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
   val agents by viewModel.gatewayAgents.collectAsState()
+  val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   var route by rememberSaveable { mutableStateOf(V2SettingsRoute.Home) }
 
   LaunchedEffect(isConnected) {
@@ -561,6 +562,7 @@ private fun V2SettingsShellScreen(
               V2SettingsRow("Profile", displayName.ifBlank { "Local device" }, Icons.Default.Person, route = V2SettingsRoute.Profile),
               V2SettingsRow("Voice", if (speakerEnabled) "Speaker on" else "Speaker muted", Icons.Default.Mic, route = V2SettingsRoute.Voice),
               V2SettingsRow("Agents", if (agents.isEmpty()) "Load from gateway" else "${agents.size} available", Icons.Default.Person, status = agents.isNotEmpty(), route = V2SettingsRoute.Agents),
+              V2SettingsRow("Approvals", approvalsSummary(pendingToolCalls.size), Icons.Default.Lock, status = approvalsStatus(pendingToolCalls.size), route = V2SettingsRoute.Approvals),
               V2SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = V2SettingsRoute.Notifications),
               V2SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = V2SettingsRoute.PhoneCapabilities),
               V2SettingsRow("Gateway", gatewaySummary(statusText, isConnected), Icons.Default.Cloud, status = isConnected, route = V2SettingsRoute.Gateway),
@@ -600,6 +602,15 @@ private fun V2SettingsShellScreen(
     }
   }
 }
+
+private fun approvalsSummary(count: Int): String =
+  when (count) {
+    0 -> "No pending approvals"
+    1 -> "1 pending"
+    else -> "$count pending"
+  }
+
+private fun approvalsStatus(count: Int): Boolean? = if (count > 0) true else null
 
 private data class V2SettingsRow(
   val title: String,
