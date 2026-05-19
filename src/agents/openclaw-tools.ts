@@ -31,6 +31,7 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
@@ -364,6 +365,10 @@ export function createOpenClawTools(
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,
     });
+  const includeSessionsYieldTool = isToolAllowedByPolicyName("sessions_yield", {
+    allow: explicitFactoryAllowlist,
+    deny: explicitFactoryDenylist,
+  });
   const tools: AnyAgentTool[] = [
     ...(embedded
       ? []
@@ -449,10 +454,14 @@ export function createOpenClawTools(
           }),
         ]
       : []),
-    createSessionsYieldTool({
-      sessionId: options?.sessionId,
-      onYield: options?.onYield,
-    }),
+    ...(includeSessionsYieldTool
+      ? [
+          createSessionsYieldTool({
+            sessionId: options?.sessionId,
+            onYield: options?.onYield,
+          }),
+        ]
+      : []),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
     }),
