@@ -1000,6 +1000,18 @@ function shouldPreservePromptErrorAfterCleanupError(params: {
   );
 }
 
+class EmbeddedAttemptPromptErrorWithCleanupTakeoverError extends Error {
+  readonly promptError: unknown;
+  readonly cleanupError: EmbeddedAttemptSessionTakeoverError;
+
+  constructor(params: { promptError: unknown; cleanupError: EmbeddedAttemptSessionTakeoverError }) {
+    super(formatErrorMessage(params.promptError), { cause: params.cleanupError });
+    this.name = "EmbeddedAttemptSessionTakeoverError";
+    this.promptError = params.promptError;
+    this.cleanupError = params.cleanupError;
+  }
+}
+
 function hasVisiblePendingToolMediaReply(
   reply: { mediaUrls?: string[]; audioAsVoice?: boolean } | null | undefined,
 ): boolean {
@@ -4872,6 +4884,12 @@ export async function runEmbeddedAttempt(
             `embedded attempt cleanup detected session takeover after prompt failure; preserving prompt error: ` +
               `runId=${params.runId} sessionId=${params.sessionId} ` +
               `promptError=${formatErrorMessage(promptError)} cleanupError=${formatErrorMessage(cleanupError)}`,
+          );
+          await Promise.reject(
+            new EmbeddedAttemptPromptErrorWithCleanupTakeoverError({
+              promptError,
+              cleanupError: cleanupError as EmbeddedAttemptSessionTakeoverError,
+            }),
           );
         } else {
           await Promise.reject(cleanupError);

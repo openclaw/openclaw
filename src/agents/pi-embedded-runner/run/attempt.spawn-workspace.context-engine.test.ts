@@ -998,31 +998,36 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
   });
 
-  it("preserves provider prompt errors when cleanup detects session takeover", async () => {
+  it("preserves provider prompt errors while carrying cleanup session takeover", async () => {
     const providerError = new Error("provider rejected request: HTTP 400");
     let releasingCleanupLock = false;
+    let cleanupTakeover: EmbeddedAttemptSessionTakeoverError | undefined;
     hoisted.flushPendingToolResultsAfterIdleMock.mockImplementation(async () => {
       releasingCleanupLock = true;
     });
     hoisted.acquireSessionWriteLockMock.mockImplementation(async (params) => ({
       release: async () => {
         if (releasingCleanupLock) {
-          throw new EmbeddedAttemptSessionTakeoverError(params.sessionFile);
+          cleanupTakeover = new EmbeddedAttemptSessionTakeoverError(params.sessionFile);
+          throw cleanupTakeover;
         }
       },
     }));
 
-    const result = await createContextEngineAttemptRunner({
+    const error = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
       sessionKey,
       tempPaths,
       sessionPrompt: async () => {
         throw providerError;
       },
-    });
+    }).catch((err: unknown) => err);
 
-    expect(result.promptError).toBe(providerError);
-    expect(result.promptErrorSource).toBe("prompt");
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).name).toBe("EmbeddedAttemptSessionTakeoverError");
+    expect((error as Error).message).toBe(providerError.message);
+    expect((error as Error).cause).toBe(cleanupTakeover);
+    expect((error as { promptError?: unknown }).promptError).toBe(providerError);
   });
 
   it("keeps cleanup session takeover fatal when no provider prompt error exists", async () => {
