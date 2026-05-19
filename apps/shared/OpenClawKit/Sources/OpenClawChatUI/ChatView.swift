@@ -17,6 +17,7 @@ public struct OpenClawChatView: View {
     @State private var hasPerformedInitialScroll = false
     @State private var isPinnedToBottom = true
     @State private var lastUserMessageID: UUID?
+    @State private var hasPendingAssistantReply = false
     private let showsSessionSwitcher: Bool
     private let style: Style
     private let markdownVariant: ChatMarkdownVariant
@@ -148,6 +149,7 @@ public struct OpenClawChatView: View {
             // Scroll to bottom when user sends a message, even if scrolled up.
             guard isSending, self.hasPerformedInitialScroll else { return }
             self.isPinnedToBottom = true
+            self.hasPendingAssistantReply = true
             withAnimation(.snappy(duration: 0.22)) {
                 self.scrollPosition = self.scrollerBottomID
             }
@@ -160,25 +162,67 @@ public struct OpenClawChatView: View {
             {
                 self.lastUserMessageID = lastMessage.id
                 self.isPinnedToBottom = true
+                self.hasPendingAssistantReply = true
                 withAnimation(.snappy(duration: 0.22)) {
                     self.scrollPosition = self.scrollerBottomID
                 }
                 return
             }
 
+            #if os(macOS)
+            if self.hasPendingAssistantReply {
+                withAnimation(.snappy(duration: 0.22)) {
+                    self.scrollPosition = self.scrollerBottomID
+                }
+                return
+            }
+            #endif
+
             guard self.isPinnedToBottom else { return }
             withAnimation(.snappy(duration: 0.22)) {
                 self.scrollPosition = self.scrollerBottomID
             }
         }
-        .onChange(of: self.viewModel.pendingRunCount) { _, _ in
+        .onChange(of: self.viewModel.pendingRunCount) { _, newCount in
+            #if os(macOS)
+            guard self.hasPerformedInitialScroll else { return }
+            if newCount > 0 {
+                self.hasPendingAssistantReply = true
+            }
+            if newCount == 0, self.hasPendingAssistantReply {
+                self.hasPendingAssistantReply = false
+                withAnimation(.snappy(duration: 0.22)) {
+                    self.scrollPosition = self.scrollerBottomID
+                }
+                return
+            }
+            if self.hasPendingAssistantReply {
+                withAnimation(.snappy(duration: 0.22)) {
+                    self.scrollPosition = self.scrollerBottomID
+                }
+                return
+            }
+            guard self.isPinnedToBottom else { return }
+            #else
             guard self.hasPerformedInitialScroll, self.isPinnedToBottom else { return }
+            #endif
             withAnimation(.snappy(duration: 0.22)) {
                 self.scrollPosition = self.scrollerBottomID
             }
         }
         .onChange(of: self.viewModel.streamingAssistantText) { _, _ in
+            #if os(macOS)
+            guard self.hasPerformedInitialScroll else { return }
+            if self.hasPendingAssistantReply {
+                withAnimation(.snappy(duration: 0.22)) {
+                    self.scrollPosition = self.scrollerBottomID
+                }
+                return
+            }
+            guard self.isPinnedToBottom else { return }
+            #else
             guard self.hasPerformedInitialScroll, self.isPinnedToBottom else { return }
+            #endif
             withAnimation(.snappy(duration: 0.22)) {
                 self.scrollPosition = self.scrollerBottomID
             }
