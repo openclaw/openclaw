@@ -171,6 +171,62 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeAssistantOutputSeparatesNextUserBubble() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "First request"))
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "assistant", text = "Checking"))
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "Second request"))
+
+    val entries = manager.conversation.value
+    assertEquals(3, entries.size)
+    assertEquals(VoiceConversationRole.User, entries[0].role)
+    assertEquals("First request", entries[0].text)
+    assertFalse(entries[0].isStreaming)
+    assertEquals(VoiceConversationRole.Assistant, entries[1].role)
+    assertEquals("Checking", entries[1].text)
+    assertEquals(VoiceConversationRole.User, entries[2].role)
+    assertEquals("Second request", entries[2].text)
+    assertTrue(entries[2].isStreaming)
+  }
+
+  @Test
+  fun realtimeUserTranscriptRewriteStaysInSameBubble() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "Can you tack"))
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "Can you check?", final = true))
+
+    val entry = manager.conversation.value.single()
+    assertEquals(VoiceConversationRole.User, entry.role)
+    assertEquals("Can you check?", entry.text)
+    assertFalse(entry.isStreaming)
+  }
+
+  @Test
+  fun realtimeLateFinalUserTranscriptRewritesBubbleAfterAssistantStarts() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "Can you tack"))
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "assistant", text = "Checking"))
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "Can you check?", final = true))
+
+    val entries = manager.conversation.value
+    assertEquals(2, entries.size)
+    assertEquals(VoiceConversationRole.User, entries[0].role)
+    assertEquals("Can you check?", entries[0].text)
+    assertFalse(entries[0].isStreaming)
+    assertEquals(VoiceConversationRole.Assistant, entries[1].role)
+    assertEquals("Checking", entries[1].text)
+  }
+
+  @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun realtimeStartWithoutGatewayTurnsTalkOff() =
     runTest {

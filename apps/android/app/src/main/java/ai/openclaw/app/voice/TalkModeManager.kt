@@ -166,6 +166,7 @@ class TalkModeManager internal constructor(
   private val pendingRealtimeToolCalls = LinkedHashSet<String>()
   private val pendingRealtimeToolCompletions = LinkedHashMap<String, RealtimeToolCompletion>()
   private var realtimeUserEntryId: String? = null
+  private var realtimeUserEntryAwaitingFinal = false
   private var realtimeAssistantEntryId: String? = null
   private val realtimePlaybackLock = Any()
   private var realtimeAudioTrack: AudioTrack? = null
@@ -788,6 +789,7 @@ class TalkModeManager internal constructor(
       }
       "audio" -> {
         if (realtimeOutputSuppressed) return
+        finishRealtimeConversationEntry(VoiceConversationRole.User)
         val audioBase64 = obj["audioBase64"].asStringOrNull() ?: return
         val bytes =
           try {
@@ -809,6 +811,7 @@ class TalkModeManager internal constructor(
           when (role) {
             "user" -> upsertRealtimeConversation(VoiceConversationRole.User, text, isFinal)
             "assistant" -> {
+              finishRealtimeConversationEntry(VoiceConversationRole.User)
               assistantText = upsertRealtimeConversation(VoiceConversationRole.Assistant, text, isFinal)
             }
           }
@@ -830,6 +833,7 @@ class TalkModeManager internal constructor(
           callId = callId,
           name = name,
           args = obj["args"],
+          forced = obj["forced"].asBooleanOrNull() == true,
         )
       }
       "toolResult" -> Unit
@@ -1010,6 +1014,7 @@ class TalkModeManager internal constructor(
     pendingRealtimeToolCalls.clear()
     pendingRealtimeToolCompletions.clear()
     realtimeUserEntryId = null
+    realtimeUserEntryAwaitingFinal = false
     realtimeAssistantEntryId = null
     stopRealtimePlayback()
     if (preserveStatus) {
@@ -1038,11 +1043,15 @@ class TalkModeManager internal constructor(
     callId: String,
     name: String,
     args: JsonElement?,
+    forced: Boolean = false,
   ) {
     val relaySessionId = realtimeSessionId ?: return
     pendingRealtimeToolCalls.add(callId)
     scope.launch {
       try {
+        if (forced) {
+          submitRealtimeToolWorking(callId, relaySessionId)
+        }
         val params =
           buildJsonObject {
             put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
@@ -1143,6 +1152,7 @@ class TalkModeManager internal constructor(
     callId: String,
     result: JsonObject,
     sessionId: String? = realtimeSessionId,
+    options: JsonObject? = null,
   ) {
     val activeSessionId = sessionId ?: return
     val params =
@@ -1150,6 +1160,7 @@ class TalkModeManager internal constructor(
         put("sessionId", JsonPrimitive(activeSessionId))
         put("callId", JsonPrimitive(callId))
         put("result", result)
+        if (options != null) put("options", options)
       }
     try {
       session.request("talk.session.submitToolResult", params.toString(), timeoutMs = 15_000)
@@ -1159,16 +1170,47 @@ class TalkModeManager internal constructor(
     }
   }
 
+  private suspend fun submitRealtimeToolWorking(
+    callId: String,
+    sessionId: String,
+  ) {
+    submitRealtimeToolResult(
+      callId = callId,
+      sessionId = sessionId,
+      result =
+        buildJsonObject {
+          put("status", JsonPrimitive("working"))
+          put("tool", JsonPrimitive("openclaw_agent_consult"))
+          put(
+            "message",
+            JsonPrimitive(
+              "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
+            ),
+          )
+        },
+      options = buildJsonObject { put("willContinue", JsonPrimitive(true)) },
+    )
+  }
+
   private fun upsertRealtimeConversation(
     role: VoiceConversationRole,
     text: String,
     isFinal: Boolean,
   ): String {
-    val entryId =
+    var entryId =
       when (role) {
         VoiceConversationRole.User -> realtimeUserEntryId
         VoiceConversationRole.Assistant -> realtimeAssistantEntryId
       }
+    if (
+      role == VoiceConversationRole.User &&
+      entryId != null &&
+      shouldStartNewRealtimeUserEntry(entryId, text, isFinal)
+    ) {
+      finishRealtimeConversationEntry(VoiceConversationRole.User)
+      entryId = null
+      realtimeUserEntryAwaitingFinal = false
+    }
     var resolvedText: String
     val resolvedEntryId =
       if (entryId == null) {
@@ -1179,10 +1221,50 @@ class TalkModeManager internal constructor(
         entryId
       }
     when (role) {
-      VoiceConversationRole.User -> realtimeUserEntryId = if (isFinal) null else resolvedEntryId
+      VoiceConversationRole.User -> {
+        realtimeUserEntryId = if (isFinal) null else resolvedEntryId
+        realtimeUserEntryAwaitingFinal = false
+      }
       VoiceConversationRole.Assistant -> realtimeAssistantEntryId = if (isFinal) null else resolvedEntryId
     }
     return resolvedText
+  }
+
+  private fun finishRealtimeConversationEntry(role: VoiceConversationRole) {
+    val entryId =
+      when (role) {
+        VoiceConversationRole.User -> realtimeUserEntryId
+        VoiceConversationRole.Assistant -> realtimeAssistantEntryId
+      } ?: return
+    val current = _conversation.value
+    val targetIndex = current.indexOfFirst { it.id == entryId }
+    if (targetIndex >= 0 && current[targetIndex].isStreaming) {
+      val updated = current.toMutableList()
+      updated[targetIndex] = current[targetIndex].copy(isStreaming = false)
+      _conversation.value = updated
+      if (role == VoiceConversationRole.User) {
+        realtimeUserEntryAwaitingFinal = true
+      }
+    }
+    when (role) {
+      VoiceConversationRole.User -> Unit
+      VoiceConversationRole.Assistant -> realtimeAssistantEntryId = null
+    }
+  }
+
+  private fun shouldStartNewRealtimeUserEntry(
+    entryId: String,
+    incoming: String,
+    isFinal: Boolean,
+  ): Boolean {
+    if (isFinal && realtimeUserEntryAwaitingFinal) return false
+    val entry = _conversation.value.firstOrNull { it.id == entryId } ?: return false
+    if (entry.isStreaming) return false
+    val existing = entry.text
+    if (existing.isBlank() || incoming.isBlank()) return false
+    if (incoming.firstOrNull()?.isWhitespace() == true) return false
+    if (incoming == existing || incoming.startsWith(existing) || existing.endsWith(incoming)) return false
+    return true
   }
 
   private fun appendConversation(
