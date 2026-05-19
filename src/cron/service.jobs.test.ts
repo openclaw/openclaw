@@ -52,6 +52,12 @@ describe("applyJobPatch", () => {
     });
   };
 
+  const createIsolatedCommandJob = (id: string, delivery: CronJob["delivery"]): CronJob => {
+    return createIsolatedAgentTurnJob(id, delivery, {
+      payload: { kind: "command", command: "/bin/echo", args: ["old"], output: "text" },
+    });
+  };
+
   it("clears delivery when switching to main session", () => {
     const job = createIsolatedAgentTurnJob("job-1", {
       mode: "announce",
@@ -125,6 +131,45 @@ describe("applyJobPatch", () => {
       channel: "telegram",
       to: "555",
       bestEffort: undefined,
+    });
+  });
+
+  it("allows isolated command payloads", () => {
+    const job = createIsolatedCommandJob("command-job", { mode: "announce" });
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "command",
+        command: "/usr/bin/printf",
+        args: ["%s", "alert"],
+        cwd: "/tmp",
+        timeoutSeconds: 30,
+        output: "json",
+      },
+    });
+
+    expect(job.payload).toEqual({
+      kind: "command",
+      command: "/usr/bin/printf",
+      args: ["%s", "alert"],
+      cwd: "/tmp",
+      timeoutSeconds: 30,
+      output: "json",
+    });
+  });
+
+  it("merges command payload patches", () => {
+    const job = createIsolatedCommandJob("command-merge-job", { mode: "announce" });
+
+    applyJobPatch(job, {
+      payload: { kind: "command", args: ["new"], output: "json" },
+    });
+
+    expect(job.payload).toEqual({
+      kind: "command",
+      command: "/bin/echo",
+      args: ["new"],
+      output: "json",
     });
   });
 

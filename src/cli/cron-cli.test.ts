@@ -58,6 +58,11 @@ type CronUpdatePatch = {
     payload?: {
       kind?: string;
       message?: string;
+      command?: string;
+      args?: string[];
+      cwd?: string;
+      output?: string;
+      timeoutSeconds?: number;
       model?: string;
       thinking?: string;
       lightContext?: boolean;
@@ -77,6 +82,12 @@ type CronUpdatePatch = {
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
   payload?: {
+    kind?: string;
+    command?: string;
+    args?: string[];
+    cwd?: string;
+    output?: string;
+    timeoutSeconds?: number;
     model?: string;
     thinking?: string;
     lightContext?: boolean;
@@ -316,16 +327,7 @@ describe("cron cli", () => {
         enqueued: true,
         runId: "manual:job-1:123:0",
         runStatus: status,
-        args: [
-          "cron",
-          "run",
-          "job-1",
-          "--wait",
-          "--wait-timeout",
-          "1s",
-          "--poll-interval",
-          "1ms",
-        ],
+        args: ["cron", "run", "job-1", "--wait", "--wait-timeout", "1s", "--poll-interval", "1ms"],
       });
 
       expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
@@ -763,6 +765,43 @@ describe("cron cli", () => {
     expect(params?.payload?.lightContext).toBe(true);
   });
 
+  it("creates command cron payloads", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Mail check",
+      "--cron",
+      "5 * * * *",
+      "--session",
+      "isolated",
+      "--command",
+      "/Users/oc/openclaw-workspace/scripts/mail_queue_processor_wrapper.sh",
+      "--arg=--once",
+      "--cwd",
+      "/Users/oc/openclaw-workspace",
+      "--output",
+      "json",
+      "--timeout-seconds",
+      "120",
+      "--channel",
+      "whatsapp",
+      "--to",
+      "+15555550123",
+    ]);
+
+    expect(params?.sessionTarget).toBe("isolated");
+    expect(params?.payload).toEqual({
+      kind: "command",
+      command: "/Users/oc/openclaw-workspace/scripts/mail_queue_processor_wrapper.sh",
+      args: ["--once"],
+      cwd: "/Users/oc/openclaw-workspace",
+      timeoutSeconds: 120,
+      output: "json",
+    });
+    expect(params?.delivery?.mode).toBe("announce");
+    expect(params?.delivery?.channel).toBe("whatsapp");
+    expect(params?.delivery?.to).toBe("+15555550123");
+  });
+
   it("splits PowerShell-style space-separated --tools on cron add", async () => {
     const params = await runCronAddAndGetParams([
       "--name",
@@ -808,6 +847,32 @@ describe("cron cli", () => {
     ]);
 
     expect(patch?.patch?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
+  });
+
+  it("updates command cron payloads", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--command",
+      "/bin/echo",
+      "--arg",
+      "hello",
+      "--cwd",
+      "/tmp",
+      "--output",
+      "json",
+      "--timeout-seconds",
+      "30",
+      "--deliver",
+    ]);
+
+    expect(patch?.patch?.payload).toEqual({
+      kind: "command",
+      command: "/bin/echo",
+      args: ["hello"],
+      cwd: "/tmp",
+      timeoutSeconds: 30,
+      output: "json",
+    });
+    expect(patch?.patch?.delivery?.mode).toBe("announce");
   });
 
   it("sets and clears agent id on cron edit", async () => {

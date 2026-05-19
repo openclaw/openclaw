@@ -33,7 +33,7 @@ const CRON_ACTIONS = [
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
-const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "command"] as const;
 const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
@@ -44,6 +44,10 @@ const CRON_FLAT_PAYLOAD_KEYS = [
   "toolsAllow",
   "thinking",
   "timeoutSeconds",
+  "command",
+  "args",
+  "cwd",
+  "output",
   "lightContext",
   "allowUnsafeExternalContent",
 ] as const;
@@ -142,6 +146,12 @@ function cronPayloadObjectSchema(params: { toolsAllow: TSchema }) {
       kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload kind" }),
       text: Type.Optional(Type.String({ description: "systemEvent text" })),
       message: Type.Optional(Type.String({ description: "agentTurn prompt" })),
+      command: Type.Optional(Type.String({ description: "command executable" })),
+      args: Type.Optional(Type.Array(Type.String(), { description: "command arguments" })),
+      cwd: Type.Optional(Type.String({ description: "command working directory" })),
+      output: optionalStringEnum(["text", "json"] as const, {
+        description: "command output mode",
+      }),
       model: Type.Optional(Type.String({ description: "Model override" })),
       thinking: Type.Optional(Type.String({ description: "Thinking override" })),
       timeoutSeconds: Type.Optional(Type.Number()),
@@ -521,13 +531,13 @@ JOB SCHEMA (for add action):
 
 SESSION TARGET OPTIONS:
 - "main": main session; requires payload.kind="systemEvent"
-- "isolated": ephemeral isolated session; requires payload.kind="agentTurn"
+- "isolated": ephemeral isolated session; requires payload.kind="agentTurn" or "command"
 - "current": bind current session at creation
 - "session:<id>": persistent named session
 
 DEFAULTS:
 - payload.kind="systemEvent" → defaults to "main"
-- payload.kind="agentTurn" → defaults to "isolated"
+- payload.kind="agentTurn" or "command" → defaults to "isolated"
 Current binding needs sessionTarget="current".
 
 SCHEDULE TYPES (schedule.kind):
@@ -548,10 +558,13 @@ PAYLOAD TYPES (payload.kind):
   { "kind": "systemEvent", "text": "<message>" }
 - "agentTurn": run agent with prompt; isolated/current/session only
   { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0=no timeout> }
+- "command": run deterministic command without a shell; isolated/current/session only
+  { "kind": "command", "command": "<executable>", "args": ["<optional>"], "cwd": "<optional>", "output": "text|json", "timeoutSeconds": <optional, 0=no timeout> }
+  JSON stdout contract: urgent[] or text/message is announced; notify=false stays silent; ok=false marks the job failed.
 
 DELIVERY (top-level):
   { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "threadId": "<optional>", "bestEffort": <optional-bool> }
-  - isolated agentTurn default when omitted: "announce"
+  - isolated agentTurn/command default when omitted: "announce"
   - announce: send to chat channel; isolated/current/session only; optional channel/to
   - threadId: chat thread/topic id
   - webhook: POST finished-run event to delivery.to URL
@@ -559,7 +572,7 @@ DELIVERY (top-level):
 
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
-- sessionTarget="isolated" | "current" | "session:xxx" REQUIRES payload.kind="agentTurn"
+- sessionTarget="isolated" | "current" | "session:xxx" REQUIRES payload.kind="agentTurn" or "command"
 - Webhook: delivery.mode="webhook" and delivery.to URL.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
 

@@ -11,6 +11,8 @@ import {
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runCronCommandPayload } from "../cron/command-runner.js";
+import { sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import {
   appendCronRunLog,
@@ -19,7 +21,10 @@ import {
 } from "../cron/run-log.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
-import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
+import {
+  resolveCronDeliverySessionKey,
+  resolveCronSessionTargetSessionKey,
+} from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -364,6 +369,31 @@ export function buildGatewayCronService(params: {
           onWarn: (msg) => cronLogger.warn({ jobId: job.id }, msg),
         });
       }
+    },
+    runCommandJob: async ({ job, abortSignal }) => {
+      const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+      return await runCronCommandPayload({
+        job,
+        abortSignal,
+        nowMs: () => Date.now(),
+        deliverAnnouncement: async ({ message, plan }) => {
+          await sendCronAnnouncePayloadStrict({
+            deps: params.deps,
+            cfg: runtimeConfig,
+            agentId,
+            jobId: job.id,
+            target: {
+              channel: plan.channel,
+              to: plan.to,
+              threadId: plan.threadId,
+              accountId: plan.accountId,
+              sessionKey: resolveCronDeliverySessionKey(job),
+            },
+            message,
+            abortSignal: abortSignal ?? new AbortController().signal,
+          });
+        },
+      });
     },
     cleanupTimedOutAgentRun: async ({ job, execution }) => {
       if (!execution?.sessionId) {

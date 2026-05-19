@@ -169,9 +169,17 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+export type CronCommandOutputMode = "text" | "json";
 
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | CronAgentTurnPayload
+  | CronCommandPayload;
+
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | CronAgentTurnPayloadPatch
+  | CronCommandPayloadPatch;
 
 type CronAgentTurnPayloadFields = {
   message: string;
@@ -198,6 +206,31 @@ type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
 } & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
     toolsAllow?: string[] | null;
+  };
+
+type CronCommandPayloadFields = {
+  /** Executable path or PATH-resolved command. Runs without a shell. */
+  command: string;
+  /** Positional arguments passed to command. */
+  args?: string[];
+  /** Working directory for the command. */
+  cwd?: string;
+  /** Optional per-job command timeout. 0 disables the safety timeout. */
+  timeoutSeconds?: number;
+  /** How stdout should be interpreted. Text delivers stdout; JSON uses the cron command contract. */
+  output?: CronCommandOutputMode;
+};
+
+type CronCommandPayload = {
+  kind: "command";
+} & CronCommandPayloadFields;
+
+type CronCommandPayloadPatch = {
+  kind: "command";
+} & Partial<Omit<CronCommandPayloadFields, "args" | "cwd" | "output">> & {
+    args?: string[] | null;
+    cwd?: string | null;
+    output?: CronCommandOutputMode | null;
   };
 export type CronJobState = {
   nextRunAtMs?: number;

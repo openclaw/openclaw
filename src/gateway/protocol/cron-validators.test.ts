@@ -45,6 +45,31 @@ describe("cron protocol validators", () => {
     ).toBe(true);
   });
 
+  it("accepts command payloads", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        sessionTarget: "isolated",
+        payload: {
+          kind: "command",
+          command: "/bin/echo",
+          args: ["hello"],
+          cwd: "/tmp",
+          output: "json",
+          timeoutSeconds: 30,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: { kind: "command", args: ["next"], output: "text" },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects add params when required scheduling fields are missing", () => {
     const { wakeMode: _wakeMode, ...withoutWakeMode } = minimalAddParams;
     expect(validateCronAddParams(withoutWakeMode)).toBe(false);

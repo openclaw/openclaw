@@ -405,6 +405,27 @@ describe("normalizeCronJobCreate", () => {
     expect(typeof normalized.name).toBe("string");
   });
 
+  it("infers command payloads as isolated deliverable jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      schedule: { kind: "every", everyMs: 60_000 },
+      command: "/bin/echo",
+      args: [" urgent "],
+      cwd: " /tmp ",
+      output: "json",
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload).toEqual({
+      kind: "command",
+      command: "/bin/echo",
+      args: ["urgent"],
+      cwd: "/tmp",
+      output: "json",
+    });
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect(normalized.delivery).toEqual({ mode: "announce" });
+  });
+
   it("normalizes flat legacy cron job rows", () => {
     const normalized = normalizeCronJobCreate({
       id: "dbus-watchdog-001",

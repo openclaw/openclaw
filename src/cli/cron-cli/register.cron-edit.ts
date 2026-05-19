@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
+import { collectOption } from "../program/helpers.js";
 import {
   applyExistingCronSchedulePatch,
   resolveCronEditScheduleRequest,
@@ -33,6 +34,27 @@ const assignIf = (
     target[key] = value;
   }
 };
+
+function normalizeCronCommandOutputMode(raw: unknown): "text" | "json" | undefined {
+  const output = normalizeOptionalLowercaseString(raw);
+  if (!output) {
+    return undefined;
+  }
+  if (output === "text" || output === "json") {
+    return output;
+  }
+  throw new Error("--output must be text or json");
+}
+
+function parseCronCommandArgs(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const args = raw
+    .map((entry) => normalizeOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  return args.length > 0 ? args : undefined;
+}
 
 async function loadCronJobForEditSchedulePatch(
   opts: Record<string, unknown>,
@@ -89,12 +111,16 @@ export function registerCronEditCommand(cron: Command) {
       .option("--exact", "Disable cron staggering (set stagger to 0)")
       .option("--system-event <text>", "Set systemEvent payload")
       .option("--message <text>", "Set agentTurn payload message")
+      .option("--command <cmd>", "Set command payload executable (runs without a shell)")
+      .option("--arg <value>", "Set command argument (repeatable)", collectOption, [])
+      .option("--cwd <dir>", "Set working directory for command payload")
+      .option("--output <mode>", "Set command output mode (text|json)")
       .option(
         "--thinking <level>",
         "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
       )
       .option("--model <model>", "Model override for agent jobs")
-      .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
+      .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
       .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
@@ -139,6 +165,11 @@ export function registerCronEditCommand(cron: Command) {
           if (sessionTarget === "main" && opts.message) {
             throw new Error(
               "Main jobs cannot use --message; use --system-event or --session isolated.",
+            );
+          }
+          if (sessionTarget === "main" && opts.command) {
+            throw new Error(
+              "Main jobs cannot use --command; use --system-event or --session isolated.",
             );
           }
           if (
@@ -223,6 +254,13 @@ export function registerCronEditCommand(cron: Command) {
           }
 
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
+          const commandArgs = parseCronCommandArgs(opts.arg);
+          const output = normalizeCronCommandOutputMode(opts.output);
+          const hasCommandPatch =
+            typeof opts.command === "string" ||
+            Boolean(commandArgs) ||
+            typeof opts.cwd === "string" ||
+            Boolean(output);
           const model = normalizeOptionalString(opts.model);
           const thinking = normalizeOptionalString(opts.thinking);
           const toolsAllow = parseCronToolsAllow(opts.tools);
@@ -241,16 +279,19 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.message === "string" ||
             Boolean(model) ||
             Boolean(thinking) ||
-            hasTimeoutSeconds ||
+            (hasTimeoutSeconds && !hasCommandPatch) ||
             typeof opts.lightContext === "boolean" ||
             typeof opts.tools === "string" ||
             Array.isArray(opts.tools) ||
             opts.clearTools ||
-            hasDeliveryModeFlag ||
-            hasDeliveryTarget ||
-            hasDeliveryAccount ||
-            hasBestEffort;
-          if (hasSystemEventPatch && hasAgentTurnPatch) {
+            (!hasCommandPatch &&
+              (hasDeliveryModeFlag || hasDeliveryTarget || hasDeliveryAccount || hasBestEffort));
+          const payloadPatchCount = [
+            hasSystemEventPatch,
+            hasAgentTurnPatch,
+            hasCommandPatch,
+          ].filter(Boolean).length;
+          if (payloadPatchCount > 1) {
             throw new Error("Choose at most one payload change");
           }
           if (hasSystemEventPatch) {
@@ -275,6 +316,24 @@ export function registerCronEditCommand(cron: Command) {
             } else if (toolsAllow) {
               payload.toolsAllow = toolsAllow;
             }
+            patch.payload = payload;
+          } else if (hasCommandPatch) {
+            const payload: Record<string, unknown> = { kind: "command" };
+            assignIf(
+              payload,
+              "command",
+              normalizeOptionalString(opts.command),
+              typeof opts.command === "string",
+            );
+            assignIf(payload, "args", commandArgs, Boolean(commandArgs));
+            assignIf(
+              payload,
+              "cwd",
+              normalizeOptionalString(opts.cwd),
+              typeof opts.cwd === "string",
+            );
+            assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
+            assignIf(payload, "output", output, Boolean(output));
             patch.payload = payload;
           }
 

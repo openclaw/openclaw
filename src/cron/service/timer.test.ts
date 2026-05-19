@@ -44,6 +44,23 @@ function createDueIsolatedAgentJob(params: { now: number }): CronJob {
   };
 }
 
+function createDueCommandJob(params: { now: number }): CronJob {
+  return {
+    id: "command-job",
+    agentId: "finn",
+    name: "command job",
+    enabled: true,
+    createdAtMs: params.now - 60_000,
+    updatedAtMs: params.now - 60_000,
+    schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now - 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "command", command: "/bin/echo", args: ["hello"], output: "text" },
+    delivery: { mode: "announce", channel: "telegram", to: "123" },
+    state: { nextRunAtMs: params.now - 1 },
+  };
+}
+
 afterEach(() => {
   resetTaskRegistryForTests();
 });
@@ -165,6 +182,51 @@ describe("cron service timer seam coverage", () => {
     expect(task.childSessionKey).toBe("agent:finn:cron:isolated-agent-job");
     expect(task.status).toBe("succeeded");
     expect(task.terminalSummary).toBe("done");
+  });
+
+  it("runs command payloads without invoking an isolated agent turn", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const runCommandJob = vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "hello",
+      delivered: true,
+      deliveryAttempted: true,
+    }));
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createDueCommandJob({ now })],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob,
+      runCommandJob,
+    });
+
+    await onTimer(state);
+
+    expect(runCommandJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        job: expect.objectContaining({ id: "command-job" }),
+      }),
+    );
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+
+    const persisted = await loadCronStore(storePath);
+    const job = persisted.jobs[0];
+    expect(job?.state.lastStatus).toBe("ok");
+    expect(job?.state.lastDeliveryStatus).toBe("delivered");
+    expect(job?.state.nextRunAtMs).toBe(now + 60_000);
   });
 
   it("keeps scheduler progress when task ledger creation fails", async () => {

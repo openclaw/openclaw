@@ -567,6 +567,7 @@ function resolveDeliveryState(params: {
   job: CronJob;
   runStatus: CronRunStatus;
   delivered?: boolean;
+  deliveryAttempted?: boolean;
   error?: string;
   globalFailureDestination?: CronConfig["failureDestination"];
 }): {
@@ -586,6 +587,16 @@ function resolveDeliveryState(params: {
       failureNotification: {
         status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
       },
+    };
+  }
+  if (
+    params.runStatus !== "error" &&
+    params.deliveryAttempted === false &&
+    params.delivered === undefined
+  ) {
+    return {
+      status: "not-requested",
+      failureNotification: { status: "not-requested" },
     };
   }
   if (params.runStatus === "error") {
@@ -814,6 +825,7 @@ export function applyJobResult(
     error?: string;
     diagnostics?: CronRunOutcome["diagnostics"];
     delivered?: boolean;
+    deliveryAttempted?: boolean;
     startedAt: number;
     endedAt: number;
   },
@@ -859,6 +871,7 @@ export function applyJobResult(
     job,
     runStatus: result.status,
     delivered: result.delivered,
+    deliveryAttempted: result.deliveryAttempted,
     error: result.error,
     globalFailureDestination: state.deps.cronConfig?.failureDestination,
   });
@@ -1044,6 +1057,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
         error: result.error,
         diagnostics: result.diagnostics,
         delivered: result.delivered,
+        deliveryAttempted: result.deliveryAttempted,
         startedAt: result.startedAt,
         endedAt: result.endedAt,
       });
@@ -1066,6 +1080,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     error: result.error,
     diagnostics: result.diagnostics,
     delivered: result.delivered,
+    deliveryAttempted: result.deliveryAttempted,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
@@ -1560,6 +1575,7 @@ async function runStartupCatchupCandidate(
       summary: result.summary,
       diagnostics: result.diagnostics,
       delivered: result.delivered,
+      deliveryAttempted: result.deliveryAttempted,
       sessionId: result.sessionId,
       sessionKey: result.sessionKey,
       model: result.model,
@@ -1677,6 +1693,20 @@ export async function executeJobCore(
   }
   if (job.sessionTarget === "main") {
     return await executeMainSessionCronJob(state, job, abortSignal, waitWithAbort);
+  }
+  if (job.payload.kind === "command") {
+    if (!state.deps.runCommandJob) {
+      const error = "cron command runner is unavailable";
+      return {
+        status: "skipped",
+        error,
+        diagnostics: createCronRunDiagnosticsFromError("cron-preflight", error, {
+          severity: "warn",
+          nowMs: state.deps.nowMs,
+        }),
+      };
+    }
+    return await state.deps.runCommandJob({ job, abortSignal });
   }
 
   return await executeDetachedCronJob(state, job, abortSignal, resolveAbortError, options);
@@ -1887,6 +1917,7 @@ export async function executeJob(
   let coreResult: {
     status: CronRunStatus;
     delivered?: boolean;
+    deliveryAttempted?: boolean;
     delivery?: CronDeliveryTrace;
   } & CronRunOutcome &
     CronRunTelemetry;
@@ -1902,6 +1933,7 @@ export async function executeJob(
     error: coreResult.error,
     diagnostics: coreResult.diagnostics,
     delivered: coreResult.delivered,
+    deliveryAttempted: coreResult.deliveryAttempted,
     startedAt,
     endedAt,
   });

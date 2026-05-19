@@ -31,14 +31,16 @@ export function normalizeOptionalAgentId(raw: unknown) {
 
 export function inferLegacyName(job: {
   schedule?: { kind?: unknown; everyMs?: unknown; expr?: unknown };
-  payload?: { kind?: unknown; text?: unknown; message?: unknown };
+  payload?: { kind?: unknown; text?: unknown; message?: unknown; command?: unknown };
 }) {
   const text =
     job?.payload?.kind === "systemEvent" && typeof job.payload.text === "string"
       ? job.payload.text
       : job?.payload?.kind === "agentTurn" && typeof job.payload.message === "string"
         ? job.payload.message
-        : "";
+        : job?.payload?.kind === "command" && typeof job.payload.command === "string"
+          ? job.payload.command
+          : "";
   const firstLine =
     text
       .split("\n")
@@ -70,5 +72,11 @@ export function normalizePayloadToSystemText(payload: CronPayload) {
     const legacyMessage = (payload as { message?: unknown }).message;
     return typeof legacyMessage === "string" ? legacyMessage.trim() : "";
   }
-  return typeof payload.message === "string" ? payload.message.trim() : "";
+  if (payload.kind === "agentTurn") {
+    return typeof payload.message === "string" ? payload.message.trim() : "";
+  }
+  if (payload.kind === "command") {
+    return typeof payload.command === "string" ? payload.command.trim() : "";
+  }
+  return "";
 }
