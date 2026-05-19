@@ -1,94 +1,60 @@
 # Polytropos Core Releases (Single-Gateway Strategy)
 
-This document defines the **release** mechanism for Polytropos core (openclaw-polytropos): how we build, install, and switch runnable **release tarballs** (`.tgz`) on a single machine **without** running a parallel dev gateway.
+## Purpose
 
-## Terms
+Maintain an **authoritative local release store** of runnable OpenClaw tarballs and switch the single running gateway between them safely.
 
-- **Release (staging)**: producing a versioned `.tgz` under `~/polytropos/releases/`, switching `current.tgz`/`previous.tgz`, and installing `current.tgz` globally. A release stages new bits but does **not** change what the running gateway process is currently executing.
-- **Activation**: applying a staged release to the running gateway by restarting/reloading it using the appropriate procedure for your runtime context (service manager, container/orchestrator, supervisor, etc.).
-- **Update**: merging a newer upstream OpenClaw tag into our fork, then performing the standard **release** procedure (see [`docs/polytropos/UPDATE-PROCEDURE.md`](./UPDATE-PROCEDURE.md)).
+## Definitions
 
-## Goal
+- **Release (staging):** stage a new version by placing a versioned tarball in `~/polytropos/releases/`, updating `previous.tgz`/`current.tgz`, and installing `current.tgz` globally.
+- **Activation:** restart/reload the gateway so the running process begins using the newly-installed global package.
 
-- One gateway process (the real one).
-- Switch core versions by updating a symlink (fast rollback).
+## Release store layout (authoritative)
 
-## Assumption (critical)
+- `~/polytropos/releases/v<ver>+poly.<N>.tgz` — immutable versioned release tarballs
+- `~/polytropos/releases/current.tgz` — symlink to the staged tarball
+- `~/polytropos/releases/previous.tgz` — symlink to the rollback tarball
 
-> **For OpenClaw specifically: a core release is an npm package tarball produced by `npm pack` (a `.tgz`).**
+## Correct procedure order
 
-Rationale: OpenClaw runtime depends on third-party dependencies resolved via `node_modules`. A `dist/`-only directory is not runnable because it does not include the dependency tree. Installing the `.tgz` via npm ensures dependencies are installed and runtime resolution matches how the gateway runs today.
+1) **Build** the release tarball in CI (GitHub Actions) from the intended code.
+2) **Release (stage)** it on the gateway host (symlinks + global install).
+3) **Activate** by restarting/reloading the gateway.
 
-## Directory layout
+Rollback uses the same order: stage rollback first, then restart/reload.
 
-We standardize on a single top-level directory:
+## Build (CI)
 
-- `~/polytropos/`
+A release tarball is produced by `npm pack` in CI. The output is an npm package tarball (`.tgz`).
 
-Inside it:
+Rationale: runtime dependencies are installed via npm when the tarball is installed globally; a raw `dist/` directory is not sufficient.
 
-- `~/polytropos/releases/`
-  - `~/polytropos/releases/v<ver>+poly.<N>.tgz` — versioned release tarballs (output of `npm pack`)  
-    (tag format matches the filename)
-  - `~/polytropos/releases/current.tgz` — symlink to the tarball we want installed
-  - `~/polytropos/releases/previous.tgz` — symlink to the prior tarball (rollback)
+## Release (stage) procedure (scripted)
 
-We keep the gateway systemd unit unchanged (it continues to run the globally installed `openclaw` package).
-
-## What a "release" contains
-
-A release is a `.tgz` produced by `npm pack` from this repo.
-
-It contains a subset of the repo as defined by `package.json.files`, including `dist/` and bundled assets. Dependencies are installed by npm when the tarball is installed globally.
-
-## Correct order (release → activation)
-
-**Always stage a release first, then activate it.**
-
-1) **Release (stage):** produce/obtain the versioned tarball, update `previous.tgz` then `current.tgz`, and install `current.tgz` globally.
-
-2) **Activation:** restart/reload the gateway using the appropriate procedure for your environment so the running process begins using the newly-installed global package.
-
-Rollback is the same concept:
-- stage rollback (point `current.tgz` back to `previous.tgz` + reinstall if needed)
-- then restart/reload the gateway.
-
-## Release procedure (scripted)
-
-(Release stages bits but does not restart the gateway; activation is always separate.)
-
-Core releases are performed by the release script:
+Core releases are staged by the release script:
 
 - [`scripts/polytropos-release.mjs`](../../scripts/polytropos-release.mjs)
 
-Usage:
+Usage (CI-only):
 
 ```bash
 node scripts/polytropos-release.mjs release --tgz /path/to/openclaw-<ver>.tgz
 ```
 
-What it does (high level):
+What staging does:
 
-- finds the nearest reachable release tag (`v<ver>` or `v<ver>+poly.<N>`) and derives the base upstream version `v<ver>` from it
-- computes next global build number `poly.N` (always increments)
-- creates tag `v<ver>+poly.<N>`
+- derives base upstream version `v<ver>` from the nearest reachable tag
+- computes next global build number `poly.N` and creates tag `v<ver>+poly.<N>`
 - validates the provided tarball (`package/package.json` name/version)
 - stages the tarball into `~/polytropos/releases/v<ver>+poly.<N>.tgz`
-- updates symlinks (mandatory): `previous.tgz` then `current.tgz`
+- updates symlinks **in order**: `previous.tgz` then `current.tgz`
 - installs `current.tgz` globally into `/home/ec2-user/.npm-global`
-- runs the Polytropos bundled plugin deps helper from the installed package (`scripts/polytropos-bundled-plugin-deps-helper.mjs`)
-- does not restart/activate the gateway (activation is always separate)
+- runs the Polytropos bundled plugin deps helper from the installed package
 
+## Activation
 
-## CI-built artifacts (recommended)
-
-If local builds are unreliable or too heavy for the gateway host, run the GitHub Actions build+pack workflow and pass the resulting `.tgz` into the release script:
-
-```bash
-node scripts/polytropos-release.mjs release --tgz /path/to/openclaw-<ver>.tgz
-```
-
-The script validates the tarball (`package/package.json` name/version), stages it into `~/polytropos/releases/`, updates symlinks safely, installs globally, and runs the bundled plugin deps helper.
+After staging, restart/reload the gateway using the appropriate procedure for your environment.
+(Activation is intentionally not automated by the release script.)
 
 ## Dev mode (without a second gateway)
 
@@ -119,6 +85,10 @@ To exit dev mode, reinstall a released tarball (see release procedure above).
 ---
 
 ## Notes / guardrails
+
+### Important: releases must be cut from main
+
+The release script refuses to run unless the current branch is `main`.
 
 ### Release directory invariants (DO NOT VIOLATE)
 
