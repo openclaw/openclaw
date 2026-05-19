@@ -819,7 +819,8 @@ private struct TriggerPhraseHelpRow: View {
                 .padding(.top, 1)
 
             Text(
-                "OpenClaw reacts when any trigger appears in a transcription. Keep phrases short to avoid false positives."
+                "OpenClaw reacts when any trigger appears in a transcription. " +
+                    "Keep phrases short to avoid false positives.",
             )
                 .font(.footnote)
                 .foregroundStyle(.secondary)
