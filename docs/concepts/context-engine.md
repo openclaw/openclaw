@@ -31,6 +31,12 @@ OpenClaw ships with a built-in `legacy` engine and uses it by default - most use
         openclaw plugins install @martian-engineering/lossless-claw
         ```
       </Tab>
+      <Tab title="From ClawHub">
+        ```bash
+        openclaw plugins install clawhub:@openviking/openclaw-plugin
+        openclaw openviking setup --base-url http://your-server:1933 --json
+        ```
+      </Tab>
       <Tab title="From a local path">
         ```bash
         openclaw plugins install -l ./my-context-engine
@@ -41,7 +47,7 @@ OpenClaw ships with a built-in `legacy` engine and uses it by default - most use
   </Step>
   <Step title="Enable and select the engine">
     ```json5
-    // openclaw.json
+    // openclaw.json — local engine (lossless-claw)
     {
       plugins: {
         slots: {
@@ -51,6 +57,26 @@ OpenClaw ships with a built-in `legacy` engine and uses it by default - most use
           "lossless-claw": {
             enabled: true,
             // Plugin-specific config goes here (see the plugin's docs)
+          },
+        },
+      },
+    }
+    ```
+
+    ```json5
+    // openclaw.json — remote engine (OpenViking)
+    {
+      plugins: {
+        slots: {
+          contextEngine: "openviking",
+        },
+        entries: {
+          "openviking": {
+            enabled: true,
+            config: {
+              baseUrl: "http://your-server:1933",
+              // apiKey: "sk-xxx",  // optional, if the server requires auth
+            },
           },
         },
       },
