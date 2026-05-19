@@ -6,7 +6,7 @@ import * as pluginCommandsModule from "openclaw/plugin-sdk/plugin-runtime";
 import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
-import { __testing as nativeCommandTesting, createDiscordNativeCommand } from "./native-command.js";
+import { testing as nativeCommandTesting, createDiscordNativeCommand } from "./native-command.js";
 import {
   createMockCommandInteraction,
   type MockCommandInteraction,
@@ -78,6 +78,16 @@ function createDispatchSpy() {
   } as never);
   nativeCommandTesting.setDispatchReplyWithDispatcher(dispatcherModule.dispatchReplyWithDispatcher);
   return dispatchSpy;
+}
+
+function firstDispatchReplyCall(): Parameters<
+  typeof dispatcherModule.dispatchReplyWithDispatcher
+>[0] {
+  const firstCall = vi.mocked(dispatcherModule.dispatchReplyWithDispatcher).mock.calls.at(0);
+  if (!firstCall) {
+    throw new Error("expected dispatchReplyWithDispatcher call");
+  }
+  return firstCall[0];
 }
 
 async function runGuildSlashCommand(params?: {
@@ -458,8 +468,10 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       },
     });
 
-    const dispatchCall = vi.mocked(dispatcherModule.dispatchReplyWithDispatcher).mock.calls[0]?.[0];
-    await dispatchCall?.dispatcherOptions.deliver({ text: longReply }, { kind: "final" });
+    await firstDispatchReplyCall().dispatcherOptions.deliver(
+      { text: longReply },
+      { kind: "final" },
+    );
 
     expect(interaction.followUp).toHaveBeenCalledWith({ content: longReply, ephemeral: true });
     expect(interaction.reply).not.toHaveBeenCalled();

@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -123,6 +123,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
 
 let applyAuthHeaderOverride: typeof import("./model-auth.js").applyAuthHeaderOverride;
 let applyLocalNoAuthHeaderOverride: typeof import("./model-auth.js").applyLocalNoAuthHeaderOverride;
+let formatMissingAuthError: typeof import("./model-auth.js").formatMissingAuthError;
 let hasUsableCustomProviderApiKey: typeof import("./model-auth.js").hasUsableCustomProviderApiKey;
 let hasSyntheticLocalProviderAuthConfig: typeof import("./model-auth.js").hasSyntheticLocalProviderAuthConfig;
 let requireApiKey: typeof import("./model-auth.js").requireApiKey;
@@ -141,6 +142,7 @@ beforeAll(async () => {
   ({
     applyAuthHeaderOverride,
     applyLocalNoAuthHeaderOverride,
+    formatMissingAuthError,
     hasSyntheticLocalProviderAuthConfig,
     hasUsableCustomProviderApiKey,
     requireApiKey,
@@ -354,6 +356,20 @@ describe("resolveModelAuthMode", () => {
 });
 
 describe("requireApiKey", () => {
+  it("formats missing auth errors with the checked credential source", () => {
+    expect(
+      formatMissingAuthError(
+        {
+          source: "env: OPENAI_API_KEY",
+          mode: "api-key",
+        },
+        "openai",
+      ),
+    ).toBe(
+      'No API key resolved for provider "openai" (auth mode: api-key, checked: env: OPENAI_API_KEY).',
+    );
+  });
+
   it("normalizes line breaks in resolved API keys", () => {
     const key = requireApiKey(
       {
@@ -376,7 +392,9 @@ describe("requireApiKey", () => {
         },
         "openai",
       ),
-    ).toThrow('No API key resolved for provider "openai"');
+    ).toThrow(
+      'No API key resolved for provider "openai" (auth mode: api-key, checked: env: OPENAI_API_KEY).',
+    );
   });
 });
 

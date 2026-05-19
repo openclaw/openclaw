@@ -66,6 +66,24 @@ describe("sendExecApprovalFollowupResult", () => {
     resetExecApprovalFollowupRuntimeHandoffsForTests();
   });
 
+  function firstExecApprovalFollowupCall():
+    | {
+        internalRuntimeHandoffId?: string;
+        idempotencyKey?: string;
+        execApprovalFollowupToken?: string;
+        bashElevated?: unknown;
+      }
+    | undefined {
+    return sendExecApprovalFollowup.mock.calls[0]?.[0] as
+      | {
+          internalRuntimeHandoffId?: string;
+          idempotencyKey?: string;
+          execApprovalFollowupToken?: string;
+          bashElevated?: unknown;
+        }
+      | undefined;
+  }
+
   it("logs repeated followup dispatch failures once per approval id and error message", async () => {
     sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
 
@@ -131,39 +149,37 @@ describe("sendExecApprovalFollowupResult", () => {
       { sendExecApprovalFollowup, logWarn },
     );
 
-    const call = sendExecApprovalFollowup.mock.calls[0]?.[0] as
-      | {
-          internalRuntimeHandoffId?: string;
-          idempotencyKey?: string;
-          execApprovalFollowupToken?: string;
-          bashElevated?: unknown;
-        }
-      | undefined;
-    expect(call?.internalRuntimeHandoffId).toEqual(expect.any(String));
-    expect(call?.idempotencyKey).toMatch(/^exec-approval-followup:approval-elevated-75832:nonce:/);
-    expect(call?.idempotencyKey).not.toContain(call?.internalRuntimeHandoffId ?? "");
+    const call = firstExecApprovalFollowupCall();
+    if (!call) {
+      throw new Error("Expected elevated exec approval followup call");
+    }
+    expect(call.internalRuntimeHandoffId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(call.idempotencyKey).toMatch(/^exec-approval-followup:approval-elevated-75832:nonce:/);
+    expect(call.idempotencyKey).not.toContain(call.internalRuntimeHandoffId ?? "");
     expect(call).not.toHaveProperty("bashElevated");
     expect(call).not.toHaveProperty("execApprovalFollowupToken");
     expect(
       consumeExecApprovalFollowupRuntimeHandoff({
-        handoffId: call?.internalRuntimeHandoffId ?? "",
+        handoffId: call.internalRuntimeHandoffId ?? "",
         approvalId: "approval-elevated-75832",
-        idempotencyKey: call?.idempotencyKey ?? "",
+        idempotencyKey: call.idempotencyKey ?? "",
         sessionKey: "agent:main:telegram:direct:wrong",
       }),
     ).toBeUndefined();
     expect(
       consumeExecApprovalFollowupRuntimeHandoff({
-        handoffId: call?.internalRuntimeHandoffId ?? "",
+        handoffId: call.internalRuntimeHandoffId ?? "",
         approvalId: "approval-elevated-75832",
-        idempotencyKey: call?.idempotencyKey ?? "",
+        idempotencyKey: call.idempotencyKey ?? "",
         sessionKey: "agent:main:telegram:direct:123",
       }),
     ).toEqual({
       kind: "exec-approval-followup",
       approvalId: "approval-elevated-75832",
       sessionKey: "agent:main:telegram:direct:123",
-      idempotencyKey: call?.idempotencyKey,
+      idempotencyKey: call.idempotencyKey,
       bashElevated,
     });
   });
@@ -181,13 +197,7 @@ describe("sendExecApprovalFollowupResult", () => {
       { sendExecApprovalFollowup, logWarn },
     );
 
-    const call = sendExecApprovalFollowup.mock.calls[0]?.[0] as
-      | {
-          internalRuntimeHandoffId?: string;
-          idempotencyKey?: string;
-          bashElevated?: unknown;
-        }
-      | undefined;
+    const call = firstExecApprovalFollowupCall();
     expect(call).not.toHaveProperty("internalRuntimeHandoffId");
     expect(call).not.toHaveProperty("idempotencyKey");
     expect(call).not.toHaveProperty("bashElevated");

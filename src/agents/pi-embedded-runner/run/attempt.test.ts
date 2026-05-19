@@ -1,4 +1,4 @@
-import { streamSimple } from "@mariozechner/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../context-engine-capabilities.js", () => ({
@@ -74,8 +74,9 @@ async function invokeWrappedTestStream(
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -104,6 +105,14 @@ function expectSingleToolCallContent(
   const item = requireContentItem(content);
   expect(item.type).toBe("toolCall");
   expect(item.name).toBe(name);
+}
+
+function firstBaseContext(baseFn: ReturnType<typeof vi.fn>): { messages: unknown[] } {
+  const call = baseFn.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected base stream call");
+  }
+  return call[1] as { messages: unknown[] };
 }
 
 describe("buildEmbeddedAttemptToolRunContext", () => {
@@ -229,6 +238,23 @@ describe("buildToolSearchRunPlan", () => {
     expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search-client:client_pick_file"]);
   });
 
+  it("keeps code-mode control tools in replay-safe names", () => {
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [{ name: "exec" }, { name: "wait" }] as never,
+      uncompactedTools: [{ name: "fake_plugin_tool" }] as never,
+      clientTools: [],
+      catalogRegistered: true,
+      catalogToolCount: 1,
+      controlsEnabled: true,
+      controlNames: ["exec", "wait"],
+      explicitAllowlistSources: [{ entries: ["missing_tool"] }],
+    });
+
+    expect([...plan.visibleAllowedToolNames]).toEqual(["exec", "wait"]);
+    expect([...plan.replayAllowedToolNames]).toEqual(["fake_plugin_tool", "exec", "wait"]);
+    expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search:0"]);
+  });
+
   it("does not let unrelated client tools mask a bad explicit allowlist", () => {
     const plan = buildToolSearchRunPlan({
       visibleTools: [{ name: "tool_search_code" }] as never,
@@ -253,6 +279,121 @@ describe("buildToolSearchRunPlan", () => {
 });
 
 describe("normalizeMessagesForLlmBoundary", () => {
+  it("strips inbound metadata from historical user turns before model replay", () => {
+    const historicalEnvelope =
+      'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram","chatType":"dm"}\n```\n\nSender (untrusted metadata):\n```json\n{"id":"user-1"}\n```\n\nActual historical ask';
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: historicalEnvelope }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Historical answer" }],
+        timestamp: 2,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
+
+    expect(output[0]?.content?.[0]?.text).toBe("Actual historical ask");
+    expect(JSON.stringify(output)).not.toContain("Conversation info");
+    expect(JSON.stringify(output)).not.toContain("Sender (untrusted metadata)");
+    expect(JSON.stringify(input)).toContain("Conversation info");
+  });
+
+  it("strips inbound metadata from string historical user turns", () => {
+    const input = [
+      {
+        role: "user",
+        content:
+          'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram"}\n```\n\nPlain historical ask',
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Historical answer" }],
+        timestamp: 2,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: string }>;
+
+    expect(output[0]?.content).toBe("Plain historical ask");
+  });
+
+  it("preserves inbound metadata on the current user turn", () => {
+    const historicalEnvelope =
+      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord"}\n```\n\nOld ask';
+    const currentEnvelope =
+      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message (untrusted, for context):\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: historicalEnvelope }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Historical answer" }],
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: currentEnvelope }],
+        timestamp: 3,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
+
+    expect(output[0]?.content?.[0]?.text).toBe("Old ask");
+    expect(output[2]?.content?.[0]?.text).toContain(
+      "Reply target of current user message (untrusted, for context):",
+    );
+    expect(output[2]?.content?.[0]?.text).toContain("quoted status body");
+  });
+
+  it("preserves current user inbound metadata through tool-result continuation", () => {
+    const currentEnvelope =
+      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message (untrusted, for context):\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: currentEnvelope }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "tool output" }],
+        timestamp: 3,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
+
+    expect(output[0]?.content?.[0]?.text).toContain(
+      "Reply target of current user message (untrusted, for context):",
+    );
+    expect(output[0]?.content?.[0]?.text).toContain("quoted status body");
+  });
+
   it("strips tool result details before provider conversion", () => {
     const input = [
       {
@@ -614,6 +755,10 @@ describe("remapInjectedContextFilesToWorkspace", () => {
             content: "tools",
           },
           {
+            path: "/real/workspace/..context/USER.md",
+            content: "dot-prefixed context",
+          },
+          {
             path: "/outside/README.md",
             content: "outside",
           },
@@ -629,6 +774,10 @@ describe("remapInjectedContextFilesToWorkspace", () => {
       {
         path: "/sandbox/workspace/nested/TOOLS.md",
         content: "tools",
+      },
+      {
+        path: "/sandbox/workspace/..context/USER.md",
+        content: "dot-prefixed context",
       },
       {
         path: "/outside/README.md",
@@ -1100,7 +1249,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
 
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     await stream.result();
@@ -1129,7 +1279,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
 
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = await stream.result();
@@ -1225,7 +1376,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
       unknownToolThreshold: 1,
     });
 
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = (await stream.result()) as {
@@ -1260,7 +1412,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const _item of secondStream) {
+    for await (const item of secondStream) {
       // drain
     }
     const secondResult = (await secondStream.result()) as {
@@ -1295,7 +1447,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const _item of secondStream) {
+    for await (const item of secondStream) {
       // drain
     }
     const secondResult = (await secondStream.result()) as {
@@ -1342,7 +1494,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
 
     const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const _item of firstStream) {
+    for await (const item of firstStream) {
       // drain
     }
     await firstStream.result();
@@ -1392,7 +1544,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
 
     const firstStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const _item of firstStream) {
+    for await (const item of firstStream) {
       // drain
     }
     await firstStream.result();
@@ -1456,7 +1608,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     await firstStream.result();
 
     const secondStream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
-    for await (const _item of secondStream) {
+    for await (const item of secondStream) {
       // drain
     }
     await secondStream.result();
@@ -1495,7 +1647,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn, new Set(["read", "write", "exec"]));
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = await stream.result();
@@ -1542,7 +1695,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     await stream.result();
@@ -1761,7 +1915,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 
     const stream = await invokeWrappedStream(baseFn);
 
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = (await stream.result()) as {
@@ -1813,7 +1968,8 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = await stream.result();
@@ -1893,7 +2049,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -1925,7 +2081,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toBe(messages);
   });
 
@@ -1957,7 +2113,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -1995,7 +2151,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -2036,7 +2192,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -2076,7 +2232,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -2117,7 +2273,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -2170,7 +2326,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -2229,7 +2385,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -2267,7 +2423,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toHaveLength(3);
     expect(seenContext.messages[0]).toEqual({
       role: "assistant",
@@ -2327,7 +2483,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ content?: Array<Record<string, unknown>> }>;
     };
     const toolCall = seenContext.messages[0]?.content?.[0] as {
@@ -2365,7 +2521,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ content?: unknown[] }>;
     };
     expect(seenContext.messages[0]?.content).toEqual([
@@ -2395,7 +2551,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toBe(messages);
   });
 
@@ -2417,7 +2573,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("read");
@@ -2441,7 +2597,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("ReadFile");
@@ -2465,7 +2621,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("write");
@@ -2496,7 +2652,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toStrictEqual([]);
   });
 
@@ -2518,7 +2674,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("read");
@@ -2554,7 +2710,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ role?: string }>;
     };
     expect(seenContext.messages).toEqual([
@@ -2594,7 +2750,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ role?: string }>;
     };
     expect(seenContext.messages).toEqual([
@@ -2629,7 +2785,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toStrictEqual([]);
   });
 
@@ -2654,7 +2810,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toStrictEqual([]);
   });
 
@@ -2691,7 +2847,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = firstBaseContext(baseFn);
     expect(seenContext.messages).toEqual([
       {
         role: "assistant",
@@ -2744,7 +2900,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual([
@@ -2791,7 +2947,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual([
@@ -2845,7 +3001,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual([
@@ -2896,7 +3052,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual(messages);
@@ -2938,7 +3094,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       await Promise.resolve(stream);
 
       expect(baseFn).toHaveBeenCalledTimes(1);
-      const seenContext = baseFn.mock.calls[0]?.[1] as {
+      const seenContext = firstBaseContext(baseFn) as {
         messages: Array<{ role?: string; content?: unknown[] }>;
       };
       expect(seenContext.messages).toEqual(messages);
@@ -2980,7 +3136,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual([
@@ -3039,7 +3195,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = await stream.result();
@@ -3081,7 +3238,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = await stream.result();
@@ -3128,7 +3286,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
     const result = await stream.result();
@@ -3165,7 +3324,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
 
@@ -3191,7 +3351,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
 
@@ -3223,7 +3384,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
 
@@ -3268,7 +3430,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
 
@@ -3307,7 +3470,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
 
@@ -3344,7 +3508,8 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn);
-    for await (const _item of stream) {
+    for await (const item of stream) {
+      void item;
       // drain
     }
 

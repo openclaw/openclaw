@@ -5,15 +5,12 @@ import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "../shared/string-coerce.js";
-import type { AgentModelConfig } from "./types.agents-shared.js";
+import type { AgentModelConfig, AgentToolModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
   primary?: string;
   fallbacks?: string[];
-  timeoutMs?: number;
 };
-
-const GOOGLE_CONFIG_MODEL_PROVIDERS = new Set(["google", "google-gemini-cli", "google-vertex"]);
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -35,18 +32,20 @@ function modelKeyForConfig(provider: string, model: string): string {
     : `${providerId}/${modelId}`;
 }
 
-export function resolveAgentModelPrimaryValue(model?: AgentModelConfig): string | undefined {
+type AgentModelInput = AgentModelConfig | AgentToolModelConfig;
+
+export function resolveAgentModelPrimaryValue(model?: AgentModelInput): string | undefined {
   return resolvePrimaryStringValue(model);
 }
 
-export function resolveAgentModelFallbackValues(model?: AgentModelConfig): string[] {
+export function resolveAgentModelFallbackValues(model?: AgentModelInput): string[] {
   if (!model || typeof model !== "object") {
     return [];
   }
   return Array.isArray(model.fallbacks) ? model.fallbacks : [];
 }
 
-export function resolveAgentModelTimeoutMsValue(model?: AgentModelConfig): number | undefined {
+export function resolveAgentModelTimeoutMsValue(model?: AgentToolModelConfig): number | undefined {
   if (!model || typeof model !== "object") {
     return undefined;
   }
@@ -76,10 +75,6 @@ export function normalizeAgentModelRefForConfig(model: string): string {
   }
 
   const provider = normalizeProviderId(trimmed.slice(0, slash));
-  if (!GOOGLE_CONFIG_MODEL_PROVIDERS.has(provider)) {
-    return trimmed;
-  }
-
   const normalizedModel = normalizeGooglePreviewModelId(trimmed.slice(slash + 1));
   return modelKeyForConfig(provider, normalizedModel);
 }

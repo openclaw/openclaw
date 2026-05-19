@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,6 +11,7 @@ import {
   loadAuthProfileStoreForRuntime,
 } from "../agents/auth-profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { buildExplicitSessionIdSessionKey } from "../agents/command/session.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
@@ -19,7 +21,11 @@ import {
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../auto-reply/thinking.js";
-import { getRuntimeConfig } from "../config/config.js";
+import {
+  getRuntimeConfig,
+  getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
@@ -40,7 +46,7 @@ import {
   describeVideoFile,
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
-import { convertHeicToJpeg, getImageMetadata } from "../media/image-ops.js";
+import { convertHeicToJpeg, getImageMetadata } from "../media/media-services.js";
 import { detectMime, extensionForMime, normalizeMimeType } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
@@ -87,6 +93,14 @@ import {
   runWebSearch,
 } from "../web-search/runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
+import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
+import {
+  getCapabilityWebFetchCommandSecretTargets,
+  getCapabilityWebSearchCommandSecretTargets,
+  getMemoryEmbeddingCommandSecretTargetIds,
+  getModelsCommandSecretTargetIds,
+  getTtsCommandSecretTargetIds,
+} from "./command-secret-targets.js";
 import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
@@ -674,7 +688,13 @@ async function runModelRun(params: {
   thinking?: ThinkLevel;
   transport: CapabilityTransport;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg =
+    params.transport === "local"
+      ? await resolveLocalCapabilityRuntimeConfig({
+          commandName: "infer model run",
+          targetIds: getModelsCommandSecretTargetIds(),
+        })
+      : getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
   const modelRef = await canonicalizeModelRunRef({
     raw: params.model,
@@ -780,6 +800,8 @@ async function runModelRun(params: {
   // Provider/model overrides require trusted-operator scope. Use the backend
   // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
   const hasModelOverride = Boolean(provider || model);
+  const sessionId = `model-run-${randomUUID()}`;
+  const sessionKey = buildExplicitSessionIdSessionKey({ agentId, sessionId });
   const response: {
     result?: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
@@ -795,6 +817,8 @@ async function runModelRun(params: {
     method: "agent",
     params: {
       agentId,
+      sessionId,
+      sessionKey,
       message: params.prompt,
       attachments:
         imageFiles.length > 0
@@ -950,7 +974,10 @@ async function runImageGenerate(params: {
   output?: string;
   timeoutMs?: number;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: `infer ${params.capability}`,
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const inputImages =
     params.file && params.file.length > 0
@@ -1019,16 +1046,21 @@ async function runImageDescribe(params: {
   prompt?: string;
   timeoutMs?: number;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: `infer ${params.capability}`,
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const activeModel = requireProviderModelOverride(params.model);
   const prompt = normalizeOptionalString(params.prompt);
   const outputs = await Promise.all(
     params.files.map(async (filePath) => {
-      const resolvedPath = path.resolve(filePath);
+      const resolvedPath = resolveImageDescribeInput(filePath);
+      const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
       const result = activeModel
         ? await describeImageFileWithModel({
             filePath: resolvedPath,
+            ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
             agentDir,
             provider: activeModel.provider,
@@ -1038,6 +1070,7 @@ async function runImageDescribe(params: {
           })
         : await describeImageFile({
             filePath: resolvedPath,
+            ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
             agentDir,
             prompt,
@@ -1086,7 +1119,10 @@ async function runAudioTranscribe(params: {
   model?: string;
   prompt?: string;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer audio transcribe",
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const activeModel = requireProviderModelOverride(params.model);
   const result = await transcribeAudioFile({
     filePath: path.resolve(params.file),
@@ -1181,7 +1217,10 @@ async function runVideoGenerate(params: {
   watermark?: boolean;
   timeoutMs?: number;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer video.generate",
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const result = await generateVideo({
     cfg,
@@ -1256,7 +1295,10 @@ async function runVideoGenerate(params: {
 }
 
 async function runVideoDescribe(params: { file: string; model?: string }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer video.describe",
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const activeModel = requireProviderModelOverride(params.model);
   const result = await describeVideoFile({
     filePath: path.resolve(params.file),
@@ -1335,7 +1377,10 @@ async function runTtsConvert(params: {
     } satisfies CapabilityEnvelope;
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer tts convert",
+    targetIds: getTtsCommandSecretTargetIds(),
+  });
   const overrides = resolveExplicitTtsOverrides({
     cfg,
     provider: params.provider,
@@ -1426,6 +1471,11 @@ async function runTtsProviders(transport: CapabilityTransport) {
   };
 }
 
+function resolveImageDescribeInput(filePath: string): string {
+  const trimmed = filePath.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : path.resolve(filePath);
+}
+
 async function runTtsPersonas(transport: CapabilityTransport) {
   if (transport === "gateway") {
     return await callGateway({
@@ -1451,7 +1501,10 @@ async function runTtsPersonas(transport: CapabilityTransport) {
 }
 
 async function runTtsVoices(providerRaw?: string) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer tts voices",
+    targetIds: getTtsCommandSecretTargetIds(),
+  });
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const provider = normalizeOptionalString(providerRaw) || getTtsProvider(config, prefsPath);
@@ -1526,8 +1579,51 @@ async function runTtsStateMutation(params: {
   return { provider };
 }
 
+async function resolveLocalCapabilityRuntimeConfig(params: {
+  commandName: string;
+  targetIds: Set<string>;
+  allowedPaths?: Set<string>;
+  forcedActivePaths?: Set<string>;
+  optionalActivePaths?: Set<string>;
+  config?: OpenClawConfig;
+}): Promise<OpenClawConfig> {
+  const cfg = params.config ?? getRuntimeConfig();
+  const sourceConfig = getRuntimeConfigSourceSnapshot();
+  const { effectiveConfig } = await resolveCommandConfigWithSecrets({
+    config: cfg,
+    commandName: params.commandName,
+    targetIds: params.targetIds,
+    ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
+    ...(params.forcedActivePaths ? { forcedActivePaths: params.forcedActivePaths } : {}),
+    ...(params.optionalActivePaths ? { optionalActivePaths: params.optionalActivePaths } : {}),
+    runtime: defaultRuntime,
+    autoEnable: true,
+  });
+  if (sourceConfig) {
+    setRuntimeConfigSnapshot(effectiveConfig, sourceConfig);
+  } else {
+    setRuntimeConfigSnapshot(effectiveConfig);
+  }
+  return effectiveConfig;
+}
+
 async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
-  const cfg = getRuntimeConfig();
+  const rawConfig = getRuntimeConfig();
+  const scopedTargets = getCapabilityWebSearchCommandSecretTargets(rawConfig, {
+    providerId: params.provider,
+  });
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer web search",
+    targetIds: scopedTargets.targetIds,
+    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+    ...(scopedTargets.forcedActivePaths
+      ? { forcedActivePaths: scopedTargets.forcedActivePaths }
+      : {}),
+    ...(scopedTargets.optionalActivePaths
+      ? { optionalActivePaths: scopedTargets.optionalActivePaths }
+      : {}),
+    config: rawConfig,
+  });
   const result = await runWebSearch({
     config: cfg,
     providerId: params.provider,
@@ -1548,7 +1644,22 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
 }
 
 async function runWebFetchCommand(params: { url: string; provider?: string; format?: string }) {
-  const cfg = getRuntimeConfig();
+  const rawConfig = getRuntimeConfig();
+  const scopedTargets = getCapabilityWebFetchCommandSecretTargets(rawConfig, {
+    providerId: params.provider,
+  });
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer web fetch",
+    targetIds: scopedTargets.targetIds,
+    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+    ...(scopedTargets.forcedActivePaths
+      ? { forcedActivePaths: scopedTargets.forcedActivePaths }
+      : {}),
+    ...(scopedTargets.optionalActivePaths
+      ? { optionalActivePaths: scopedTargets.optionalActivePaths }
+      : {}),
+    config: rawConfig,
+  });
   const resolved = resolveWebFetchDefinition({
     config: cfg,
     providerId: params.provider,
@@ -1576,7 +1687,10 @@ async function runMemoryEmbeddingCreate(params: {
   model?: string;
 }) {
   ensureMemoryEmbeddingProvidersRegistered();
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer embedding create",
+    targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
+  });
   const modelRef = resolveModelRefOverride(params.model);
   const requestedProvider = normalizeOptionalString(params.provider) || modelRef.provider || "auto";
   const result = await createEmbeddingProvider({
@@ -1750,10 +1864,17 @@ export function registerCapabilityCli(program: Command) {
     .command("login")
     .description("Run provider auth login")
     .requiredOption("--provider <id>", "Provider id")
+    .option("--method <id>", "Provider auth method id")
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
-        await modelsAuthLoginCommand({ provider: String(opts.provider) }, defaultRuntime);
+        await modelsAuthLoginCommand(
+          {
+            provider: String(opts.provider),
+            method: opts.method ? String(opts.method) : undefined,
+          },
+          defaultRuntime,
+        );
       });
     });
 

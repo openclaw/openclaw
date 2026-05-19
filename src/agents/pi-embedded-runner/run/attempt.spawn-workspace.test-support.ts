@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { expect, vi, type Mock } from "vitest";
 import type {
   AssembleResult,
@@ -105,6 +105,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSentTargets: () => [] as MessagingToolSend[],
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
+    getVisibleBlockReplyCount: () => 0,
     getSuccessfulCronAdds: () => 0,
     getReplayState: () => ({
       replayInvalid: false,
@@ -279,7 +280,7 @@ vi.mock("../../../trajectory/metadata.js", () => ({
   buildTrajectoryRunMetadata: () => ({ source: "test" }),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => {
+vi.mock("@earendil-works/pi-coding-agent", () => {
   function AuthStorage() {}
   class DefaultResourceLoader {
     async reload() {}
@@ -440,6 +441,7 @@ vi.mock("../../session-write-lock.js", () => ({
   acquireSessionWriteLock: (params: Parameters<AcquireSessionWriteLockFn>[0]) =>
     hoisted.acquireSessionWriteLockMock(params),
   resolveSessionWriteLockAcquireTimeoutMs: () => 60000,
+  resolveSessionWriteLockOptions: () => ({ timeoutMs: 60000, staleMs: 1_800_000, maxHoldMs: 1 }),
   resolveSessionLockMaxHoldFromTimeout: () => 1,
 }));
 
@@ -647,6 +649,7 @@ vi.mock("../../transcript-policy.js", () => ({
   resolveTranscriptPolicy: () => ({
     allowSyntheticToolResults: false,
   }),
+  shouldAllowProviderOwnedThinkingReplay: () => false,
 }));
 
 vi.mock("../cache-ttl.js", () => ({
@@ -810,7 +813,8 @@ export type MutableSession = {
   isCompacting: boolean;
   isStreaming: boolean;
   agent: {
-    streamFn?: unknown;
+    prompt?: (...args: unknown[]) => Promise<unknown>;
+    streamFn?: (...args: unknown[]) => Promise<unknown>;
     transport?: string;
     reset: () => void;
     state: {
@@ -839,6 +843,22 @@ type SessionPromptOverride = (
   prompt: string,
   options?: { images?: unknown[] },
 ) => Promise<void>;
+
+type TestAgentStream = {
+  result: () => Promise<unknown>;
+  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
+};
+
+function createCompletedAssistantStream(): TestAgentStream {
+  return {
+    async result() {
+      return { role: "assistant", content: "done" };
+    },
+    [Symbol.asyncIterator]() {
+      return (async function* () {})();
+    },
+  };
+}
 
 let runEmbeddedAttemptPromise:
   | Promise<typeof import("./attempt.js").runEmbeddedAttempt>
@@ -966,12 +986,30 @@ export function createDefaultEmbeddedSession(params?: {
     options?: { images?: unknown[] },
   ) => Promise<void>;
 }): MutableSession {
+  let pendingPrompt:
+    | {
+        prompt: string;
+        options?: { images?: unknown[] };
+      }
+    | undefined;
   const session: MutableSession = {
     sessionId: "embedded-session",
     messages: [...(params?.initialMessages ?? [])],
     isCompacting: false,
     isStreaming: false,
     agent: {
+      prompt: async (prompt, options) => {
+        pendingPrompt = { prompt: String(prompt), options: options as { images?: unknown[] } };
+        await session.agent.streamFn?.();
+      },
+      streamFn: async () => {
+        if (params?.prompt && pendingPrompt) {
+          const currentPrompt = pendingPrompt;
+          pendingPrompt = undefined;
+          await params.prompt(session, currentPrompt.prompt, currentPrompt.options);
+        }
+        return createCompletedAssistantStream();
+      },
       reset: () => {
         session.messages = [];
       },
@@ -986,8 +1024,8 @@ export function createDefaultEmbeddedSession(params?: {
     },
     setActiveToolsByName: () => {},
     prompt: async (prompt, options) => {
+      await session.agent.prompt?.(prompt, options);
       if (params?.prompt) {
-        await params.prompt(session, prompt, options);
         return;
       }
       session.messages = [
@@ -1029,9 +1067,7 @@ export function createContextEngineBootstrapAndAssemble() {
 }
 
 export function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessionKey: string) {
-  expect(mock).toHaveBeenCalled();
-  const [params] = mock.mock.calls.at(-1) ?? [];
-  expect((params as { sessionKey?: string } | undefined)?.sessionKey).toBe(sessionKey);
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
 }
 
 export const testModel = {
@@ -1101,6 +1137,7 @@ export async function createContextEngineAttemptRunner(params: {
     info?: Partial<ContextEngineInfo>;
   };
   attemptOverrides?: Partial<Parameters<Awaited<ReturnType<typeof loadRunEmbeddedAttempt>>>[0]>;
+  createSession?: () => MutableSession;
   sessionMessages?: AgentMessage[];
   sessionPrompt?: SessionPromptOverride;
   sessionKey: string;
@@ -1135,10 +1172,12 @@ export async function createContextEngineAttemptRunner(params: {
     .mockReturnValue({ messages: seedMessages });
 
   hoisted.createAgentSessionMock.mockImplementation(async () => ({
-    session: createDefaultEmbeddedSession({
-      initialMessages: seedMessages,
-      prompt: params.sessionPrompt,
-    }),
+    session:
+      params.createSession?.() ??
+      createDefaultEmbeddedSession({
+        initialMessages: seedMessages,
+        prompt: params.sessionPrompt,
+      }),
   }));
 
   const previousTrajectoryEnv = process.env.OPENCLAW_TRAJECTORY;

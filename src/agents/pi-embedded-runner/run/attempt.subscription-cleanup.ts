@@ -58,7 +58,6 @@ export async function cleanupEmbeddedAttemptResources(params: {
     agent: IdleAwareAgent | null | undefined;
     sessionManager: ToolResultFlushManager | null | undefined;
     timeoutMs?: number;
-    clearPendingOnTimeout?: boolean;
   }) => Promise<void>;
   session?: { agent?: unknown; dispose(): void };
   sessionManager: unknown;
@@ -67,6 +66,7 @@ export async function cleanupEmbeddedAttemptResources(params: {
   sessionLock: { release(): Promise<void> | void };
   aborted?: boolean;
   abortSettlePromise?: Promise<unknown> | null;
+  skipSessionFlush?: boolean;
   runId?: string;
   sessionId?: string;
 }): Promise<void> {
@@ -83,15 +83,19 @@ export async function cleanupEmbeddedAttemptResources(params: {
         sessionId: params.sessionId ?? "unknown",
       });
     }
-    try {
-      await params.flushPendingToolResultsAfterIdle({
-        agent: params.session?.agent as IdleAwareAgent | null | undefined,
-        sessionManager: params.sessionManager as ToolResultFlushManager | null | undefined,
-        clearPendingOnTimeout: true,
-        ...(params.aborted ? { timeoutMs: 0 } : {}),
-      });
-    } catch {
-      /* best-effort */
+    // PERF: When the run was aborted (user stop / timeout), skip the expensive
+    // waitForIdle (up to 30 s) and flush pending tool results synchronously so
+    // the session write-lock is released without leaving orphaned tool calls.
+    if (!params.skipSessionFlush) {
+      try {
+        await params.flushPendingToolResultsAfterIdle({
+          agent: params.session?.agent as IdleAwareAgent | null | undefined,
+          sessionManager: params.sessionManager as ToolResultFlushManager | null | undefined,
+          ...(params.aborted ? { timeoutMs: 0 } : {}),
+        });
+      } catch {
+        /* best-effort */
+      }
     }
     try {
       params.session?.dispose();

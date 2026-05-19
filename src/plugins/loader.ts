@@ -26,6 +26,8 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { buildPluginApi } from "./api-builder.js";
+import { attachPluginApiFacades } from "./api-facades.js";
+import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
   clearPluginCommands,
@@ -120,6 +122,7 @@ import {
 } from "./plugin-scope.js";
 import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistryParams } from "./registry-types.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
@@ -145,6 +148,7 @@ import {
   shouldPreferNativeModuleLoad,
 } from "./sdk-alias.js";
 import { hasKind, kindsEqual } from "./slots.js";
+import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginDefinition,
@@ -167,7 +171,11 @@ export type PluginLoadOptions = {
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];
+  hostServices?: PluginRegistryParams["hostServices"];
   runtimeOptions?: CreatePluginRuntimeOptions;
+  startupTrace?: {
+    detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+  };
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cache?: boolean;
   mode?: "full" | "validate";
@@ -191,6 +199,17 @@ export type PluginLoadOptions = {
   throwOnLoadError?: boolean;
   manifestRegistry?: PluginManifestRegistry;
 };
+
+function detailPluginStartupTrace(
+  startupTrace: PluginLoadOptions["startupTrace"] | undefined,
+  pluginId: string,
+  metrics: ReadonlyArray<readonly [string, number | string]>,
+): void {
+  startupTrace?.detail(
+    `plugins.gateway-load.plugin.${encodeStartupTraceSegment(pluginId)}`,
+    metrics,
+  );
+}
 
 const CLI_METADATA_ENTRY_BASENAMES = [
   "cli-metadata.ts",
@@ -349,11 +368,12 @@ type PluginRegistrySnapshot = {
     securityAuditCollectors: NonNullable<PluginRegistry["securityAuditCollectors"]>;
     services: PluginRegistry["services"];
     commands: PluginRegistry["commands"];
+    sessionActions: NonNullable<PluginRegistry["sessionActions"]>;
     conversationBindingResolvedHandlers: PluginRegistry["conversationBindingResolvedHandlers"];
     diagnostics: PluginRegistry["diagnostics"];
   };
   gatewayHandlers: PluginRegistry["gatewayHandlers"];
-  gatewayMethodScopes: NonNullable<PluginRegistry["gatewayMethodScopes"]>;
+  gatewayMethodDescriptors: PluginRegistry["gatewayMethodDescriptors"];
   coreGatewayMethodNames: NonNullable<PluginRegistry["coreGatewayMethodNames"]>;
 };
 
@@ -391,11 +411,12 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       securityAuditCollectors: [...(registry.securityAuditCollectors ?? [])],
       services: [...registry.services],
       commands: [...registry.commands],
+      sessionActions: [...(registry.sessionActions ?? [])],
       conversationBindingResolvedHandlers: [...registry.conversationBindingResolvedHandlers],
       diagnostics: [...registry.diagnostics],
     },
     gatewayHandlers: { ...registry.gatewayHandlers },
-    gatewayMethodScopes: { ...registry.gatewayMethodScopes },
+    gatewayMethodDescriptors: [...registry.gatewayMethodDescriptors],
     coreGatewayMethodNames: [...(registry.coreGatewayMethodNames ?? [])],
   };
 }
@@ -432,11 +453,12 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.securityAuditCollectors = snapshot.arrays.securityAuditCollectors;
   registry.services = snapshot.arrays.services;
   registry.commands = snapshot.arrays.commands;
+  registry.sessionActions = snapshot.arrays.sessionActions;
   registry.conversationBindingResolvedHandlers =
     snapshot.arrays.conversationBindingResolvedHandlers;
   registry.diagnostics = snapshot.arrays.diagnostics;
   registry.gatewayHandlers = snapshot.gatewayHandlers;
-  registry.gatewayMethodScopes = snapshot.gatewayMethodScopes;
+  registry.gatewayMethodDescriptors = snapshot.gatewayMethodDescriptors;
   registry.coreGatewayMethodNames = snapshot.coreGatewayMethodNames;
 }
 
@@ -445,21 +467,29 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
   close: () => void;
 } {
   let closed = false;
-  return {
-    api: new Proxy(api, {
+  const guardedApi = attachPluginApiFacades(
+    new Proxy(api, {
       get(target, prop, receiver) {
         const value = Reflect.get(target, prop, receiver);
         if (typeof value !== "function") {
           return value;
         }
+        if (typeof prop === "string" && isLateCallablePluginApiMethod(prop)) {
+          return (...args: unknown[]) => Reflect.apply(value, target, args);
+        }
         return (...args: unknown[]) => {
-          if (closed) {
+          const isLateCallableMethod =
+            typeof prop === "string" && isLateCallablePluginApiMethod(prop);
+          if (closed && !isLateCallableMethod) {
             return undefined;
           }
           return Reflect.apply(value, target, args);
         };
       },
     }),
+  );
+  return {
+    api: guardedApi,
     close: () => {
       closed = true;
     },
@@ -559,7 +589,7 @@ function resolvePreferredBuiltBundledRuntimeArtifact(params: {
   return { source, rootDir };
 }
 
-export const __testing = {
+export const testing = {
   buildPluginLoaderJitiOptions,
   buildPluginLoaderAliasMap,
   listPluginSdkAliasCandidates,
@@ -573,6 +603,8 @@ export const __testing = {
   shouldLoadChannelPluginInSetupRuntime,
   shouldPreferNativeModuleLoad,
   toSafeImportPath,
+  createGuardedPluginRegistrationApi,
+  runPluginRegisterSync,
   getCompatibleActivePluginRegistry,
   resolvePluginLoadCacheContext,
   get maxPluginRegistryCacheEntries() {
@@ -1422,6 +1454,20 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   return {};
 }
 
+function kindIncludes(kind: unknown, target: string): boolean {
+  return kind === target || (Array.isArray(kind) && kind.includes(target));
+}
+
+function formatBundledChannelWrongLoaderError(kind: unknown): string | null {
+  if (kindIncludes(kind, "bundled-channel-setup-entry")) {
+    return "bundled channel setup entry requires setup-runtime loader";
+  }
+  if (kindIncludes(kind, "bundled-channel-entry")) {
+    return "bundled channel entry requires setup-runtime loader";
+  }
+  return null;
+}
+
 function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]) {
   diagnostics.push(...append);
 }
@@ -1632,6 +1678,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       ...(options.coreGatewayMethodNames !== undefined && {
         coreGatewayMethodNames: options.coreGatewayMethodNames,
       }),
+      ...(options.hostServices !== undefined && {
+        hostServices: options.hostServices,
+      }),
       activateGlobalSideEffects: shouldActivate,
     });
 
@@ -1678,6 +1727,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const provenance = buildProvenanceIndex({
       normalizedLoadPaths: normalized.loadPaths,
       env,
+      installRecords,
     });
 
     const manifestByRoot = new Map(
@@ -2026,6 +2076,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       fs.closeSync(opened.fd);
 
       let mod: OpenClawPluginModule | null = null;
+      let moduleLoadMs = 0;
+      let moduleLoadFailed = false;
+      const beforeModuleLoad = performance.now();
       try {
         // Track the plugin as imported once module evaluation begins. Top-level
         // code may have already executed even if evaluation later throws.
@@ -2050,7 +2103,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
           diagnosticMessagePrefix: "failed to load plugin: ",
         });
+        moduleLoadFailed = true;
         continue;
+      } finally {
+        moduleLoadMs = performance.now() - beforeModuleLoad;
+        detailPluginStartupTrace(options.startupTrace, record.id, [
+          ["loadMs", moduleLoadMs],
+          ["loadFailedCount", moduleLoadFailed ? 1 : 0],
+        ]);
       }
 
       if (registrationPlan.loadSetupEntry && manifestRecord.setupSource) {
@@ -2320,8 +2380,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
 
       if (typeof register !== "function") {
-        logger.error(`[plugins] ${record.id} missing register/activate export`);
-        pushPluginLoadError(formatMissingPluginRegisterError(mod, env));
+        const bundledChannelWrongLoaderError = formatBundledChannelWrongLoaderError(record.kind);
+        if (bundledChannelWrongLoaderError) {
+          logger.error(
+            `[plugins] ${record.id} ${bundledChannelWrongLoaderError}; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+          );
+          pushPluginLoadError(bundledChannelWrongLoaderError);
+        } else {
+          logger.error(`[plugins] ${record.id} missing register/activate export`);
+          pushPluginLoadError(formatMissingPluginRegisterError(mod, env));
+        }
         continue;
       }
 
@@ -2340,6 +2408,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
 
+      const beforeRegister = performance.now();
+      let registerFailed = false;
       try {
         withProfile(
           { pluginId: record.id, source: record.source },
@@ -2384,6 +2454,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
           diagnosticMessagePrefix: "plugin failed during register: ",
         });
+        registerFailed = true;
+      } finally {
+        const registerMs = performance.now() - beforeRegister;
+        detailPluginStartupTrace(options.startupTrace, record.id, [
+          ["registerMs", registerMs],
+          ["loadAndRegisterMs", moduleLoadMs + registerMs],
+          ["registerFailedCount", registerFailed ? 1 : 0],
+        ]);
       }
     }
 
@@ -2514,6 +2592,7 @@ export async function loadOpenClawPluginCliRegistry(
   const provenance = buildProvenanceIndex({
     normalizedLoadPaths: normalized.loadPaths,
     env,
+    installRecords,
   });
   const manifestByRoot = new Map(
     manifestRegistry.plugins.map((record) => [record.rootDir, record]),
@@ -2773,8 +2852,16 @@ export async function loadOpenClawPluginCliRegistry(
     }
 
     if (typeof register !== "function") {
-      logger.error(`[plugins] ${record.id} missing register/activate export`);
-      pushPluginLoadError(formatMissingPluginRegisterError(mod, env));
+      const bundledChannelWrongLoaderError = formatBundledChannelWrongLoaderError(record.kind);
+      if (bundledChannelWrongLoaderError) {
+        logger.error(
+          `[plugins] ${record.id} ${bundledChannelWrongLoaderError}; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+        );
+        pushPluginLoadError(bundledChannelWrongLoaderError);
+      } else {
+        logger.error(`[plugins] ${record.id} missing register/activate export`);
+        pushPluginLoadError(formatMissingPluginRegisterError(mod, env));
+      }
       continue;
     }
 
@@ -2840,3 +2927,4 @@ function resolveCliMetadataEntrySource(rootDir: string): string | null {
   }
   return null;
 }
+export { testing as __testing };

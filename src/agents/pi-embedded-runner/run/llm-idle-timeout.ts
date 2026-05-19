@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
 import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "../../../config/agent-timeout-defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
@@ -144,6 +144,9 @@ export function resolveLlmIdleTimeoutMs(params?: {
       value > 0 &&
       value < MAX_SAFE_TIMEOUT_MS,
   );
+  const baseUrl = params?.model?.baseUrl;
+  const isLocalProvider =
+    typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl);
 
   const modelRequestTimeoutMs = params?.modelRequestTimeoutMs;
   if (
@@ -151,7 +154,18 @@ export function resolveLlmIdleTimeoutMs(params?: {
     Number.isFinite(modelRequestTimeoutMs) &&
     modelRequestTimeoutMs > 0
   ) {
-    return clampTimeoutMs(Math.min(modelRequestTimeoutMs, ...timeoutBounds));
+    // `modelRequestTimeoutMs` is wired from `models.providers.<id>.timeoutSeconds`,
+    // which is an explicit per-provider opt-in. The schema help describes it as
+    // "Use this for slow local or self-hosted model servers instead of changing
+    // global agent timeouts." so we honor it as a deliberate ceiling rather
+    // than clamping it back down to the implicit `DEFAULT_LLM_IDLE_TIMEOUT_MS`
+    // network-silence-as-hang guard. Without this, users hitting #77744 /
+    // #78361 set provider timeoutSeconds to e.g. 600s, observe the value is
+    // accepted and hot-reloaded, yet the idle watchdog still aborts at 120s.
+    // The agent/run timeoutBounds still apply so an explicit shorter run
+    // timeout always wins.
+    const boundedTimeoutMs = Math.min(modelRequestTimeoutMs, ...timeoutBounds);
+    return clampTimeoutMs(boundedTimeoutMs);
   }
 
   if (typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0) {
@@ -176,13 +190,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
   // baseUrl pointing at loopback / private-network / `.local`. Ollama cloud
   // models are still hosted remotely even when proxied through local Ollama, so
   // keep the cloud watchdog for `*:cloud` model ids.
-  const baseUrl = params?.model?.baseUrl;
-  if (
-    typeof baseUrl === "string" &&
-    baseUrl.length > 0 &&
-    isLocalProviderBaseUrl(baseUrl) &&
-    !isOllamaCloudModel(params?.model)
-  ) {
+  if (isLocalProvider && !isOllamaCloudModel(params?.model)) {
     return 0;
   }
 
@@ -204,7 +212,63 @@ export function streamWithIdleTimeout(
   onIdleTimeout?: (error: Error) => void,
 ): StreamFn {
   return (model, context, options) => {
-    const maybeStream = baseFn(model, context, options);
+    const createIdleTimeoutError = () =>
+      new Error(`LLM idle timeout (${Math.floor(timeoutMs / 1000)}s): no response from model`);
+
+    const streamAbortController = new AbortController();
+    const sourceSignal = options?.signal;
+    const abortStream = (reason?: unknown) => {
+      if (!streamAbortController.signal.aborted) {
+        streamAbortController.abort(reason);
+      }
+    };
+    const abortFromSourceSignal = () => abortStream(sourceSignal?.reason);
+    if (sourceSignal?.aborted) {
+      abortFromSourceSignal();
+    } else {
+      sourceSignal?.addEventListener("abort", abortFromSourceSignal, { once: true });
+    }
+    const cleanupSourceSignal = () => {
+      sourceSignal?.removeEventListener("abort", abortFromSourceSignal);
+    };
+    const wrappedOptions = {
+      ...options,
+      signal: streamAbortController.signal,
+    } as typeof options;
+    const existingRequestTimeoutMs =
+      typeof (model as { requestTimeoutMs?: unknown })?.requestTimeoutMs === "number" &&
+      Number.isFinite((model as { requestTimeoutMs?: number }).requestTimeoutMs) &&
+      (model as { requestTimeoutMs?: number }).requestTimeoutMs! > 0
+        ? Math.floor((model as { requestTimeoutMs?: number }).requestTimeoutMs!)
+        : timeoutMs;
+    const wrappedModel =
+      typeof model === "object" && model !== null
+        ? ({
+            ...model,
+            requestTimeoutMs: Math.min(existingRequestTimeoutMs, timeoutMs),
+          } as typeof model)
+        : model;
+
+    const createTimeoutPromise = (setTimer: (timer: NodeJS.Timeout) => void): Promise<never> => {
+      return new Promise((_, reject) => {
+        const timer = setTimeout(() => {
+          const error = createIdleTimeoutError();
+          abortStream(error);
+          onIdleTimeout?.(error);
+          reject(error);
+        }, timeoutMs);
+        timer.unref?.();
+        setTimer(timer);
+      });
+    };
+
+    let maybeStream: ReturnType<StreamFn>;
+    try {
+      maybeStream = baseFn(wrappedModel, context, wrappedOptions);
+    } catch (error) {
+      cleanupSourceSignal();
+      throw error;
+    }
 
     const wrapStream = (stream: ReturnType<typeof streamSimple>) => {
       const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
@@ -212,18 +276,6 @@ export function streamWithIdleTimeout(
         function () {
           const iterator = originalAsyncIterator();
           let idleTimer: NodeJS.Timeout | null = null;
-
-          const createTimeoutPromise = (): Promise<never> => {
-            return new Promise((_, reject) => {
-              idleTimer = setTimeout(() => {
-                const error = new Error(
-                  `LLM idle timeout (${Math.floor(timeoutMs / 1000)}s): no response from model`,
-                );
-                onIdleTimeout?.(error);
-                reject(error);
-              }, timeoutMs);
-            });
-          };
 
           const clearTimer = () => {
             if (idleTimer) {
@@ -239,10 +291,16 @@ export function streamWithIdleTimeout(
 
               try {
                 // Race between the actual next() and the timeout
-                const result = await Promise.race([streamIterator.next(), createTimeoutPromise()]);
+                const result = await Promise.race([
+                  streamIterator.next(),
+                  createTimeoutPromise((timer) => {
+                    idleTimer = timer;
+                  }),
+                ]);
 
                 if (result.done) {
                   clearTimer();
+                  cleanupSourceSignal();
                   return result;
                 }
 
@@ -255,10 +313,12 @@ export function streamWithIdleTimeout(
             },
             onReturn(streamIterator) {
               clearTimer();
+              cleanupSourceSignal();
               return streamIterator.return?.() ?? Promise.resolve({ done: true, value: undefined });
             },
             onThrow(streamIterator, error) {
               clearTimer();
+              cleanupSourceSignal();
               return streamIterator.throw?.(error) ?? Promise.reject(error);
             },
           });
@@ -268,7 +328,30 @@ export function streamWithIdleTimeout(
     };
 
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then(wrapStream);
+      let streamPromiseTimer: NodeJS.Timeout | null = null;
+      const clearStreamPromiseTimer = () => {
+        if (streamPromiseTimer) {
+          clearTimeout(streamPromiseTimer);
+          streamPromiseTimer = null;
+        }
+      };
+
+      return Promise.race([
+        Promise.resolve(maybeStream),
+        createTimeoutPromise((timer) => {
+          streamPromiseTimer = timer;
+        }),
+      ]).then(
+        (stream) => {
+          clearStreamPromiseTimer();
+          return wrapStream(stream);
+        },
+        (error) => {
+          clearStreamPromiseTimer();
+          cleanupSourceSignal();
+          throw error;
+        },
+      );
     }
     return wrapStream(maybeStream);
   };

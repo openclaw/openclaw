@@ -1,13 +1,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("provider-local-service");
 const DEFAULT_READY_TIMEOUT_MS = 120_000;
 const DEFAULT_PROBE_TIMEOUT_MS = 2_000;
-const PROBE_INTERVAL_MS = 1_000;
+const PROBE_INTERVAL_MS = 250;
 
 const MODEL_PROVIDER_LOCAL_SERVICE_SYMBOL = Symbol.for("openclaw.modelProviderLocalService");
 

@@ -12,6 +12,7 @@ import {
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { closeActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
 import {
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
@@ -631,8 +632,12 @@ function resolveRecallRunChannelContext(params: {
   // causes bundled-plugin dirName validation to throw (#76704, #78918).
   const runnableExplicitChannel =
     explicitChannel && isRunnableChannelName(explicitChannel) ? explicitChannel : undefined;
+  // Non-webchat providers often pass a raw conversation id as channelId.
+  // Keep those ids for filtering, but run the recall sub-agent through the provider.
   const trustedExplicitChannel =
-    runnableExplicitChannel && runnableExplicitChannel !== explicitProvider
+    runnableExplicitChannel &&
+    runnableExplicitChannel !== explicitProvider &&
+    (!explicitProvider || explicitProvider === "webchat")
       ? runnableExplicitChannel
       : undefined;
   const resolveReturnValue = (params: {
@@ -645,8 +650,8 @@ function resolveRecallRunChannelContext(params: {
       messageChannel:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
-        runnableExplicitChannel ??
         explicitProvider ??
+        runnableExplicitChannel ??
         params.resolvedChannel,
       messageProvider:
         trustedExplicitChannel ??
@@ -976,6 +981,39 @@ function applyActiveMemoryRuntimeConfigSnapshot(
   };
 }
 
+function resolveActiveMemoryCleanupConfig(api: OpenClawPluginApi): OpenClawConfig | undefined {
+  try {
+    return (
+      (api.runtime.config?.current?.() as OpenClawConfig | undefined) ??
+      (api.config as OpenClawConfig | undefined)
+    );
+  } catch {
+    return api.config as OpenClawConfig | undefined;
+  }
+}
+
+function scheduleMemorySearchCleanupAfterTimeout(
+  api: OpenClawPluginApi,
+  logPrefix: string,
+  agentId: string,
+): void {
+  const cfg = resolveActiveMemoryCleanupConfig(api);
+  setTimeout(() => {
+    void closeActiveMemorySearchManager({ cfg: cfg ?? api.config, agentId })
+      .then(() => {
+        api.logger.debug?.(`${logPrefix} released memory search managers after timeout`);
+      })
+      .catch((error: unknown) => {
+        const message = toSingleLineLogValue(
+          error instanceof Error ? error.message : String(error),
+        );
+        api.logger.warn?.(
+          `${logPrefix} failed to release memory search managers after timeout: ${message}`,
+        );
+      });
+  }, 0);
+}
+
 function resolveThinkingLevel(thinking: unknown): ActiveMemoryThinkingLevel {
   if (
     thinking === "off" ||
@@ -1174,7 +1212,9 @@ function resolveChatType(ctx: {
   channelId?: string;
   mainKey?: string;
 }): ActiveMemoryChatType | undefined {
-  const sessionKey = ctx.sessionKey?.trim().toLowerCase();
+  const rawSessionKey = ctx.sessionKey?.trim();
+  const { baseSessionKey } = parseThreadSessionSuffix(rawSessionKey);
+  const sessionKey = (baseSessionKey ?? rawSessionKey)?.trim().toLowerCase();
   if (sessionKey) {
     if (sessionKey.startsWith("agent:") && sessionKey.split(":")[2] === "explicit") {
       return "explicit";
@@ -2749,6 +2789,7 @@ async function maybeResolveActiveRecall(params: {
         searchDebug: result.searchDebug,
       });
       recordCircuitBreakerTimeout(cbKey);
+      scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
       return result;
     }
 
@@ -2858,6 +2899,7 @@ async function maybeResolveActiveRecall(params: {
         searchDebug: result.searchDebug,
       });
       recordCircuitBreakerTimeout(cbKey);
+      scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
       return result;
     }
     const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
@@ -2955,19 +2997,23 @@ export default definePluginEntry({
             };
           }
           if (action === "on" || action === "enable" || action === "enabled") {
-            const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, true);
-            await api.runtime.config.replaceConfigFile({
-              nextConfig,
+            await api.runtime.config.mutateConfigFile({
               afterWrite: { mode: "auto" },
+              mutate: (draft) => {
+                const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, true);
+                Object.assign(draft, nextConfig);
+              },
             });
             refreshLiveConfigFromRuntime();
             return { text: "Active Memory: on globally." };
           }
           if (action === "off" || action === "disable" || action === "disabled") {
-            const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, false);
-            await api.runtime.config.replaceConfigFile({
-              nextConfig,
+            await api.runtime.config.mutateConfigFile({
               afterWrite: { mode: "auto" },
+              mutate: (draft) => {
+                const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, false);
+                Object.assign(draft, nextConfig);
+              },
             });
             refreshLiveConfigFromRuntime();
             return { text: "Active Memory: off globally." };
@@ -3166,4 +3212,4 @@ const testing = {
   },
 };
 
-export { testing as __testing };
+export { testing, testing as __testing };

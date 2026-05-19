@@ -1,7 +1,7 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
+import { resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
 const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
@@ -83,7 +83,9 @@ function expectBaseStreamModelFields(baseStream: StreamFn, fields: Record<string
     "base stream",
   );
   expectRecordFields(requireRecord(call[0], "base stream model"), fields);
-  expect(call[1]).toBeDefined();
+  if (call[1] === undefined) {
+    throw new Error("Expected base stream context");
+  }
   expect(call[2]).toBeUndefined();
 }
 
@@ -161,7 +163,7 @@ function runWrappedLmstudioStream(
 
 describe("lmstudio stream wrapper", () => {
   beforeEach(() => {
-    __resetLmstudioPreloadCooldownForTest();
+    resetLmstudioPreloadCooldownForTest();
   });
 
   afterEach(() => {
@@ -171,7 +173,7 @@ describe("lmstudio stream wrapper", () => {
     resolveLmstudioRuntimeApiKeyMock.mockReset();
     resolveLmstudioProviderHeadersMock.mockResolvedValue(undefined);
     resolveLmstudioRuntimeApiKeyMock.mockResolvedValue(undefined);
-    __resetLmstudioPreloadCooldownForTest();
+    resetLmstudioPreloadCooldownForTest();
   });
 
   it("preloads LM Studio model before inference using model context window", async () => {

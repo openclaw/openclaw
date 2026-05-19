@@ -79,6 +79,8 @@ export type AgentConfig = {
   id: string;
   default?: boolean;
   name?: string;
+  /** Optional human-authored agent description. */
+  description?: string;
   workspace?: string;
   agentDir?: string;
   /** Optional per-agent full system prompt replacement. */
@@ -92,6 +94,8 @@ export type AgentConfig = {
   models?: Record<string, AgentModelEntryConfig>;
   /** Optional per-agent model visibility allowlist. Falls back to agents.defaults.models when omitted or empty. */
   modelAllowlist?: Record<string, AgentModelEntryConfig>;
+  /** @deprecated Legacy per-agent compaction config is kept for raw doctor migration/repair. */
+  compaction?: AgentDefaultsConfig["compaction"];
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Optional per-agent default verbosity level. */
@@ -102,6 +106,14 @@ export type AgentConfig = {
   reasoningDefault?: "on" | "off" | "stream";
   /** Optional per-agent default for fast mode. */
   fastModeDefault?: boolean;
+  /** Optional per-agent bootstrap/context injection mode override. */
+  contextInjection?: AgentDefaultsConfig["contextInjection"];
+  /** Optional per-agent max chars for each injected bootstrap file. */
+  bootstrapMaxChars?: AgentDefaultsConfig["bootstrapMaxChars"];
+  /** Optional per-agent max total chars across injected bootstrap files. */
+  bootstrapTotalMaxChars?: AgentDefaultsConfig["bootstrapTotalMaxChars"];
+  /** Optional per-agent experimental flags. Omitted fields inherit agents.defaults.experimental. */
+  experimental?: AgentDefaultsConfig["experimental"];
   /** Optional allowlist of skills for this agent; omitting it inherits agents.defaults.skills when set, and an explicit list replaces defaults instead of merging. */
   skills?: string[];
   memorySearch?: MemorySearchConfig;
@@ -128,6 +140,8 @@ export type AgentConfig = {
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };
+  /** Optional outer run loop retry boundaries. */
+  runRetries?: AgentDefaultsConfig["runRetries"];
   /** Optional per-agent embedded Pi overrides. */
   embeddedPi?: {
     /** Optional per-agent execution contract override. */

@@ -27,8 +27,8 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     memoryEmbeddingProviders: [],
     agentHarnesses: [],
     gatewayHandlers: {},
+    gatewayMethodDescriptors: [],
     coreGatewayMethodNames: [],
-    gatewayMethodScopes: {},
     httpRoutes: [],
     hostedMediaResolvers: [],
     cliRegistrars: [],
@@ -46,6 +46,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     runtimeLifecycles: [],
     agentEventSubscriptions: [],
     sessionSchedulerJobs: [],
+    sessionActions: [],
     conversationBindingResolvedHandlers: [],
     diagnostics: [],
   };

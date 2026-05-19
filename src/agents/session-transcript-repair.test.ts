@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
   sanitizeToolCallInputs,
@@ -145,6 +145,52 @@ describe("sanitizeToolUseResultPairing", () => {
     expect((result.messages[2] as { toolCallId?: string }).toolCallId).toBe("call_2");
     expect((result.messages[3] as { toolCallId?: string }).toolCallId).toBe("call_3");
     expect(JSON.stringify(result.added)).not.toContain("missing tool result");
+  });
+
+  it("keeps parallel tool results when code-mode display turns arrive first", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_search", name: "lcm_expand_query", arguments: {} },
+          { type: "toolCall", id: "call_status", name: "session_status", arguments: {} },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Lcm Expand Query: missing tool result" }],
+        stopReason: "stop",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_status",
+        toolName: "session_status",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_search",
+        toolName: "lcm_expand_query",
+        content: [{ type: "text", text: "expanded" }],
+        isError: false,
+      },
+      { role: "user", content: "next turn" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.added).toHaveLength(0);
+    expect(result.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "toolResult",
+      "assistant",
+      "user",
+    ]);
+    expect((result.messages[1] as { toolCallId?: string }).toolCallId).toBe("call_search");
+    expect((result.messages[2] as { toolCallId?: string }).toolCallId).toBe("call_status");
+    expect(result.moved).toBe(true);
   });
 
   it("repairs blank tool result names from matching tool calls", () => {

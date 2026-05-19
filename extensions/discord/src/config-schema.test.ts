@@ -76,6 +76,32 @@ describe("discord config schema", () => {
     expect(cfg.historyLimit).toBe(3);
   });
 
+  it("accepts suppressEmbeds at top-level and account scope", () => {
+    const cfg = expectValidDiscordConfig({
+      suppressEmbeds: true,
+      accounts: {
+        noisy: {
+          suppressEmbeds: false,
+        },
+      },
+    });
+
+    expect(cfg.suppressEmbeds).toBe(true);
+    expect(cfg.accounts?.noisy?.suppressEmbeds).toBe(false);
+  });
+
+  it("rejects Telegram-only native tool-progress draft config", () => {
+    const issues = expectInvalidDiscordConfig({
+      streaming: {
+        preview: {
+          nativeToolProgress: true,
+        },
+      },
+    });
+
+    expect(issues[0]?.path.join(".")).toBe("streaming.preview");
+  });
+
   it("accepts Discord application IDs at top-level and account scope", () => {
     const cfg = expectValidDiscordConfig({
       applicationId: "123456789012345678",
@@ -224,6 +250,25 @@ describe("discord config schema", () => {
     expect(cfg.voice?.connectTimeoutMs).toBe(45_000);
     expect(cfg.voice?.reconnectGraceMs).toBe(20_000);
     expect(cfg.voice?.captureSilenceGraceMs).toBe(3_500);
+  });
+
+  it("accepts Discord voice allowed channels", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        allowedChannels: [{ guildId: "123", channelId: "456" }],
+      },
+    });
+
+    expect(cfg.voice?.allowedChannels).toEqual([{ guildId: "123", channelId: "456" }]);
+  });
+
+  it("rejects invalid Discord voice allowed channels", () => {
+    for (const voice of [
+      { allowedChannels: [{ guildId: "", channelId: "456" }] },
+      { allowedChannels: [{ guildId: "123", channelId: "" }] },
+    ]) {
+      expectInvalidDiscordConfig({ voice });
+    }
   });
 
   it("rejects invalid Discord voice timing overrides", () => {

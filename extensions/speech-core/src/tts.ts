@@ -11,7 +11,9 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { transcodeAudioBuffer } from "openclaw/plugin-sdk/media-runtime";
 import {
+  markReplyPayloadAsTtsSupplement,
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -49,7 +51,6 @@ import {
   type TtsDirectiveParseResult,
   type TtsConfigResolutionContext,
 } from "../api.js";
-import { transcodeAudioBuffer } from "./audio-transcode.js";
 
 export type {
   ResolvedTtsConfig,
@@ -247,10 +248,6 @@ function sortSpeechProvidersForAutoSelection(cfg?: OpenClawConfig) {
     }
     return left.id.localeCompare(right.id);
   });
-}
-
-function _resolveRegistryDefaultSpeechProviderId(cfg?: OpenClawConfig): TtsProvider {
-  return sortSpeechProvidersForAutoSelection(cfg)[0]?.id ?? "";
 }
 
 function resolveTtsRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -544,8 +541,8 @@ export function buildTtsSystemPromptHint(
   if (autoMode === "off") {
     return undefined;
   }
-  const _config = resolveTtsConfig(cfg, agentId);
-  const persona = getTtsPersona(_config, prefsPath);
+  const configForTest = resolveTtsConfig(cfg, agentId);
+  const persona = getTtsPersona(configForTest, prefsPath);
   const maxLength = getTtsMaxLength(prefsPath);
   const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
   const autoHint =
@@ -561,6 +558,7 @@ export function buildTtsSystemPromptHint(
       ? `Active TTS persona: ${persona.label ?? persona.id}${persona.description ? ` - ${persona.description}` : ""}.`
       : undefined,
     `Keep spoken text ≤${maxLength} chars to avoid auto-summary (summary ${summarize}).`,
+    "If workspace context (especially MEMORY.md) tells you not to use [[tts:...]] or to use a local/non-tagged voice workflow, follow that workspace instruction instead.",
     "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
   ]
     .filter(Boolean)
@@ -1848,12 +1846,16 @@ export async function maybeApplyTtsToPayload(params: {
       latencyMs: result.latencyMs,
     };
 
-    return {
+    const payloadWithAudio = {
       ...nextPayload,
       mediaUrl: result.audioPath,
       audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
       spokenText: textForAudio,
-    };
+      trustedLocalMedia: true,
+    } as ReplyPayload;
+    return nextPayload.text?.trim()
+      ? markReplyPayloadAsTtsSupplement(payloadWithAudio)
+      : payloadWithAudio;
   }
 
   lastTtsAttempt = {
@@ -1872,7 +1874,7 @@ export async function maybeApplyTtsToPayload(params: {
   return nextPayload;
 }
 
-export const _test = {
+export const testApi = {
   parseTtsDirectives,
   resolveModelOverridePolicy,
   supportsNativeVoiceNoteTts,
@@ -1884,3 +1886,6 @@ export const _test = {
   formatTtsProviderError,
   sanitizeTtsErrorForLog,
 };
+
+/** @deprecated Use `testApi`. */
+export { testApi as _test };

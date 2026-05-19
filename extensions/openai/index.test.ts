@@ -32,7 +32,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
+vi.mock("@earendil-works/pi-ai/oauth", () => ({
   getOAuthApiKey: vi.fn(),
   getOAuthProviders: () => [],
   loginOpenAICodex: vi.fn(),
@@ -41,7 +41,7 @@ vi.mock("@mariozechner/pi-ai/oauth", () => ({
 
 import { createOpenAICodexProviderRuntime } from "./openai-codex-provider.runtime.js";
 
-const _registerOpenAIPlugin = async () =>
+const registerOpenAIPluginForTest = async () =>
   registerProviderPlugin({
     plugin,
     id: "openai",
@@ -138,6 +138,31 @@ function mockOpenAIImageApiResponse(params: {
   return { resolveApiKeySpy, postJsonRequestSpy, postMultipartRequestSpy };
 }
 
+function firstMockArg(mocked: unknown): Record<string, unknown> {
+  const arg = (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls?.[0]?.[0];
+  if (!arg || typeof arg !== "object") {
+    throw new Error("Expected first mock argument");
+  }
+  return arg as Record<string, unknown>;
+}
+
+function mockCalls(mocked: unknown): unknown[][] {
+  return (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
+}
+
+function expectNoBeforePromptBuildHook(on: unknown): void {
+  const hasBeforePromptBuild = mockCalls(on).some((call) => call[0] === "before_prompt_build");
+  expect(hasBeforePromptBuild).toBe(false);
+}
+
+function expectNoRequestUrl(mocked: unknown, url: string): void {
+  const hasUrl = mockCalls(mocked).some((call) => {
+    const arg = call[0] as { url?: unknown } | undefined;
+    return arg?.url === url;
+  });
+  expect(hasUrl).toBe(false);
+}
+
 describe("openai plugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -167,28 +192,18 @@ describe("openai plugin", () => {
       size: "2048x2048",
     });
 
-    expect(resolveApiKeySpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        store: authStore,
-      }),
-    );
-    expect(postJsonRequestSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/generations",
-        body: {
-          model: "gpt-image-2",
-          prompt: "draw a cat",
-          n: 2,
-          size: "2048x2048",
-        },
-      }),
-    );
-    expect(postJsonRequestSpy).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/edits",
-      }),
-    );
+    const authArgs = firstMockArg(resolveApiKeySpy);
+    expect(authArgs.provider).toBe("openai");
+    expect(authArgs.store).toBe(authStore);
+    const requestArgs = firstMockArg(postJsonRequestSpy);
+    expect(requestArgs.url).toBe("https://api.openai.com/v1/images/generations");
+    expect(requestArgs.body).toEqual({
+      model: "gpt-image-2",
+      prompt: "draw a cat",
+      n: 2,
+      size: "2048x2048",
+    });
+    expectNoRequestUrl(postJsonRequestSpy, "https://api.openai.com/v1/images/edits");
     expect(result).toEqual({
       images: [
         {
@@ -226,22 +241,16 @@ describe("openai plugin", () => {
       ],
     });
 
-    expect(resolveApiKeySpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        store: authStore,
-      }),
-    );
-    expect(postMultipartRequestSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/edits",
-        body: expect.any(FormData),
-        allowPrivateNetwork: false,
-        dispatcherPolicy: undefined,
-        fetchFn: fetch,
-      }),
-    );
-    const editCallArgs = postMultipartRequestSpy.mock.calls[0]?.[0] as {
+    const authArgs = firstMockArg(resolveApiKeySpy);
+    expect(authArgs.provider).toBe("openai");
+    expect(authArgs.store).toBe(authStore);
+    const multipartArgs = firstMockArg(postMultipartRequestSpy);
+    expect(multipartArgs.url).toBe("https://api.openai.com/v1/images/edits");
+    expect(multipartArgs.body).toBeInstanceOf(FormData);
+    expect(multipartArgs.allowPrivateNetwork).toBe(false);
+    expect(multipartArgs.dispatcherPolicy).toBeUndefined();
+    expect(multipartArgs.fetchFn).toBe(fetch);
+    const editCallArgs = multipartArgs as unknown as {
       headers: Headers;
       body: FormData;
     };
@@ -257,9 +266,7 @@ describe("openai plugin", () => {
     expect(images[0]?.type).toBe("image/png");
     expect(images[1]?.name).toBe("ref.jpg");
     expect(images[1]?.type).toBe("image/jpeg");
-    expect(postJsonRequestSpy).not.toHaveBeenCalledWith(
-      expect.objectContaining({ url: "https://api.openai.com/v1/images/edits" }),
-    );
+    expectNoRequestUrl(postJsonRequestSpy, "https://api.openai.com/v1/images/edits");
     expect(result).toEqual({
       images: [
         {
@@ -408,7 +415,7 @@ describe("openai plugin", () => {
       pluginConfig: { personality: "friendly" },
     });
 
-    expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    expectNoBeforePromptBuildHook(on);
 
     const openaiProvider = requireRegisteredProvider(providers, "openai");
     const codexProvider = requireRegisteredProvider(providers, "openai-codex");
@@ -536,7 +543,7 @@ describe("openai plugin", () => {
   it("defaults to the friendly OpenAI interaction-style overlay", async () => {
     const { on, providers } = await registerOpenAIPluginWithHook();
 
-    expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    expectNoBeforePromptBuildHook(on);
     const openaiProvider = requireRegisteredProvider(providers, "openai");
     expectOpenAIPromptContribution(openaiProvider, {
       interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
@@ -548,7 +555,7 @@ describe("openai plugin", () => {
       pluginConfig: { personality: "off" },
     });
 
-    expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    expectNoBeforePromptBuildHook(on);
     const openaiProvider = requireRegisteredProvider(providers, "openai");
     expectOpenAIPromptContribution(openaiProvider, {});
   });
@@ -567,7 +574,7 @@ describe("openai plugin", () => {
       pluginConfig: { personality: "friendly" },
     });
 
-    expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    expectNoBeforePromptBuildHook(on);
     const openaiProvider = requireRegisteredProvider(providers, "openai");
     expectOpenAIPromptContribution(openaiProvider, {
       interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,

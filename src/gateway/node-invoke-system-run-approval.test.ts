@@ -319,15 +319,20 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     const forwarded = result.params as Record<string, unknown>;
     expect(forwarded.command).toEqual(["/usr/bin/echo", "SAFE"]);
     expect(forwarded.rawCommand).toBe("/usr/bin/echo SAFE");
-    expect(forwarded.systemRunPlan).toEqual(
-      expect.objectContaining({
-        argv: ["/usr/bin/echo", "SAFE"],
-        cwd: "/real/cwd",
-        commandText: "/usr/bin/echo SAFE",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-      }),
-    );
+    const systemRunPlan = forwarded.systemRunPlan as
+      | {
+          argv?: string[];
+          cwd?: string;
+          commandText?: string;
+          agentId?: string;
+          sessionKey?: string;
+        }
+      | undefined;
+    expect(systemRunPlan?.argv).toEqual(["/usr/bin/echo", "SAFE"]);
+    expect(systemRunPlan?.cwd).toBe("/real/cwd");
+    expect(systemRunPlan?.commandText).toBe("/usr/bin/echo SAFE");
+    expect(systemRunPlan?.agentId).toBe("main");
+    expect(systemRunPlan?.sessionKey).toBe("agent:main:main");
     expect(forwarded.cwd).toBe("/real/cwd");
     expect(forwarded.agentId).toBe("main");
     expect(forwarded.sessionKey).toBe("agent:main:main");
@@ -671,6 +676,52 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         turnSourceTo: "wecom:corp-42:conversation-7",
         turnSourceAccountId: "corp-42",
         turnSourceThreadId: "conversation-7",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: trustedBackendClient,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+
+    expectAllowOnceForwardingResult(result);
+  });
+
+  test("accepts trusted backend webchat replay when turnSourceTo is null on both sides (regression #82132)", () => {
+    const sessionKey = "agent:main:main";
+    const record = makeChatRecord({
+      sessionKey,
+      turnSourceChannel: "webchat",
+      turnSourceTo: null,
+      turnSourceAccountId: null,
+      turnSourceThreadId: null,
+      systemRunPlan: {
+        argv: ["echo", "SAFE"],
+        cwd: null,
+        commandText: "echo SAFE",
+        agentId: "main",
+        sessionKey,
+      },
+      systemRunBinding: buildSystemRunApprovalBinding({
+        argv: ["echo", "SAFE"],
+        cwd: null,
+        agentId: "main",
+        sessionKey,
+      }).binding,
+    });
+
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        agentId: "main",
+        sessionKey,
+        turnSourceChannel: "webchat",
+        turnSourceTo: null,
+        turnSourceAccountId: null,
+        turnSourceThreadId: null,
         runId: "approval-1",
         approved: true,
         approvalDecision: "allow-once",

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
+import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
-import { assertNotRoot } from "./cli/root-guard.js";
+import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import {
   enableOpenClawCompileCache,
@@ -93,12 +93,6 @@ if (
     installProcessWarningFilter();
     normalizeEnv();
 
-    // Block root execution early, before any state/config operations.
-    // Allow --help and --version so users can still discover the override env var.
-    if (!isRootHelpInvocation(process.argv) && !isRootVersionInvocation(process.argv)) {
-      assertNotRoot();
-    }
-
     enableOpenClawCompileCache({
       installRoot,
     });
@@ -164,7 +158,10 @@ export async function tryHandleRootHelpFastPath(
   argv: string[],
   deps: {
     outputPrecomputedRootHelpText?: () => boolean;
-    outputRootHelp?: () => void | Promise<void>;
+    outputRootHelp?: (options?: RootHelpRenderOptions) => void | Promise<void>;
+    loadRootHelpRenderOptionsForConfigSensitivePlugins?: (
+      env?: NodeJS.ProcessEnv,
+    ) => Promise<RootHelpRenderOptions | null>;
     onError?: (error: unknown) => void;
     env?: NodeJS.ProcessEnv;
   } = {},
@@ -185,17 +182,22 @@ export async function tryHandleRootHelpFastPath(
       process.exitCode = 1;
     });
   try {
-    if (deps.outputRootHelp) {
-      await deps.outputRootHelp();
-      return true;
+    const loadRootHelpRenderOptionsForConfigSensitivePlugins =
+      deps.loadRootHelpRenderOptionsForConfigSensitivePlugins ??
+      (await import("./cli/root-help-live-config.js"))
+        .loadRootHelpRenderOptionsForConfigSensitivePlugins;
+    const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(deps.env);
+    if (!liveRootHelpOptions) {
+      const outputPrecomputedRootHelpText =
+        deps.outputPrecomputedRootHelpText ??
+        (await import("./cli/root-help-metadata.js")).outputPrecomputedRootHelpText;
+      if (outputPrecomputedRootHelpText()) {
+        return true;
+      }
     }
-    const outputPrecomputedRootHelpText =
-      deps.outputPrecomputedRootHelpText ??
-      (await import("./cli/root-help-metadata.js")).outputPrecomputedRootHelpText;
-    if (!outputPrecomputedRootHelpText()) {
-      const { outputRootHelp } = await import("./cli/program/root-help.js");
-      await outputRootHelp();
-    }
+    const outputRootHelp =
+      deps.outputRootHelp ?? (await import("./cli/program/root-help.js")).outputRootHelp;
+    await outputRootHelp(liveRootHelpOptions ?? undefined);
     return true;
   } catch (error) {
     handleError(error);

@@ -1,8 +1,8 @@
-import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { execNodeEvalSync, spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 
 const WRAPPERS = {
   linux: "scripts/e2e/parallels-linux-smoke.sh",
@@ -46,10 +46,7 @@ function countNonEmptyLines(value: string): number {
 }
 
 function runTsEval(source: string, env: Record<string, string> = {}) {
-  return execFileSync("node", ["--import", "tsx", "--input-type=module", "--eval", source], {
-    encoding: "utf8",
-    env: { ...process.env, ...env },
-  });
+  return execNodeEvalSync(source, { env: { ...process.env, ...env }, imports: ["tsx"] });
 }
 
 function resolveProviderAuth(
@@ -245,6 +242,17 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(script).toContain("DPkg::Lock::Timeout=300");
   });
 
+  it("keeps Linux bad-plugin diagnostics gated for historical update baselines", () => {
+    const script = readFileSync(TS_PATHS.linux, "utf8");
+
+    expect(script).toContain('BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION = "2026.5.7"');
+    expect(script).toContain("parseOpenClawPackageVersion");
+    expect(script).toContain("maybeInjectBadPluginFixture");
+    expect(script).toContain("maybeVerifyBadPluginDiagnostic");
+    expect(script).toContain("Skipping bad plugin diagnostic fixture");
+    expect(script).toContain("Skipping bad plugin diagnostic assertion");
+  });
+
   it("resolves provider defaults and explicit model overrides", () => {
     expect(resolveProviderAuth("openai", { env: { OPENAI_API_KEY: "sk-openai" } })).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
@@ -302,32 +310,18 @@ console.log(JSON.stringify(result));
   });
 
   it("rejects invalid providers and missing keys before touching guests", () => {
-    const invalidProvider = spawnSync(
-      "node",
-      [
-        "--import",
-        "tsx",
-        "--input-type=module",
-        "--eval",
-        `import { parseProvider } from "./${TS_PATHS.common}"; parseProvider("bogus");`,
-      ],
-      { encoding: "utf8", env: process.env },
+    const invalidProvider = spawnNodeEvalSync(
+      `import { parseProvider } from "./${TS_PATHS.common}"; parseProvider("bogus");`,
+      { env: process.env, imports: ["tsx"] },
     );
     expect(invalidProvider.status).toBe(1);
     expect(invalidProvider.stderr).toContain("invalid --provider: bogus");
 
-    const missingKey = spawnSync(
-      "node",
-      [
-        "--import",
-        "tsx",
-        "--input-type=module",
-        "--eval",
-        `import { resolveProviderAuth } from "./${TS_PATHS.common}"; resolveProviderAuth({ provider: "openai", apiKeyEnv: "PARALLELS_TEST_MISSING_KEY" });`,
-      ],
+    const missingKey = spawnNodeEvalSync(
+      `import { resolveProviderAuth } from "./${TS_PATHS.common}"; resolveProviderAuth({ provider: "openai", apiKeyEnv: "PARALLELS_TEST_MISSING_KEY" });`,
       {
-        encoding: "utf8",
         env: { ...process.env, PARALLELS_TEST_MISSING_KEY: "" },
+        imports: ["tsx"],
       },
     );
     expect(missingKey.status).toBe(1);
@@ -351,7 +345,7 @@ console.log(JSON.stringify(result));
         expect(script, scriptPath).toContain("tools.profile");
       }
       expect(script, scriptPath).toContain("--thinking");
-      expect(script, scriptPath).toContain("minimal");
+      expect(script, scriptPath).toContain("off");
       expect(script, scriptPath).toContain("finalAssistant(Raw|Visible)Text");
     }
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("modelProviderConfigBatchJson");
@@ -369,7 +363,7 @@ console.log(JSON.stringify(result));
     expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("windowsAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("tools.profile");
-    expect(npmUpdateScripts).toContain("--thinking minimal");
+    expect(npmUpdateScripts).toContain("--thinking off");
     expect(npmUpdateScripts).toContain("finalAssistant(Raw|Visible)Text");
     expect(npmUpdateScripts).toContain("posixAssertAgentOkScript");
     expect(npmUpdateScripts).toContain("windowsAgentTurnConfigPatchScript");

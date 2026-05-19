@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_APP_SERVER_CONFIG_KEYS,
   CODEX_COMPUTER_USE_CONFIG_KEYS,
@@ -67,6 +67,7 @@ describe("Codex app-server config", () => {
           sandbox: "danger-full-access",
           approvalsReviewer: "guardian_subagent",
           serviceTier: "flex",
+          codeModeOnly: true,
           turnCompletionIdleTimeoutMs: 120_000,
         },
       },
@@ -81,6 +82,7 @@ describe("Codex app-server config", () => {
       sandbox: "danger-full-access",
       approvalsReviewer: "guardian_subagent",
       serviceTier: "flex",
+      codeModeOnly: true,
       turnCompletionIdleTimeoutMs: 120_000,
     });
     expectFields(runtime.start, "runtime start", {
@@ -183,6 +185,7 @@ describe("Codex app-server config", () => {
       sandbox: "danger-full-access",
       approvalsReviewer: "user",
     });
+    expect(runtime.codeModeOnly).toBe(false);
     expectFields(runtime.start, "runtime start", {
       command: "codex",
       commandSource: "managed",
@@ -518,6 +521,35 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
+  it("defaults native Codex plugin destructive policy to enabled", () => {
+    const policy = resolveCodexPluginsPolicy({
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          slack: {
+            marketplaceName: "openai-curated",
+            pluginName: "slack",
+          },
+        },
+      },
+    });
+
+    expect(policy).toEqual({
+      configured: true,
+      enabled: true,
+      allowDestructiveActions: true,
+      pluginPolicies: [
+        {
+          configKey: "slack",
+          marketplaceName: "openai-curated",
+          pluginName: "slack",
+          enabled: true,
+          allowDestructiveActions: true,
+        },
+      ],
+    });
+  });
+
   it("rejects non-curated native plugin identities", () => {
     const config = readCodexPluginConfig({
       codexPlugins: {
@@ -742,6 +774,26 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     ).toEqual(first);
     expect(first).not.toContain("sk-first");
     expect(second).not.toContain("sk-second");
+  });
+
+  it("keeps secret-derived shared-client keys stable across module reloads", async () => {
+    const startOptions = {
+      transport: "websocket" as const,
+      command: "codex",
+      args: [],
+      url: "ws://127.0.0.1:39175",
+      authToken: "tok_reload",
+      headers: {},
+      env: { OPENAI_API_KEY: "sk-reload" },
+    };
+    const first = codexAppServerStartOptionsKey(startOptions);
+
+    vi.resetModules();
+    const reloaded = await import("./config.js");
+
+    expect(reloaded.codexAppServerStartOptionsKey(startOptions)).toEqual(first);
+    expect(first).not.toContain("tok_reload");
+    expect(first).not.toContain("sk-reload");
   });
 
   it("derives distinct shared-client keys for distinct agent dirs", () => {

@@ -101,7 +101,7 @@
           },
           "allow_destructive_actions": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "plugins": {
             "type": "object",
@@ -160,6 +160,10 @@
           "clearEnv": {
             "type": "array",
             "items": { "type": "string" }
+          },
+          "codeModeOnly": {
+            "type": "boolean",
+            "default": false
           },
           "requestTimeoutMs": {
             "type": "number",
@@ -272,7 +276,7 @@
     },
     "codexPlugins.allow_destructive_actions": {
       "label": "Allow Destructive Plugin Actions",
-      "help": "Default policy for plugin app write or destructive action elicitations. Defaults to false.",
+      "help": "Default policy for plugin app write or destructive action elicitations. Defaults to true.",
       "advanced": true
     },
     "codexPlugins.plugins": {
@@ -326,6 +330,11 @@
       "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
       "advanced": true
     },
+    "appServer.codeModeOnly": {
+      "label": "Code Mode Only",
+      "help": "Expose Codex's code-mode-only tool surface. OpenClaw dynamic tools remain available through Codex nested tool calls.",
+      "advanced": true
+    },
     "appServer.requestTimeoutMs": {
       "label": "Request Timeout",
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
@@ -333,7 +342,7 @@
     },
     "appServer.turnCompletionIdleTimeoutMs": {
       "label": "Turn Completion Idle Timeout",
-      "help": "Maximum quiet time after a turn-scoped Codex app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "help": "Maximum quiet time after Codex accepts a turn or after a turn-scoped app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
       "advanced": true
     },
     "appServer.approvalPolicy": {

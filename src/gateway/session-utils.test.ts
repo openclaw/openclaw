@@ -9,6 +9,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
+  canonicalizeSpawnedByForAgent,
   buildGatewaySessionRow,
   capArrayByJsonBytes,
   classifySessionKey,
@@ -84,8 +85,9 @@ function requireString(value: string | undefined, label: string): string {
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -280,6 +282,57 @@ describe("gateway session utils", () => {
     ]);
     expect(defaults.thinkingDefault).toBe("medium");
     expect(row.thinkingDefault).toBe("medium");
+  });
+
+  test("session rows ignore malformed compaction checkpoints", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        compactionCheckpoints: [
+          {
+            checkpointId: "checkpoint-older",
+            sessionKey: "agent:main:main",
+            sessionId: "session-1",
+            createdAt: 10,
+            reason: "manual",
+            preCompaction: { sessionId: "session-1" },
+            postCompaction: { sessionId: "session-1" },
+          },
+          null,
+          {
+            checkpointId: "",
+            createdAt: 30,
+            reason: "manual",
+          },
+          {
+            checkpointId: "checkpoint-bad-reason",
+            createdAt: 40,
+            reason: "bogus",
+          },
+          {
+            checkpointId: "checkpoint-newer",
+            sessionKey: "agent:main:main",
+            sessionId: "session-1",
+            createdAt: 50,
+            reason: "overflow-retry",
+            preCompaction: { sessionId: "session-1" },
+            postCompaction: { sessionId: "session-1" },
+          },
+        ],
+      } as unknown as SessionEntry,
+    });
+
+    expect(row.compactionCheckpointCount).toBe(2);
+    expect(row.latestCompactionCheckpoint).toEqual({
+      checkpointId: "checkpoint-newer",
+      createdAt: 50,
+      reason: "overflow-retry",
+    });
   });
 
   test("async session list reuses thinking metadata for lightweight rows", async () => {
@@ -596,6 +649,34 @@ describe("gateway session utils", () => {
     expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:MySession" })).toBe(
       "agent:alpha:mysession",
     );
+  });
+
+  test("resolveSessionStoreKey preserves Signal group ids", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+    expect(resolveSessionStoreKey({ cfg, sessionKey: `Signal:Group:${mixedGroupId}` })).toBe(
+      `agent:ops:signal:group:${mixedGroupId}`,
+    );
+    expect(
+      resolveSessionStoreKey({ cfg, sessionKey: `Agent:Alpha:Signal:Group:${mixedGroupId}` }),
+    ).toBe(`agent:alpha:signal:group:${mixedGroupId}`);
+  });
+
+  test("canonicalizeSpawnedByForAgent preserves Signal group ids", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+    } as OpenClawConfig;
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+
+    expect(canonicalizeSpawnedByForAgent(cfg, "ops", `Signal:Group:${mixedGroupId}`)).toBe(
+      `agent:ops:signal:group:${mixedGroupId}`,
+    );
+    expect(
+      canonicalizeSpawnedByForAgent(cfg, "ops", `Agent:Main:Signal:Group:${mixedGroupId}`),
+    ).toBe(`agent:main:signal:group:${mixedGroupId}`);
   });
 
   test("resolveSessionStoreKey honors global scope", () => {
@@ -1246,7 +1327,7 @@ describe("resolveSessionModelRef", () => {
 
   test("falls back to resolved provider for unprefixed legacy runtime model", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
 
     const resolved = resolveSessionModelRef(cfg, {
@@ -1264,7 +1345,7 @@ describe("resolveSessionModelRef", () => {
 
   test("preserves provider from slash-prefixed model when modelProvider is missing", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
 
     const resolved = resolveSessionModelRef(cfg, {
@@ -1607,7 +1688,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("does not inherit default provider for unprefixed legacy runtime model", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
 
     const resolved = resolveLegacyIdentityRef(cfg);
@@ -1617,7 +1698,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("infers provider from configured model allowlist when unambiguous", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
       models: {
         "anthropic/claude-sonnet-4-6": {},
       },
@@ -1630,7 +1711,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("infers provider from configured provider catalogs when allowlist is absent", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
     cfg.models = {
       providers: {
@@ -1652,7 +1733,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("keeps provider unknown when configured models are ambiguous", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
       models: {
         "anthropic/claude-sonnet-4-6": {},
         "minimax/claude-sonnet-4-6": {},
@@ -1666,7 +1747,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("keeps provider unknown when configured provider catalog matches are ambiguous", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
     cfg.models = {
       providers: {
@@ -1691,7 +1772,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("preserves provider from slash-prefixed runtime model", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
     });
 
     const resolved = resolveSessionModelIdentityRef(cfg, {
@@ -1706,7 +1787,7 @@ describe("resolveSessionModelIdentityRef", () => {
 
   test("infers wrapper provider for slash-prefixed runtime model when allowlist match is unique", () => {
     const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3-pro-preview",
+      primary: "google-gemini-cli/gemini-3.1-pro-preview",
       models: {
         "vercel-ai-gateway/anthropic/claude-sonnet-4-6": {},
       },

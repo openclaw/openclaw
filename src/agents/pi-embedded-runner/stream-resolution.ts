@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { getApiProvider, streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { getApiProvider, streamSimple } from "@earendil-works/pi-ai";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import { createBoundaryAwareStreamFnForModel } from "../provider-transport-stream.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
@@ -184,7 +184,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   return currentStreamFn;
 }
 
-export const __testing = {
+export const testing = {
   setPiNativeCodexResponsesStreamFnForTest(streamFn: StreamFn | undefined): void {
     piNativeCodexResponsesStreamFnForTest = streamFn;
   },
@@ -230,3 +230,4 @@ function wrapEmbeddedAgentStreamFn(
     });
   };
 }
+export { testing as __testing };

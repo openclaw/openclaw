@@ -1,8 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Command } from "commander";
 import type {
   ApiKeyCredential,
@@ -94,6 +94,8 @@ import type {
 } from "./conversation-binding.types.js";
 import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
 import type {
+  PluginAgentEventEmitParams,
+  PluginAgentEventEmitResult,
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
   PluginJsonValue,
@@ -102,9 +104,15 @@ import type {
   PluginRunContextGetParams,
   PluginRunContextPatch,
   PluginRuntimeLifecycleRegistration,
+  PluginSessionActionRegistration,
+  PluginSessionAttachmentParams,
+  PluginSessionAttachmentResult,
   PluginSessionSchedulerJobHandle,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
+  PluginSessionTurnScheduleParams,
+  PluginSessionTurnUnscheduleByTagParams,
+  PluginSessionTurnUnscheduleByTagResult,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
@@ -192,6 +200,8 @@ export type {
 } from "./cli-backend.types.js";
 export * from "./hook-types.js";
 export type {
+  PluginAgentEventEmitParams,
+  PluginAgentEventEmitResult,
   PluginAgentEventSubscriptionRegistration,
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
@@ -205,10 +215,18 @@ export type {
   PluginRunContextGetParams,
   PluginRunContextPatch,
   PluginRuntimeLifecycleRegistration,
+  PluginSessionAttachmentParams,
+  PluginSessionAttachmentResult,
   PluginSessionSchedulerJobHandle,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginSessionExtensionProjection,
+  PluginSessionActionContext,
+  PluginSessionActionRegistration,
+  PluginSessionActionResult,
+  PluginSessionTurnScheduleParams,
+  PluginSessionTurnUnscheduleByTagParams,
+  PluginSessionTurnUnscheduleByTagResult,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
@@ -946,9 +964,9 @@ export type PluginEmbeddingProvider = {
   id: string;
   model: string;
   maxInputTokens?: number;
-  embedQuery: (text: string) => Promise<number[]>;
-  embedBatch: (texts: string[]) => Promise<number[][]>;
-  embedBatchInputs?: (inputs: unknown[]) => Promise<number[][]>;
+  embedQuery: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>;
+  embedBatch: (texts: string[], options?: { signal?: AbortSignal }) => Promise<number[][]>;
+  embedBatchInputs?: (inputs: unknown[], options?: { signal?: AbortSignal }) => Promise<number[][]>;
   client?: unknown;
 };
 
@@ -1102,6 +1120,7 @@ export type ProviderPluginWizardSetup = {
   choiceHint?: string;
   assistantPriority?: number;
   assistantVisibility?: "visible" | "manual-only";
+  onboardingFeatured?: boolean;
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
@@ -1110,7 +1129,7 @@ export type ProviderPluginWizardSetup = {
    * Interactive onboarding surfaces where this auth choice should appear.
    * Defaults to `["text-inference"]` when omitted.
    */
-  onboardingScopes?: Array<"text-inference" | "image-generation">;
+  onboardingScopes?: Array<"text-inference" | "image-generation" | "music-generation">;
   /**
    * Optional model-allowlist prompt policy applied after this auth choice is
    * selected in configure/onboarding flows.
@@ -1979,6 +1998,23 @@ export type PluginCommandHandler = (
 /**
  * Definition for a plugin-registered command.
  */
+export const AGENT_PROMPT_SURFACE_KINDS = [
+  "pi_main",
+  "codex_app_server",
+  "cli_backend",
+  "acp_backend",
+  "subagent",
+] as const;
+
+export type AgentPromptSurfaceKind = (typeof AGENT_PROMPT_SURFACE_KINDS)[number];
+
+export type AgentPromptGuidanceEntry = {
+  text: string;
+  surfaces?: readonly AgentPromptSurfaceKind[];
+};
+
+export type AgentPromptGuidance = string | AgentPromptGuidanceEntry;
+
 export type OpenClawPluginCommandDefinition = {
   /** Command name without leading slash (e.g., "tts") */
   name: string;
@@ -2006,7 +2042,7 @@ export type OpenClawPluginCommandDefinition = {
    */
   channels?: readonly string[];
   /** Optional system-prompt guidance for agents when this command is registered. */
-  agentPromptGuidance?: readonly string[];
+  agentPromptGuidance?: readonly AgentPromptGuidance[];
   /** Whether this command accepts arguments */
   acceptsArgs?: boolean;
   /** Whether only authorized senders can use this command (default: true) */
@@ -2237,6 +2273,7 @@ export type OpenClawGatewayDiscoveryAdvertiseContext = {
   gatewayPort: number;
   gatewayTlsEnabled: boolean;
   gatewayTlsFingerprintSha256?: string;
+  gatewayDirectReachable: boolean;
   canvasPort?: number;
   tailnetDns?: string;
   sshPort?: number;
@@ -2257,6 +2294,10 @@ export type OpenClawPluginServiceContext = {
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;
+  startupTrace?: {
+    detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+    measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
+  };
   internalDiagnostics?: {
     emit: (event: DiagnosticEventInput) => void;
     onEvent: (
@@ -2329,7 +2370,13 @@ export type PluginConfigMigration = (config: OpenClawConfig) =>
   | null
   | undefined;
 
-export type MigrationItemStatus = "planned" | "migrated" | "skipped" | "conflict" | "error";
+export type MigrationItemStatus =
+  | "planned"
+  | "migrated"
+  | "skipped"
+  | "warning"
+  | "conflict"
+  | "error";
 export type MigrationItemKind =
   | "config"
   | "secret"
@@ -2397,6 +2444,10 @@ export type MigrationApplyResult = MigrationPlan & {
   reportDir?: string;
 };
 
+export type MigrationProviderPreparation = {
+  dispose?: () => void | Promise<void>;
+};
+
 export type MigrationProviderContext = {
   config: OpenClawConfig;
   runtime?: PluginRuntime;
@@ -2405,6 +2456,7 @@ export type MigrationProviderContext = {
   source?: string;
   includeSecrets?: boolean;
   overwrite?: boolean;
+  providerOptions?: Record<string, unknown>;
   backupPath?: string;
   reportDir?: string;
   signal?: AbortSignal;
@@ -2416,6 +2468,9 @@ export type MigrationProviderPlugin = {
   label: string;
   description?: string;
   detect?: (ctx: MigrationProviderContext) => MigrationDetection | Promise<MigrationDetection>;
+  prepareApply?: (
+    ctx: MigrationProviderContext,
+  ) => MigrationProviderPreparation | Promise<MigrationProviderPreparation | undefined> | undefined;
   plan: (ctx: MigrationProviderContext) => MigrationPlan | Promise<MigrationPlan>;
   apply: (
     ctx: MigrationProviderContext,
@@ -2431,6 +2486,79 @@ export type PluginSetupAutoEnableContext = {
 export type PluginSetupAutoEnableProbe = (
   ctx: PluginSetupAutoEnableContext,
 ) => string | string[] | null | undefined;
+
+export type OpenClawPluginSessionStateApi = {
+  /** Register plugin-owned session state projected into Gateway session rows. */
+  registerSessionExtension: (extension: PluginSessionExtensionRegistration) => void;
+};
+
+export type OpenClawPluginSessionWorkflowApi = {
+  /** Queue one plugin-owned context injection for the next agent turn in a session. */
+  enqueueNextTurnInjection: (
+    injection: PluginNextTurnInjection,
+  ) => Promise<PluginNextTurnInjectionEnqueueResult>;
+  /**
+   * Register cleanup metadata for a plugin-owned session scheduler job.
+   * This does not schedule work or create task records; it only lets the host
+   * clean external scheduler state during reset/delete/disable.
+   */
+  registerSessionSchedulerJob: (
+    job: PluginSessionSchedulerJobRegistration,
+  ) => PluginSessionSchedulerJobHandle | undefined;
+  /** Send host-validated files to the active direct-outbound route for a session. */
+  sendSessionAttachment: (
+    params: PluginSessionAttachmentParams,
+  ) => Promise<PluginSessionAttachmentResult>;
+  /**
+   * Schedule a future agent turn in a session through Cron.
+   * Cron owns timing and creates the task ledger entry when the turn runs.
+   */
+  scheduleSessionTurn: (
+    params: PluginSessionTurnScheduleParams,
+  ) => Promise<PluginSessionSchedulerJobHandle | undefined>;
+  /** Remove Cron-backed scheduled session turns that share a plugin-owned tag. */
+  unscheduleSessionTurnsByTag: (
+    params: PluginSessionTurnUnscheduleByTagParams,
+  ) => Promise<PluginSessionTurnUnscheduleByTagResult>;
+};
+
+export type OpenClawPluginSessionControlsApi = {
+  /** Register a typed session action that clients can dispatch through the Gateway. */
+  registerSessionAction: (action: PluginSessionActionRegistration) => void;
+  /** Register a generic Control UI contribution descriptor. */
+  registerControlUiDescriptor: (descriptor: PluginControlUiDescriptor) => void;
+};
+
+export type OpenClawPluginSessionApi = {
+  state: OpenClawPluginSessionStateApi;
+  workflow: OpenClawPluginSessionWorkflowApi;
+  controls: OpenClawPluginSessionControlsApi;
+};
+
+export type OpenClawPluginAgentEventsApi = {
+  /** Subscribe to sanitized agent events through the host-owned plugin lifecycle. */
+  registerAgentEventSubscription: (subscription: PluginAgentEventSubscriptionRegistration) => void;
+  /** Emit a host-routed, plugin-attributed event for workflow/UI subscribers. */
+  emitAgentEvent: (params: PluginAgentEventEmitParams) => PluginAgentEventEmitResult;
+};
+
+export type OpenClawPluginAgentApi = {
+  events: OpenClawPluginAgentEventsApi;
+};
+
+export type OpenClawPluginRunContextApi = {
+  /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
+  setRunContext: (patch: PluginRunContextPatch) => boolean;
+  /** Read namespaced plugin data for a run. */
+  getRunContext: (params: PluginRunContextGetParams) => PluginJsonValue | undefined;
+  /** Clear one namespace or all namespaces this plugin owns for a run. */
+  clearRunContext: (params: { runId: string; namespace?: string }) => void;
+};
+
+export type OpenClawPluginLifecycleApi = {
+  /** Register cleanup hooks for plugin-owned host state and background work. */
+  registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
+};
 
 /** Main registration API injected into native plugin entry files. */
 export type OpenClawPluginApi = {
@@ -2451,6 +2579,17 @@ export type OpenClawPluginApi = {
    */
   runtime: PluginRuntime;
   logger: PluginLogger;
+  /**
+   * Grouped facade over the existing flat session-related plugin API.
+   * Flat methods remain supported for compatibility.
+   */
+  session: OpenClawPluginSessionApi;
+  /** Grouped facade for agent-event workflow seams. */
+  agent: OpenClawPluginAgentApi;
+  /** Grouped facade for run-scoped plugin scratch state. */
+  runContext: OpenClawPluginRunContextApi;
+  /** Grouped facade for plugin-owned lifecycle cleanup hooks. */
+  lifecycle: OpenClawPluginLifecycleApi;
   registerTool: (
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: OpenClawPluginToolOptions,
@@ -2578,9 +2717,15 @@ export type OpenClawPluginApi = {
     handler: AgentToolResultMiddleware,
     options?: AgentToolResultMiddlewareOptions,
   ) => void;
-  /** Register plugin-owned session state that can be projected into Gateway session rows. */
+  /**
+   * Register plugin-owned session state that can be projected into Gateway session rows.
+   * @deprecated Use `api.session.state.registerSessionExtension(...)`.
+   */
   registerSessionExtension: (extension: PluginSessionExtensionRegistration) => void;
-  /** Queue one plugin-owned context injection for the next agent turn in a session. */
+  /**
+   * Queue one plugin-owned context injection for the next agent turn in a session.
+   * @deprecated Use `api.session.workflow.enqueueNextTurnInjection(...)`.
+   */
   enqueueNextTurnInjection: (
     injection: PluginNextTurnInjection,
   ) => Promise<PluginNextTurnInjectionEnqueueResult>;
@@ -2595,22 +2740,88 @@ export type OpenClawPluginApi = {
    * cannot decorate other plugins' tools or core tools through this surface.
    */
   registerToolMetadata: (metadata: PluginToolMetadataRegistration) => void;
-  /** Register a generic Control UI contribution descriptor. */
+  /**
+   * Register a generic Control UI contribution descriptor.
+   * @deprecated Use `api.session.controls.registerControlUiDescriptor(...)`.
+   */
   registerControlUiDescriptor: (descriptor: PluginControlUiDescriptor) => void;
-  /** Register cleanup hooks for plugin-owned host state and background work. */
+  /**
+   * Register cleanup hooks for plugin-owned host state and background work.
+   * @deprecated Use `api.lifecycle.registerRuntimeLifecycle(...)`.
+   */
   registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
-  /** Subscribe to sanitized agent events through the host-owned plugin lifecycle. */
+  /**
+   * Subscribe to sanitized agent events through the host-owned plugin lifecycle.
+   * @deprecated Use `api.agent.events.registerAgentEventSubscription(...)`.
+   */
   registerAgentEventSubscription: (subscription: PluginAgentEventSubscriptionRegistration) => void;
-  /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
+  /**
+   * Emit a host-routed, plugin-attributed agent event for workflow/UI subscribers.
+   * @deprecated Use `api.agent.events.emitAgentEvent(...)`.
+   */
+  emitAgentEvent: (params: PluginAgentEventEmitParams) => PluginAgentEventEmitResult;
+  /**
+   * Store namespaced, JSON-compatible data for the active run. Cleared on run end/error.
+   * @deprecated Use `api.runContext.setRunContext(...)`.
+   */
   setRunContext: (patch: PluginRunContextPatch) => boolean;
-  /** Read namespaced plugin data for a run. */
+  /**
+   * Read namespaced plugin data for a run.
+   * @deprecated Use `api.runContext.getRunContext(...)`.
+   */
   getRunContext: (params: PluginRunContextGetParams) => PluginJsonValue | undefined;
-  /** Clear one namespace or all namespaces this plugin owns for a run. */
+  /**
+   * Clear one namespace or all namespaces this plugin owns for a run.
+   * @deprecated Use `api.runContext.clearRunContext(...)`.
+   */
   clearRunContext: (params: { runId: string; namespace?: string }) => void;
-  /** Register a plugin-owned session job so reset/delete/disable can clean it deterministically. */
+  /**
+   * Register cleanup metadata for a plugin-owned session scheduler job.
+   * This does not schedule work or create task records; it only lets the host
+   * clean external scheduler state during reset/delete/disable.
+   *
+   * @deprecated Use `api.session.workflow.registerSessionSchedulerJob(...)`.
+   */
   registerSessionSchedulerJob: (
     job: PluginSessionSchedulerJobRegistration,
   ) => PluginSessionSchedulerJobHandle | undefined;
+  /**
+   * Register a typed session action that clients can dispatch through the Gateway.
+   * @deprecated Use `api.session.controls.registerSessionAction(...)`.
+   */
+  registerSessionAction: (action: PluginSessionActionRegistration) => void;
+  /**
+   * Send one or more host-validated files to the active direct-outbound channel for a session.
+   *
+   * This API is intended for bundled plugins running with the host channel/session
+   * integration available. Calls may resolve to `{ ok: false }` instead of attaching
+   * files when global side effects are disabled or when the required plugin/channel
+   * runtime is not loaded, so callers must handle rejection via the returned result.
+   *
+   * @deprecated Use `api.session.workflow.sendSessionAttachment(...)`.
+   */
+  sendSessionAttachment: (
+    params: PluginSessionAttachmentParams,
+  ) => Promise<PluginSessionAttachmentResult>;
+  /**
+   * Schedule a future agent turn in a session through Cron.
+   * Cron owns timing and creates the task ledger entry when the turn runs.
+   * Bundled plugins only; workspace plugins receive undefined.
+   *
+   * @deprecated Use `api.session.workflow.scheduleSessionTurn(...)`.
+   */
+  scheduleSessionTurn: (
+    params: PluginSessionTurnScheduleParams,
+  ) => Promise<PluginSessionSchedulerJobHandle | undefined>;
+  /**
+   * Remove Cron-backed scheduled session turns that share the same plugin-owned tag.
+   * Bundled plugins only; workspace plugins receive a zero-count result.
+   *
+   * @deprecated Use `api.session.workflow.unscheduleSessionTurnsByTag(...)`.
+   */
+  unscheduleSessionTurnsByTag: (
+    params: PluginSessionTurnUnscheduleByTagParams,
+  ) => Promise<PluginSessionTurnUnscheduleByTagResult>;
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (
     runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,

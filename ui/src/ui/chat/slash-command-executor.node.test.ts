@@ -20,6 +20,21 @@ function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessio
   };
 }
 
+function requireRequestCall(
+  request: ReturnType<typeof vi.fn>,
+  method: string,
+): { method: string; payload: Record<string, unknown> } {
+  const call = request.mock.calls.find(([calledMethod]) => calledMethod === method);
+  if (!call) {
+    throw new Error(`expected ${method} request`);
+  }
+  return { method: call[0] as string, payload: call[1] as Record<string, unknown> };
+}
+
+function expectNoRequestCall(request: ReturnType<typeof vi.fn>, method: string) {
+  expect(request.mock.calls.some(([calledMethod]) => calledMethod === method)).toBe(false);
+}
+
 describe("executeSlashCommand /kill", () => {
   it("aborts every sub-agent session for /kill all", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
@@ -865,9 +880,9 @@ describe("executeSlashCommand directives", () => {
       "",
     );
 
-    // Should NOT show DeepSeek defaults (xhigh, max) for an Anthropic session
-    expect(status.content).not.toContain("xhigh");
-    expect(status.content).not.toContain("max");
+    expect(status.content).toBe(
+      "Current thinking level: high.\nOptions: default, off, minimal, low, medium, high.",
+    );
   });
 
   it("reports the current verbose level for bare /verbose", async () => {
@@ -973,14 +988,10 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe("Steered.");
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        message: "try a different approach",
-        deliver: false,
-      }),
-    );
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload.sessionKey).toBe("agent:main:main");
+    expect(chatSend.payload.message).toBe("try a different approach");
+    expect(chatSend.payload.deliver).toBe(false);
   });
 
   it("injects into a matching subagent when the first word resolves to one", async () => {
@@ -1010,14 +1021,10 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe("Steered `researcher`.");
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:subagent:researcher",
-        message: "try a different approach",
-        deliver: false,
-      }),
-    );
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload.sessionKey).toBe("agent:main:subagent:researcher");
+    expect(chatSend.payload.message).toBe("try a different approach");
+    expect(chatSend.payload.deliver).toBe(false);
   });
 
   it("uses cached sessions to avoid an extra sessions.list round trip", async () => {
@@ -1048,14 +1055,10 @@ describe("executeSlashCommand /steer (soft inject)", () => {
 
     expect(result.content).toBe("Steered `researcher`.");
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:subagent:researcher",
-        message: "try a different approach",
-        deliver: false,
-      }),
-    );
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload.sessionKey).toBe("agent:main:subagent:researcher");
+    expect(chatSend.payload.message).toBe("try a different approach");
+    expect(chatSend.payload.deliver).toBe(false);
   });
 
   it("matches an explicit full subagent session key", async () => {
@@ -1085,14 +1088,10 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe("Steered `agent:main:subagent:researcher`.");
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:subagent:researcher",
-        message: "try a different approach",
-        deliver: false,
-      }),
-    );
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload.sessionKey).toBe("agent:main:subagent:researcher");
+    expect(chatSend.payload.message).toBe("try a different approach");
+    expect(chatSend.payload.deliver).toBe(false);
   });
 
   it("does not treat 'all' as a subagent wildcard", async () => {
@@ -1114,14 +1113,10 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe("Steered.");
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        message: "all good now",
-        deliver: false,
-      }),
-    );
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload.sessionKey).toBe("agent:main:main");
+    expect(chatSend.payload.message).toBe("all good now");
+    expect(chatSend.payload.deliver).toBe(false);
   });
 
   it("does not match agent id as target — treats 'main' as message text", async () => {
@@ -1148,14 +1143,10 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe("Steered.");
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        message: "main refine the plan",
-        deliver: false,
-      }),
-    );
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload.sessionKey).toBe("agent:main:main");
+    expect(chatSend.payload.message).toBe("main refine the plan");
+    expect(chatSend.payload.deliver).toBe(false);
   });
 
   it("keeps ended subagent targets so steer does not fall back to the current session", async () => {
@@ -1186,7 +1177,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
 
     expect(result.content).toBe("No active run matched `researcher`. Use `/redirect` instead.");
     expect(request).toHaveBeenCalledWith("sessions.list", {});
-    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expectNoRequestCall(request, "chat.send");
   });
 
   it("returns a no-op summary when the current session has no active run", async () => {
@@ -1206,7 +1197,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
 
     expect(result.content).toBe("No active run. Use the chat input or `/redirect` instead.");
     expect(request).toHaveBeenCalledWith("sessions.list", {});
-    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expectNoRequestCall(request, "chat.send");
   });
 
   it("returns steer usage when no message is provided", async () => {

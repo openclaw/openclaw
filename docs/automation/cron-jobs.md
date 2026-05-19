@@ -27,6 +27,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
   <Step title="Check your jobs">
     ```bash
     openclaw cron list
+    openclaw cron get <job-id>
     openclaw cron show <job-id>
     ```
   </Step>
@@ -359,6 +360,9 @@ When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `
 # List all jobs
 openclaw cron list
 
+# Get one stored job as JSON
+openclaw cron get <jobId>
+
 # Show one job, including resolved delivery route
 openclaw cron show <jobId>
 
@@ -368,11 +372,17 @@ openclaw cron edit <jobId> --message "Updated prompt" --model "opus"
 # Force run a job now
 openclaw cron run <jobId>
 
+# Force run a job now and wait for its terminal status
+openclaw cron run <jobId> --wait --wait-timeout 10m --poll-interval 2s
+
 # Run only if due
 openclaw cron run <jobId> --due
 
 # View run history
 openclaw cron runs --id <jobId> --limit 50
+
+# View one exact run
+openclaw cron runs --id <jobId> --run-id <runId>
 
 # Delete a job
 openclaw cron remove <jobId>
@@ -381,6 +391,8 @@ openclaw cron remove <jobId>
 openclaw cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --message "Check ops queue" --agent ops
 openclaw cron edit <jobId> --clear-agent
 ```
+
+`openclaw cron run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes. Wait mode polls the exact returned `runId`; it exits `0` for status `ok` and non-zero for `error`, `skipped`, or a wait timeout.
 
 <Note>
 Model override note:
@@ -482,7 +494,7 @@ openclaw doctor
 
 ## Related
 
-- [Automation & Tasks](/automation) — all automation mechanisms at a glance
+- [Automation](/automation) — all automation mechanisms at a glance
 - [Background Tasks](/automation/tasks) — task ledger for cron executions
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
 - [Timezone](/concepts/timezone) — timezone configuration

@@ -217,6 +217,18 @@ function expectReplyCall(
   }
 }
 
+function replyBody(
+  replySpy: ReturnType<typeof vi.fn>,
+  index = 0,
+): { Body?: string; ForceSenderIsOwnerFalse?: boolean; Provider?: string } {
+  const call = replySpy.mock.calls[index];
+  return requireRecord(call?.[0], `reply call ${index} body`) as {
+    Body?: string;
+    ForceSenderIsOwnerFalse?: boolean;
+    Provider?: string;
+  };
+}
+
 beforeAll(async () => {
   previousRegistry = getActivePluginRegistry();
 
@@ -834,7 +846,7 @@ describe("runHeartbeatOnce", () => {
         replySpy,
         0,
         {
-          Body: expect.stringMatching(/Ops check[\s\S]*Current time: /),
+          Body: /Ops check[\s\S]*Current time: /,
           SessionKey: sessionKey,
           From: "120363401234567890@g.us",
           To: "120363401234567890@g.us",
@@ -1204,13 +1216,31 @@ describe("runHeartbeatOnce", () => {
         name: "raw flagged reasoning + final payload",
         caseDir: "hb-reasoning-raw",
         replies: [{ text: "Because it helps", isReasoning: true }, { text: "Final alert" }],
-        expectedTexts: ["Reasoning:\n_Because it helps_", "Final alert"],
+        expectedTexts: ["Thinking\n\n_Because it helps_", "Final alert"],
       },
       {
         name: "raw flagged reasoning + HEARTBEAT_OK",
         caseDir: "hb-reasoning-heartbeat-ok",
         replies: [{ text: "Because it helps", isReasoning: true }, { text: "HEARTBEAT_OK" }],
-        expectedTexts: ["Reasoning:\n_Because it helps_"],
+        expectedTexts: ["Thinking\n\n_Because it helps_"],
+      },
+      {
+        name: "visible final that starts with thinking prose",
+        caseDir: "hb-thinking-visible-final",
+        replies: [{ text: "Thinking... all clear" }],
+        expectedTexts: ["Thinking... all clear"],
+      },
+      {
+        name: "visible final that is exactly thinking label",
+        caseDir: "hb-thinking-exact-final",
+        replies: [{ text: "Thinking..." }],
+        expectedTexts: ["Thinking..."],
+      },
+      {
+        name: "visible final that starts with thinking status line",
+        caseDir: "hb-thinking-status-final",
+        replies: [{ text: "Thinking...\nI'll check that now" }],
+        expectedTexts: ["Thinking...\nI'll check that now"],
       },
     ]),
   )(
@@ -1470,7 +1500,7 @@ describe("runHeartbeatOnce", () => {
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const calledCtx = replyBody(replySpy);
       const expectedPath = path.join(workspaceDir, "HEARTBEAT.md").replace(/\\/g, "/");
       expect(calledCtx.Body).toContain(`use workspace file ${expectedPath} (exact case)`);
       expect(calledCtx.Body).toContain("Do not read docs/heartbeat.md.");
@@ -1541,7 +1571,7 @@ Some global directive after tasks.
 
     expect(res.status).toBe("ran");
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+    const calledCtx = replyBody(replySpy);
     expect(calledCtx.Body).toContain("- inbox: Check urgent inbox items");
     expect(calledCtx.Body).toContain("- calendar: Check calendar changes");
     expect(calledCtx.Body).toContain("Additional context from HEARTBEAT.md");
@@ -1612,7 +1642,7 @@ tasks:
 
     expect(res.status).toBe("ran");
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+    const calledCtx = replyBody(replySpy);
     expect(calledCtx.Body).toContain("- inbox: Check urgent inbox items");
     expect(calledCtx.Body).toContain("- calendar: Check calendar changes");
     expect(calledCtx.Body).toContain("Additional context from HEARTBEAT.md");
@@ -1750,7 +1780,7 @@ tasks:
         expect(replySpy, name).toHaveBeenCalledTimes(expectedReplyCalls);
         expect(sendWhatsApp, name).toHaveBeenCalledTimes(expectedSendCalls);
         if (expectCronContext) {
-          const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+          const calledCtx = replyBody(replySpy);
           expect(calledCtx.Provider, name).toBe("cron-event");
           expect(calledCtx.Body, name).toContain("scheduled reminder has been triggered");
         }
@@ -1808,7 +1838,7 @@ tasks:
       });
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
-      const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+      const calledCtx = replyBody(replySpy);
       expect(calledCtx.Provider).toBe("cron-event");
       expect(calledCtx.Body).toContain("Handle this reminder internally");
       expect(calledCtx.Body).not.toContain("Please relay this reminder to the user");
@@ -1865,11 +1895,7 @@ tasks:
       });
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
-      const calledCtx = replySpy.mock.calls[0]?.[0] as {
-        Provider?: string;
-        Body?: string;
-        ForceSenderIsOwnerFalse?: boolean;
-      };
+      const calledCtx = replyBody(replySpy);
       expect(calledCtx.Provider).toBe("exec-event");
       expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
       expect(calledCtx.Body).toContain("Handle the result internally");

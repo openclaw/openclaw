@@ -364,6 +364,142 @@ run_pnpm() {
   "${PNPM_CMD[@]}" "$@"
 }
 
+resolve_git_openclaw_ref() {
+  local requested="${OPENCLAW_VERSION:-latest}"
+  local resolved_version=""
+
+  case "$requested" in
+    ""|latest)
+      resolved_version="$("$(npm_bin)" view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
+      if [[ -n "$resolved_version" ]]; then
+        echo "v${resolved_version}"
+        return 0
+      fi
+      echo "main"
+      return 0
+      ;;
+    next|beta)
+      resolved_version="$("$(npm_bin)" view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
+      if [[ -n "$resolved_version" ]]; then
+        echo "v${resolved_version}"
+        return 0
+      fi
+      echo "$requested"
+      return 0
+      ;;
+    main)
+      echo "main"
+      return 0
+      ;;
+    v[0-9]*)
+      echo "$requested"
+      return 0
+      ;;
+    [0-9]*.[0-9]*.[0-9]*)
+      echo "v${requested}"
+      return 0
+      ;;
+    *)
+      echo "$requested"
+      return 0
+      ;;
+  esac
+}
+
+checkout_git_openclaw_ref() {
+  local repo_dir="$1"
+  local ref="$2"
+
+  if [[ -z "$ref" ]]; then
+    return 0
+  fi
+
+  if [[ "$ref" == "main" ]]; then
+    git -C "$repo_dir" fetch --no-tags origin main
+    git -C "$repo_dir" checkout main
+    if [[ "$GIT_UPDATE" == "1" ]]; then
+      git -C "$repo_dir" pull --rebase --no-tags || true
+    fi
+    return 0
+  fi
+
+  if git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
+    git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
+    git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
+    if [[ "$GIT_UPDATE" == "1" ]]; then
+      git -C "$repo_dir" pull --rebase --no-tags || true
+    fi
+    return 0
+  fi
+
+  git -C "$repo_dir" fetch --tags origin
+
+  if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
+    git -C "$repo_dir" checkout --detach "$ref"
+    return 0
+  fi
+
+  if git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
+    git -C "$repo_dir" checkout --detach "$ref"
+    return 0
+  fi
+
+  fail "Requested git version not found: ${ref}"
+}
+
+git_install_lockfile_flag() {
+  local repo_dir="$1"
+  local ref="$2"
+
+  if [[ "$ref" == "main" ]] || git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
+    echo "--no-frozen-lockfile"
+    return 0
+  fi
+
+  echo "--frozen-lockfile"
+}
+
+repo_pnpm_spec() {
+  local repo_dir="$1"
+  local package_json="${repo_dir}/package.json"
+
+  if [[ ! -f "$package_json" ]]; then
+    return 1
+  fi
+
+  sed -n -E 's/^[[:space:]]*"packageManager"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$package_json" | head -n1
+}
+
+activate_repo_pnpm_version() {
+  local repo_dir="$1"
+  local spec
+  local version
+  local corepack_cmd=""
+
+  spec="$(repo_pnpm_spec "$repo_dir" || true)"
+  if [[ "$spec" != pnpm@* ]]; then
+    return 0
+  fi
+
+  version="${spec#pnpm@}"
+  version="${version%%+*}"
+  if [[ -z "$version" ]]; then
+    return 0
+  fi
+
+  if [[ -x "$(node_dir)/bin/corepack" ]]; then
+    corepack_cmd="$(node_dir)/bin/corepack"
+  elif command -v corepack >/dev/null 2>&1; then
+    corepack_cmd="$(command -v corepack)"
+  fi
+
+  if [[ -n "$corepack_cmd" ]]; then
+    log "Activating repo pnpm ${version}"
+    "$corepack_cmd" prepare "pnpm@${version}" --activate >/dev/null 2>&1 || true
+    detect_pnpm_cmd || true
+  fi
+}
+
 install_node() {
   local os
   local arch
@@ -429,18 +565,18 @@ ensure_pnpm() {
   if detect_pnpm_cmd && pnpm_cmd_is_ready; then
     local current_version
     current_version="$("${PNPM_CMD[@]}" --version 2>/dev/null || true)"
-    if [[ "$current_version" =~ ^10\. ]]; then
+    if [[ "$current_version" =~ ^11\. ]]; then
       return 0
     fi
-    log "Found pnpm ${current_version:-unknown}; upgrading to pnpm@10..."
+    log "Found pnpm ${current_version:-unknown}; upgrading to pnpm@11..."
   fi
 
   if [[ -x "$(node_dir)/bin/corepack" ]]; then
     emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"start\",\"method\":\"corepack\"}"
     log "Installing pnpm via Corepack..."
     "$(node_dir)/bin/corepack" enable >/dev/null 2>&1 || true
-    "$(node_dir)/bin/corepack" prepare pnpm@10 --activate
-    if detect_pnpm_cmd && pnpm_cmd_is_ready && [[ "$("${PNPM_CMD[@]}" --version 2>/dev/null || true)" =~ ^10\. ]]; then
+    "$(node_dir)/bin/corepack" prepare pnpm@11 --activate
+    if detect_pnpm_cmd && pnpm_cmd_is_ready && [[ "$("${PNPM_CMD[@]}" --version 2>/dev/null || true)" =~ ^11\. ]]; then
       emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"ok\"}"
       return 0
     fi
@@ -448,7 +584,7 @@ ensure_pnpm() {
 
   emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"start\",\"method\":\"npm\"}"
   log "Installing pnpm via npm..."
-  SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$PREFIX" pnpm@10
+  SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$PREFIX" pnpm@11
   detect_pnpm_cmd || true
   emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"ok\"}"
   return 0
@@ -488,10 +624,21 @@ fix_npm_prefix_if_needed() {
 
 install_openclaw() {
   local requested="${OPENCLAW_VERSION:-latest}"
+  local freshness_flag="--min-release-age=0"
+  local min_release_age=""
+  min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$(npm_bin)" config get min-release-age 2>/dev/null || true)"
+  if [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
+    local before_value=""
+    before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" config get before 2>/dev/null || true)"
+    if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
+      freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+    fi
+  fi
   local npm_args=(
     --loglevel "$NPM_LOGLEVEL"
     --no-fund
     --no-audit
+    "$freshness_flag"
   )
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"start\",\"version\":\"${requested}\"}"
   log "Installing OpenClaw (${requested})..."
@@ -500,14 +647,14 @@ install_openclaw() {
   fi
 
   if [[ "${requested}" == "latest" ]]; then
-    if ! SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@latest"; then
+    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@latest"; then
       log "npm install openclaw@latest failed; retrying openclaw@next"
       emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"retry\",\"version\":\"next\"}"
-      SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@next"
+      env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@next"
       requested="next"
     fi
   else
-    SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${requested}"
+    env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${requested}"
   fi
 
   mkdir -p "${PREFIX}/bin"
@@ -524,51 +671,29 @@ EOF
 ensure_pnpm_git_prepare_allowlist() {
   local repo_dir="$1"
   local workspace_file="${repo_dir}/pnpm-workspace.yaml"
-  local package_file="${repo_dir}/package.json"
   local dep="@tloncorp/api"
   local tmp
 
-  if [[ -f "$workspace_file" ]] && ! grep -Fq "\"${dep}\"" "$workspace_file" && ! grep -Fq -- "- ${dep}" "$workspace_file"; then
+  if [[ -f "$workspace_file" ]] && ! grep -Fq "\"${dep}\"" "$workspace_file" && ! grep -Fq "${dep}:" "$workspace_file" && ! grep -Fq -- "- ${dep}" "$workspace_file"; then
     tmp="$(mktemp)"
-    if grep -q '^onlyBuiltDependencies:[[:space:]]*$' "$workspace_file"; then
+    if grep -q '^allowBuilds:[[:space:]]*$' "$workspace_file"; then
       awk -v dep="$dep" '
         BEGIN { inserted = 0 }
         {
           print
-          if (!inserted && $0 ~ /^onlyBuiltDependencies:[[:space:]]*$/) {
-            print "  - \"" dep "\""
+          if (!inserted && $0 ~ /^allowBuilds:[[:space:]]*$/) {
+            print "  \"" dep "\": true"
             inserted = 1
           }
         }
       ' "$workspace_file" >"$tmp"
     else
       cat "$workspace_file" >"$tmp"
-      printf '\nonlyBuiltDependencies:\n  - "%s"\n' "$dep" >>"$tmp"
+      printf '\nallowBuilds:\n  "%s": true\n' "$dep" >>"$tmp"
     fi
     mv "$tmp" "$workspace_file"
-  fi
-
-  if [[ -f "$package_file" ]]; then
-    "$(node_bin)" - "$package_file" "$dep" <<'EOF'
-const fs = require("node:fs");
-
-const [packageFile, dep] = process.argv.slice(2);
-const data = JSON.parse(fs.readFileSync(packageFile, "utf8"));
-const list = data.pnpm?.onlyBuiltDependencies;
-if (Array.isArray(list)) {
-  if (!list.includes(dep)) {
-    list.unshift(dep);
-    fs.writeFileSync(packageFile, `${JSON.stringify(data, null, 2)}\n`);
-  }
-  process.exit(0);
-}
-
-if (!data.pnpm || typeof data.pnpm !== "object") {
-  data.pnpm = {};
-}
-data.pnpm.onlyBuiltDependencies = [dep];
-fs.writeFileSync(packageFile, `${JSON.stringify(data, null, 2)}\n`);
-EOF
+  elif [[ ! -f "$workspace_file" ]]; then
+    printf 'allowBuilds:\n  "%s": true\n' "$dep" >"$workspace_file"
   fi
 
   log "Updated pnpm allowlist for git-hosted build dependency: ${dep}"
@@ -610,18 +735,22 @@ install_openclaw_from_git() {
     git clone "$repo_url" "$repo_dir"
   fi
 
-  if [[ "$GIT_UPDATE" == "1" ]]; then
-    if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
-      git -C "$repo_dir" pull --rebase || true
-    else
-      log "Repo is dirty; skipping git pull"
-    fi
+  local git_ref
+  git_ref="$(resolve_git_openclaw_ref)"
+  if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+    log "Using git ref: ${git_ref}"
+    checkout_git_openclaw_ref "$repo_dir" "$git_ref"
+  else
+    log "Repo is dirty; skipping git checkout/update"
   fi
 
   cleanup_legacy_submodules "$repo_dir"
   ensure_pnpm_git_prepare_allowlist "$repo_dir"
+  activate_repo_pnpm_version "$repo_dir"
 
-  SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm -C "$repo_dir" install
+  local install_lockfile_flag
+  install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
+  CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
 
   if ! run_pnpm -C "$repo_dir" ui:build; then
     log "UI build failed; continuing (CLI may still work)"

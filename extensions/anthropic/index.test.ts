@@ -48,8 +48,9 @@ function createModelRegistry(models: ProviderRuntimeModel[]) {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -76,9 +77,11 @@ describe("anthropic provider replay hooks", () => {
     const captured = capturePluginRegistration({ register: anthropicPlugin.register });
 
     const backend = captured.cliBackends.find((entry) => entry.id === "claude-cli");
-    expect(backend).toBeDefined();
-    expect(backend?.bundleMcp).toBe(true);
-    expectFields(backend?.config, {
+    if (!backend) {
+      throw new Error("Expected claude-cli backend");
+    }
+    expect(backend.bundleMcp).toBe(true);
+    expectFields(backend.config, {
       command: "claude",
       modelArg: "--model",
       sessionArg: "--session-id",
@@ -261,7 +264,7 @@ describe("anthropic provider replay hooks", () => {
       "anthropic/claude-sonnet-4-5",
       "anthropic/claude-haiku-4-5",
     ]) {
-      expect(models[modelId]).toEqual({});
+      expect(models[modelId]).toEqual({ agentRuntime: { id: "claude-cli" } });
     }
   });
 
@@ -340,6 +343,28 @@ describe("anthropic provider replay hooks", () => {
     } as ProviderResolveDynamicModelContext);
 
     expect(resolved).toBeUndefined();
+  });
+
+  it("normalizes stale text-only Claude vision rows to image-capable", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      model: {
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 64_000,
+      },
+    } as never);
+
+    expect(normalized?.input).toEqual(["text", "image"]);
   });
 
   it("normalizes exact claude opus 4.7 variants to 1M context", async () => {

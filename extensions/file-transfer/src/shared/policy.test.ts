@@ -51,8 +51,6 @@ function withConfig(fileTransfer: Record<string, unknown> | undefined) {
 }
 
 function expectResultFields(result: unknown, fields: Record<string, unknown>) {
-  expect(typeof result).toBe("object");
-  expect(result).not.toBeNull();
   if (typeof result !== "object" || result === null) {
     throw new Error("policy result was not an object");
   }
@@ -159,6 +157,46 @@ describe("evaluateFilePolicy — denyPaths always wins", () => {
     });
     expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
     expect(r.ok ? "" : r.reason).toMatch(/deny/);
+  });
+
+  it("treats globstar slash as zero or more directories in denyPaths", () => {
+    withConfig({
+      n1: {
+        allowReadPaths: ["~/Downloads/**"],
+        denyPaths: ["~/Downloads/**/*.pem"],
+      },
+    });
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: path.join(os.homedir(), "Downloads", "key.pem"),
+    });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
+  });
+
+  it("preserves minimatch brace semantics in denyPaths", () => {
+    withConfig({
+      n1: {
+        allowReadPaths: ["~/Downloads/**"],
+        denyPaths: ["~/Downloads/**/*.{pem,key}", "**/.{ssh,aws}/**"],
+      },
+    });
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: path.join(os.homedir(), "Downloads", "api.key"),
+      }),
+      { ok: false, code: "POLICY_DENIED", askable: false },
+    );
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: path.join(os.homedir(), "Downloads", ".aws", "credentials"),
+      }),
+      { ok: false, code: "POLICY_DENIED", askable: false },
+    );
   });
 
   it("denies even with ask=always (denyPaths is hard)", () => {

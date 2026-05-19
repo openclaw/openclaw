@@ -1,7 +1,7 @@
 import { lstat, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { defaultQaSuiteConcurrencyForTransport } from "./qa-transport-registry.js";
 import {
   collectQaSuiteGatewayConfigPatch,
@@ -122,7 +122,11 @@ describe("qa suite planning helpers", () => {
     const sleeps: number[] = [];
     const releaseSleeps: Array<() => void> = [];
     const started: number[] = [];
-    const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const waitForStarted = async (expected: number[]) => {
+      await vi.waitFor(() => {
+        expect(started).toEqual(expected);
+      });
+    };
     const resultPromise = mapQaSuiteWithConcurrency(
       [1, 2, 3, 4],
       3,
@@ -141,17 +145,13 @@ describe("qa suite planning helpers", () => {
       },
     );
 
-    await tick();
-    expect(started).toEqual([1]);
+    await waitForStarted([1]);
     releaseSleeps.shift()?.();
-    await tick();
-    expect(started).toEqual([1, 2]);
+    await waitForStarted([1, 2]);
     releaseSleeps.shift()?.();
-    await tick();
-    expect(started).toEqual([1, 2, 3]);
+    await waitForStarted([1, 2, 3]);
     releaseSleeps.shift()?.();
-    await tick();
-    expect(started).toEqual([1, 2, 3, 4]);
+    await waitForStarted([1, 2, 3, 4]);
 
     const result = await resultPromise;
     expect(result).toEqual([1, 2, 3, 4]);
@@ -174,7 +174,7 @@ describe("qa suite planning helpers", () => {
       makeQaSuiteTestScenario("anthropic-only", {
         config: {
           requiredProvider: "anthropic",
-          requiredModel: "claude-opus-4-6",
+          requiredModel: "claude-opus-4-7",
         },
       }),
     ];
@@ -187,6 +187,23 @@ describe("qa suite planning helpers", () => {
         primaryModel: "openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["anthropic-only"]);
+  });
+
+  it("keeps explicitly requested scenarios in request order", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("first"),
+      makeQaSuiteTestScenario("second"),
+      makeQaSuiteTestScenario("third"),
+    ];
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        scenarioIds: ["third", "first"],
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["third", "first"]);
   });
 
   it("collects unique scenario-declared bundled plugins in encounter order", () => {
@@ -303,7 +320,7 @@ describe("qa suite planning helpers", () => {
         config: { requiredProvider: "openai", requiredModel: "gpt-5.5" },
       }),
       makeQaSuiteTestScenario("anthropic-only", {
-        config: { requiredProvider: "anthropic", requiredModel: "claude-opus-4-6" },
+        config: { requiredProvider: "anthropic", requiredModel: "claude-opus-4-7" },
       }),
       makeQaSuiteTestScenario("claude-subscription", {
         config: { requiredProvider: "claude-cli", authMode: "subscription" },

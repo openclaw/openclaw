@@ -1,5 +1,5 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   installOpenClawOwnedToolHooks,
   resetOpenClawOwnedToolHooks,
@@ -47,7 +47,7 @@ function createToolHandlerCtx(): ToolHandlerContext {
       messagingToolSentTargets: [] as MessagingToolSend[],
       successfulCronAdds: 0,
     },
-    log: { debug: vi.fn(), warn: vi.fn() },
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     flushBlockReplyBuffer: vi.fn(),
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
@@ -93,10 +93,12 @@ async function waitForAfterToolCall(hooks: {
   afterToolCall: { mock: { calls: unknown[][] } };
 }): Promise<[Record<string, unknown>, Record<string, unknown>]> {
   await vi.waitFor(() => {
-    expect(hooks.afterToolCall.mock.calls.length).toBe(1);
+    expect(hooks.afterToolCall).toHaveBeenCalledTimes(1);
   });
-  const call = hooks.afterToolCall.mock.calls[0];
-  expect(call).toBeDefined();
+  const call = hooks.afterToolCall.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected afterToolCall hook call");
+  }
   return call as [Record<string, unknown>, Record<string, unknown>];
 }
 

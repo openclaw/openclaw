@@ -1,9 +1,12 @@
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
+import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
+import type { HistoryEntry } from "./reply/history.types.js";
 import type { ReplyThreadingPolicy } from "./types.js";
 
 /** Valid message channels for routing. */
@@ -38,6 +41,7 @@ type UntrustedStructuredContextEntry = {
 
 export type MsgContext = {
   Body?: string;
+  InboundEventKind?: InboundEventKind;
   /**
    * Agent prompt body (may include envelope/history/context). Prefer this for prompt shaping.
    * Should use real newlines (`\n`), not escaped `\\n`.
@@ -47,11 +51,7 @@ export type MsgContext = {
    * Recent chat history for context (untrusted user content). Prefer passing this
    * as structured context blocks in the user prompt rather than rendering plaintext envelopes.
    */
-  InboundHistory?: Array<{
-    sender: string;
-    body: string;
-    timestamp?: number;
-  }>;
+  InboundHistory?: HistoryEntry[];
   /**
    * @deprecated Use CommandBody.
    *
@@ -103,6 +103,7 @@ export type MsgContext = {
   /** Provider-specific full reply-to id when ReplyToId is a shortened alias. */
   ReplyToIdFull?: string;
   ReplyToBody?: string;
+  ReplyToQuoteText?: string;
   ReplyToSender?: string;
   ReplyChain?: Array<{
     messageId?: string;
@@ -225,6 +226,7 @@ export type MsgContext = {
   /** Provider-native source that caused the current mention decision. */
   MentionSource?: MentionSource;
   CommandAuthorized?: boolean;
+  CommandTurn?: CommandTurnContext;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;
   /**
@@ -234,10 +236,12 @@ export type MsgContext = {
   AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
-  /** Trusted system override for contexts that must never inherit owner semantics. */
+  /** System-event authority override for contexts that must never inherit owner semantics. */
   ForceSenderIsOwnerFalse?: boolean;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
+  /** Provider-native thread target for reply delivery without making the session thread-scoped. */
+  TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
   /** Stable provider-native direct-peer id when a DM room/user mapping must survive later writes. */
@@ -282,6 +286,11 @@ export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
    * Default-deny: missing/undefined becomes false.
    */
   CommandAuthorized: boolean;
+  /**
+   * Populated by finalizeInboundContext(); optional for public SDK
+   * compatibility with existing plugin-constructed finalized contexts.
+   */
+  CommandTurn?: CommandTurnContext;
 };
 
 export type TemplateContext = MsgContext & {

@@ -22,6 +22,7 @@ import {
   type DetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime-state.js";
 import { withEnv } from "../test-utils/env.js";
+import { buildPluginApi } from "./api-builder.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
 import { listCompactionProviderIds } from "./compaction-provider.js";
@@ -42,9 +43,10 @@ import {
   commitPluginInteractiveCallbackDedupe,
 } from "./interactive-state.js";
 import {
-  __testing,
+  testing,
   clearPluginLoaderCache,
   loadOpenClawPlugins,
+  type PluginLoadOptions,
   PluginLoadReentryError,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
@@ -87,7 +89,7 @@ import {
   setActivePluginRegistry,
 } from "./runtime.js";
 import {
-  __testing as runtimeRegistryLoaderTesting,
+  testing as runtimeRegistryLoaderTesting,
   ensurePluginRegistryLoaded,
 } from "./runtime/runtime-registry-loader.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
@@ -95,6 +97,10 @@ let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
 
 type GlobalHookRunner = NonNullable<ReturnType<typeof getGlobalHookRunner>>;
+type PluginStartupTraceDetail = {
+  name: string;
+  metrics: ReadonlyArray<readonly [string, number | string]>;
+};
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
@@ -525,7 +531,9 @@ function expectRegistryErrorDiagnostic(params: {
       entry.pluginId === params.pluginId &&
       entry.message === params.message,
   );
-  expect(diagnostic, params.message).toBeDefined();
+  if (!diagnostic) {
+    throw new Error(`Expected registry error diagnostic: ${params.message}`);
+  }
 }
 
 function expectDiagnosticContaining(params: {
@@ -540,7 +548,9 @@ function expectDiagnosticContaining(params: {
       (!params.pluginId || entry.pluginId === params.pluginId) &&
       entry.message.includes(params.message),
   );
-  expect(diagnostic, params.message).toBeDefined();
+  if (!diagnostic) {
+    throw new Error(`Expected diagnostic containing: ${params.message}`);
+  }
 }
 
 function expectNoDiagnosticContaining(params: {
@@ -908,6 +918,36 @@ function expectEscapingEntryRejected(params: {
   return registry;
 }
 
+function createStartupTraceRecorder(): {
+  details: PluginStartupTraceDetail[];
+  startupTrace: NonNullable<PluginLoadOptions["startupTrace"]>;
+} {
+  const details: PluginStartupTraceDetail[] = [];
+  return {
+    details,
+    startupTrace: {
+      detail: (name, metrics) => {
+        details.push({ name, metrics });
+      },
+    },
+  };
+}
+
+function collectStartupTraceMetrics(
+  details: readonly PluginStartupTraceDetail[],
+  name: string,
+): Record<string, number | string> {
+  const matched = details.filter((entry) => entry.name === name);
+  expect(matched.length).toBeGreaterThan(0);
+  const metrics: Record<string, number | string> = {};
+  for (const entry of matched) {
+    for (const [key, value] of entry.metrics) {
+      metrics[key] = value;
+    }
+  }
+  return metrics;
+}
+
 afterEach(() => {
   clearRuntimeConfigSnapshot();
   runtimeRegistryLoaderTesting.resetPluginRegistryLoadedForTests();
@@ -921,6 +961,76 @@ afterAll(() => {
 });
 
 describe("loadOpenClawPlugins", () => {
+  it("emits loader startup trace timings for normal plugin load and register", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "trace-plugin",
+      filename: "trace-plugin.cjs",
+      body: `module.exports = { id: "trace-plugin", register() {} };`,
+    });
+    const { details, startupTrace } = createStartupTraceRecorder();
+
+    loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["trace-plugin"],
+      },
+      options: {
+        startupTrace,
+      },
+    });
+
+    const metrics = collectStartupTraceMetrics(details, "plugins.gateway-load.plugin.trace-plugin");
+    expect(metrics.loadMs).toEqual(expect.any(Number));
+    expect(metrics.loadFailedCount).toBe(0);
+    expect(metrics.registerMs).toEqual(expect.any(Number));
+    expect(metrics.registerFailedCount).toBe(0);
+    expect(metrics.loadAndRegisterMs).toEqual(expect.any(Number));
+  });
+
+  it("emits loader startup trace failure counts for load and register failures", () => {
+    useNoBundledPlugins();
+    const loadFailPlugin = writePlugin({
+      id: "trace-load-fail",
+      filename: "trace-load-fail.cjs",
+      body: `throw new Error("load boom");`,
+    });
+    const registerFailPlugin = writePlugin({
+      id: "trace-register-fail",
+      filename: "trace-register-fail.cjs",
+      body: `module.exports = { id: "trace-register-fail", register() { throw new Error("register boom"); } };`,
+    });
+    const { details, startupTrace } = createStartupTraceRecorder();
+
+    loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [loadFailPlugin.file, registerFailPlugin.file] },
+          allow: ["trace-load-fail", "trace-register-fail"],
+        },
+      },
+      startupTrace,
+    });
+
+    const loadFailMetrics = collectStartupTraceMetrics(
+      details,
+      "plugins.gateway-load.plugin.trace-load-fail",
+    );
+    expect(loadFailMetrics.loadMs).toEqual(expect.any(Number));
+    expect(loadFailMetrics.loadFailedCount).toBe(1);
+    expect(loadFailMetrics.registerMs).toBeUndefined();
+
+    const registerFailMetrics = collectStartupTraceMetrics(
+      details,
+      "plugins.gateway-load.plugin.trace-register-fail",
+    );
+    expect(registerFailMetrics.loadFailedCount).toBe(0);
+    expect(registerFailMetrics.registerMs).toEqual(expect.any(Number));
+    expect(registerFailMetrics.registerFailedCount).toBe(1);
+    expect(registerFailMetrics.loadAndRegisterMs).toEqual(expect.any(Number));
+  });
+
   it("can load scoped plugins from a supplied manifest registry without rereading manifests", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -1397,6 +1507,12 @@ describe("loadOpenClawPlugins", () => {
         const loaded = registry.plugins.find((entry) => entry.id === "allowed-config-path");
         expect(loaded?.status).toBe("loaded");
         expect(Object.keys(registry.gatewayHandlers)).toContain("allowed-config-path.ping");
+        expect(registry.gatewayMethodDescriptors).toMatchObject([
+          {
+            name: "allowed-config-path.ping",
+            owner: { kind: "plugin", pluginId: "allowed-config-path" },
+          },
+        ]);
       },
     },
     {
@@ -1430,10 +1546,46 @@ describe("loadOpenClawPlugins", () => {
         });
 
         expect(Object.keys(registry.gatewayHandlers)).toContain(RESERVED_ADMIN_PLUGIN_METHOD);
-        expect(registry.gatewayMethodScopes?.[RESERVED_ADMIN_PLUGIN_METHOD]).toBe("operator.admin");
+        expect(registry.gatewayMethodDescriptors[0]?.scope).toBe("operator.admin");
         expectDiagnosticContaining({
           registry,
           message: `${RESERVED_ADMIN_SCOPE_WARNING}: ${RESERVED_ADMIN_PLUGIN_METHOD}`,
+        });
+      },
+    },
+    {
+      label: "rejects gateway methods that collide with hidden core methods",
+      run: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "hidden-core-collision",
+          filename: "hidden-core-collision.cjs",
+          body: `module.exports = {
+  id: "hidden-core-collision",
+  register(api) {
+    api.registerGatewayMethod("config.openFile", ({ respond }) => respond(true, { ok: true }));
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: plugin.dir,
+          coreGatewayMethodNames: ["config.openFile"],
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["hidden-core-collision"],
+            },
+          },
+        });
+
+        expect(Object.keys(registry.gatewayHandlers)).not.toContain("config.openFile");
+        expectDiagnosticContaining({
+          registry,
+          level: "error",
+          pluginId: "hidden-core-collision",
+          message: "gateway method already registered: config.openFile",
         });
       },
     },
@@ -1468,6 +1620,98 @@ describe("loadOpenClawPlugins", () => {
         expect(loaded?.failurePhase).toBe("register");
         expect(loaded?.error).toContain("plugin register must be synchronous");
         expect(Object.keys(registry.gatewayHandlers)).not.toContain("async-register.ping");
+      },
+    },
+    {
+      label:
+        "keeps sendSessionAttachment callable after register closes while blocking registration-only APIs",
+      run: () => {
+        const registerGatewayMethod = vi.fn();
+        const registerSessionExtension = vi.fn();
+        const sendSessionAttachment = vi.fn(async () => ({
+          ok: true as const,
+          channel: "proofchat",
+          deliveredTo: "12345",
+          count: 1,
+        }));
+        const emitAgentEvent = vi.fn(() => ({
+          emitted: true as const,
+          stream: "late-attachment-plugin.workflow",
+        }));
+        const api = buildPluginApi({
+          id: "late-attachment-plugin",
+          name: "Late Attachment Plugin",
+          source: "/tmp/late-attachment-plugin/index.cjs",
+          registrationMode: "full",
+          config: {},
+          runtime: {} as never,
+          logger: {
+            info() {},
+            warn() {},
+            error() {},
+            debug() {},
+          },
+          resolvePath: (input) => input,
+          handlers: {
+            emitAgentEvent,
+            registerGatewayMethod,
+            registerSessionExtension,
+            sendSessionAttachment,
+          },
+        });
+        let capturedApi: typeof api | undefined;
+
+        testing.runPluginRegisterSync((guardedApi) => {
+          capturedApi = guardedApi;
+          // Host-hook delivery remains callable after registration closes; only registration-only APIs lock.
+          guardedApi.registerGatewayMethod("proofchat.ping", vi.fn() as never);
+        }, api);
+
+        expect(registerGatewayMethod).toHaveBeenCalledTimes(1);
+        expect(
+          capturedApi?.registerGatewayMethod("proofchat.late-ping", vi.fn() as never),
+        ).toBeUndefined();
+        expect(registerGatewayMethod).toHaveBeenCalledTimes(1);
+
+        const attachmentParams = {
+          sessionKey: "agent:main:main",
+          files: [{ path: "./proof-report.txt" }],
+          text: "attachment ready",
+        };
+        const lateResult = capturedApi?.sendSessionAttachment(attachmentParams);
+        const lateWorkflowResult =
+          capturedApi?.session?.workflow.sendSessionAttachment(attachmentParams);
+        const eventParams = {
+          runId: "run-late",
+          stream: "late-attachment-plugin.workflow",
+          data: { phase: "done" },
+        };
+        const lateEventResult = capturedApi?.emitAgentEvent(eventParams);
+        const lateNamespacedEventResult = capturedApi?.agent?.events.emitAgentEvent(eventParams);
+        capturedApi?.session?.state.registerSessionExtension({
+          namespace: "late",
+          description: "late extension should stay blocked",
+        });
+
+        expect(lateResult).toBe(sendSessionAttachment.mock.results[0]?.value);
+        expect(lateWorkflowResult).toBe(sendSessionAttachment.mock.results[1]?.value);
+        expect(sendSessionAttachment).toHaveBeenCalledWith({
+          sessionKey: "agent:main:main",
+          files: [{ path: "./proof-report.txt" }],
+          text: "attachment ready",
+        });
+        expect(sendSessionAttachment).toHaveBeenCalledTimes(2);
+        expect(lateEventResult).toEqual({
+          emitted: true,
+          stream: "late-attachment-plugin.workflow",
+        });
+        expect(lateNamespacedEventResult).toEqual({
+          emitted: true,
+          stream: "late-attachment-plugin.workflow",
+        });
+        expect(emitAgentEvent).toHaveBeenCalledTimes(2);
+        expect(emitAgentEvent).toHaveBeenCalledWith(eventParams);
+        expect(registerSessionExtension).not.toHaveBeenCalled();
       },
     },
     {
@@ -2067,7 +2311,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
         entry.pluginId === "bad-harness" &&
         entry.message === 'agent harness "broken" registration missing required runtime methods',
     );
-    expect(diagnostic).toBeDefined();
+    if (!diagnostic) {
+      throw new Error("Expected bad-harness runtime methods diagnostic");
+    }
   });
 
   it("does not register internal hooks globally during non-activating loads", () => {
@@ -3593,9 +3839,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
       filename: "cache-eviction.cjs",
       body: `module.exports = { id: "cache-eviction", register() {} };`,
     });
-    const previousCacheCap = __testing.maxPluginRegistryCacheEntries;
-    __testing.setMaxPluginRegistryCacheEntriesForTest(4);
-    const stateDirs = Array.from({ length: __testing.maxPluginRegistryCacheEntries + 1 }, () =>
+    const previousCacheCap = testing.maxPluginRegistryCacheEntries;
+    testing.setMaxPluginRegistryCacheEntriesForTest(4);
+    const stateDirs = Array.from({ length: testing.maxPluginRegistryCacheEntries + 1 }, () =>
       makeTempDir(),
     );
 
@@ -3629,7 +3875,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
       expect(loadWithStateDir(stateDirs[1] ?? makeTempDir())).not.toBe(second);
     } finally {
-      __testing.setMaxPluginRegistryCacheEntriesForTest(previousCacheCap);
+      testing.setMaxPluginRegistryCacheEntriesForTest(previousCacheCap);
     }
   });
 
@@ -3899,6 +4145,45 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(loaded?.error).toContain("module shape:");
     expect(loaded?.error).toContain("export:object keys=default");
     expect(loaded?.error).toContain("export.default:object keys=default");
+  });
+
+  it.each([
+    {
+      id: "wrong-channel-entry",
+      kind: "bundled-channel-entry",
+      error: "bundled channel entry requires setup-runtime loader",
+    },
+    {
+      id: "wrong-channel-setup-entry",
+      kind: "bundled-channel-setup-entry",
+      error: "bundled channel setup entry requires setup-runtime loader",
+    },
+  ])("reports $kind loaded through the legacy plugin loader", ({ id, kind, error }) => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id,
+      filename: `${id}.cjs`,
+      body: `module.exports = { id: ${JSON.stringify(id)}, kind: ${JSON.stringify(kind)} };`,
+    });
+    const errors: string[] = [];
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: [id],
+      },
+      options: {
+        logger: createErrorLogger(errors),
+      },
+    });
+
+    const loaded = registry.plugins.find((entry) => entry.id === id);
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).toBe(error);
+    expectRegistryErrorDiagnostic({ registry, pluginId: id, message: error });
+    expect(errors).toEqual([
+      `[plugins] ${id} ${error}; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+    ]);
   });
 
   it("handles single-plugin channel, context engine, and cli validation", () => {
@@ -5295,11 +5580,11 @@ module.exports = {
       },
     });
 
-    expect(
-      registry.channels.find((entry) => entry.plugin.id === "healthy-chat")?.plugin.meta,
-    ).toBeDefined();
     const healthyMeta = registry.channels.find((entry) => entry.plugin.id === "healthy-chat")
       ?.plugin.meta;
+    if (!healthyMeta) {
+      throw new Error("expected healthy chat plugin metadata");
+    }
     expect(healthyMeta?.label).toBe("Healthy Chat");
     expect(healthyMeta?.docsPath).toBe("/channels/healthy-chat");
     expect(registry.plugins.find((entry) => entry.id === "healthy-channel")?.status).toBe("loaded");
@@ -5313,7 +5598,7 @@ module.exports = {
 
   it("prefers setupEntry for configured channel loads during startup when opted in", () => {
     expect(
-      __testing.shouldLoadChannelPluginInSetupRuntime({
+      testing.shouldLoadChannelPluginInSetupRuntime({
         manifestChannels: ["setup-runtime-preferred-test"],
         setupSource: "./setup-entry.cjs",
         startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
@@ -5451,7 +5736,7 @@ module.exports = {
       id: "next-turn-policy",
       filename: "next-turn-policy.cjs",
       body: `module.exports = { id: "next-turn-policy", register(api) {
-  void api.enqueueNextTurnInjection({
+  void api.session.workflow.enqueueNextTurnInjection({
     sessionKey: "agent:main:main",
     text: "blocked context",
   });
@@ -5619,6 +5904,45 @@ module.exports = {
       "agent_end",
       "before_agent_run",
     ]);
+  });
+
+  it("normalizes legacy deactivate typed hooks onto gateway_stop", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "legacy-deactivate-hook",
+      filename: "legacy-deactivate-hook.cjs",
+      body: `module.exports = { id: "legacy-deactivate-hook", register(api) {
+  api.on("deactivate", () => undefined);
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["legacy-deactivate-hook"],
+        entries: {
+          "legacy-deactivate-hook": {
+            hooks: {
+              timeoutMs: 250,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "legacy-deactivate-hook")?.status).toBe(
+      "loaded",
+    );
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["gateway_stop"]);
+    expect(registry.typedHooks[0]?.timeoutMs).toBe(250);
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "legacy-deactivate-hook" &&
+          diag.message ===
+            'typed hook "deactivate" is deprecated (legacy-deactivate-hook-alias); use "gateway_stop". This compatibility alias will be removed after 2026-08-16.',
+      ),
+    ).toBe(true);
   });
 
   it("ignores unknown typed hooks from plugins and keeps loading", () => {
@@ -6092,6 +6416,91 @@ module.exports = {
         expectedDisabledError: "overridden by global plugin",
         expectDuplicateWarning: false,
         assert: expectPluginSourcePrecedence,
+      },
+      {
+        label: "transient installed memory plugin beats bundled duplicate",
+        pluginId: "memory-lancedb",
+        bundledFilename: "index.cjs",
+        loadRegistry: () => {
+          writeBundledPlugin({
+            id: "memory-lancedb",
+            body: memoryPluginBody("memory-lancedb"),
+          });
+          return withStateDir((stateDir) => {
+            const globalDir = path.join(stateDir, "node_modules", "@openclaw", "memory-lancedb");
+            mkdirSafe(globalDir);
+            const globalPlugin = writePlugin({
+              id: "memory-lancedb",
+              body: `module.exports = {
+                id: "memory-lancedb",
+                kind: "memory",
+                register(api) {
+                  api.registerTool({
+                    name: "memory_recall",
+                    description: "Recall memories",
+                    parameters: {},
+                    execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+                  });
+                },
+              };`,
+              dir: globalDir,
+              filename: "index.cjs",
+            });
+            updatePluginManifest(globalPlugin, {
+              kind: "memory",
+              contracts: { tools: ["memory_recall"] },
+            });
+            fs.writeFileSync(
+              path.join(globalDir, "package.json"),
+              JSON.stringify(
+                {
+                  name: "@openclaw/memory-lancedb",
+                  version: "2026.5.12-beta.1",
+                  openclaw: { extensions: ["./index.cjs"] },
+                },
+                null,
+                2,
+              ),
+              "utf-8",
+            );
+
+            return loadOpenClawPlugins({
+              cache: false,
+              config: {
+                plugins: {
+                  allow: ["memory-lancedb"],
+                  slots: { memory: "memory-lancedb" },
+                  entries: {
+                    "memory-lancedb": { enabled: true },
+                  },
+                  installs: {
+                    "memory-lancedb": {
+                      source: "npm",
+                      spec: "@openclaw/memory-lancedb",
+                      resolvedName: "@openclaw/memory-lancedb",
+                      resolvedVersion: "2026.5.12-beta.1",
+                      installPath: globalDir,
+                    },
+                  },
+                },
+              },
+            });
+          });
+        },
+        expectedLoadedOrigin: "global",
+        expectedDisabledOrigin: "bundled",
+        expectedDisabledError: "overridden by global plugin",
+        expectDuplicateWarning: false,
+        assert: (
+          registry: PluginRegistry,
+          scenario: Parameters<typeof expectPluginSourcePrecedence>[1],
+        ) => {
+          expectPluginSourcePrecedence(registry, scenario);
+          expect(
+            registry.tools.flatMap((entry) => entry.names),
+            scenario.label,
+          ).toContain("memory_recall");
+        },
       },
     ] as const;
 
@@ -6579,14 +6988,14 @@ module.exports = {
       const untrustedPlugin = registry.plugins.find((entry) => entry.id === "untrusted-plugin");
       expect(untrustedPlugin?.status).toBe("disabled");
       expect(untrustedPlugin?.error).toBe("not in allowlist");
-      expect(warnings.some((message) => message.includes("plugins.allow is empty"))).toBe(false);
+      expect(warnings.join("\n")).not.toContain("plugins.allow is empty");
       expect(
-        warnings.some(
+        warnings.filter(
           (message) =>
             message.includes("trusted-plugin") &&
             message.includes("loaded without install/load-path provenance"),
         ),
-      ).toBe(false);
+      ).toEqual([]);
     });
   });
 
@@ -6875,19 +7284,19 @@ export const runtimeValue = helperValue;`,
   it("converts Windows absolute import specifiers to file URLs only for module loading", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
-      expect(__testing.toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
+      expect(testing.toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
         "file:///C:/Users/alice/plugin/index.mjs",
       );
-      expect(__testing.toSafeImportPath("C:\\Users\\alice\\plugin folder\\x#y.mjs")).toBe(
+      expect(testing.toSafeImportPath("C:\\Users\\alice\\plugin folder\\x#y.mjs")).toBe(
         "file:///C:/Users/alice/plugin%20folder/x%23y.mjs",
       );
-      expect(__testing.toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
+      expect(testing.toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
         "file://server/share/plugin/index.mjs",
       );
-      expect(__testing.toSafeImportPath("file:///C:/Users/alice/plugin/index.mjs")).toBe(
+      expect(testing.toSafeImportPath("file:///C:/Users/alice/plugin/index.mjs")).toBe(
         "file:///C:/Users/alice/plugin/index.mjs",
       );
-      expect(__testing.toSafeImportPath("./relative/index.mjs")).toBe("./relative/index.mjs");
+      expect(testing.toSafeImportPath("./relative/index.mjs")).toBe("./relative/index.mjs");
     } finally {
       platformSpy.mockRestore();
     }

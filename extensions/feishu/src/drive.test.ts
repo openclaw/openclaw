@@ -22,19 +22,12 @@ function createFeishuToolRuntime(): PluginRuntime {
 }
 
 async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<"pending">((resolve) => {
-        timer = setTimeout(() => resolve("pending"), 0);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return await Promise.race([
+    promise,
+    new Promise<"pending">((resolve) => {
+      setImmediate(() => resolve("pending"));
+    }),
+  ]);
 }
 
 function createDriveToolApi(params: {
@@ -58,9 +51,29 @@ function mockCallArg<T>(
   argIndex: number,
   _type?: (value: unknown) => value is T,
 ): T {
-  const call = mock.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return call?.[argIndex] as T;
+  const call = mock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected mock call at index ${callIndex}`);
+  }
+  return call[argIndex] as T;
+}
+
+type FeishuDriveTool = {
+  execute: (callId: string, input: Record<string, unknown>) => Promise<{ details?: unknown }>;
+  name?: string;
+};
+
+type FeishuDriveToolFactory = (context: {
+  agentAccountId?: string;
+  deliveryContext?: unknown;
+}) => FeishuDriveTool;
+
+function firstToolFactory(mock: { mock: { calls: unknown[][] } }): FeishuDriveToolFactory {
+  return mockCallArg<FeishuDriveToolFactory>(mock, 0, 0);
+}
+
+function firstLogMessage(mock: { mock: { calls: unknown[][] } }): string {
+  return String(mockCallArg<unknown>(mock, 0, 0));
 }
 
 type FeishuDriveRequest = {
@@ -145,8 +158,8 @@ describe("registerFeishuDriveTools", () => {
     );
 
     expect(registerTool).toHaveBeenCalledTimes(1);
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({ agentAccountId: undefined });
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
     expect(tool?.name).toBe("feishu_drive");
 
     requestMock.mockResolvedValueOnce({
@@ -363,8 +376,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({ agentAccountId: undefined });
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
 
     requestMock.mockResolvedValueOnce({
       code: 0,
@@ -384,9 +397,7 @@ describe("registerFeishuDriveTools", () => {
       file_type: "docx",
       reply_elements: [{ type: "text", text: "defaulted file type" }],
     });
-    expect(infoSpy.mock.calls[0]?.[0]).toContain(
-      "add_comment missing file_type; defaulting to docx",
-    );
+    expect(firstLogMessage(infoSpy)).toContain("add_comment missing file_type; defaulting to docx");
     expect((result.details as { comment_id?: string; success?: boolean }).success).toBe(true);
     expect((result.details as { comment_id?: string }).comment_id).toBe("c-default-docx");
   });
@@ -410,8 +421,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({ agentAccountId: undefined });
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
 
     requestMock.mockResolvedValueOnce({
       code: 0,
@@ -428,7 +439,7 @@ describe("registerFeishuDriveTools", () => {
     expect(request.url).toBe(
       "/open-apis/drive/v1/files/doc_1/comments?file_type=docx&user_id_type=open_id",
     );
-    expect(infoSpy.mock.calls[0]?.[0]).toContain(
+    expect(firstLogMessage(infoSpy)).toContain(
       "list_comments missing file_type; defaulting to docx",
     );
   });
@@ -452,8 +463,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({ agentAccountId: undefined });
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
 
     requestMock.mockResolvedValueOnce({
       code: 0,
@@ -471,7 +482,7 @@ describe("registerFeishuDriveTools", () => {
     expect(request.url).toBe(
       "/open-apis/drive/v1/files/doc_1/comments/c1/replies?file_type=docx&user_id_type=open_id",
     );
-    expect(infoSpy.mock.calls[0]?.[0]).toContain(
+    expect(firstLogMessage(infoSpy)).toContain(
       "list_comment_replies missing file_type; defaulting to docx",
     );
   });
@@ -495,8 +506,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({ agentAccountId: undefined });
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
 
     requestMock
       .mockResolvedValueOnce({
@@ -553,7 +564,7 @@ describe("registerFeishuDriveTools", () => {
         ],
       },
     });
-    expect(warnSpy.mock.calls[0]?.[0]).toContain("replyComment threw");
+    expect(firstLogMessage(warnSpy)).toContain("replyComment threw");
     expect((replyCommentResult.details as { error?: string }).error).toBe(
       "Request failed with status code 400",
     );
@@ -577,8 +588,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({
       agentAccountId: undefined,
       deliveryContext: {
         channel: "feishu",
@@ -640,7 +651,9 @@ describe("registerFeishuDriveTools", () => {
       client?: unknown;
       deliveryContext?: { channel?: string; threadId?: string; to?: string };
     }>(cleanupAmbientCommentTypingReactionMock, 0, 0);
-    expect(cleanupRequest.client).toBeDefined();
+    if (!cleanupRequest.client) {
+      throw new Error("Expected cleanup request client");
+    }
     expect(cleanupRequest.deliveryContext).toEqual({
       channel: "feishu",
       to: "comment:docx:doc_1:c1",
@@ -673,8 +686,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({
       agentAccountId: undefined,
       deliveryContext: {
         channel: "feishu",
@@ -714,7 +727,9 @@ describe("registerFeishuDriveTools", () => {
       client?: unknown;
       deliveryContext?: { channel?: string; threadId?: string; to?: string };
     }>(cleanupAmbientCommentTypingReactionMock, 0, 0);
-    expect(cleanupRequest.client).toBeDefined();
+    if (!cleanupRequest.client) {
+      throw new Error("Expected cleanup request client");
+    }
     expect(cleanupRequest.deliveryContext).toEqual({
       channel: "feishu",
       to: "comment:docx:doc_1:c1",
@@ -748,8 +763,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({
       agentAccountId: undefined,
       deliveryContext: {
         channel: "feishu",
@@ -775,9 +790,7 @@ describe("registerFeishuDriveTools", () => {
       file_type: "docx",
       reply_elements: [{ type: "text", text: "default add comment" }],
     });
-    expect(infoSpy.mock.calls[0]?.[0]).toContain(
-      "add_comment missing file_type; defaulting to docx",
-    );
+    expect(firstLogMessage(infoSpy)).toContain("add_comment missing file_type; defaulting to docx");
     expect((result.details as { comment_id?: string; success?: boolean }).success).toBe(true);
     expect((result.details as { comment_id?: string }).comment_id).toBe("c-add-docx");
   });
@@ -801,8 +814,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({ agentAccountId: undefined });
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
 
     requestMock
       .mockResolvedValueOnce({
@@ -845,7 +858,7 @@ describe("registerFeishuDriveTools", () => {
         },
       },
     });
-    expect(infoSpy.mock.calls[0]?.[0]).toContain(
+    expect(firstLogMessage(infoSpy)).toContain(
       "reply_comment missing file_type; defaulting to docx",
     );
     expect((result.details as { reply_id?: string; success?: boolean }).success).toBe(true);
@@ -871,8 +884,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({ agentAccountId: undefined });
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
 
     requestMock
       .mockResolvedValueOnce({
@@ -907,7 +920,7 @@ describe("registerFeishuDriveTools", () => {
         reply_elements: [{ type: "text", text: "whole comment follow-up" }],
       },
     });
-    expect(infoSpy.mock.calls[0]?.[0]).toContain("whole-comment compatibility path");
+    expect(firstLogMessage(infoSpy)).toContain("whole-comment compatibility path");
     const details = result.details as {
       comment_id?: string;
       delivery_mode?: string;
@@ -937,8 +950,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({ agentAccountId: undefined });
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
 
     requestMock.mockRejectedValueOnce(new Error("preflight unavailable")).mockResolvedValueOnce({
       code: 0,
@@ -975,7 +988,7 @@ describe("registerFeishuDriveTools", () => {
         },
       },
     });
-    expect(warnSpy.mock.calls[0]?.[0]).toContain("comment metadata preflight failed");
+    expect(firstLogMessage(warnSpy)).toContain("comment metadata preflight failed");
     const details = result.details as {
       delivery_mode?: string;
       reply_id?: string;
@@ -1005,8 +1018,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({ agentAccountId: undefined });
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
 
     requestMock
       .mockResolvedValueOnce({
@@ -1084,8 +1097,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({ agentAccountId: undefined });
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
 
     requestMock
       .mockResolvedValueOnce({
@@ -1132,7 +1145,7 @@ describe("registerFeishuDriveTools", () => {
         reply_elements: [{ type: "text", text: "compat follow-up" }],
       },
     });
-    expect(infoSpy.mock.calls[0]?.[0]).toContain("reply-not-allowed compatibility path");
+    expect(firstLogMessage(infoSpy)).toContain("reply-not-allowed compatibility path");
     const details = result.details as {
       comment_id?: string;
       delivery_mode?: string;
@@ -1161,8 +1174,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({ agentAccountId: undefined });
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
 
     requestMock.mockResolvedValueOnce({ code: 0, data: { has_more: false, items: [] } });
     await tool.execute("call-list", {
@@ -1208,8 +1221,8 @@ describe("registerFeishuDriveTools", () => {
       }),
     );
 
-    const toolFactory = registerTool.mock.calls[0]?.[0];
-    const tool = toolFactory?.({ agentAccountId: undefined });
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
     const result = await tool.execute("call-5", {
       action: "add_comment",
       file_token: "doc_1",

@@ -57,7 +57,6 @@ function resolveModelPickerSelectionValue(
 
 function buildDiscordModelPickerSelectionCommand(params: {
   modelRef: string;
-  runtime?: string;
 }): { command: ChatCommandDefinition; args: CommandArgs; prompt: string } | null {
   const commandDefinition =
     findCommandByNativeName("model", "discord") ??
@@ -65,13 +64,11 @@ function buildDiscordModelPickerSelectionCommand(params: {
   if (!commandDefinition) {
     return null;
   }
-  const runtime = normalizeOptionalString(params.runtime);
-  const raw = runtime ? `${params.modelRef} --runtime ${runtime}` : params.modelRef;
   const commandArgs: CommandArgs = {
     values: {
       model: params.modelRef,
     },
-    raw,
+    raw: params.modelRef,
   };
   return {
     command: commandDefinition,
@@ -120,6 +117,47 @@ function resolveDiscordModelPickerModelByIndex(params: {
     return null;
   }
   return models[params.modelIndex - 1] ?? null;
+}
+
+function resolveDiscordModelPickerRuntimeForProvider(params: {
+  data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>;
+  provider: string;
+  runtime?: string;
+  allowResetRuntime?: boolean;
+}): string | undefined {
+  const runtime = normalizeOptionalString(params.runtime);
+  if (!runtime) {
+    return undefined;
+  }
+  if (runtime === "auto" || runtime === "default") {
+    return params.allowResetRuntime ? runtime : undefined;
+  }
+  const choices = params.data.runtimeChoicesByProvider?.get(params.provider);
+  if (!choices?.length) {
+    return runtime === "pi" ? runtime : undefined;
+  }
+  return choices.some((choice) => choice.id === runtime) ? runtime : undefined;
+}
+
+function resolveDiscordModelPickerSubmissionRuntime(params: {
+  data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>;
+  provider: string;
+  parsedRuntime?: string;
+  currentRuntime?: string;
+}): string | undefined {
+  return (
+    resolveDiscordModelPickerRuntimeForProvider({
+      data: params.data,
+      provider: params.provider,
+      runtime: params.parsedRuntime,
+      allowResetRuntime: true,
+    }) ??
+    resolveDiscordModelPickerRuntimeForProvider({
+      data: params.data,
+      provider: params.provider,
+      runtime: params.currentRuntime,
+    })
+  );
 }
 
 export async function handleDiscordModelPickerInteraction(params: {
@@ -199,6 +237,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       data: pickerData,
       quickModels,
       currentModel: currentModelRef,
+      runtime: parsed.runtime,
       provider: parsed.provider,
       page: parsed.page,
       providerPage: parsed.providerPage,
@@ -233,6 +272,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       providerPage: parsed.providerPage ?? 1,
       currentModel: currentModelRef,
       currentRuntime,
+      pendingRuntime: parsed.runtime,
       quickModels,
     });
     await updatePicker(toDiscordModelPickerMessagePayload(rendered));
@@ -362,13 +402,14 @@ export async function handleDiscordModelPickerInteraction(params: {
     }
 
     const resolvedModelRef = `${parsedModelRef.provider}/${parsedModelRef.model}`;
-    const parsedRuntime = normalizeOptionalString(parsed.runtime);
-    const runtimeOverride =
-      parsedRuntime ??
-      (currentRuntime !== "auto" && currentRuntime !== "default" ? currentRuntime : undefined);
+    const selectedRuntime = resolveDiscordModelPickerSubmissionRuntime({
+      data: pickerData,
+      provider: parsedModelRef.provider,
+      parsedRuntime: parsed.runtime,
+      currentRuntime,
+    });
     const selectionCommand = buildDiscordModelPickerSelectionCommand({
       modelRef: resolvedModelRef,
-      runtime: runtimeOverride,
     });
     if (!selectionCommand) {
       await showNotice("Sorry, /model is unavailable right now.");
@@ -393,6 +434,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       resolvedModelRef,
       selectedProvider: parsedModelRef.provider,
       selectedModel: parsedModelRef.model,
+      selectedRuntime,
       defaultProvider: pickerData.resolvedDefault.provider,
       defaultModel: pickerData.resolvedDefault.model,
       preferenceScope,
@@ -443,7 +485,7 @@ class DiscordModelPickerFallbackButton extends Button {
     super();
   }
 
-  async run(interaction: ButtonInteraction, data: ComponentData) {
+  override async run(interaction: ButtonInteraction, data: ComponentData) {
     await runDiscordModelPickerFallback({ ...this.params, interaction, data });
   }
 }
@@ -456,7 +498,7 @@ class DiscordModelPickerFallbackSelect extends StringSelectMenu {
     super();
   }
 
-  async run(interaction: StringSelectMenuInteraction, data: ComponentData) {
+  override async run(interaction: StringSelectMenuInteraction, data: ComponentData) {
     await runDiscordModelPickerFallback({ ...this.params, interaction, data });
   }
 }

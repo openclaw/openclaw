@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import JSZip from "jszip";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -240,15 +241,19 @@ describe("loadWebMedia", () => {
 
   async function withUnavailableImageOptimizer<T>(fn: () => Promise<T>): Promise<T> {
     vi.resetModules();
-    vi.doMock("./image-ops.js", () => ({
+    vi.doMock("./media-services.js", () => ({
       convertHeicToJpeg: vi.fn(async (buffer: Buffer) => buffer),
       hasAlphaChannel: vi.fn(async () => {
         throw new Error(
           "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
         );
       }),
+      isImageProcessorUnavailableError: (err: unknown) =>
+        err instanceof Error && err.message.includes("Optional dependency sharp is required"),
       optimizeImageToPng: vi.fn(async () => {
-        throw new Error("should not optimize png");
+        throw new Error(
+          "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
+        );
       }),
       resizeToJpeg: vi.fn(async () => {
         throw new Error(
@@ -259,7 +264,7 @@ describe("loadWebMedia", () => {
     try {
       return await fn();
     } finally {
-      vi.doUnmock("./image-ops.js");
+      vi.doUnmock("./media-services.js");
       vi.resetModules();
     }
   }
@@ -306,6 +311,31 @@ describe("loadWebMedia", () => {
     });
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("does not treat image-named generic container bytes as local image media", async () => {
+    const zip = new JSZip();
+    zip.file("hello.txt", "hi");
+    const fakeImage = path.join(fixtureRoot, "fake.png");
+    await fs.writeFile(fakeImage, await zip.generateAsync({ type: "nodebuffer" }));
+
+    const result = await loadWebMedia(fakeImage, createLocalWebMediaOptions());
+
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/zip");
+    expect(result.fileName).toBe("fake.png");
+  });
+
+  it("uses only the leaf filename from Windows-style sandbox-validated media paths", async () => {
+    const result = await loadWebMedia(String.raw`C:\workspace\captures\tiny.png`, {
+      maxBytes: 1024 * 1024,
+      sandboxValidated: true,
+      readFile: async () => Buffer.from(TINY_PNG_BASE64, "base64"),
+    });
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/png");
+    expect(result.fileName).toBe("tiny.png");
   });
 
   it("resolves home-relative local media paths through allowed local roots", async () => {

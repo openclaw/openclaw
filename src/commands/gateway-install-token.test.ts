@@ -59,6 +59,14 @@ vi.mock("./random-token.js", () => ({
   randomToken: randomTokenMock,
 }));
 
+function firstReplaceConfigRequest(): unknown {
+  const [call] = replaceConfigFileMock.mock.calls;
+  if (!call) {
+    throw new Error("expected config replace call");
+  }
+  return call[0];
+}
+
 describe("resolveGatewayInstallToken", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -135,7 +143,9 @@ describe("resolveGatewayInstallToken", () => {
     });
 
     expect(result.token).toBeUndefined();
-    expect(result.unavailableReason).toContain("gateway.auth.token SecretRef is configured");
+    expect(result.unavailableReason).toBe(
+      "gateway.auth.token SecretRef is configured but unresolved (gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).).",
+    );
   });
 
   it("returns unavailable reason when token and password are both configured and mode is unset", async () => {
@@ -191,7 +201,7 @@ describe("resolveGatewayInstallToken", () => {
 
     expect(result.warnings.join("\n")).toContain("saving to config");
     expect(replaceConfigFileMock).toHaveBeenCalledOnce();
-    expect(replaceConfigFileMock.mock.calls[0]?.[0]).toStrictEqual({
+    expect(firstReplaceConfigRequest()).toStrictEqual({
       nextConfig: {
         gateway: {
           auth: {
@@ -200,6 +210,7 @@ describe("resolveGatewayInstallToken", () => {
           },
         },
       },
+      snapshot: baseSnapshot,
       writeOptions: {
         baseSnapshot,
         skipRuntimeSnapshotRefresh: true,
@@ -262,7 +273,7 @@ describe("resolveGatewayInstallToken", () => {
 
     expect(result.token).toBeUndefined();
     expect(result.unavailableReason).toBeUndefined();
-    expect(result.warnings.some((message) => message.includes("Auto-generated"))).toBe(false);
+    expect(result.warnings.join("\n")).not.toContain("Auto-generated");
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
@@ -294,7 +305,7 @@ describe("resolveGatewayInstallToken", () => {
     });
     expect(result.token).toBeUndefined();
     expect(result.unavailableReason).toBeUndefined();
-    expect(result.warnings.some((message) => message.includes("Auto-generated"))).toBe(false);
+    expect(result.warnings.join("\n")).not.toContain("Auto-generated");
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 

@@ -4,8 +4,10 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 
@@ -106,6 +108,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   const startupPluginIds = [...(pluginLookUpTable?.startup.pluginIds ?? [])];
 
   const baseMethods = listGatewayMethods();
+  const coreGatewayMethodNames = listCoreGatewayMethodNames();
   const emptyPluginRegistry = createEmptyPluginRegistry();
   let pluginRegistry = emptyPluginRegistry;
   let baseGatewayMethods = baseMethods;
@@ -119,6 +122,7 @@ export async function prepareGatewayPluginBootstrap(params: {
         workspaceDir: defaultWorkspaceDir,
         log: params.log,
         baseMethods,
+        coreGatewayMethodNames,
         startupPluginIds,
         pluginLookUpTable,
         preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
@@ -151,6 +155,8 @@ export async function loadGatewayStartupPluginRuntime(params: {
   workspaceDir: string;
   log: GatewayPluginBootstrapLog;
   baseMethods: string[];
+  coreGatewayMethodNames?: readonly string[];
+  hostServices?: PluginRegistryParams["hostServices"];
   startupPluginIds: string[];
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
   preferSetupRuntimeForChannelPlugins?: boolean;
@@ -163,8 +169,11 @@ export async function loadGatewayStartupPluginRuntime(params: {
     activationSourceConfig: params.activationSourceConfig,
     workspaceDir: params.workspaceDir,
     log: params.log,
-    coreGatewayMethodNames: params.baseMethods,
+    coreGatewayMethodNames: params.coreGatewayMethodNames ?? params.baseMethods,
     baseMethods: params.baseMethods,
+    ...(params.hostServices !== undefined && {
+      hostServices: params.hostServices,
+    }),
     pluginIds: params.startupPluginIds,
     pluginLookUpTable: params.pluginLookUpTable,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,

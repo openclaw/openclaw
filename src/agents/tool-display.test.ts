@@ -1,7 +1,36 @@
 import { describe, expect, it } from "vitest";
+import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
 describe("tool display details", () => {
+  it("summarizes tool-search code targets from described tool ids", () => {
+    expect(
+      resolveToolSearchCodeDisplayTarget({
+        code: "const tool = await openclaw.tools.describe('openclaw:core:exec'); return await openclaw.tools.call(tool.id, { command: 'echo hi' });",
+      }),
+    ).toEqual({
+      toolName: "openclaw:core:exec",
+      displayToolName: "exec",
+      displayArgs: { command: "echo hi" },
+      detail: "echo hi",
+      bridgeVerb: "call",
+    });
+  });
+
+  it("normalizes direct tool-search catalog ids to native display names and args", () => {
+    expect(
+      resolveToolSearchCodeDisplayTarget({
+        code: 'return await openclaw.tools.call("openclaw:core:exec", { command: "echo hi" });',
+      }),
+    ).toEqual({
+      toolName: "openclaw:core:exec",
+      displayToolName: "exec",
+      displayArgs: { command: "echo hi" },
+      detail: "echo hi",
+      bridgeVerb: "call",
+    });
+  });
+
   it("skips zero/false values for optional detail fields", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
@@ -186,6 +215,19 @@ describe("tool display details", () => {
         }),
       ),
     ).toBe("check git status (repo)");
+
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "bash",
+          args: {
+            command: "command -v discrawl",
+            workdir: "/root/.openclaw/sandboxes/agent-clawsweeper-sandbox-discor-766423d0",
+          },
+          detailMode: "explain",
+        }),
+      ),
+    ).toBe("command -v discrawl");
   });
 
   it("omits bash and exec names from compact tool summaries", () => {

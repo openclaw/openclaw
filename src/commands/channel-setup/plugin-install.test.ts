@@ -207,15 +207,8 @@ function expectSetupSnapshotDoesNotScopeToPlugin(params: {
     workspaceDir: "/tmp/openclaw-workspace",
   });
 
-  expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-    expect.not.objectContaining({
-      onlyPluginIds: [params.pluginId],
-    }),
-  );
-  const firstLoadCall = vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as
-    | { onlyPluginIds?: string[] }
-    | undefined;
-  expect(firstLoadCall?.onlyPluginIds).toStrictEqual([]);
+  expect(loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+  expect(requireMockCallArg(vi.mocked(loadOpenClawPlugins), 0).onlyPluginIds).toStrictEqual([]);
 }
 
 beforeEach(() => {
@@ -304,8 +297,7 @@ async function runInitialValueForChannel(channel: "dev" | "beta") {
     runtime,
   });
 
-  const call = select.mock.calls[0];
-  return call?.[0]?.initialValue;
+  return requireMockCallArg(select, 0).initialValue;
 }
 
 function expectPluginLoadedFromLocalPath(
@@ -425,7 +417,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     });
 
     expectRecordFields(requireMockCallArg(installPluginFromNpmSpec, 0), "npm install args", {
-      extensionsDir: path.join(profileStateDir, "extensions"),
+      extensionsDir: path.resolve(profileStateDir, "extensions"),
       spec: bundledChatNpmSpec,
     });
   });

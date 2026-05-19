@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { getToolParamsRecord } from "./pi-tools.params.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -60,7 +60,7 @@ function readEditReplacements(record: Record<string, unknown> | undefined): Edit
 function readEditToolParams(params: unknown): EditToolParams {
   const record = getToolParamsRecord(params);
   return {
-    pathParam: readStringParam(record, "path"),
+    pathParam: readStringParam(record, "path", "file_path", "filePath", "filepath", "file"),
     edits: readEditReplacements(record),
   };
 }

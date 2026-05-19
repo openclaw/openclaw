@@ -167,18 +167,26 @@ describe("openai codex provider", () => {
     const provider = buildOpenAICodexProviderPlugin();
     const oauth = requireAuthMethod(provider, "oauth");
     const deviceCode = requireAuthMethod(provider, "device-code");
+    const apiKey = requireAuthMethod(provider, "api-key");
 
     expectRecordFields(oauth.wizard, "oauth wizard", {
-      choiceLabel: "OpenAI Codex Browser Login",
-      groupId: "openai-codex",
-      groupLabel: "OpenAI Codex",
-      groupHint: "ChatGPT/Codex sign-in",
+      choiceLabel: "ChatGPT/Codex Browser Login",
+      groupId: "openai",
+      groupLabel: "OpenAI",
+      groupHint: "ChatGPT/Codex sign-in or API key",
     });
     expectRecordFields(deviceCode.wizard, "device-code wizard", {
-      choiceLabel: "OpenAI Codex Device Pairing",
-      groupId: "openai-codex",
-      groupLabel: "OpenAI Codex",
-      groupHint: "ChatGPT/Codex sign-in",
+      choiceLabel: "ChatGPT/Codex Device Pairing",
+      groupId: "openai",
+      groupLabel: "OpenAI",
+      groupHint: "ChatGPT/Codex sign-in or API key",
+    });
+    expectRecordFields(apiKey.wizard, "api-key wizard", {
+      choiceLabel: "OpenAI API Key Backup",
+      choiceHint: "Use an OpenAI API key when your Codex subscription is unavailable",
+      groupId: "openai",
+      groupLabel: "OpenAI",
+      groupHint: "ChatGPT/Codex sign-in or API key",
     });
   });
 
@@ -213,20 +221,21 @@ describe("openai codex provider", () => {
     const oauth = requireAuthMethod(provider, "oauth");
     const deviceCode = requireAuthMethod(provider, "device-code");
 
-    expect(provider.auth?.map((method) => method.id)).toEqual(["oauth", "device-code"]);
-    expect(oauth.label).toBe("OpenAI Codex Browser Login");
+    expect(provider.auth?.map((method) => method.id)).toEqual(["oauth", "device-code", "api-key"]);
+    expect(oauth.label).toBe("ChatGPT/Codex Browser Login");
     expect(oauth.hint).toBe("Sign in with OpenAI in your browser");
     expectRecordFields(oauth.wizard, "oauth wizard", {
       choiceId: "openai-codex",
-      choiceLabel: "OpenAI Codex Browser Login",
+      choiceLabel: "ChatGPT/Codex Browser Login",
       assistantPriority: -30,
+      onboardingFeatured: true,
     });
-    expect(deviceCode.label).toBe("OpenAI Codex Device Pairing");
+    expect(deviceCode.label).toBe("ChatGPT/Codex Device Pairing");
     expect(deviceCode.hint).toBe("Pair in browser with a device code");
     expect(deviceCode.kind).toBe("device_code");
     expectRecordFields(deviceCode.wizard, "device-code wizard", {
       choiceId: "openai-codex-device-code",
-      choiceLabel: "OpenAI Codex Device Pairing",
+      choiceLabel: "ChatGPT/Codex Device Pairing",
       assistantPriority: -10,
     });
   });
@@ -345,13 +354,15 @@ describe("openai codex provider", () => {
     const { note } = await runRemoteDeviceCodeAuthFlow();
 
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Code: CODE-12345"),
+      [
+        "Open this URL in your LOCAL browser and enter the code below.",
+        "URL: https://auth.openai.com/codex/device",
+        "Code: CODE-12345",
+        "Code expires in 15 minutes. Never share it.",
+      ].join("\n"),
       "OpenAI Codex device code",
     );
-    expect(note).not.toHaveBeenCalledWith(
-      expect.stringContaining("Code: [shown on the local device only]"),
-      "OpenAI Codex device code",
-    );
+    expect(note).toHaveBeenCalledTimes(1);
   });
 
   it("does not write the device pairing code to the runtime log in remote mode", async () => {

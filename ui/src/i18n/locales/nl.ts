@@ -350,6 +350,12 @@ export const nl: TranslationMap = {
     eventLogSubtitle: "Nieuwste gateway-gebeurtenissen.",
     noEvents: "Nog geen gebeurtenissen.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "verloopt over {time}",
     expired: "verlopen",
@@ -696,9 +702,6 @@ export const nl: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Zie waar tokens naartoe gaan, wanneer sessies pieken en wat de kosten bepaalt.",
-    },
     common: {
       emptyValue: "—",
       unknown: "onbekend",
@@ -1046,6 +1049,10 @@ export const nl: TranslationMap = {
     settings: "Chatinstellingen",
     thinkingToggle: "Denken-/werken-output van assistent schakelen",
     toolCallsToggle: "Tool-aanroepen en toolresultaten schakelen",
+    autoScrollMode: "Automatisch scrollen",
+    autoScrollAlways: "Altijd",
+    autoScrollNearBottom: "Bijna onderaan",
+    autoScrollOff: "Uit",
     focusToggle: "Focusmodus schakelen (zijbalk + paginakop verbergen)",
     hideCronSessions: "Cron-sessies verbergen",
     showCronSessions: "Cron-sessies weergeven",
@@ -1061,6 +1068,42 @@ export const nl: TranslationMap = {
     updateNow: "Nu bijwerken",
     dismissUpdateBanner: "Updatebanner sluiten",
     switchedSession: "Overgeschakeld naar {session}",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "Exporteren",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "Sessies filteren op agent",
+      session: "Chat session",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "English (Engels)",
@@ -1169,6 +1212,9 @@ export const nl: TranslationMap = {
       ascending: "Oplopend",
       descending: "Aflopend",
       reset: "Resetten",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Geen overeenkomende taken.",
       loading: "Laden...",
       loadMore: "Meer taken laden",
@@ -1204,6 +1250,7 @@ export const nl: TranslationMap = {
     form: {
       editJob: "Taak bewerken",
       newJob: "Nieuwe taak",
+      advancedJob: "Advanced job",
       updateSubtitle: "Werk de geselecteerde geplande taak bij.",
       createSubtitle: "Maak een geplande wakeup of agent-run.",
       required: "Vereist",

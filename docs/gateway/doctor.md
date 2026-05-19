@@ -26,17 +26,28 @@ openclaw doctor
     Accept defaults without prompting (including restart/service/sandbox repair steps when applicable).
 
   </Tab>
-  <Tab title="--repair">
+  <Tab title="--fix">
     ```bash
-    openclaw doctor --repair
+    openclaw doctor --fix
     ```
 
     Apply recommended repairs without prompting (repairs + restarts where safe).
 
   </Tab>
-  <Tab title="--repair --force">
+  <Tab title="--lint">
     ```bash
-    openclaw doctor --repair --force
+    openclaw doctor --lint
+    openclaw doctor --lint --json
+    ```
+
+    Run structured health checks for CI or preflight automation. This mode is
+    read-only: it does not prompt, repair, migrate config, restart services, or
+    touch state.
+
+  </Tab>
+  <Tab title="--fix --force">
+    ```bash
+    openclaw doctor --fix --force
     ```
 
     Apply aggressive repairs too (overwrites custom supervisor configs).
@@ -65,6 +76,57 @@ If you want to review changes before writing, open the config file first:
 ```bash
 cat ~/.openclaw/openclaw.json
 ```
+
+## Read-only lint mode
+
+`openclaw doctor --lint` is the automation-friendly sibling of
+`openclaw doctor --fix`. Both use doctor health checks, but their posture is
+different:
+
+| Mode                     | Prompts   | Writes config/state     | Output                 | Use it for                      |
+| ------------------------ | --------- | ----------------------- | ---------------------- | ------------------------------- |
+| `openclaw doctor`        | yes       | no                      | friendly health report | a human checking status         |
+| `openclaw doctor --fix`  | sometimes | yes, with repair policy | friendly repair log    | applying approved repairs       |
+| `openclaw doctor --lint` | no        | no                      | structured findings    | CI, preflight, and review gates |
+
+Modernized health checks may provide an optional `repair()` implementation.
+`doctor --fix` applies those repairs when they exist and continues to use the
+existing doctor repair flow for checks that have not migrated yet.
+The structured repair contract also separates repair reporting from detection:
+`detect()` reports current findings, while `repair()` can report changes,
+config/file diffs, and non-file side effects. That keeps the migration path open
+for future `doctor --fix --dry-run` and diff output without making lint checks
+plan mutations.
+
+Examples:
+
+```bash
+openclaw doctor --lint
+openclaw doctor --lint --severity-min warning
+openclaw doctor --lint --json
+openclaw doctor --lint --only core/doctor/gateway-config --json
+```
+
+JSON output includes:
+
+- `ok`: whether any visible finding met the selected severity threshold
+- `checksRun`: number of health checks executed
+- `checksSkipped`: checks skipped by `--only` or `--skip`
+- `findings`: structured diagnostics with `checkId`, `severity`, `message`, and
+  optional `path`, `line`, `column`, `ocPath`, and `fixHint`
+
+Exit codes:
+
+- `0`: no findings at or above the selected threshold
+- `1`: one or more findings met the selected threshold
+- `2`: command/runtime failure before lint findings could be emitted
+
+Use `--severity-min info|warning|error` to control both what is printed and what
+causes a non-zero lint exit. Use `--only <id>` for narrow preflight gates and
+`--skip <id>` to temporarily exclude a noisy check while keeping the rest of the
+lint run active.
+Lint-output options such as `--json`, `--severity-min`, `--only`, and `--skip`
+must be paired with `--lint`; regular doctor and repair runs reject them.
 
 ## What it does (summary)
 
@@ -195,7 +257,6 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `routing.groupChat.historyLimit` → `messages.groupChat.historyLimit`
     - `routing.groupChat.mentionPatterns` → `messages.groupChat.mentionPatterns`
     - `channels.telegram.requireMention` → `channels.telegram.groups."*".requireMention`
-    - configured-channel configs missing visible reply policy → `messages.groupChat.visibleReplies: "message_tool"`
     - `routing.queue` → `messages.queue`
     - `routing.bindings` → top-level `bindings`
     - `routing.agents`/`routing.defaultAgentId` → `agents.list` + `agents.list[].default`
@@ -218,7 +279,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `identity` → `agents.list[].identity`
     - `agent.*` → `agents.defaults` + `tools.*` (tools/elevated/exec/sandbox/subagents)
     - `agent.model`/`allowedModels`/`modelAliases`/`modelFallbacks`/`imageModelFallbacks` → `agents.defaults.models` + `agents.defaults.model.primary/fallbacks` + `agents.defaults.imageModel.primary/fallbacks`
-    - remove `agents.defaults.llm`; use `models.providers.<id>.timeoutSeconds` for slow provider/model timeouts
+    - remove `agents.defaults.llm`; use `models.providers.<id>.timeoutSeconds` for slow provider/model timeouts, and keep the agent/run timeout above that value when the whole run must last longer
     - `browser.ssrfPolicy.allowPrivateNetwork` → `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
     - `browser.profiles.*.driver: "extension"` → `"existing-session"`
     - remove `browser.relayBindHost` (legacy extension relay setting)
@@ -232,7 +293,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="2b. OpenCode provider overrides">
-    If you've added `models.providers.opencode`, `opencode-zen`, or `opencode-go` manually, it overrides the built-in OpenCode catalog from `@mariozechner/pi-ai`. That can force models onto the wrong API or zero out costs. Doctor warns so you can remove the override and restore per-model API routing + costs.
+    If you've added `models.providers.opencode`, `opencode-zen`, or `opencode-go` manually, it overrides the built-in OpenCode catalog from `@earendil-works/pi-ai`. That can force models onto the wrong API or zero out costs. Doctor warns so you can remove the override and restore per-model API routing + costs.
   </Accordion>
   <Accordion title="2c. Browser migration and Chrome MCP readiness">
     If your browser config still points at the removed Chrome extension path, doctor normalizes it to the current host-local Chrome MCP attach model:
@@ -360,7 +421,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     When sandboxing is enabled, doctor checks Docker images and offers to build or switch to legacy names if the current image is missing.
   </Accordion>
   <Accordion title="7b. Plugin install cleanup">
-    Doctor removes legacy OpenClaw-generated plugin dependency staging state in `openclaw doctor --fix` / `openclaw doctor --repair` mode. This covers stale generated dependency roots, old install-stage directories, package-local debris from earlier bundled-plugin dependency repair code, and orphaned or recovered managed npm copies of bundled `@openclaw/*` plugins that can shadow the current bundled manifest.
+    Doctor removes legacy OpenClaw-generated plugin dependency staging state in `openclaw doctor --fix` / `openclaw doctor --repair` mode. This covers stale generated dependency roots, old install-stage directories, package-local debris from earlier bundled-plugin dependency repair code, and orphaned or recovered managed npm copies of bundled `@openclaw/*` plugins that can shadow the current bundled manifest. Doctor also relinks the host `openclaw` package into managed npm plugins that declare `peerDependencies.openclaw`, so package-local runtime imports such as `openclaw/plugin-sdk/*` keep resolving after updates or npm repairs.
 
     Doctor can also reinstall missing downloadable plugins when config references them but the local plugin registry cannot find them. Examples include material `plugins.entries`, configured channel/provider/search settings, and configured agent runtimes. During package updates, doctor avoids running package-manager plugin repair while the core package is being swapped; run `openclaw doctor --fix` again after the update if a configured plugin still needs recovery. Gateway startup and config reload do not run package managers; plugin installs remain explicit doctor/install/update work.
 
@@ -471,8 +532,8 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     - `openclaw doctor` prompts before rewriting supervisor config.
     - `openclaw doctor --yes` accepts the default repair prompts.
-    - `openclaw doctor --repair` applies recommended fixes without prompts.
-    - `openclaw doctor --repair --force` overwrites custom supervisor configs.
+    - `openclaw doctor --fix` applies recommended fixes without prompts (`--repair` is an alias).
+    - `openclaw doctor --fix --force` overwrites custom supervisor configs.
     - `OPENCLAW_SERVICE_REPAIR_POLICY=external` keeps doctor read-only for gateway service lifecycle. It still reports service health and runs non-service repairs, but skips service install/start/restart/bootstrap, supervisor config rewrites, and legacy service cleanup because an external supervisor owns that lifecycle.
     - On Linux, doctor does not rewrite command/entrypoint metadata while the matching systemd gateway unit is active. It also ignores inactive non-legacy extra gateway-like units during the duplicate-service scan so companion service files do not create cleanup noise.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, doctor service install/repair validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.

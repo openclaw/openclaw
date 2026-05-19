@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 type PnpmBuildConfig = {
+  allowBuilds?: Record<string, boolean>;
+  blockExoticSubdeps?: boolean;
   ignoredBuiltDependencies?: string[];
   onlyBuiltDependencies?: string[];
 };
@@ -22,9 +24,9 @@ describe("package manager build policy", () => {
     const packageJson = readJson("package.json") as RootPackageJson;
     const workspace = parse(fs.readFileSync("pnpm-workspace.yaml", "utf8")) as WorkspaceConfig;
 
-    for (const config of [packageJson.pnpm, workspace]) {
-      expect(config?.ignoredBuiltDependencies ?? []).toContain("@discordjs/opus");
-      expect(config?.onlyBuiltDependencies ?? []).not.toContain("@discordjs/opus");
-    }
+    expect(packageJson.pnpm).toBeUndefined();
+    expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
+    expect(workspace.blockExoticSubdeps).toBe(true);
+    expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });
 });

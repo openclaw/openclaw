@@ -41,13 +41,6 @@ type StoredMatrixThreadBindingState = {
   bindings: MatrixThreadBindingRecord[];
 };
 
-function _normalizeDurationMs(raw: unknown, fallback: number): number {
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return fallback;
-  }
-  return Math.max(0, Math.floor(raw));
-}
-
 function resolveBindingsPath(params: {
   auth: MatrixAuth;
   accountId: string;

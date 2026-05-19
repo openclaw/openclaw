@@ -68,6 +68,18 @@ async function flushPendingDelivery(): Promise<void> {
   await Promise.resolve();
 }
 
+type DeliveryArgs = {
+  payloads?: Array<{ text?: string; presentation?: unknown; interactive?: unknown }>;
+};
+
+function deliveryArgs(deliver: ReturnType<typeof vi.fn>): DeliveryArgs | undefined {
+  return deliver.mock.calls[0]?.at(0) as DeliveryArgs | undefined;
+}
+
+function firstDeliveredPayload(deliver: ReturnType<typeof vi.fn>) {
+  return deliveryArgs(deliver)?.payloads?.at(0);
+}
+
 function registerSlackAdapterPlugin(plugin: SlackAdapterPlugin): void {
   const registry = createTestRegistry([{ pluginId: "slack", plugin, source: "test" }]);
   setActivePluginRegistry(registry);
@@ -119,16 +131,13 @@ describe("plugin approval forwarding", () => {
       expect(result).toBe(true);
       await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
-      const deliveryArgs = deliver.mock.calls[0]?.[0] as
-        | { payloads?: Array<{ text?: string; interactive?: unknown }> }
-        | undefined;
-      const payload = deliveryArgs?.payloads?.[0];
+      const payload = firstDeliveredPayload(deliver);
       const text = payload?.text ?? "";
       expect(text).toContain("Plugin approval required");
       expect(text).toContain("Sensitive tool call");
       expect(text).toContain("plugin-req-1");
       expect(text).toContain("/approve");
-      expect(payload?.interactive).toEqual({
+      expect(payload?.presentation).toEqual({
         blocks: [
           {
             type: "buttons",
@@ -152,6 +161,7 @@ describe("plugin approval forwarding", () => {
           },
         ],
       });
+      expect(payload?.interactive).toBeUndefined();
     });
 
     it("renders only request-scoped plugin approval decisions", async () => {
@@ -167,13 +177,10 @@ describe("plugin approval forwarding", () => {
       );
       expect(result).toBe(true);
       await flushPendingDelivery();
-      const deliveryArgs = deliver.mock.calls[0]?.[0] as
-        | { payloads?: Array<{ text?: string; interactive?: unknown }> }
-        | undefined;
-      const payload = deliveryArgs?.payloads?.[0];
+      const payload = firstDeliveredPayload(deliver);
       expect(payload?.text).toContain("Reply with: /approve <id> allow-once|deny");
       expect(payload?.text).not.toContain("allow-always");
-      expect(payload?.interactive).toEqual({
+      expect(payload?.presentation).toEqual({
         blocks: [
           {
             type: "buttons",
@@ -192,6 +199,7 @@ describe("plugin approval forwarding", () => {
           },
         ],
       });
+      expect(payload?.interactive).toBeUndefined();
     });
 
     it("includes severity icon for critical", async () => {
@@ -202,9 +210,7 @@ describe("plugin approval forwarding", () => {
       await forwarder.handlePluginApprovalRequested!(request);
       await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
-      const text =
-        (deliver.mock.calls[0]?.[0] as { payloads?: Array<{ text?: string }> })?.payloads?.[0]
-          ?.text ?? "";
+      const text = firstDeliveredPayload(deliver)?.text ?? "";
       expect(text).toMatch(/🚨/);
     });
 
@@ -267,10 +273,7 @@ describe("plugin approval forwarding", () => {
       await forwarder.handlePluginApprovalRequested!(makePluginRequest());
       await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
-      const deliveryArgs = deliver.mock.calls[0]?.[0] as
-        | { payloads?: Array<{ text?: string }> }
-        | undefined;
-      expect(deliveryArgs?.payloads?.[0]?.text).toBe("custom adapter payload");
+      expect(firstDeliveredPayload(deliver)?.text).toBe("custom adapter payload");
     });
 
     it("calls outbound beforeDeliverPayload before plugin approval delivery", async () => {
@@ -314,10 +317,7 @@ describe("plugin approval forwarding", () => {
       await forwarder.handlePluginApprovalResolved!(makePluginResolved());
       await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
-      const deliveryArgs = deliver.mock.calls[0]?.[0] as
-        | { payloads?: Array<{ text?: string }> }
-        | undefined;
-      expect(deliveryArgs?.payloads?.[0]?.text).toBe("custom resolved payload");
+      expect(firstDeliveredPayload(deliver)?.text).toBe("custom resolved payload");
     });
   });
 
@@ -330,9 +330,7 @@ describe("plugin approval forwarding", () => {
 
       await forwarder.handlePluginApprovalResolved!(makePluginResolved());
       expect(deliver).toHaveBeenCalled();
-      const text =
-        (deliver.mock.calls[0]?.[0] as { payloads?: Array<{ text?: string }> })?.payloads?.[0]
-          ?.text ?? "";
+      const text = firstDeliveredPayload(deliver)?.text ?? "";
       expect(text).toContain("Plugin approval");
       expect(text).toContain("allowed once");
     });
@@ -358,9 +356,7 @@ describe("plugin approval forwarding", () => {
       });
 
       expect(deliver).toHaveBeenCalled();
-      const text =
-        (deliver.mock.calls[0]?.[0] as { payloads?: Array<{ text?: string }> })?.payloads?.[0]
-          ?.text ?? "";
+      const text = firstDeliveredPayload(deliver)?.text ?? "";
       expect(text).toContain("Plugin approval");
       expect(text).toContain("denied");
     });

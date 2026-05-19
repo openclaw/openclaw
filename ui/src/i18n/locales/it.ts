@@ -350,6 +350,12 @@ export const it: TranslationMap = {
     eventLogSubtitle: "Ultimi eventi del gateway.",
     noEvents: "Ancora nessun evento.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "scade tra {time}",
     expired: "scaduta",
@@ -695,10 +701,6 @@ export const it: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Scopri dove vanno i token, quando le sessioni hanno picchi e cosa determina i costi.",
-    },
     common: {
       emptyValue: "—",
       unknown: "sconosciuto",
@@ -1049,6 +1051,10 @@ export const it: TranslationMap = {
     settings: "Impostazioni chat",
     thinkingToggle: "Attiva/disattiva output di pensiero/elaborazione dell'assistente",
     toolCallsToggle: "Attiva/disattiva chiamate agli strumenti e risultati strumenti",
+    autoScrollMode: "Modalità di scorrimento automatico",
+    autoScrollAlways: "Sempre",
+    autoScrollNearBottom: "Vicino al fondo",
+    autoScrollOff: "Disattivato",
     focusToggle: "Attiva/disattiva modalità focus (nascondi barra laterale + intestazione pagina)",
     hideCronSessions: "Nascondi sessioni cron",
     showCronSessions: "Mostra sessioni cron",
@@ -1064,6 +1070,42 @@ export const it: TranslationMap = {
     updateNow: "Aggiorna ora",
     dismissUpdateBanner: "Ignora banner di aggiornamento",
     switchedSession: "Passato a {session}",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "Esporta",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "Filtra sessioni per agente",
+      session: "Chat session",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "English (Inglese)",
@@ -1174,6 +1216,9 @@ export const it: TranslationMap = {
       ascending: "Crescente",
       descending: "Decrescente",
       reset: "Reimposta",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Nessun processo corrispondente.",
       loading: "Caricamento...",
       loadMore: "Carica altri processi",
@@ -1209,6 +1254,7 @@ export const it: TranslationMap = {
     form: {
       editJob: "Modifica processo",
       newJob: "Nuovo processo",
+      advancedJob: "Advanced job",
       updateSubtitle: "Aggiorna il processo pianificato selezionato.",
       createSubtitle: "Crea un risveglio pianificato o un'esecuzione dell'agente.",
       required: "Obbligatorio",

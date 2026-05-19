@@ -55,6 +55,12 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
+import {
+  recordMemoryWatchEventPath,
+  settleMemoryWatchEventPaths,
+  type MemoryWatchEventStats,
+  type MemoryWatchSettleQueue,
+} from "./watch-settle.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 
@@ -62,12 +68,10 @@ const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
-const QMD_WATCH_STABILITY_MS = 200;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
-const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
 const QMD_EMBED_LOCK_MIN_WAIT_MS = 15 * 60 * 1000;
 const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
   factor: 1.2,
@@ -146,10 +150,6 @@ function getQmdUpdateQueueState(): QmdUpdateQueueState {
   return resolveGlobalSingleton<QmdUpdateQueueState>(QMD_UPDATE_QUEUE_KEY, () => ({
     tails: new Map<string, Promise<void>>(),
   }));
-}
-
-function _hasHanScript(value: string): boolean {
-  return HAN_SCRIPT_RE.test(value);
 }
 
 function normalizeHanBm25Query(query: string): string {
@@ -329,6 +329,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private embedTimer: NodeJS.Timeout | null = null;
   private watcher: FSWatcher | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
+  private readonly pendingWatchPaths: MemoryWatchSettleQueue = new Map();
   private pendingUpdate: Promise<void> | null = null;
   private queuedForcedUpdate: Promise<void> | null = null;
   private queuedForcedRuns = 0;
@@ -1565,12 +1566,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.watcher = chokidar.watch(watchPathList, {
       ignoreInitial: true,
       ignored: (watchPath) => shouldIgnoreMemoryWatchPath(watchPath),
-      awaitWriteFinish: {
-        stabilityThreshold: QMD_WATCH_STABILITY_MS,
-        pollInterval: 100,
-      },
     });
-    const markDirty = () => {
+    const markDirty = (watchPath?: string, stats?: MemoryWatchEventStats) => {
+      recordMemoryWatchEventPath(this.pendingWatchPaths, watchPath, stats);
       this.dirty = true;
       this.scheduleWatchSync();
     };
@@ -1597,7 +1595,21 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     this.watchTimer = setTimeout(() => {
       this.watchTimer = null;
-      void this.sync({ reason: "watch" }).catch((err) => {
+      void (async () => {
+        if (this.closed) {
+          return;
+        }
+        if (!(await settleMemoryWatchEventPaths(this.pendingWatchPaths))) {
+          if (!this.closed) {
+            this.scheduleWatchSync();
+          }
+          return;
+        }
+        if (this.closed) {
+          return;
+        }
+        await this.sync({ reason: "watch" });
+      })().catch((err) => {
         log.warn(`qmd watch sync failed: ${String(err)}`);
       });
     }, this.syncSettings.watchDebounceMs);
@@ -1940,21 +1952,22 @@ export class QmdMemoryManager implements MemorySearchManager {
     query: string,
     searchCommand?: string,
   ): Array<{ type: string; query: string }> {
+    const semanticQuery = normalizeQmdSemanticQuery(query);
     switch (searchCommand) {
       case "search":
         // BM25 keyword search only
         return [{ type: "lex", query }];
       case "vsearch":
         // Vector search only
-        return [{ type: "vec", query }];
+        return [{ type: "vec", query: semanticQuery }];
       case "query":
       case undefined:
       default:
         // Full hybrid: lex + vec + hyde (query expansion)
         return [
           { type: "lex", query },
-          { type: "vec", query },
-          { type: "hyde", query },
+          { type: "vec", query: semanticQuery },
+          { type: "hyde", query: semanticQuery },
         ];
     }
   }
@@ -2565,15 +2578,6 @@ export class QmdMemoryManager implements MemorySearchManager {
     return `${normalizedName || fallbackName || "file"}${normalizedExt}`;
   }
 
-  private extractSnippetLines(snippet: string): { startLine: number; endLine: number } {
-    const headerLines = this.parseSnippetHeaderLines(snippet);
-    if (headerLines) {
-      return headerLines;
-    }
-    const lines = snippet.split("\n").length;
-    return { startLine: 1, endLine: lines };
-  }
-
   private resolveSnippetLines(
     entry: QmdQueryResult,
     snippet: string,
@@ -3145,4 +3149,8 @@ function resolveQmdManagerRuntimeConfig(
     syncSettings: resolveMemorySearchSyncConfig(cfg, agentId),
     contextLimits: resolveAgentContextLimits(cfg, agentId),
   };
+}
+
+function normalizeQmdSemanticQuery(query: string): string {
+  return query.replace(/(\w)-(?=\w)/g, "$1 ");
 }

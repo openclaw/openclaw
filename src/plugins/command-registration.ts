@@ -4,6 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { isRecord } from "../utils.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -11,7 +12,13 @@ import {
   pluginCommands,
   type RegisteredPluginCommand,
 } from "./command-registry-state.js";
-import type { OpenClawPluginCommandDefinition } from "./types.js";
+import {
+  AGENT_PROMPT_SURFACE_KINDS,
+  type AgentPromptGuidance,
+  type AgentPromptGuidanceEntry,
+  type AgentPromptSurfaceKind,
+  type OpenClawPluginCommandDefinition,
+} from "./types.js";
 
 /**
  * Reserved command names that plugins cannot override (built-in commands).
@@ -22,6 +29,7 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
  * first accessed during plugin registration.
  */
 let reservedCommands: Set<string> | undefined;
+let agentPromptSurfaces: Set<string> | undefined;
 
 function getReservedCommands(): Set<string> {
   reservedCommands ??= new Set([
@@ -60,6 +68,11 @@ function getReservedCommands(): Set<string> {
     "usage",
   ]);
   return reservedCommands;
+}
+
+function getAgentPromptSurfaces(): Set<string> {
+  agentPromptSurfaces ??= new Set(AGENT_PROMPT_SURFACE_KINDS);
+  return agentPromptSurfaces;
 }
 
 export type CommandRegistrationResult = {
@@ -125,14 +138,12 @@ export function validatePluginCommandDefinition(
     }
   }
   if (command.agentPromptGuidance !== undefined && !Array.isArray(command.agentPromptGuidance)) {
-    return "Agent prompt guidance must be an array of strings";
+    return "Agent prompt guidance must be an array of strings or objects";
   }
   for (const [index, guidance] of (command.agentPromptGuidance ?? []).entries()) {
-    if (typeof guidance !== "string") {
-      return `Agent prompt guidance ${index + 1} must be a string`;
-    }
-    if (!guidance.trim()) {
-      return `Agent prompt guidance ${index + 1} cannot be empty`;
+    const guidanceError = validateAgentPromptGuidance(index, guidance);
+    if (guidanceError) {
+      return guidanceError;
     }
   }
   if (command.requiredScopes !== undefined) {
@@ -165,6 +176,9 @@ export function validatePluginCommandDefinition(
   if (nameError) {
     return nameError;
   }
+  if (command.nativeNames !== undefined && !isRecord(command.nativeNames)) {
+    return "Command nativeNames must be an object";
+  }
   for (const [label, alias] of Object.entries(command.nativeNames ?? {})) {
     if (typeof alias !== "string") {
       continue;
@@ -174,6 +188,9 @@ export function validatePluginCommandDefinition(
       return `Native command alias "${label}" invalid: ${aliasError}`;
     }
   }
+  if (command.nativeProgressMessages !== undefined && !isRecord(command.nativeProgressMessages)) {
+    return "Command nativeProgressMessages must be an object";
+  }
   for (const [label, message] of Object.entries(command.nativeProgressMessages ?? {})) {
     if (typeof message !== "string") {
       return `Native progress message "${label}" must be a string`;
@@ -181,6 +198,12 @@ export function validatePluginCommandDefinition(
     if (!message.trim()) {
       return `Native progress message "${label}" cannot be empty`;
     }
+  }
+  if (
+    command.descriptionLocalizations !== undefined &&
+    !isRecord(command.descriptionLocalizations)
+  ) {
+    return "Command descriptionLocalizations must be an object";
   }
   for (const [locale, description] of Object.entries(command.descriptionLocalizations ?? {})) {
     if (typeof description !== "string") {
@@ -191,6 +214,61 @@ export function validatePluginCommandDefinition(
     }
   }
   return null;
+}
+
+function validateAgentPromptGuidance(index: number, guidance: AgentPromptGuidance): string | null {
+  const label = `Agent prompt guidance ${index + 1}`;
+  if (typeof guidance === "string") {
+    return guidance.trim() ? null : `${label} cannot be empty`;
+  }
+  if (!isRecord(guidance)) {
+    return `${label} must be a string or object`;
+  }
+  if (typeof guidance.text !== "string") {
+    return `${label} text must be a string`;
+  }
+  if (!guidance.text.trim()) {
+    return `${label} text cannot be empty`;
+  }
+  if (guidance.surfaces === undefined) {
+    return null;
+  }
+  if (!Array.isArray(guidance.surfaces)) {
+    return `${label} surfaces must be an array of prompt surface ids`;
+  }
+  if (guidance.surfaces.length === 0) {
+    return `${label} surfaces cannot be empty`;
+  }
+  for (const [surfaceIndex, surface] of guidance.surfaces.entries()) {
+    const normalizedSurface = typeof surface === "string" ? surface.trim() : "";
+    if (!getAgentPromptSurfaces().has(normalizedSurface)) {
+      const surfaces = AGENT_PROMPT_SURFACE_KINDS.join(", ");
+      return `${label} surface ${surfaceIndex + 1} must be one of: ${surfaces}`;
+    }
+  }
+  return null;
+}
+
+function normalizeAgentPromptGuidance(
+  guidance: readonly AgentPromptGuidance[] | undefined,
+): AgentPromptGuidance[] | undefined {
+  if (!guidance) {
+    return undefined;
+  }
+  return guidance.map((entry) => {
+    if (typeof entry === "string") {
+      return entry.trim();
+    }
+    const normalized: AgentPromptGuidanceEntry = {
+      text: entry.text.trim(),
+    };
+    if (entry.surfaces) {
+      normalized.surfaces = entry.surfaces.map(
+        (surface) => surface.trim() as AgentPromptSurfaceKind,
+      );
+    }
+    return normalized;
+  });
 }
 
 export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
@@ -258,7 +336,7 @@ export function registerPluginCommand(
       ? { channels: command.channels.map((channel) => normalizeLowercaseStringOrEmpty(channel)) }
       : {}),
     ...(command.agentPromptGuidance
-      ? { agentPromptGuidance: command.agentPromptGuidance.map((line) => line.trim()) }
+      ? { agentPromptGuidance: normalizeAgentPromptGuidance(command.agentPromptGuidance) }
       : {}),
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);

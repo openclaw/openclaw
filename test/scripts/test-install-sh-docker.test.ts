@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
+const DOCKER_SETUP_PATH = "scripts/docker/setup.sh";
+const PODMAN_SETUP_PATH = "scripts/podman/setup.sh";
 const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
 const BUN_GLOBAL_ASSERTIONS_PATH = "scripts/e2e/lib/bun-global-install/assertions.mjs";
@@ -71,7 +73,9 @@ describe("test-install-sh-docker", () => {
   it("runs the root Dockerfile build with the CI heap limit", () => {
     const dockerfile = readFileSync("Dockerfile", "utf8");
 
-    expect(dockerfile).toContain("NODE_OPTIONS=--max-old-space-size=8192 pnpm build:docker");
+    expect(dockerfile).toContain(
+      "NODE_OPTIONS=--max-old-space-size=8192 pnpm_config_verify_deps_before_run=false pnpm build:docker",
+    );
   });
 
   it("exports the Playwright browser cache installed by the root Dockerfile", () => {
@@ -84,13 +88,50 @@ describe("test-install-sh-docker", () => {
     );
   });
 
+  it("passes the baked browser build arg through Docker setup", () => {
+    const script = readFileSync(DOCKER_SETUP_PATH, "utf8");
+
+    expect(script).toContain('export OPENCLAW_INSTALL_BROWSER="${OPENCLAW_INSTALL_BROWSER:-}"');
+    expect(script).toContain("OPENCLAW_INSTALL_BROWSER \\");
+    expect(script).toContain('--build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}"');
+  });
+
+  it("passes image-scoped pip packages through Docker and Podman setup", () => {
+    const dockerSetup = readFileSync(DOCKER_SETUP_PATH, "utf8");
+    const podmanSetup = readFileSync(PODMAN_SETUP_PATH, "utf8");
+    const dockerfile = readFileSync("Dockerfile", "utf8");
+
+    expect(dockerfile).toContain("ARG OPENCLAW_IMAGE_PIP_PACKAGES");
+    expect(dockerfile).toContain(
+      "python3 -m pip install --no-cache-dir --break-system-packages $OPENCLAW_IMAGE_PIP_PACKAGES",
+    );
+    expect(dockerSetup).toContain(
+      'export OPENCLAW_IMAGE_PIP_PACKAGES="${OPENCLAW_IMAGE_PIP_PACKAGES:-}"',
+    );
+    expect(dockerSetup).toContain("OPENCLAW_IMAGE_PIP_PACKAGES \\");
+    expect(dockerSetup).toContain(
+      '--build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}"',
+    );
+    expect(dockerSetup).not.toContain("OPENCLAW_DOCKER_PIP_PACKAGES");
+    expect(podmanSetup).toContain('OPENCLAW_IMAGE_PIP_PACKAGES="${OPENCLAW_IMAGE_PIP_PACKAGES:-}"');
+    expect(podmanSetup).toContain(
+      'BUILD_ARGS+=(--build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}")',
+    );
+    expect(podmanSetup).not.toContain("OPENCLAW_DOCKER_PIP_PACKAGES");
+  });
+
   it("allows repository branch history and release tags for secret-backed Docker release checks", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8");
 
-    expect(workflow).toContain("git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'");
     expect(workflow).toContain('git rev-parse --verify "${INPUT_REF}^{commit}"');
+    expect(workflow).toContain(
+      'git merge-base --is-ancestor "$selected_sha" refs/remotes/origin/main',
+    );
     expect(workflow).toContain("repository-branch-history");
     expect(workflow).toContain("git tag --points-at \"$selected_sha\" | grep -Eq '^v'");
+    expect(workflow).toContain(
+      "git for-each-ref --format='%(refname:short)' --contains \"$selected_sha\" refs/remotes/origin",
+    );
     expect(workflow).toContain("reachable from an OpenClaw branch or release tag");
   });
 
@@ -229,6 +270,9 @@ describe("bun global install smoke", () => {
     expect(workflow).not.toContain('timeout 300s docker pull "$IMAGE_REF"');
     expect(workflow).toContain("--progress=plain");
     expect(workflow).toContain("--load");
+    expect(workflow).toContain("pnpm-workspace.yaml");
+    expect(workflow).toContain("workspace.patchedDependencies");
+    expect(workflow).not.toContain("pkg.pnpm?.patchedDependencies");
     expect(workflow).not.toContain("--cache-from");
     expect(workflow).not.toContain("--cache-to");
     expect(workflow).not.toContain("type=gha");

@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,6 +22,10 @@ type ToolExecute = ReturnType<
   typeof import("./pi-tool-definition-adapter.js").toToolDefinitions
 >[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
+
+function firstLogErrorMessage(): unknown {
+  return vi.mocked(logError).mock.calls[0]?.[0];
+}
 
 describe("pi tool definition adapter logging", () => {
   beforeAll(async () => {
@@ -64,7 +68,7 @@ describe("pi tool definition adapter logging", () => {
 
     await def.execute("call-edit-1", { path: "notes.txt" }, undefined, undefined, extensionContext);
 
-    expect(vi.mocked(logError).mock.calls[0]?.[0]).toContain(
+    expect(firstLogErrorMessage()).toContain(
       '[tools] edit failed: Missing required parameter: edits (received: path). Supply correct parameters before retrying. raw_params={"path":"notes.txt"}',
     );
   });
@@ -139,7 +143,7 @@ describe("pi tool definition adapter logging", () => {
     expect(details?.status).toBe("error");
     expect(details?.tool).toBe("web_search");
     expect(details?.error).toBe("This operation was aborted");
-    expect(vi.mocked(logError).mock.calls[0]?.[0]).toContain(
+    expect(firstLogErrorMessage()).toContain(
       "[tools] web_search failed: This operation was aborted",
     );
   });

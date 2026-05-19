@@ -97,12 +97,8 @@ const {
   ) => number;
 };
 
-const VITEST_NODE_PREFIX = [
-  "exec",
-  "node",
-  "--no-maglev",
-  expect.stringMatching(/(?:^|[\\/])node_modules[\\/]vitest[\\/]vitest\.mjs$/),
-];
+const VITEST_CLI_ENTRY = path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs");
+const VITEST_NODE_PREFIX = ["exec", "node", "--no-maglev", VITEST_CLI_ENTRY];
 
 describe("test-projects args", () => {
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
@@ -943,10 +939,10 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.extension-discord.config.ts",
         forwardedArgs: [],
         includePatterns: [
-          "extensions/discord/src/api-barrel.test.ts",
           "extensions/discord/src/channel-actions.contract.test.ts",
           "extensions/discord/src/channel.message-adapter.test.ts",
           "extensions/discord/src/channel.test.ts",
+          "extensions/discord/src/durable-delivery.test.ts",
           "extensions/discord/src/monitor/message-handler.bot-self-filter.test.ts",
           "extensions/discord/src/monitor/message-handler.queue.test.ts",
           "extensions/discord/src/monitor/provider.skill-dedupe.test.ts",

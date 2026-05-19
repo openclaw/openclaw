@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   onAgentEvent as registerAgentEventListener,
@@ -23,21 +23,25 @@ function createTestContext(): {
   warn: ReturnType<typeof vi.fn>;
   onBlockReplyFlush: ReturnType<typeof vi.fn>;
   onAgentEvent: ReturnType<typeof vi.fn>;
+  onExecutionPhase: ReturnType<typeof vi.fn>;
 } {
   const onBlockReplyFlush = vi.fn();
   const onAgentEvent = vi.fn();
+  const onExecutionPhase = vi.fn();
   const warn = vi.fn();
   const ctx: ToolHandlerContext = {
     params: {
       runId: "run-test",
       onBlockReplyFlush,
       onAgentEvent,
+      onExecutionPhase,
       onToolResult: undefined,
     },
     flushBlockReplyBuffer: vi.fn(),
     hookRunner: undefined,
     log: {
       debug: vi.fn(),
+      info: vi.fn(),
       warn,
     },
     state: {
@@ -70,7 +74,7 @@ function createTestContext(): {
     trimMessagingToolSent: vi.fn(),
   };
 
-  return { ctx, warn, onBlockReplyFlush, onAgentEvent };
+  return { ctx, warn, onBlockReplyFlush, onAgentEvent, onExecutionPhase };
 }
 
 type CapturedAgentEvent = { stream?: string; data?: Record<string, unknown> };
@@ -105,13 +109,6 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value;
 }
 
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an array`);
-  }
-  return value;
-}
-
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
   const record = requireRecord(value, label);
   for (const [key, expectedValue] of Object.entries(expected)) {
@@ -131,6 +128,22 @@ function requireNestedRecord(value: unknown, label: string, path: string[]) {
   return requireRecord(current, label);
 }
 
+function expectInteractiveApprovalButtons(
+  result: Record<string, unknown>,
+  expectedButtons: readonly Record<string, unknown>[],
+) {
+  const interactive = result.interactive;
+  if (interactive === undefined) {
+    expect(
+      requireNestedRecord(result, "exec approval payload", ["channelData", "execApproval"]),
+    ).toBeTruthy();
+    return;
+  }
+  expect(requireRecord(interactive, "interactive payload")).toEqual({
+    blocks: [{ type: "buttons", buttons: expectedButtons }],
+  });
+}
+
 function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
   const targets = ctx.state.messagingToolSentTargets;
   expect(targets).toHaveLength(1);
@@ -139,7 +152,7 @@ function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
 
 describe("handleToolExecutionStart read path checks", () => {
   it("does not warn when read tool uses file_path alias", async () => {
-    const { ctx, warn, onBlockReplyFlush } = createTestContext();
+    const { ctx, warn, onBlockReplyFlush, onExecutionPhase } = createTestContext();
 
     const evt: ToolExecutionStartEvent = {
       type: "tool_execution_start",
@@ -151,6 +164,12 @@ describe("handleToolExecutionStart read path checks", () => {
     await handleToolExecutionStart(ctx, evt);
 
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+    expect(onExecutionPhase).toHaveBeenCalledWith({
+      phase: "tool_execution_started",
+      tool: "read",
+      toolCallId: "tool-1",
+      source: "pi-embedded",
+    });
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -558,12 +577,23 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         allowedDecisions: ["allow-once", "allow-always", "deny"],
       },
     );
-    expect(
-      requireArray(
-        requireNestedRecord(result, "interactive payload", ["interactive"]).blocks,
-        "interactive blocks",
-      ).length,
-    ).toBeGreaterThan(0);
+    expectInteractiveApprovalButtons(result, [
+      {
+        label: "Allow Once",
+        value: "/approve 12345678-1234-1234-1234-123456789012 allow-once",
+        style: "success",
+      },
+      {
+        label: "Allow Always",
+        value: "/approve 12345678-1234-1234-1234-123456789012 allow-always",
+        style: "primary",
+      },
+      {
+        label: "Deny",
+        value: "/approve 12345678-1234-1234-1234-123456789012 deny",
+        style: "danger",
+      },
+    ]);
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
 
@@ -605,12 +635,18 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         allowedDecisions: ["allow-once", "deny"],
       },
     );
-    expect(
-      requireArray(
-        requireNestedRecord(result, "interactive payload", ["interactive"]).blocks,
-        "interactive blocks",
-      ).length,
-    ).toBeGreaterThan(0);
+    expectInteractiveApprovalButtons(result, [
+      {
+        label: "Allow Once",
+        value: "/approve 12345678-1234-1234-1234-123456789012 allow-once",
+        style: "success",
+      },
+      {
+        label: "Deny",
+        value: "/approve 12345678-1234-1234-1234-123456789012 deny",
+        style: "danger",
+      },
+    ]);
   });
 
   it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
@@ -1158,6 +1194,43 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-upload-file")).toBe(false);
   });
 
+  it("commits message attachment aliases as delivery evidence", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-attachment-aliases",
+      args: {
+        action: "send",
+        to: "channel:123",
+        content: "track ready",
+        media: "/tmp/generated-song.mp3",
+        attachments: [{ filePath: "/tmp/generated-cover.png" }],
+      },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-attachment-aliases",
+      isError: false,
+      result: { ok: true },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([
+      "/tmp/generated-song.mp3",
+      "/tmp/generated-cover.png",
+    ]);
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      to: "channel:123",
+      text: "track ready",
+      mediaUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
+    });
+  });
+
   it("commits sendAttachment args as message delivery evidence", async () => {
     const { ctx } = createTestContext();
 
@@ -1346,7 +1419,7 @@ describe("control UI credential redaction (issue #72283)", () => {
     const commandOutputCalls = onAgentEvent.mock.calls
       .map((call) => call[0])
       .filter((arg: unknown) => (arg as { stream?: string })?.stream === "command_output");
-    expect(commandOutputCalls.length).toBeGreaterThan(0);
+    expect(commandOutputCalls).toHaveLength(1);
     const lastOutput = commandOutputCalls.at(-1) as { data?: { output?: string } } | undefined;
     const output = requireString(lastOutput?.data?.output, "command output");
     expect(output).not.toContain("sk-or-v1-abcdef0123456789");

@@ -68,6 +68,28 @@ vi.mock("../../config/config.js", async () => {
     writeConfigFile: mocks.writeConfigFile,
     replaceConfigFile: async (params: { nextConfig: unknown }) =>
       await mocks.writeConfigFile(params.nextConfig),
+    mutateConfigFileWithRetry: async (params: {
+      mutate: (draft: Record<string, unknown>, context: unknown) => unknown;
+    }) => {
+      const draft = structuredClone(mocks.loadConfigReturn);
+      const result = await params.mutate(draft, {
+        snapshot: { path: "/tmp/openclaw/config.json" },
+        previousHash: "test-hash",
+        attempt: 0,
+      });
+      await mocks.writeConfigFile(draft);
+      return {
+        path: "/tmp/openclaw/config.json",
+        previousHash: "test-hash",
+        persistedHash: "persisted-hash",
+        snapshot: { path: "/tmp/openclaw/config.json" },
+        nextConfig: draft,
+        result,
+        attempts: 1,
+        afterWrite: { mode: "auto" },
+        followUp: { action: "none" },
+      };
+    },
   };
 });
 
@@ -168,7 +190,7 @@ vi.mock("node:fs/promises", async () => {
 /* Import after mocks are set up                                      */
 /* ------------------------------------------------------------------ */
 
-const { __testing: agentsTesting, agentsHandlers } = await import("./agents.js");
+const { testing: agentsTesting, agentsHandlers } = await import("./agents.js");
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
@@ -251,7 +273,9 @@ function makeCall(method: keyof typeof agentsHandlers, params: Record<string, un
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -278,8 +302,22 @@ function expectRespondErrorContaining(respond: ReturnType<typeof vi.fn>, text: s
   expect(mockCallArg(respond)).toBe(false);
   expect(mockCallArg(respond, 0, 1)).toBeUndefined();
   const error = expectRecordFields(mockCallArg(respond, 0, 2), {});
-  expect(error.message).toEqual(expect.stringContaining(text));
+  expectStringContaining(error.message, text);
   return error;
+}
+
+function firstRespondResult(respond: ReturnType<typeof vi.fn>): unknown {
+  return mockCallArg(respond, 0, 1);
+}
+
+function expectStringContaining(value: unknown, text: string) {
+  expect(typeof value).toBe("string");
+  expect(value as string).toContain(text);
+}
+
+function expectStringNotContaining(value: unknown, text: string) {
+  expect(typeof value).toBe("string");
+  expect(value as string).not.toContain(text);
 }
 
 function findMockCallArg(
@@ -432,7 +470,7 @@ async function listAgentFileNames(agentId = "main") {
   const { respond, promise } = makeCall("agents.files.list", { agentId });
   await promise;
 
-  const [, result] = respond.mock.calls[0] ?? [];
+  const result = firstRespondResult(respond);
   const files = (result as { files: Array<{ name: string }> }).files;
   return files.map((file) => file.name);
 }
@@ -546,6 +584,23 @@ describe("agents.create", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("returns an invalid request when a concurrent create wins the config race", async () => {
+    let findCallCount = 0;
+    mocks.findAgentEntryIndex.mockImplementation(() => {
+      findCallCount += 1;
+      return findCallCount >= 2 ? 0 : -1;
+    });
+
+    const { respond, promise } = makeCall("agents.create", {
+      name: "Race Agent",
+      workspace: "/tmp/ws",
+    });
+    await promise;
+
+    expectRespondErrorContaining(respond, "already exists");
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("rejects invalid params (missing name)", async () => {
     const { respond, promise } = makeCall("agents.create", {
       workspace: "/tmp/ws",
@@ -568,7 +623,7 @@ describe("agents.create", () => {
       rootDir: "/resolved/tmp/ws",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(expect.stringContaining("- Name: Plain Agent"));
+    expectStringContaining(write.data, "- Name: Plain Agent");
   });
 
   it("writes emoji and avatar to both config and IDENTITY.md", async () => {
@@ -590,8 +645,15 @@ describe("agents.create", () => {
       rootDir: "/resolved/tmp/ws",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(
-      expect.stringMatching(/- Name: Fancy Agent[\s\S]*- Emoji: 🤖[\s\S]*- Avatar:/),
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: Fancy Agent",
+        "- Emoji: 🤖",
+        "- Avatar: https://example.com/avatar.png",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -726,6 +788,22 @@ describe("agents.update", () => {
     expectNotFoundResponseAndNoWrite(respond);
   });
 
+  it("returns not found when a concurrent delete wins the update race", async () => {
+    let findCallCount = 0;
+    mocks.findAgentEntryIndex.mockImplementation(() => {
+      findCallCount += 1;
+      return findCallCount >= 2 ? -1 : 0;
+    });
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      model: "gpt-5.5",
+    });
+    await promise;
+
+    expectNotFoundResponseAndNoWrite(respond);
+  });
+
   it("ensures workspace when workspace changes", async () => {
     const { promise } = makeCall("agents.update", {
       agentId: "test-agent",
@@ -762,10 +840,16 @@ describe("agents.update", () => {
       rootDir: "/workspace/test-agent",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(
-      expect.stringMatching(
-        /- Name: Current Agent[\s\S]*- Theme: steady[\s\S]*- Emoji: 🐢[\s\S]*- Avatar: https:\/\/example\.com\/avatar\.png/,
-      ),
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: Current Agent",
+        "- Theme: steady",
+        "- Emoji: 🐢",
+        "- Avatar: https://example.com/avatar.png",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -783,8 +867,15 @@ describe("agents.update", () => {
       rootDir: "/workspace/test-agent",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(
-      expect.stringMatching(/- Name: Current Agent[\s\S]*- Theme: steady[\s\S]*- Emoji: 🦀/),
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: Current Agent",
+        "- Theme: steady",
+        "- Emoji: 🦀",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -810,10 +901,16 @@ describe("agents.update", () => {
       rootDir: "/workspace/test-agent",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(
-      expect.stringMatching(
-        /- Name: New Name[\s\S]*- Theme: steady[\s\S]*- Emoji: 🤖[\s\S]*- Avatar: https:\/\/example\.com\/new\.png/,
-      ),
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: New Name",
+        "- Theme: steady",
+        "- Emoji: 🤖",
+        "- Avatar: https://example.com/new.png",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -882,9 +979,9 @@ describe("agents.update", () => {
       rootDir: "/resolved/new/workspace",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(expect.stringContaining("- **Creature:** Steady Turtle"));
-    expect(write.data).toEqual(expect.stringContaining("## Role"));
-    expect(write.data).not.toEqual(expect.stringContaining("Flustered Protocol Droid"));
+    expectStringContaining(write.data, "- **Creature:** Steady Turtle");
+    expectStringContaining(write.data, "## Role");
+    expectStringNotContaining(write.data, "Flustered Protocol Droid");
   });
 
   it("preserves an existing destination identity file when workspace changes", async () => {
@@ -950,9 +1047,9 @@ describe("agents.update", () => {
       rootDir: "/resolved/new/workspace",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(expect.stringContaining("- **Creature:** Destination Fox"));
-    expect(write.data).toEqual(expect.stringContaining("Destination workspace role."));
-    expect(write.data).not.toEqual(expect.stringContaining("Old workspace role."));
+    expectStringContaining(write.data, "- **Creature:** Destination Fox");
+    expectStringContaining(write.data, "Destination workspace role.");
+    expectStringNotContaining(write.data, "Old workspace role.");
   });
 
   it("does not persist config when IDENTITY.md write fails on update", async () => {
@@ -1069,6 +1166,22 @@ describe("agents.delete", () => {
     expectNotFoundResponseAndNoWrite(respond);
   });
 
+  it("returns not found when a concurrent delete wins the delete race", async () => {
+    let findCallCount = 0;
+    mocks.findAgentEntryIndex.mockImplementation(() => {
+      findCallCount += 1;
+      return findCallCount >= 2 ? -1 : 0;
+    });
+
+    const { respond, promise } = makeCall("agents.delete", {
+      agentId: "test-agent",
+    });
+    await promise;
+
+    expectNotFoundResponseAndNoWrite(respond);
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+  });
+
   it("rejects invalid params (missing agentId)", async () => {
     const { respond, promise } = makeCall("agents.delete", {});
     await promise;
@@ -1132,7 +1245,7 @@ describe("agents.files.list", () => {
     const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
     await promise;
 
-    const [, result] = respond.mock.calls[0] ?? [];
+    const result = firstRespondResult(respond);
     const files = (result as { files: Array<{ name: string; missing: boolean; size?: number }> })
       .files;
     const file = files.find((entry) => entry.name === "AGENTS.md");
@@ -1142,6 +1255,33 @@ describe("agents.files.list", () => {
       size: 17,
     });
     expect(rootOpen).not.toHaveBeenCalled();
+  });
+
+  it("falls back to fixed-path lstat when safe stat is unavailable", async () => {
+    const rootStat = vi.fn(async () => {
+      throw createErrnoError("helper-unavailable");
+    });
+    agentsTesting.setDepsForTests({ root: makeRootForTest({ stat: rootStat }) });
+    mocks.fsLstat.mockImplementation(async (filePath: unknown) => {
+      if (filePath === "/workspace/main/AGENTS.md") {
+        return makeFileStat({ size: 23, mtimeMs: 6789 });
+      }
+      throw createEnoentError();
+    });
+
+    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
+    await promise;
+
+    const result = firstRespondResult(respond);
+    const files = (result as { files: Array<{ name: string; missing: boolean; size?: number }> })
+      .files;
+    const file = files.find((entry) => entry.name === "AGENTS.md");
+    expectRecordFields(file, {
+      name: "AGENTS.md",
+      missing: false,
+      size: 23,
+    });
+    expect(rootStat).toHaveBeenCalled();
   });
 });
 

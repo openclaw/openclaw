@@ -4,6 +4,7 @@ read_when:
   - You want a single API key for many LLMs
   - You want to run models via OpenRouter in OpenClaw
   - You want to use OpenRouter for image generation
+  - You want to use OpenRouter for music generation
   - You want to use OpenRouter for video generation
 title: "OpenRouter"
 ---
@@ -107,6 +108,34 @@ second durations, `720P`/`1080P` resolutions, and `16:9`/`9:16` aspect
 ratios. Video-to-video is not registered for OpenRouter because the upstream
 video generation API currently accepts text and image references.
 
+## Music generation
+
+OpenRouter can also back the `music_generate` tool through chat completions
+audio output. Use an OpenRouter audio model under
+`agents.defaults.musicGenerationModel`:
+
+```json5
+{
+  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  agents: {
+    defaults: {
+      musicGenerationModel: {
+        primary: "openrouter/google/lyria-3-pro-preview",
+        timeoutMs: 180_000,
+      },
+    },
+  },
+}
+```
+
+The bundled OpenRouter music provider defaults to
+`google/lyria-3-pro-preview` and also exposes
+`google/lyria-3-clip-preview`. OpenClaw sends `modalities: ["text",
+"audio"]`, enables streaming, collects the streamed audio chunks, and saves
+the result as generated media for channel delivery. Reference images are
+accepted for Lyria models through the shared `music_generate image=...`
+parameter.
+
 ## Text-to-speech
 
 OpenRouter can also be used as a TTS provider through its OpenAI-compatible
@@ -132,6 +161,29 @@ OpenRouter can also be used as a TTS provider through its OpenAI-compatible
 
 If `messages.tts.providers.openrouter.apiKey` is omitted, TTS reuses
 `models.providers.openrouter.apiKey`, then `OPENROUTER_API_KEY`.
+
+## Speech-to-text (inbound audio)
+
+OpenRouter can transcribe inbound voice/audio attachments through the shared
+`tools.media.audio` path using its STT endpoint (`/audio/transcriptions`).
+This applies to any channel plugin that forwards inbound voice/audio into
+media understanding preflight.
+
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        models: [{ provider: "openrouter", model: "openai/whisper-large-v3-turbo" }],
+      },
+    },
+  },
+}
+```
+
+OpenClaw sends OpenRouter STT requests as JSON with base64 audio under
+`input_audio` (OpenRouter STT contract), not as multipart OpenAI form uploads.
 
 ## Authentication and headers
 

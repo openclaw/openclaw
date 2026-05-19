@@ -1,4 +1,4 @@
-import { completeSimple, getModel, streamSimple } from "@mariozechner/pi-ai";
+import { completeSimple, getModel, streamSimple } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
@@ -32,7 +32,7 @@ type AssistantLikeMessage = {
 };
 
 function resolveLiveXaiModel() {
-  return getModel("xai", "grok-4.3" as never) ?? getModel("xai", "grok-4");
+  return getModel("xai", "grok-4.3") ?? getModel("xai", "grok-4.20-0309-reasoning");
 }
 
 function requireLiveValue<T>(value: T | null | undefined, label: string): T {
@@ -142,7 +142,7 @@ describeLive("xai live", () => {
         : [];
       expect(payloadTools.length).toBeGreaterThan(0);
       const firstFunction = payloadTools[0]?.function;
-      expect(firstFunction).not.toBeNull();
+      requireLiveValue(firstFunction, "first xAI tool function");
       expect(typeof firstFunction).toBe("object");
       expect(Array.isArray(firstFunction)).toBe(false);
       expect([undefined, false]).toContain((firstFunction as Record<string, unknown>).strict);
