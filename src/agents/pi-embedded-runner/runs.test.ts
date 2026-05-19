@@ -368,9 +368,7 @@ describe("pi-embedded runner run registry", () => {
     expect(isEmbeddedPiRunHandleActive("session-repeat-clear")).toBe(false);
     expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
     expect(
-      debugSpy.mock.calls.some(([message]) =>
-        String(message).includes("reason=handle_mismatch"),
-      ),
+      debugSpy.mock.calls.some(([message]) => message.includes("reason=handle_mismatch")),
     ).toBe(false);
   });
 
@@ -384,9 +382,7 @@ describe("pi-embedded runner run registry", () => {
 
     expect(isEmbeddedPiRunHandleActive("session-handle-replaced")).toBe(true);
     expect(
-      debugSpy.mock.calls.some(([message]) =>
-        String(message).includes("reason=handle_mismatch"),
-      ),
+      debugSpy.mock.calls.some(([message]) => message.includes("reason=handle_mismatch")),
     ).toBe(true);
   });
 
