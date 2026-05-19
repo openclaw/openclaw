@@ -351,6 +351,28 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("marks middleware tool-error warnings after assistant output as non-terminal", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Queued 3 topics."],
+      lastToolError: {
+        toolName: "exec",
+        error: "Tool output unavailable due to post-processing error",
+        middlewareError: true,
+      },
+      verboseLevel: "off",
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("Queued 3 topics.");
+    expect(payloads[1]).toMatchObject({
+      isError: true,
+    });
+    expect(payloads[1]?.text).toContain("Exec failed");
+    expect(getReplyPayloadMetadata(payloads[1] as object)).toMatchObject({
+      nonTerminalToolErrorWarning: true,
+    });
+  });
+
   it("surfaces concise bash tool errors when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "bash", error: "command failed" },

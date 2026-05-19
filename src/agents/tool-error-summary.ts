@@ -6,6 +6,7 @@ export type ToolErrorSummary = {
   meta?: string;
   error?: string;
   timedOut?: boolean;
+  middlewareError?: boolean;
   mutatingAction?: boolean;
   actionFingerprint?: string;
   fileTarget?: FileTarget;

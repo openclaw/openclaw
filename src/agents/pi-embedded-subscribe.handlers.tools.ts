@@ -67,6 +67,19 @@ const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
 
+function isMiddlewareToolResultError(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const details = (result as { details?: unknown }).details;
+  return Boolean(
+    details &&
+    typeof details === "object" &&
+    !Array.isArray(details) &&
+    (details as { middlewareError?: unknown }).middlewareError === true,
+  );
+}
+
 function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
   return execApprovalReplyModuleLoader.load();
 }
@@ -939,6 +952,7 @@ export async function handleToolExecutionEnd(
       meta,
       error: errorMessage,
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
+      middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
       mutatingAction: callSummary?.mutatingAction,
       actionFingerprint: callSummary?.actionFingerprint,
       fileTarget: callSummary?.fileTarget,
