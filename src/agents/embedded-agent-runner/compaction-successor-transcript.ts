@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentConfig } from "../agent-scope-config.js";
+import { resolveAgentCompactionConfig, resolveAgentConfig } from "../agent-scope-config.js";
 import { type CompactionEntry, type SessionEntry, type SessionHeader } from "../sessions/index.js";
 import { collectDuplicateUserMessageEntryIdsForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
@@ -30,12 +30,7 @@ export function shouldRotateCompactionTranscript(
   config?: OpenClawConfig,
   agentId?: string | null,
 ): boolean {
-  return (
-    (
-      (config && agentId ? resolveAgentConfig(config, agentId)?.compaction : undefined) ??
-      config?.agents?.defaults?.compaction
-    )?.truncateAfterCompaction === true
-  );
+  return resolveAgentCompactionConfig(config, agentId)?.truncateAfterCompaction === true;
 }
 
 export async function rotateTranscriptAfterCompaction(params: {

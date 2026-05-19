@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
+import { resolveAgentCompactionConfig } from "../../agents/agent-scope-config.js";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
@@ -97,10 +97,7 @@ export async function readPostCompactionContext(
 
     // Extract configured sections from AGENTS.md (default: Session Startup + Red Lines).
     // An explicit empty array disables post-compaction context injection entirely.
-    const configuredSections =
-      (cfg && agentId
-        ? resolveAgentConfig(cfg, agentId)?.compaction?.postCompactionSections
-        : undefined) ?? cfg?.agents?.defaults?.compaction?.postCompactionSections;
+    const configuredSections = resolveAgentCompactionConfig(cfg, agentId)?.postCompactionSections;
     const sectionNames = Array.isArray(configuredSections)
       ? configuredSections
       : DEFAULT_POST_COMPACTION_SECTIONS;

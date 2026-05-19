@@ -147,6 +147,56 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBeUndefined();
   });
 
+  it("uses session model when per-agent compaction clears a default model override", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      agentId: "worker",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              model: "anthropic/claude-opus-4-6",
+            },
+          },
+          list: [{ id: "worker", compaction: {} }],
+        },
+      } as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:p1",
+    });
+
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.5");
+    expect(result.authProfileId).toBe("openai:p1");
+  });
+
+  it("uses session model when partial per-agent compaction omits model", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      agentId: "worker",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              model: "anthropic/claude-opus-4-6",
+            },
+          },
+          list: [{ id: "worker", compaction: { keepRecentTokens: 12_000 } }],
+        },
+      } as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:p1",
+    });
+
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.5");
+    expect(result.authProfileId).toBe("openai:p1");
+  });
+
   it("uses session model when no compaction.model override configured", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",

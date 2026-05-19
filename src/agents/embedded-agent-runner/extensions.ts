@@ -4,7 +4,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveMemoryRoleSlot } from "../../plugins/slot-resolution.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
-import { resolveAgentConfig } from "../agent-scope-config.js";
+import {
+  resolveAgentCompactionConfig,
+  resolveAgentContextPruningConfig,
+} from "../agent-scope-config.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../agent-hooks/context-pruning.js";
@@ -22,13 +25,6 @@ import type { AgentToolResult } from "../runtime/index.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
-
-function resolveScopedAgentConfig(cfg: OpenClawConfig | undefined, agentId?: string | null) {
-  if (!cfg || !agentId) {
-    return undefined;
-  }
-  return resolveAgentConfig(cfg, agentId);
-}
 
 type AgentToolResultEvent = {
   threadId?: string;
@@ -120,9 +116,7 @@ function buildContextPruningFactory(params: {
   modelId: string;
   model: ProviderRuntimeModel | undefined;
 }): ExtensionFactory | undefined {
-  const raw =
-    resolveScopedAgentConfig(params.cfg, params.agentId)?.contextPruning ??
-    params.cfg?.agents?.defaults?.contextPruning;
+  const raw = resolveAgentContextPruningConfig(params.cfg, params.agentId);
   if (raw?.mode !== "cache-ttl") {
     return undefined;
   }
@@ -164,9 +158,7 @@ export function buildEmbeddedExtensionFactories(params: {
   model: ProviderRuntimeModel | undefined;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
-  const compactionCfg =
-    resolveScopedAgentConfig(params.cfg, params.agentId)?.compaction ??
-    params.cfg?.agents?.defaults?.compaction;
+  const compactionCfg = resolveAgentCompactionConfig(params.cfg, params.agentId);
   if (resolveEffectiveCompactionMode(params.cfg, params.agentId) === "safeguard") {
     const compactionSlot =
       params.cfg && !compactionCfg?.provider

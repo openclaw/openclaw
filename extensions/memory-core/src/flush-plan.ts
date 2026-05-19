@@ -1,7 +1,7 @@
 import {
   DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   parseNonNegativeByteSize,
-  resolveAgentConfig,
+  resolveAgentCompactionConfig,
   resolveCronStyleNow,
   SILENT_REPLY_TOKEN,
   type MemoryFlushPlan,
@@ -103,10 +103,8 @@ export function buildMemoryFlushPlan(
   const resolved = params;
   const nowMs = Number.isFinite(resolved.nowMs) ? (resolved.nowMs as number) : Date.now();
   const cfg = resolved.cfg;
-  const agentCompaction =
-    cfg && resolved.agentId ? resolveAgentConfig(cfg, resolved.agentId)?.compaction : undefined;
-  const defaults = cfg?.agents?.defaults?.compaction;
-  const memoryFlush = agentCompaction?.memoryFlush ?? defaults?.memoryFlush;
+  const compaction = resolveAgentCompactionConfig(cfg, resolved.agentId);
+  const memoryFlush = compaction?.memoryFlush;
   if (memoryFlush?.enabled === false) {
     return null;
   }
@@ -117,8 +115,7 @@ export function buildMemoryFlushPlan(
     parseNonNegativeByteSize(memoryFlush?.forceFlushTranscriptBytes) ??
     DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
   const reserveTokensFloor =
-    normalizeNonNegativeInt(agentCompaction?.reserveTokensFloor) ??
-    normalizeNonNegativeInt(defaults?.reserveTokensFloor) ??
+    normalizeNonNegativeInt(compaction?.reserveTokensFloor) ??
     DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
 
   const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);

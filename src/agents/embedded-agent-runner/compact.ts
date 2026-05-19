@@ -41,7 +41,7 @@ import {
   setCompactionSafeguardCancelReason,
 } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
-import { resolveAgentConfig } from "../agent-scope-config.js";
+import { resolveAgentCompactionConfig, resolveAgentConfig } from "../agent-scope-config.js";
 import {
   resolveAgentDir,
   resolveRunModelFallbacksOverride,
@@ -367,11 +367,7 @@ function hasExplicitCompactionModel(
   params: CompactEmbeddedAgentSessionParams,
   agentId?: string,
 ): boolean {
-  const scopedModel =
-    params.config && agentId
-      ? resolveAgentConfig(params.config, agentId)?.compaction?.model
-      : undefined;
-  return Boolean(scopedModel ?? params.config?.agents?.defaults?.compaction?.model);
+  return Boolean(resolveAgentCompactionConfig(params.config, agentId)?.model);
 }
 
 function resolveCompactionFallbacksOverride(
@@ -1343,10 +1339,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
               const hardenedBoundary = await hardenManualCompactionBoundary({
                 sessionFile: params.sessionFile,
                 preserveRecentTail:
-                  typeof (
-                    resolveAgentConfig(params.config ?? {}, sessionAgentId)?.compaction ??
-                    params.config?.agents?.defaults?.compaction
-                  )?.keepRecentTokens === "number",
+                  typeof resolveAgentCompactionConfig(params.config, sessionAgentId)
+                    ?.keepRecentTokens === "number",
               });
               if (hardenedBoundary.applied) {
                 effectiveFirstKeptEntryId =

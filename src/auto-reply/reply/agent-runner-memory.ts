@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
+import { resolveAgentCompactionConfig, resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import {
@@ -738,8 +738,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg, agentId: activeAgentId });
   const reserveTokensFloor =
     memoryFlushPlan?.reserveTokensFloor ??
-    resolveAgentConfig(params.cfg, activeAgentId)?.compaction?.reserveTokensFloor ??
-    params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
+    resolveAgentCompactionConfig(params.cfg, activeAgentId)?.reserveTokensFloor ??
     20_000;
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);

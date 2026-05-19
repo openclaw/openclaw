@@ -75,7 +75,7 @@ import {
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
-import { resolveAgentConfig } from "../../agent-scope-config.js";
+import { resolveAgentCompactionConfig, resolveAgentConfig } from "../../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
 import {
   applyAgentAutoCompactionGuard,
@@ -2195,10 +2195,8 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
       });
       const midTurnPrecheckEnabled =
-        (
-          resolveAgentConfig(params.config ?? {}, sessionAgentId)?.compaction ??
-          params.config?.agents?.defaults?.compaction
-        )?.midTurnPrecheck?.enabled === true;
+        resolveAgentCompactionConfig(params.config, sessionAgentId)?.midTurnPrecheck?.enabled ===
+        true;
       let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
       const onMidTurnPrecheck = (request: MidTurnPrecheckRequest) => {
         pendingMidTurnPrecheckRequest = request;

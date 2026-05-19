@@ -241,6 +241,63 @@ describe("buildMemoryFlushPlan", () => {
     expect(plan?.prompt).not.toContain("Default prompt");
   });
 
+  it("does not inherit memoryFlush or reserve floor when per-agent compaction is empty", () => {
+    const plan = buildMemoryFlushPlan({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokensFloor: 12_345,
+              memoryFlush: {
+                model: "ollama/qwen3:8b",
+                softThresholdTokens: 123,
+                forceFlushTranscriptBytes: "3mb",
+                prompt: "Default prompt",
+                systemPrompt: "Default system prompt",
+              },
+            },
+          },
+          list: [{ id: "main", compaction: {} }],
+        },
+      },
+      agentId: "main",
+    });
+
+    expect(plan?.model).toBeUndefined();
+    expect(plan?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
+    expect(plan?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
+    expect(plan?.reserveTokensFloor).toBe(20_000);
+    expect(plan?.prompt).toContain(DEFAULT_MEMORY_FLUSH_PROMPT[0]);
+    expect(plan?.prompt).not.toContain("Default prompt");
+    expect(plan?.systemPrompt).not.toContain("Default system prompt");
+  });
+
+  it("does not inherit memoryFlush or reserve floor when per-agent compaction is partial", () => {
+    const plan = buildMemoryFlushPlan({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokensFloor: 12_345,
+              memoryFlush: {
+                model: "ollama/qwen3:8b",
+                softThresholdTokens: 123,
+                forceFlushTranscriptBytes: "3mb",
+              },
+            },
+          },
+          list: [{ id: "main", compaction: { keepRecentTokens: 12_000 } }],
+        },
+      },
+      agentId: "main",
+    });
+
+    expect(plan?.model).toBeUndefined();
+    expect(plan?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
+    expect(plan?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
+    expect(plan?.reserveTokensFloor).toBe(20_000);
+  });
+
   it("honors per-agent disable overrides", () => {
     expect(
       buildMemoryFlushPlan({

@@ -4,7 +4,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { resolveAgentConfig } from "../agent-scope-config.js";
+import { resolveAgentCompactionConfig } from "../agent-scope-config.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -14,10 +14,7 @@ function resolvePostCompactionIndexSyncMode(
   config?: OpenClawConfig,
   agentId?: string | null,
 ): "off" | "async" | "await" {
-  const mode =
-    (config && agentId
-      ? resolveAgentConfig(config, agentId)?.compaction?.postIndexSync
-      : undefined) ?? config?.agents?.defaults?.compaction?.postIndexSync;
+  const mode = resolveAgentCompactionConfig(config, agentId)?.postIndexSync;
   if (mode === "off" || mode === "async" || mode === "await") {
     return mode;
   }
