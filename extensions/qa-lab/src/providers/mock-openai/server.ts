@@ -916,7 +916,6 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
 }
 
 function extractToolErrorForNamedCall(params: {
-  allInputText: string;
   input: ResponsesInputItem[];
   name: string;
   toolJson: Record<string, unknown> | null;
@@ -928,8 +927,7 @@ function extractToolErrorForNamedCall(params: {
   const namedFunctionCall = params.input.some(
     (item) => item.type === "function_call" && item.name === params.name,
   );
-  const namedPromptReference = new RegExp(`\\b${params.name}\\b`, "i").test(params.allInputText);
-  if (namedFunctionCall || namedPromptReference) {
+  if (namedFunctionCall) {
     return error;
   }
   return undefined;
@@ -1015,7 +1013,6 @@ function buildAssistantText(
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
   const sessionsSpawnError = extractToolErrorForNamedCall({
-    allInputText,
     input,
     name: "sessions_spawn",
     toolJson,
@@ -1079,6 +1076,21 @@ function buildAssistantText(
       "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
       "Wrote: repo-contract-summary.txt",
       "Status: blocked",
+    ].join("\n");
+  }
+  if (toolOutput && /personal task followthrough check/i.test(allInputText)) {
+    const taskEvidenceText = scenarioToolOutput;
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)) {
+      return [
+        "Pending: maintainer feedback before publishing",
+        "Blocked: publishing needs explicit user approval",
+        "Done: local evidence captured in personal-task-status.txt",
+      ].join("\n");
+    }
+    return [
+      "Pending: maintainer feedback before publishing",
+      "Blocked: publishing needs explicit user approval",
+      "Done: blocked until personal-task-status.txt exists",
     ].join("\n");
   }
   if (/session memory ranking check/i.test(prompt) && orbitCode) {
@@ -1857,6 +1869,125 @@ async function buildResponsesPayload(
       return buildAssistantEvents("RELEASE-AUDIT-COMPLETE");
     }
   }
+  if (/dreaming shadow trial report check/i.test(allInputText)) {
+    const shadowTrialEvidenceText = extractAllToolOutputText(input);
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(shadowTrialEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Report: dreaming-shadow-trial-report.md",
+          "Promotion action: report-only",
+          "DREAMING-SHADOW-TRIAL-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !shadowTrialEvidenceText ||
+      (!shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
+        !shadowTrialEvidenceText.includes("# Candidate evidence"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "DREAMING_SHADOW_TRIAL_BRIEF.md" });
+    }
+    if (
+      shadowTrialEvidenceText.includes("# Dreaming shadow trial brief") &&
+      shadowTrialEvidenceText.includes("# Candidate evidence")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "dreaming-shadow-trial-report.md",
+        content: [
+          "Candidate: The user prefers release reports that include exact verification commands and remaining risk.",
+          "Trial prompt: Prepare a release readiness reply for a local OpenClaw QA change.",
+          "Baseline outcome: mentions tests passed but omits the exact command and remaining risk.",
+          "Candidate outcome: includes the exact verification command and calls out the remaining review risk.",
+          "Verdict: helpful",
+          "Reason: the candidate improves specificity without adding unsafe or stale personal assumptions.",
+          "Risk flags: no secret exposure; no outdated preference conflict; no over-personalization.",
+          "Promotion action: report-only",
+        ].join("\n"),
+      });
+    }
+    if (shadowTrialEvidenceText.includes("# Dreaming shadow trial brief")) {
+      return buildToolCallEventsWithArgs("read", { path: "DREAMING_CANDIDATE_EVIDENCE.md" });
+    }
+  }
+  if (/personal share-safe diagnostics check/i.test(allInputText)) {
+    const diagnosticsEvidenceText = extractAllToolOutputText(input);
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(diagnosticsEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Artifact: personal-diagnostics-summary.txt",
+          "Status: share-safe diagnostics summary ready",
+          "PERSONAL-DIAGNOSTICS-SAFE-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !diagnosticsEvidenceText ||
+      (!diagnosticsEvidenceText.includes("# Personal diagnostics request") &&
+        !diagnosticsEvidenceText.includes("# Raw personal diagnostics fixture"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "DIAGNOSTICS_REQUEST.md" });
+    }
+    if (
+      diagnosticsEvidenceText.includes("# Personal diagnostics request") &&
+      diagnosticsEvidenceText.includes("# Raw personal diagnostics fixture")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "personal-diagnostics-summary.txt",
+        content: [
+          "Status: blocked waiting for explicit publish approval",
+          "Affected surface: telegram direct message",
+          "Omitted content: raw chat text, raw tool output, account id, message id, and fake secret",
+          "Redaction confirmed: yes",
+          "Next step: ask maintainer whether manually landed commits can count for contributor credit",
+        ].join("\n"),
+      });
+    }
+    if (diagnosticsEvidenceText.includes("# Personal diagnostics request")) {
+      return buildToolCallEventsWithArgs("read", { path: "PERSONAL_DIAGNOSTICS_RAW.md" });
+    }
+  }
+  if (/personal no-fake-progress check/i.test(allInputText)) {
+    const progressEvidenceText = [
+      extractAllToolOutputText(input),
+      extractUserTextAfterLatestToolOutput(input),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(progressEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Artifact: personal-progress-proof.txt",
+          "Status: local proof artifact written",
+          "External status: not sent, not published, not uploaded, not merged",
+          "PERSONAL-NO-FAKE-PROGRESS-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !progressEvidenceText ||
+      (!progressEvidenceText.includes("# Progress request") &&
+        !progressEvidenceText.includes("# Progress evidence"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "PROGRESS_REQUEST.md" });
+    }
+    if (
+      progressEvidenceText.includes("# Progress request") &&
+      progressEvidenceText.includes("# Progress evidence")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "personal-progress-proof.txt",
+        content: [
+          "Personal no-fake-progress",
+          "Status: local proof artifact written",
+          "External status: not sent; not published; not uploaded; not merged",
+          "Evidence: PROGRESS_REQUEST.md and PROGRESS_EVIDENCE.md were read before this artifact was written",
+        ].join("\n"),
+      });
+    }
+    if (progressEvidenceText.includes("# Progress request")) {
+      return buildToolCallEventsWithArgs("read", { path: "PROGRESS_EVIDENCE.md" });
+    }
+  }
   if (/lobster invaders/i.test(prompt)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
@@ -2136,6 +2267,47 @@ async function buildResponsesPayload(
     }
     if (repoEvidenceText.includes("# Repo contract")) {
       return buildToolCallEventsWithArgs("read", { path: "SOUL.md" });
+    }
+  }
+  if (/personal task followthrough check/i.test(allInputText)) {
+    const taskEvidenceText = [
+      extractAllToolOutputText(input),
+      extractUserTextAfterLatestToolOutput(input),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(taskEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Pending: maintainer feedback before publishing",
+          "Blocked: publishing needs explicit user approval",
+          "Done: local evidence captured in personal-task-status.txt",
+        ].join("\n"),
+      );
+    }
+    if (
+      !taskEvidenceText ||
+      (!taskEvidenceText.includes("# Personal task ledger") &&
+        !taskEvidenceText.includes("Task: prepare a local OpenClaw PR readiness note."))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "PERSONAL_TASK_LEDGER.md" });
+    }
+    if (
+      taskEvidenceText.includes("Task: prepare a local OpenClaw PR readiness note.") &&
+      taskEvidenceText.includes("Done: local evidence captured in personal-task-status.txt.")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "personal-task-status.txt",
+        content: [
+          "Personal task followthrough",
+          "Pending: maintainer feedback before publishing",
+          "Blocked: publishing needs explicit user approval",
+          "Done: local evidence captured in personal-task-status.txt",
+        ].join("\n"),
+      });
+    }
+    if (taskEvidenceText.includes("# Personal task ledger")) {
+      return buildToolCallEventsWithArgs("read", { path: "FOLLOWTHROUGH_NOTE.md" });
     }
   }
   if (

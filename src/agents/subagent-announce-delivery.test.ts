@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing as sessionBindingServiceTesting,
+  testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
 import type { AgentInternalEvent } from "./internal-events.js";
@@ -9,7 +9,7 @@ import type {
   EmbeddedPiQueueMessageOutcome,
 } from "./pi-embedded-runner/runs.js";
 import {
-  __testing,
+  testing,
   deliverSubagentAnnouncement,
   resolveSubagentCompletionOrigin,
 } from "./subagent-announce-delivery.js";
@@ -22,7 +22,7 @@ import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 
 afterEach(() => {
   sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
-  __testing.setDepsForTest();
+  testing.setDepsForTest();
 });
 
 const slackThreadOrigin = {
@@ -137,7 +137,7 @@ async function deliverSlackThreadAnnouncement(params: {
   internalEvents?: AgentInternalEvent[];
   sourceTool?: string;
 }) {
-  __testing.setDepsForTest({
+  testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: params.sessionId,
@@ -178,7 +178,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
     to: "dm:U123",
     accountId: "acct-1",
   };
-  __testing.setDepsForTest({
+  testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: "requester-session-dm",
@@ -211,13 +211,22 @@ async function deliverTelegramDirectMessageCompletion(params: {
   internalEvents?: AgentInternalEvent[];
   isActive?: boolean;
   queueEmbeddedPiMessageWithOutcome?: QueueEmbeddedPiMessageWithOutcome;
+  requesterSessionKey?: string;
+  sourceTool?: string;
+  origin?: {
+    channel: "telegram";
+    to: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
 }) {
-  const origin = {
+  const origin = params.origin ?? {
     channel: "telegram",
     to: "123456789",
     accountId: "bot-1",
   };
-  __testing.setDepsForTest({
+  const requesterSessionKey = params.requesterSessionKey ?? "agent:main:telegram:123456789";
+  testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: "requester-session-telegram",
@@ -230,8 +239,8 @@ async function deliverTelegramDirectMessageCompletion(params: {
   });
 
   return deliverSubagentAnnouncement({
-    requesterSessionKey: "agent:main:telegram:123456789",
-    targetRequesterSessionKey: "agent:main:telegram:123456789",
+    requesterSessionKey,
+    targetRequesterSessionKey: requesterSessionKey,
     triggerMessage: "child done",
     steerMessage: "child done",
     requesterOrigin: origin,
@@ -243,6 +252,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
     bestEffortDeliver: true,
     directIdempotencyKey: "announce-telegram-dm-fallback",
     internalEvents: params.internalEvents,
+    sourceTool: params.sourceTool,
   });
 }
 
@@ -269,6 +279,7 @@ async function deliverSlackChannelAnnouncement(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   sourceTool?: string;
+  runtimeConfig?: Record<string, unknown>;
 }) {
   const origin = {
     channel: "slack",
@@ -276,13 +287,13 @@ async function deliverSlackChannelAnnouncement(params: {
     accountId: "acct-1",
   } as const;
 
-  __testing.setDepsForTest({
+  testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: params.sessionId,
       isActive: params.isActive,
     }),
-    getRuntimeConfig: () => ({}) as never,
+    getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
     ...(params.queueEmbeddedPiMessageWithOutcome
       ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
       : {}),
@@ -557,7 +568,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
   }) {
     const callGateway = createGatewayMock();
     let activityChecks = 0;
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway,
       getRequesterSessionActivity: () => ({
         sessionId: "paperclip-session",
@@ -713,7 +724,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       errorMessage: "cannot steer a compact turn",
     }));
     const callGateway = createGatewayMock();
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway,
       getRequesterSessionActivity: () => ({
         sessionId: "paperclip-session",
@@ -763,7 +774,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       },
     });
     let activityChecks = 0;
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway,
       getRequesterSessionActivity: () => ({
         sessionId: "paperclip-session",
@@ -863,7 +874,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         payloads: [{ text: "requester voice completion" }],
       },
     });
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway,
       dispatchGatewayMethodInProcess,
       getRequesterSessionActivity: () => ({
@@ -1603,6 +1614,56 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("stringifies Telegram topic ids for generated video completion handoff", async () => {
+    const callGateway = createGatewayMock({
+      payloads: [],
+      didSendViaMessagingTool: true,
+      messagingToolSentMediaUrls: ["/tmp/generated-corgi.mp4"],
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      requesterSessionKey: "agent:main:telegram:group:-1003970070733:topic:1",
+      origin: {
+        channel: "telegram",
+        to: "telegram:-1003970070733",
+        accountId: "bot-1",
+        threadId: 1,
+      },
+      sourceTool: "video_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "video_generation",
+          childSessionKey: "video_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "video generation task",
+          taskLabel: "anime corgi skateboard",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 video.\nMEDIA:/tmp/generated-corgi.mp4",
+          mediaUrls: ["/tmp/generated-corgi.mp4"],
+          replyInstruction: "Deliver the generated video through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "telegram",
+      accountId: "bot-1",
+      to: "telegram:-1003970070733",
+      threadId: "1",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("requires generated image completion DMs to use the message tool", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -2116,12 +2177,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("requires message-tool delivery for channel subagent completions", async () => {
+  it("requires message-tool delivery for configured channel subagent completions", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [{ text: "The subagent is done." }],
       },
     });
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(false);
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
       sessionId: "requester-session-channel",
@@ -2129,6 +2191,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectsCompletionMessage: true,
       directIdempotencyKey: "announce-channel-subagent-message-tool",
       sourceTool: "subagent_announce",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      queueEmbeddedPiMessageWithOutcome,
       internalEvents: [
         {
           type: "task_completion",

@@ -98,10 +98,15 @@ describe("test-install-sh-docker", () => {
   it("allows repository branch history and release tags for secret-backed Docker release checks", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8");
 
-    expect(workflow).toContain("git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'");
     expect(workflow).toContain('git rev-parse --verify "${INPUT_REF}^{commit}"');
+    expect(workflow).toContain(
+      'git merge-base --is-ancestor "$selected_sha" refs/remotes/origin/main',
+    );
     expect(workflow).toContain("repository-branch-history");
     expect(workflow).toContain("git tag --points-at \"$selected_sha\" | grep -Eq '^v'");
+    expect(workflow).toContain(
+      "git for-each-ref --format='%(refname:short)' --contains \"$selected_sha\" refs/remotes/origin",
+    );
     expect(workflow).toContain("reachable from an OpenClaw branch or release tag");
   });
 

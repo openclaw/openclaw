@@ -162,8 +162,11 @@ async function main(): Promise<void> {
 }
 
 main()
-  .then(() => undefined)
+  .then(() => {
+    parentPort?.close();
+  })
   .catch((err) => {
     post({ type: "poll-error", message: formatErrorMessage(err), finishedAt: Date.now() });
-    process.exitCode = 1;
+    parentPort?.close();
+    process.exitCode = stopped ? 0 : 1;
   });

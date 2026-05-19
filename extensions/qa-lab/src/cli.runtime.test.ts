@@ -778,6 +778,9 @@ describe("qa cli runtime", () => {
         "personal-redaction-no-secret-leak",
         "personal-tool-safety-followthrough",
         "personal-approval-denial-stop",
+        "personal-task-followthrough-status",
+        "personal-share-safe-diagnostics-artifact",
+        "personal-no-fake-progress",
       ],
     });
   });

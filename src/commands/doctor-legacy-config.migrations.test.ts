@@ -157,7 +157,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     fs.rmSync(tempOauthDir, { recursive: true, force: true });
   });
 
-  it("sets the group visible reply default for configured channels", () => {
+  it("does not materialize a group visible reply default for configured channels", () => {
     const res = normalizeCompatibilityConfigValues({
       channels: {
         discord: {},
@@ -171,10 +171,9 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     expect(res.config.messages?.groupChat).toEqual({
       mentionPatterns: ["@openclaw"],
-      visibleReplies: "message_tool",
     });
-    expect(res.changes).toContain(
-      'Set messages.groupChat.visibleReplies to "message_tool" so group/channel replies use the message tool by default.',
+    expect(res.changes.some((change) => change.includes("messages.groupChat.visibleReplies"))).toBe(
+      false,
     );
   });
 
@@ -638,6 +637,60 @@ describe("normalizeCompatibilityConfigValues", () => {
         agentRuntime: { id: "claude-cli" },
       },
     });
+  });
+
+  it("preserves legacy whole-agent Claude CLI intent for canonical Anthropic defaults", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { alias: "Opus" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "claude-cli" });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-7": {
+        alias: "Opus",
+        agentRuntime: { id: "claude-cli" },
+      },
+      "anthropic/claude-sonnet-4-6": {
+        agentRuntime: { id: "claude-cli" },
+      },
+    });
+    expect(res.changes).toContain(
+      "Moved agents.defaults.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
+    );
+  });
+
+  it("does not overwrite explicit model runtime while preserving legacy whole-agent CLI intent", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [
+          {
+            id: "paige",
+            agentRuntime: { id: "claude-cli" },
+            model: "anthropic/claude-opus-4-7",
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "pi" } },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.list?.[0]?.agentRuntime).toEqual({ id: "claude-cli" });
+    expect(res.config.agents?.list?.[0]?.models).toEqual({
+      "anthropic/claude-opus-4-7": { agentRuntime: { id: "pi" } },
+    });
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("migrates legacy Codex CLI primary refs to the Codex app-server route", () => {
