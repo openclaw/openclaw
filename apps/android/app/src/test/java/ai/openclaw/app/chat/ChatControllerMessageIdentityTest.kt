@@ -78,4 +78,42 @@ class ChatControllerMessageIdentityTest {
     assertEquals("new-2", reconciled[1].id)
     assertNotEquals(reconciled[0].id, reconciled[1].id)
   }
+
+  @Test
+  fun mergeOptimisticMessagesKeepsOutgoingUserTurnWhenHistoryOmitsIt() {
+    val optimistic =
+      ChatMessage(
+        id = "local-user",
+        role = "user",
+        content = listOf(ChatMessageContent(type = "text", text = "Testing testing 1 2 3")),
+        timestampMs = 1000L,
+      )
+    val assistant =
+      ChatMessage(
+        id = "remote-assistant",
+        role = "assistant",
+        content = listOf(ChatMessageContent(type = "text", text = "Received.")),
+        timestampMs = 2000L,
+      )
+
+    val merged = mergeOptimisticMessages(incoming = listOf(assistant), optimistic = listOf(optimistic))
+
+    assertEquals(listOf("local-user", "remote-assistant"), merged.map { it.id })
+  }
+
+  @Test
+  fun mergeOptimisticMessagesDoesNotDuplicateHistoryTurns() {
+    val user =
+      ChatMessage(
+        id = "local-user",
+        role = "user",
+        content = listOf(ChatMessageContent(type = "text", text = "hello")),
+        timestampMs = 1000L,
+      )
+    val remoteUser = user.copy(id = "remote-user")
+
+    val merged = mergeOptimisticMessages(incoming = listOf(remoteUser), optimistic = listOf(user))
+
+    assertEquals(listOf("remote-user"), merged.map { it.id })
+  }
 }

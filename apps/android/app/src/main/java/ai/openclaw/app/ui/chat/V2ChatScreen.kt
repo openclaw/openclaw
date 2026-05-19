@@ -4,7 +4,6 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawStatus
@@ -35,7 +34,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -58,6 +59,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import java.text.DateFormat
+import java.util.Date
 import java.util.Locale
 
 @Composable
@@ -111,8 +114,8 @@ fun V2ChatScreen(
     modifier =
       Modifier
         .fillMaxSize()
-        .padding(horizontal = 20.dp, vertical = 12.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
+        .padding(horizontal = 18.dp, vertical = 10.dp),
+    verticalArrangement = Arrangement.spacedBy(7.dp),
   ) {
     V2ChatHeader(
       sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
@@ -120,7 +123,8 @@ fun V2ChatScreen(
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
       onBack = onBack,
-      onRefresh = {
+      onPin = {},
+      onMore = {
         viewModel.refreshChat()
         viewModel.refreshChatSessions(limit = 100)
       },
@@ -167,33 +171,34 @@ private fun V2ChatHeader(
   healthOk: Boolean,
   pendingRunCount: Int,
   onBack: () -> Unit,
-  onRefresh: () -> Unit,
+  onPin: () -> Unit,
+  onMore: () -> Unit,
 ) {
   Row(
     modifier = Modifier.fillMaxWidth(),
     verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(10.dp),
+    horizontalArrangement = Arrangement.spacedBy(6.dp),
   ) {
     V2HeaderIcon(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", onClick = onBack)
 
     Column(
       modifier = Modifier.weight(1f),
       horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(4.dp),
+      verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
       Text(
         text = sessionTitle,
-        style = ClawTheme.type.section,
+        style = ClawTheme.type.title.copy(fontSize = 15.sp, lineHeight = 19.sp),
         color = ClawTheme.colors.text,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         textAlign = TextAlign.Center,
       )
-      ClawStatusPill(
+      V2ModelPill(
         text =
           when {
             pendingRunCount > 0 -> "Working"
-            healthOk -> thinkingDisplay(thinkingLevel)
+            healthOk -> "auto"
             else -> "Offline"
           },
         status =
@@ -205,7 +210,34 @@ private fun V2ChatHeader(
       )
     }
 
-    V2HeaderIcon(icon = Icons.Default.Refresh, contentDescription = "Refresh chat", onClick = onRefresh)
+    V2HeaderIcon(icon = Icons.Default.StarBorder, contentDescription = "Pin chat", onClick = onPin)
+    V2HeaderIcon(icon = Icons.Default.MoreVert, contentDescription = "Chat options", onClick = onMore)
+  }
+}
+
+@Composable
+private fun V2ModelPill(
+  text: String,
+  status: ClawStatus,
+) {
+  val borderColor =
+    when (status) {
+      ClawStatus.Danger -> ClawTheme.colors.danger
+      ClawStatus.Warning -> ClawTheme.colors.warning
+      else -> ClawTheme.colors.border
+    }
+  Surface(
+    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    color = ClawTheme.colors.surfaceRaised,
+    contentColor = ClawTheme.colors.textMuted,
+    border = BorderStroke(1.dp, borderColor),
+  ) {
+    Text(
+      text = text,
+      modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+      style = ClawTheme.type.caption.copy(fontSize = 9.5.sp, lineHeight = 12.sp),
+      maxLines = 1,
+    )
   }
 }
 
@@ -217,13 +249,13 @@ private fun V2HeaderIcon(
 ) {
   Surface(
     onClick = onClick,
-    modifier = Modifier.size(34.dp),
+    modifier = Modifier.size(32.dp),
     shape = CircleShape,
     color = Color.Transparent,
     contentColor = ClawTheme.colors.text,
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(24.dp))
+      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(21.dp))
     }
   }
 }
@@ -260,7 +292,7 @@ private fun V2ChatMessageList(
     ) {
       if (!stream.isNullOrEmpty()) {
         item(key = "stream") {
-          V2ChatBubble(role = "assistant", live = true, content = listOf(ChatMessageContent(text = stream)))
+          V2ChatBubble(role = "assistant", live = true, content = listOf(ChatMessageContent(text = stream)), timestampMs = null)
         }
       }
 
@@ -277,22 +309,34 @@ private fun V2ChatMessageList(
       }
 
       items(items = displayMessages, key = { it.id }) { message ->
-        V2ChatBubble(role = message.role, live = false, content = message.content)
+        V2ChatBubble(role = message.role, live = false, content = message.content, timestampMs = message.timestampMs)
       }
     }
 
     if (messages.isEmpty() && pendingRunCount == 0 && pendingToolCalls.isEmpty() && stream.isNullOrBlank()) {
-      ClawEmptyState(
-        title = "No messages yet",
-        body =
-          if (healthOk) {
-            "Ask OpenClaw anything, or start Talk from the Voice tab."
-          } else {
-            "Connect your Gateway from Settings, then return to chat."
-          },
-        modifier = Modifier.align(Alignment.Center),
-      )
+      V2EmptyChatHint(healthOk = healthOk, modifier = Modifier.align(Alignment.Center))
     }
+  }
+}
+
+@Composable
+private fun V2EmptyChatHint(
+  healthOk: Boolean,
+  modifier: Modifier = Modifier,
+) {
+  Column(modifier = modifier.padding(horizontal = 32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+    Text(text = "No messages yet", style = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 18.sp), color = ClawTheme.colors.text)
+    Text(
+      text =
+        if (healthOk) {
+          "Ask OpenClaw anything."
+        } else {
+          "Reconnect your Gateway from Settings."
+        },
+      style = ClawTheme.type.body.copy(fontSize = 11.sp, lineHeight = 15.sp),
+      color = ClawTheme.colors.textMuted,
+      textAlign = TextAlign.Center,
+    )
   }
 }
 
@@ -301,6 +345,7 @@ private fun V2ChatBubble(
   role: String,
   live: Boolean,
   content: List<ChatMessageContent>,
+  timestampMs: Long?,
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
@@ -318,13 +363,13 @@ private fun V2ChatBubble(
     horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
   ) {
     Surface(
-      modifier = Modifier.fillMaxWidth(if (isUser) 0.72f else 0.78f),
-      shape = RoundedCornerShape(12.dp),
-      color = if (isUser) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
-      contentColor = if (isUser) ClawTheme.colors.primaryText else ClawTheme.colors.text,
+      modifier = Modifier.fillMaxWidth(if (isUser) 0.72f else 0.74f),
+      shape = RoundedCornerShape(10.dp),
+      color = ClawTheme.colors.surfaceRaised,
+      contentColor = ClawTheme.colors.text,
       border = BorderStroke(1.dp, if (live) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
     ) {
-      Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
           text =
             when {
@@ -333,15 +378,23 @@ private fun V2ChatBubble(
               normalizedRole == "system" -> "System"
               else -> "OpenClaw"
             },
-          style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
-          color = if (isUser) ClawTheme.colors.primaryText.copy(alpha = 0.70f) else ClawTheme.colors.textSubtle,
+          style = ClawTheme.type.caption.copy(fontSize = 9.8.sp, lineHeight = 12.sp, fontWeight = FontWeight.SemiBold),
+          color = ClawTheme.colors.text,
         )
         displayableContent.forEach { part ->
           if (part.type == "text") {
-            V2ChatText(text = part.text.orEmpty(), textColor = if (isUser) ClawTheme.colors.primaryText else ClawTheme.colors.text)
+            V2ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text)
           } else {
             Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
+        }
+        timestampMs?.let {
+          Text(
+            text = formatChatTimestamp(it),
+            style = ClawTheme.type.caption.copy(fontSize = 8.6.sp, lineHeight = 10.5.sp),
+            color = ClawTheme.colors.textMuted,
+            modifier = Modifier.align(Alignment.End),
+          )
         }
       }
     }
@@ -358,7 +411,7 @@ private fun V2ChatText(
   } else {
     Text(
       text = text,
-      style = ClawTheme.type.body.copy(fontSize = 12.sp, lineHeight = 17.sp),
+      style = ClawTheme.type.body.copy(fontSize = 10.7.sp, lineHeight = 14.4.sp),
       color = textColor,
     )
   }
@@ -415,7 +468,7 @@ private fun V2ChatComposer(
   onAbort: () -> Unit,
   onSend: () -> Unit,
 ) {
-  Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+  Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
     V2ChatContextMeter(thinkingLevel = thinkingLevel, onClick = { onThinkingLevelChange(nextThinkingValue(thinkingLevel)) })
 
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -460,7 +513,7 @@ private fun V2ChatContextMeter(
   Row(
     modifier = Modifier.fillMaxWidth(),
     verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
   ) {
     Surface(
       onClick = onClick,
@@ -474,7 +527,7 @@ private fun V2ChatContextMeter(
         horizontalArrangement = Arrangement.spacedBy(7.dp),
       ) {
         Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.textSubtle)
-        Text(text = "Thinking ${thinkingDisplay(thinkingLevel)}", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        Text(text = "Context ${contextPercent(thinkingLevel)}%", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       }
     }
     Box(
@@ -503,23 +556,23 @@ private fun V2ChatInputPill(
   modifier: Modifier = Modifier,
 ) {
   Surface(
-    modifier = modifier.heightIn(min = 50.dp),
-    shape = RoundedCornerShape(18.dp),
+    modifier = modifier.heightIn(min = 46.dp),
+    shape = RoundedCornerShape(17.dp),
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+      modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      Icon(imageVector = Icons.Default.AttachFile, contentDescription = "Attach file", modifier = Modifier.size(21.dp), tint = ClawTheme.colors.text)
+      Icon(imageVector = Icons.Default.AttachFile, contentDescription = "Attach file", modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
       Box(modifier = Modifier.weight(1f)) {
         BasicTextField(
           value = value,
           onValueChange = onValueChange,
-          textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
+          textStyle = ClawTheme.type.body.copy(fontSize = 11.sp, lineHeight = 15.sp, color = ClawTheme.colors.text),
           cursorBrush = SolidColor(ClawTheme.colors.primary),
           minLines = 1,
           maxLines = 4,
@@ -527,7 +580,7 @@ private fun V2ChatInputPill(
           decorationBox = { innerTextField ->
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
               if (value.isEmpty()) {
-                Text(text = "Message OpenClaw", style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
+                Text(text = "Message OpenClaw", style = ClawTheme.type.body.copy(fontSize = 11.sp, lineHeight = 15.sp), color = ClawTheme.colors.textSubtle)
               }
               innerTextField()
             }
@@ -542,7 +595,7 @@ private fun V2ChatInputPill(
         contentColor = ClawTheme.colors.text,
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Mic, contentDescription = "Voice", modifier = Modifier.size(20.dp))
+          Icon(imageVector = Icons.Default.Mic, contentDescription = "Voice", modifier = Modifier.size(19.dp))
         }
       }
     }
@@ -566,14 +619,14 @@ private fun V2SendButton(
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = Modifier.size(50.dp),
-    shape = RoundedCornerShape(16.dp),
+    modifier = Modifier.size(48.dp),
+    shape = CircleShape,
     color = if (enabled) ClawTheme.colors.primary else ClawTheme.colors.surfacePressed,
     contentColor = if (enabled) ClawTheme.colors.primaryText else ClawTheme.colors.textSubtle,
     border = BorderStroke(1.dp, if (enabled) ClawTheme.colors.primary else ClawTheme.colors.border),
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(22.dp))
+      Icon(imageVector = Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(21.dp))
     }
   }
 }
@@ -618,6 +671,10 @@ private fun thinkingMeterWidth(value: String): Float =
     "high" -> 0.82f
     else -> 0.18f
   }
+
+private fun contextPercent(value: String): Int = (thinkingMeterWidth(value) * 100).toInt()
+
+private fun formatChatTimestamp(timestampMs: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(Date(timestampMs))
 
 private fun String.hasMarkdownSyntax(): Boolean =
   any { it == '#' || it == '*' || it == '`' || it == '[' || it == '|' } ||

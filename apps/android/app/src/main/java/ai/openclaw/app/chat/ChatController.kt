@@ -58,6 +58,7 @@ class ChatController(
 
   private val pendingRuns = mutableSetOf<String>()
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
+  private val optimisticMessagesByRunId = LinkedHashMap<String, ChatMessage>()
   private val pendingRunTimeoutMs = 120_000L
 
   private var lastHealthPollAtMs: Long? = null
@@ -76,6 +77,7 @@ class ChatController(
   fun load(sessionKey: String) {
     val key = normalizeRequestedSessionKey(sessionKey)
     _sessionKey.value = key
+    optimisticMessagesByRunId.clear()
     scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
   }
 
@@ -113,6 +115,7 @@ class ChatController(
     if (key.isEmpty()) return
     if (key == _sessionKey.value) return
     _sessionKey.value = key
+    optimisticMessagesByRunId.clear()
     // Keep the thread switch path lean: history + health are needed immediately,
     // but the session list is usually unchanged and can refresh on explicit pull-to-refresh.
     scope.launch { bootstrap(forceHealth = true, refreshSessions = false) }
@@ -171,14 +174,15 @@ class ChatController(
           )
         }
       }
-    _messages.value =
-      _messages.value +
+    val optimisticMessage =
       ChatMessage(
         id = UUID.randomUUID().toString(),
         role = "user",
         content = userContent,
         timestampMs = System.currentTimeMillis(),
       )
+    optimisticMessagesByRunId[runId] = optimisticMessage
+    _messages.value = _messages.value + optimisticMessage
 
     armPendingRunTimeout(runId)
     synchronized(pendingRuns) {
@@ -218,6 +222,7 @@ class ChatController(
       val res = session.request("chat.send", params.toString())
       val actualRunId = parseRunId(res) ?: runId
       if (actualRunId != runId) {
+        optimisticMessagesByRunId[actualRunId] = optimisticMessagesByRunId.remove(runId) ?: optimisticMessage
         clearPendingRun(runId)
         armPendingRunTimeout(actualRunId)
         synchronized(pendingRuns) {
@@ -302,7 +307,7 @@ class ChatController(
 
       val historyJson = session.request("chat.history", """{"sessionKey":"$key"}""")
       val history = parseHistory(historyJson, sessionKey = key, previousMessages = _messages.value)
-      _messages.value = history.messages
+      _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
       _sessionId.value = history.sessionId
       history.thinkingLevel
         ?.trim()
@@ -378,7 +383,7 @@ class ChatController(
             val historyJson =
               session.request("chat.history", """{"sessionKey":"${_sessionKey.value}"}""")
             val history = parseHistory(historyJson, sessionKey = _sessionKey.value, previousMessages = _messages.value)
-            _messages.value = history.messages
+            _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
             _sessionId.value = history.sessionId
             history.thinkingLevel
               ?.trim()
@@ -618,6 +623,23 @@ internal fun reconcileMessageIds(
     if (reusedId == message.id) return@map message
     message.copy(id = reusedId)
   }
+}
+
+internal fun mergeOptimisticMessages(
+  incoming: List<ChatMessage>,
+  optimistic: Collection<ChatMessage>,
+): List<ChatMessage> {
+  if (optimistic.isEmpty()) return incoming
+
+  val incomingKeys = incoming.mapNotNull(::messageIdentityKey).toSet()
+  val missingOptimistic =
+    optimistic.filter { message ->
+      val key = messageIdentityKey(message) ?: return@filter false
+      key !in incomingKeys
+    }
+  if (missingOptimistic.isEmpty()) return incoming
+
+  return (incoming + missingOptimistic).sortedWith(compareBy<ChatMessage> { it.timestampMs ?: Long.MAX_VALUE }.thenBy { it.id })
 }
 
 internal fun messageIdentityKey(message: ChatMessage): String? {
