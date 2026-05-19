@@ -2,6 +2,15 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodeCli } from "./register.js";
 
+type MockNodeHostConfig = {
+  version: 1;
+  nodeId: string;
+  gateway?: {
+    host?: string;
+    port?: number;
+  };
+};
+
 const daemonMocks = vi.hoisted(() => ({
   runNodeDaemonInstall: vi.fn(),
   runNodeDaemonRestart: vi.fn(),
@@ -13,7 +22,9 @@ const daemonMocks = vi.hoisted(() => ({
 
 vi.mock("./daemon.js", () => daemonMocks);
 
-const loadNodeHostConfigMock = vi.hoisted(() => vi.fn(async () => null));
+const loadNodeHostConfigMock = vi.hoisted(() =>
+  vi.fn<() => Promise<MockNodeHostConfig | null>>(async () => null),
+);
 vi.mock("../../node-host/config.js", () => ({
   loadNodeHostConfig: loadNodeHostConfigMock,
 }));
@@ -105,6 +116,8 @@ describe("registerNodeCli", () => {
 
   it("falls back to the configured port when --port is omitted (#83923 no-regression)", async () => {
     loadNodeHostConfigMock.mockImplementation(async () => ({
+      version: 1,
+      nodeId: "node-1",
       gateway: { host: "127.0.0.1", port: 19000 },
     }));
     const program = createProgram();
