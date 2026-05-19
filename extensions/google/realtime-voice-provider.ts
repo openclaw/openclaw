@@ -25,6 +25,7 @@ import type {
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
+  RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -439,6 +440,14 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private resumptionHandle: string | undefined;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  // Native-audio Gemini live models stream inputTranscription/outputTranscription
+  // chunks with `finished` left undefined and never emit a turnComplete=true, so
+  // a final aggregate would never reach consumers. Half-cascade variants do mark
+  // finished/turnComplete but those signals still need a buffer to assemble the
+  // complete utterance from per-token deltas. We accumulate here, then flush a
+  // single onTranscript(role, fullText, true) on whichever boundary arrives.
+  private pendingInputTranscript = "";
+  private pendingOutputTranscript = "";
 
   constructor(private readonly config: GoogleRealtimeVoiceBridgeConfig) {
     this.audioFormat = config.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ;
@@ -451,6 +460,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
     this.pendingFunctionNames.clear();
+    this.pendingInputTranscript = "";
+    this.pendingOutputTranscript = "";
 
     const ai = createGoogleGenAI({
       apiKey: this.config.apiKey,
@@ -493,6 +504,10 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
           this.sessionConfigured = false;
           this.pendingFunctionNames.clear();
           this.session = null;
+          // Same salvage as close(): any unfinalized transcript text should be
+          // delivered before consumers tear down.
+          this.flushPendingTranscript("assistant");
+          this.flushPendingTranscript("user");
           if (this.intentionallyClosed) {
             this.config.onClose?.("completed");
             return;
@@ -638,6 +653,11 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
     this.pendingFunctionNames.clear();
+    // Salvage any in-flight transcript text that never received a turnComplete /
+    // finished signal (the native-audio model leaves these unset). Emitting a
+    // final here ensures the caller's transcript record reflects what was said.
+    this.flushPendingTranscript("assistant");
+    this.flushPendingTranscript("user");
     const session = this.session;
     this.session = null;
     session?.close();
@@ -718,22 +738,38 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private handleServerContent(content: LiveServerContent): void {
     if (content.interrupted) {
       this.config.onClearAudio();
+      // The user just barged in; whatever the model already said is final and
+      // anything the user said up to the interruption is the trigger — flush both.
+      this.flushPendingTranscript("assistant");
+      this.flushPendingTranscript("user");
     }
 
     if (content.inputTranscription?.text) {
+      // Role switch: assistant was speaking and now the user is. Finalize the
+      // assistant turn before starting to accumulate user text.
+      this.flushPendingTranscript("assistant");
+      this.pendingInputTranscript += content.inputTranscription.text;
       this.config.onTranscript?.(
         "user",
         content.inputTranscription.text,
         content.inputTranscription.finished ?? false,
       );
+      if (content.inputTranscription.finished) {
+        this.flushPendingTranscript("user");
+      }
     }
 
     if (content.outputTranscription?.text) {
+      this.flushPendingTranscript("user");
+      this.pendingOutputTranscript += content.outputTranscription.text;
       this.config.onTranscript?.(
         "assistant",
         content.outputTranscription.text,
         content.outputTranscription.finished ?? false,
       );
+      if (content.outputTranscription.finished) {
+        this.flushPendingTranscript("assistant");
+      }
     }
 
     let emittedAssistantText = false;
@@ -753,13 +789,42 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       }
       if (!content.outputTranscription?.text && typeof part.text === "string" && part.text.trim()) {
         emittedAssistantText = true;
+        // Fallback path for configs that don't enable outputAudioTranscription:
+        // text arrives via modelTurn.parts. Use the same accumulator so the
+        // boundary semantics below still apply.
+        this.flushPendingTranscript("user");
+        this.pendingOutputTranscript += part.text;
         this.config.onTranscript?.("assistant", part.text, content.turnComplete ?? false);
+        if (content.turnComplete) {
+          this.flushPendingTranscript("assistant");
+        }
       }
+    }
+
+    // turnComplete / generationComplete are the model's own boundary signals
+    // (half-cascade models emit them; native-audio preview models do not).
+    // When they do arrive, flush whatever remains buffered.
+    if (content.turnComplete || content.generationComplete) {
+      this.flushPendingTranscript("assistant");
+      this.flushPendingTranscript("user");
     }
 
     if (!emittedAssistantText && content.turnComplete && content.waitingForInput === false) {
       return;
     }
+  }
+
+  private flushPendingTranscript(role: RealtimeVoiceRole): void {
+    const buffer = role === "user" ? this.pendingInputTranscript : this.pendingOutputTranscript;
+    if (!buffer) {
+      return;
+    }
+    if (role === "user") {
+      this.pendingInputTranscript = "";
+    } else {
+      this.pendingOutputTranscript = "";
+    }
+    this.config.onTranscript?.(role, buffer, true);
   }
 
   private handleToolCall(toolCall: LiveServerToolCall): void {

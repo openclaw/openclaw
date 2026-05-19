@@ -854,4 +854,113 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       ],
     });
   });
+
+  // Native-audio Gemini live models stream transcripts as token-by-token deltas
+  // with no `finished` flag and never emit `turnComplete=true`. Without buffering
+  // these and flushing on whatever boundary signal we do get, consumers only ever
+  // see non-final deltas, the aggregated final never reaches `addTranscriptEntry`,
+  // and the call record's transcript stays empty (see openclaw#84161).
+  describe("transcript aggregation", () => {
+    it("buffers streamed outputTranscription chunks and flushes a final aggregate when interrupted", async () => {
+      const provider = buildGoogleRealtimeVoiceProvider();
+      const onTranscript = vi.fn();
+      const bridge = provider.createBridge({
+        providerConfig: { apiKey: "gemini-key" },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onTranscript,
+      });
+
+      await bridge.connect();
+      const onmessage = lastConnectParams().callbacks.onmessage;
+
+      onmessage({ serverContent: { outputTranscription: { text: "Hi, this" } } });
+      onmessage({ serverContent: { outputTranscription: { text: " is Rosellen" } } });
+      onmessage({ serverContent: { outputTranscription: { text: " — how can I help?" } } });
+
+      expect(onTranscript.mock.calls.filter(([, , isFinal]) => isFinal === true)).toHaveLength(0);
+
+      onmessage({ serverContent: { interrupted: true } });
+
+      const finals = onTranscript.mock.calls.filter(([, , isFinal]) => isFinal === true);
+      expect(finals).toHaveLength(1);
+      expect(finals[0][0]).toBe("assistant");
+      expect(finals[0][1]).toBe("Hi, this is Rosellen — how can I help?");
+    });
+
+    it("flushes both pending transcripts on turnComplete", async () => {
+      const provider = buildGoogleRealtimeVoiceProvider();
+      const onTranscript = vi.fn();
+      const bridge = provider.createBridge({
+        providerConfig: { apiKey: "gemini-key" },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onTranscript,
+      });
+
+      await bridge.connect();
+      const onmessage = lastConnectParams().callbacks.onmessage;
+
+      onmessage({ serverContent: { inputTranscription: { text: "hello" } } });
+      onmessage({ serverContent: { inputTranscription: { text: " there" } } });
+      onmessage({ serverContent: { outputTranscription: { text: "hi back" } } });
+      // The role switch alone flushes the prior role's buffer; the trailing
+      // turnComplete then flushes the new role's buffer.
+      onmessage({ serverContent: { turnComplete: true } });
+
+      const finals = onTranscript.mock.calls.filter(([, , isFinal]) => isFinal === true);
+      const finalByRole = Object.fromEntries(finals.map(([role, text]) => [role, text]));
+      expect(finalByRole.user).toBe("hello there");
+      expect(finalByRole.assistant).toBe("hi back");
+    });
+
+    it("respects an upstream finished:true flag without waiting for another boundary", async () => {
+      const provider = buildGoogleRealtimeVoiceProvider();
+      const onTranscript = vi.fn();
+      const bridge = provider.createBridge({
+        providerConfig: { apiKey: "gemini-key" },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onTranscript,
+      });
+
+      await bridge.connect();
+      const onmessage = lastConnectParams().callbacks.onmessage;
+
+      onmessage({
+        serverContent: { outputTranscription: { text: "all of it ", finished: false } },
+      });
+      onmessage({
+        serverContent: { outputTranscription: { text: "in one shot", finished: true } },
+      });
+
+      const finals = onTranscript.mock.calls.filter(([, , isFinal]) => isFinal === true);
+      // Two finals: the upstream finished:true delta itself (passed through),
+      // then the aggregated flush from our buffer.
+      const aggregateFinal = finals.find(
+        ([role, text]) => role === "assistant" && text === "all of it in one shot",
+      );
+      expect(aggregateFinal).toBeDefined();
+    });
+
+    it("flushes pending transcript when the underlying session closes intentionally", async () => {
+      const provider = buildGoogleRealtimeVoiceProvider();
+      const onTranscript = vi.fn();
+      const bridge = provider.createBridge({
+        providerConfig: { apiKey: "gemini-key" },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onTranscript,
+      });
+
+      await bridge.connect();
+      const onmessage = lastConnectParams().callbacks.onmessage;
+
+      onmessage({ serverContent: { outputTranscription: { text: "trailing thought" } } });
+      bridge.close();
+
+      const finals = onTranscript.mock.calls.filter(([, , isFinal]) => isFinal === true);
+      expect(finals).toEqual([["assistant", "trailing thought", true]]);
+    });
+  });
 });
