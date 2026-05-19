@@ -493,6 +493,65 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(sanitized.originalSizeBytes ?? 0).toBeGreaterThan(100_000);
   });
 
+  it("preserves delivered message.send results when middleware throws after delivery", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      () => {
+        throw new Error("post-processing failed");
+      },
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message.send",
+      args: {},
+      result: {
+        content: [{ type: "text", text: "delivered" }],
+        details: {
+          ok: true,
+          messageId: "1700000000.000100",
+          channelId: "C123",
+          threadId: "1700000000.000000",
+        },
+      },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "delivered" }]);
+    expect(result.details).toMatchObject({
+      ok: true,
+      messageId: "1700000000.000100",
+      channelId: "C123",
+      threadId: "1700000000.000000",
+      middlewareWarning: "tool-result middleware failed after message delivery",
+    });
+  });
+
+  it("preserves delivered message.send results when middleware returns an invalid result", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      () => ({ result: { content: "not an array" } as never }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message.send",
+      args: {},
+      result: {
+        content: [{ type: "text", text: "delivered" }],
+        details: {
+          ok: true,
+          messageId: "1700000000.000100",
+          channelId: "C123",
+          threadId: "1700000000.000000",
+        },
+      },
+    });
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      messageId: "1700000000.000100",
+      middlewareWarning: "tool-result middleware failed after message delivery",
+    });
+  });
+
   it("accepts well-formed middleware results", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       (eventValue, ctx) => ({

@@ -407,6 +407,44 @@ function buildMiddlewareFailureResult(): OpenClawAgentToolResult {
   };
 }
 
+function cloneMiddlewareToolResult(result: OpenClawAgentToolResult): OpenClawAgentToolResult {
+  return {
+    ...result,
+    content: result.content.map((block) => ({ ...block })),
+    details: sanitizeMiddlewareDetailsValue(result.details),
+  };
+}
+
+function isMessageSendToolName(toolName: string): boolean {
+  const normalized = toolName.trim().toLowerCase();
+  return normalized === "message" || normalized === "message.send" || normalized === "message_send";
+}
+
+function hasMessageDeliveryIdentifier(details: unknown): details is Record<string, unknown> {
+  if (!isRecord(details)) {
+    return false;
+  }
+  return ["messageId", "channelId", "threadId", "ts", "thread_ts"].some(
+    (key) => typeof details[key] === "string" && details[key].trim().length > 0,
+  );
+}
+
+function buildSideEffectSuccessMiddlewareFallback(
+  event: AgentToolResultMiddlewareEvent,
+  result: OpenClawAgentToolResult,
+): OpenClawAgentToolResult | undefined {
+  if (!isMessageSendToolName(event.toolName) || !hasMessageDeliveryIdentifier(result.details)) {
+    return undefined;
+  }
+  const fallback = cloneMiddlewareToolResult(result);
+  const details = isRecord(fallback.details) ? fallback.details : {};
+  fallback.details = {
+    ...details,
+    middlewareWarning: "tool-result middleware failed after message delivery",
+  };
+  return fallback;
+}
+
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
@@ -440,6 +478,7 @@ export function createAgentToolResultMiddlewareRunner(
         return event.result;
       }
       let current = sanitizeToolResultForMiddleware(event.result);
+      const sideEffectSuccessFallback = buildSideEffectSuccessMiddlewareFallback(event, current);
       for (const handler of handlersForRun) {
         try {
           const next = await handler({ ...event, result: current }, middlewareContext);
@@ -457,7 +496,7 @@ export function createAgentToolResultMiddlewareRunner(
                 120,
               )}`,
             );
-            return buildMiddlewareFailureResult();
+            return sideEffectSuccessFallback ?? buildMiddlewareFailureResult();
           }
         } catch {
           log.warn(
@@ -466,7 +505,7 @@ export function createAgentToolResultMiddlewareRunner(
               120,
             )}`,
           );
-          return buildMiddlewareFailureResult();
+          return sideEffectSuccessFallback ?? buildMiddlewareFailureResult();
         }
       }
       return current;
