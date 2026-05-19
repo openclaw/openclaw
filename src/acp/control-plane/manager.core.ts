@@ -129,6 +129,14 @@ function resolveBackgroundTaskTerminalResult(progressSummary: string): {
   if (!normalized) {
     return {};
   }
+  // Native hook relay unavailable
+  if (/\bnative hook relay unavailable\b/i.test(normalized)) {
+    return {
+      terminalOutcome: "blocked",
+      terminalSummary: "Native hook relay unavailable.",
+    };
+  }
+  // Permission denied
   const permissionDeniedMatch = normalized.match(
     /\b(?:write failed:\s*)?permission denied(?: for (?<path>\S+))?\.?/i,
   );
