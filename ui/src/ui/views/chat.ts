@@ -1078,7 +1078,8 @@ export function renderChat(props: ChatProps) {
     expandedToolCards.set(toolCardId, !expandedToolCards.get(toolCardId));
     requestUpdate();
   };
-  const isEmpty = chatItems.length === 0 && !props.loading;
+  const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
+  const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
 
   const thread = html`
@@ -1227,6 +1228,7 @@ export function renderChat(props: ChatProps) {
             return nothing;
           },
         )}
+        ${renderRealtimeTalkConversation(props)}
       </div>
     </div>
   `;
@@ -1478,7 +1480,7 @@ export function renderChat(props: ChatProps) {
           @change=${(e: Event) => handleFileSelect(e, props)}
         />
 
-        ${renderRealtimeTalkOptions(props)} ${renderRealtimeTalkConversation(props)}
+        ${renderRealtimeTalkOptions(props)}
         ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
           ? html`
               <div class="agent-chat__stt-interim agent-chat__talk-status">

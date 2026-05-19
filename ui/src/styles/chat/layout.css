@@ -705,11 +705,8 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: min(28vh, 220px);
-  overflow-y: auto;
-  padding: 10px 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
-  background: color-mix(in srgb, var(--bg-elevated) 64%, transparent);
+  padding: 0 4px 8px;
+  background: transparent;
 }
 
 .agent-chat__voice-turn {

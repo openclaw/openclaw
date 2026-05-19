@@ -567,6 +567,9 @@ describe("chat loading skeleton", () => {
       "Val Checking",
       "You Second request",
     ]);
+    expect(container.querySelector(".chat-thread-inner .agent-chat__voice-turns")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__input .agent-chat__voice-turns")).toBeNull();
+    expect(container.querySelector(".agent-chat__welcome")).toBeNull();
   });
 
   it("shows the skeleton while the initial history load has no rendered content", () => {

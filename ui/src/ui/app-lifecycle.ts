@@ -155,6 +155,7 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
       changed.has("chatToolMessages") ||
       changed.has("chatStream") ||
       changed.has("chatLoading") ||
+      changed.has("realtimeTalkConversation") ||
       changed.has("tab"))
   ) {
     const forcedByTab = changed.has("tab");
