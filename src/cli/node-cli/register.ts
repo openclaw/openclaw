@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { parsePort } from "../daemon-cli/shared.js";
+import { formatInvalidPortOption } from "../error-format.js";
 import { formatHelpExamples } from "../help-format.js";
 import {
   runNodeDaemonInstall,
@@ -15,9 +16,23 @@ import {
   runNodeDaemonUninstall,
 } from "./daemon.js";
 
-function parsePortWithFallback(value: unknown, fallback: number): number {
+/**
+ * Resolve a gateway port from a CLI option, falling back to the config / default
+ * when ``--port`` is absent but rejecting (loud error + exit) when ``--port`` was
+ * passed and the value doesn't parse to a valid port. Previously a silent fallback
+ * meant ``openclaw node run --port abc`` started the host on 18789 with no
+ * diagnostic; ``node install`` already validates the same value via daemon.ts. (#83923)
+ */
+function resolveNodeGatewayPortOrExit(value: unknown, fallback: number): number {
+  if (value === undefined) {
+    return fallback;
+  }
   const parsed = parsePort(value);
-  return parsed ?? fallback;
+  if (parsed === null || parsed > 65_535) {
+    process.stderr.write(`${formatInvalidPortOption("--port")}\n`);
+    process.exit(2);
+  }
+  return parsed;
 }
 
 export function registerNodeCli(program: Command) {
@@ -54,7 +69,7 @@ export function registerNodeCli(program: Command) {
         normalizeOptionalString(opts.host as string | undefined) ||
         existing?.gateway?.host ||
         "127.0.0.1";
-      const port = parsePortWithFallback(opts.port, existing?.gateway?.port ?? 18789);
+      const port = resolveNodeGatewayPortOrExit(opts.port, existing?.gateway?.port ?? 18789);
       await runNodeHost({
         gatewayHost: host,
         gatewayPort: port,
