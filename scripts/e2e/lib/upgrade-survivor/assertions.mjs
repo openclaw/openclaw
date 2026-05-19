@@ -207,6 +207,14 @@ function assertConfigSurvived() {
       agents.some((agent) => agent?.id === "ops"),
       "ops agent missing",
     );
+    assert(
+      agents.some((agent) => agent?.id === "main" && agent.identity?.name === "Main"),
+      "main agent identity changed",
+    );
+    assert(
+      agents.some((agent) => agent?.id === "ops" && agent.identity?.name === "Ops"),
+      "ops agent identity changed",
+    );
     if (hasCoverage(coverage)) {
       assert(config.agents?.defaults?.contextTokens === 64000, "default contextTokens changed");
     } else {
@@ -273,6 +281,7 @@ function assertConfigSurvived() {
   if (acceptsIntent(coverage, "telegram-channel")) {
     const telegram = config.channels?.telegram;
     assert(telegram?.enabled === true, "telegram enabled flag changed");
+    assert(telegram?.responsePrefix === "auto", "telegram response prefix changed");
     assert(
       telegram.groups?.["-1001234567890"]?.requireMention === true,
       "telegram group policy changed",
