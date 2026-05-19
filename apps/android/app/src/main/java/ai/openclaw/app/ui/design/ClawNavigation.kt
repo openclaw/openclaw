@@ -92,7 +92,7 @@ internal fun ClawBottomNav(
       modifier =
         Modifier
           .windowInsetsPadding(safeInsets)
-          .padding(horizontal = 10.dp, vertical = 10.dp),
+          .padding(horizontal = 8.dp, vertical = 8.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -117,17 +117,17 @@ private fun ClawBottomNavItem(
 ) {
   Surface(
     onClick = onClick,
-    modifier = modifier.heightIn(min = 56.dp),
+    modifier = modifier.heightIn(min = 48.dp),
     shape = RoundedCornerShape(ClawTheme.radii.control),
     color = if (selected) ClawTheme.colors.primary else Color.Transparent,
     contentColor = if (selected) ClawTheme.colors.primaryText else ClawTheme.colors.textSubtle,
   ) {
     Column(
-      modifier = Modifier.padding(horizontal = 6.dp, vertical = 7.dp),
+      modifier = Modifier.padding(horizontal = 5.dp, vertical = 6.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-      Icon(imageVector = item.icon, contentDescription = item.label, modifier = Modifier.size(20.dp))
+      Icon(imageVector = item.icon, contentDescription = item.label, modifier = Modifier.size(18.dp))
       Text(text = item.label, style = ClawTheme.type.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
   }
@@ -139,7 +139,7 @@ internal fun ClawAvatarMark(
   modifier: Modifier = Modifier,
 ) {
   Surface(
-    modifier = modifier.size(42.dp),
+    modifier = modifier.size(38.dp),
     shape = CircleShape,
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,

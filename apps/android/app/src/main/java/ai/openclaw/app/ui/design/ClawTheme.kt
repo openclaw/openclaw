@@ -55,10 +55,10 @@ internal data class ClawSpacing(
 
 @Immutable
 internal data class ClawRadii(
-  val row: Dp = 14.dp,
-  val panel: Dp = 18.dp,
-  val control: Dp = 20.dp,
-  val sheet: Dp = 28.dp,
+  val row: Dp = 10.dp,
+  val panel: Dp = 14.dp,
+  val control: Dp = 16.dp,
+  val sheet: Dp = 22.dp,
   val pill: Dp = 999.dp,
 )
 
@@ -174,35 +174,19 @@ private fun clawTypography(fontFamily: FontFamily) =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.Bold,
-        fontSize = 34.sp,
-        lineHeight = 40.sp,
+        fontSize = 27.sp,
+        lineHeight = 33.sp,
         letterSpacing = 0.sp,
       ),
     title =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 24.sp,
-        lineHeight = 30.sp,
+        fontSize = 19.sp,
+        lineHeight = 25.sp,
         letterSpacing = 0.sp,
       ),
     section =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 17.sp,
-        lineHeight = 23.sp,
-        letterSpacing = 0.sp,
-      ),
-    body =
-      TextStyle(
-        fontFamily = fontFamily,
-        fontWeight = FontWeight.Medium,
-        fontSize = 15.sp,
-        lineHeight = 22.sp,
-        letterSpacing = 0.sp,
-      ),
-    label =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.SemiBold,
@@ -210,12 +194,28 @@ private fun clawTypography(fontFamily: FontFamily) =
         lineHeight = 18.sp,
         letterSpacing = 0.sp,
       ),
-    caption =
+    body =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.Medium,
         fontSize = 12.sp,
+        lineHeight = 17.sp,
+        letterSpacing = 0.sp,
+      ),
+    label =
+      TextStyle(
+        fontFamily = fontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 12.sp,
         lineHeight = 16.sp,
+        letterSpacing = 0.sp,
+      ),
+    caption =
+      TextStyle(
+        fontFamily = fontFamily,
+        fontWeight = FontWeight.Medium,
+        fontSize = 10.5.sp,
+        lineHeight = 14.sp,
         letterSpacing = 0.sp,
       ),
     mono =
