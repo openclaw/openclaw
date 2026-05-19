@@ -91,7 +91,7 @@ This works with local models too, for example a second Ollama model dedicated to
 ```
 
 When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
-Per-agent `agents.list[].compaction.model` overrides are also supported. They deep-merge over `agents.defaults.compaction` and apply only to the matching agent runtime.
+Per-agent `agents.list[].compaction.model` overrides are also supported. Omit `agents.list[].compaction` to inherit `agents.defaults.compaction`; set `agents.list[].compaction` to replace the default block for that agent; set `agents.list[].compaction: {}` to clear the inherited compaction block and return that agent to built-in compaction behavior.
 
 ### Identifier preservation
 
@@ -151,7 +151,7 @@ Before compaction, OpenClaw can run a **silent memory flush** turn to store dura
 ```
 
 The memory-flush model override is exact and does not inherit the active session fallback chain. See [Memory](/concepts/memory) for details and config.
-Per-agent `agents.list[].compaction.memoryFlush.model` overrides are supported the same way, with `agents.list[].compaction` deep-merging over `agents.defaults.compaction`.
+Per-agent `agents.list[].compaction.memoryFlush.model` overrides are supported through the same replacement semantics: omit `agents.list[].compaction` to inherit the default block, or set a per-agent compaction block to replace it for that agent.
 
 ## Pluggable compaction providers
 
