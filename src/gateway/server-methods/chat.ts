@@ -2719,8 +2719,23 @@ export const chatHandlers: GatewayRequestHandlers = {
           cfg,
         });
       };
+      // Deferred media payloads: during an active agent run, writing a gateway-injected
+      // assistant message to the transcript file can race with the Pi agent core's session
+      // state and cause premature run termination (the injected stopReason:"stop" is
+      // misinterpreted as the run ending). Capture media payloads here and flush them
+      // after the run completes in the post-dispatch phase.
+      let deferredMediaPayload: ReplyPayload | undefined;
       const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
+          return;
+        }
+        // Defer the transcript append until after the agent run ends to avoid
+        // the gateway-injected message interfering with the active run lifecycle.
+        deferredMediaPayload = payload;
+      };
+      const flushDeferredWebchatAgentMediaTranscript = async () => {
+        const payload = deferredMediaPayload;
+        if (!payload || appendedWebchatAgentMedia) {
           return;
         }
         const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
@@ -2895,6 +2910,11 @@ export const chatHandlers: GatewayRequestHandlers = {
             "gateway.chat_send.post_dispatch",
             async () => {
               await rewriteUserTranscriptMedia();
+              // Flush deferred media transcript now that the agent run is complete.
+              // This was deferred from the deliver() callback to avoid writing a
+              // gateway-injected assistant message to the transcript while the run
+              // was active, which could interfere with the Pi agent core lifecycle.
+              await flushDeferredWebchatAgentMediaTranscript();
               // WebChat persistence has two owners. Agent runs persist model-visible turns
               // through Pi's SessionManager; this dispatcher only owns live delivery payloads.
               // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
