@@ -56,7 +56,7 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.phases.deep.maxAgeDays).toBe(30);
   });
 
-  it("lets execution defaults and phase execution override the top-level dreaming model", () => {
+  it("lets execution defaults and phase execution override Dream Diary runtime options", () => {
     const resolved = resolveMemoryDreamingConfig({
       pluginConfig: {
         dreaming: {
@@ -64,12 +64,14 @@ describe("memory dreaming host helpers", () => {
           execution: {
             defaults: {
               model: "openai/gpt-5.4",
+              timeoutMs: "120000",
             },
           },
           phases: {
             rem: {
               execution: {
                 model: "xai/grok-4.1-fast",
+                timeoutMs: 180000,
               },
             },
           },
@@ -78,9 +80,13 @@ describe("memory dreaming host helpers", () => {
     });
 
     expect(resolved.execution.defaults.model).toBe("openai/gpt-5.4");
+    expect(resolved.execution.defaults.timeoutMs).toBe(120_000);
     expect(resolved.phases.light.execution.model).toBe("openai/gpt-5.4");
+    expect(resolved.phases.light.execution.timeoutMs).toBe(120_000);
     expect(resolved.phases.deep.execution.model).toBe("openai/gpt-5.4");
+    expect(resolved.phases.deep.execution.timeoutMs).toBe(120_000);
     expect(resolved.phases.rem.execution.model).toBe("xai/grok-4.1-fast");
+    expect(resolved.phases.rem.execution.timeoutMs).toBe(180_000);
   });
 
   it("falls back to cfg timezone and deep defaults", () => {

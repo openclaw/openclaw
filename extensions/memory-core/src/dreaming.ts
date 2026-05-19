@@ -125,6 +125,7 @@ type ShortTermPromotionDreamingConfig = {
   };
   execution?: {
     model?: string;
+    timeoutMs?: number;
   };
 };
 
@@ -401,7 +402,16 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     ...(typeof resolved.maxAgeDays === "number" ? { maxAgeDays: resolved.maxAgeDays } : {}),
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
-    ...(resolved.execution.model ? { execution: { model: resolved.execution.model } } : {}),
+    ...(resolved.execution.model || typeof resolved.execution.timeoutMs === "number"
+      ? {
+          execution: {
+            ...(resolved.execution.model ? { model: resolved.execution.model } : {}),
+            ...(typeof resolved.execution.timeoutMs === "number"
+              ? { timeoutMs: resolved.execution.timeoutMs }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -647,6 +657,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
             model: params.config.execution?.model,
+            timeoutMs: params.config.execution?.timeoutMs,
             logger: params.logger,
           });
         } else {
@@ -657,6 +668,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
             model: params.config.execution?.model,
+            timeoutMs: params.config.execution?.timeoutMs,
             logger: params.logger,
           });
         }
