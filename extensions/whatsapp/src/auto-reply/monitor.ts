@@ -42,6 +42,7 @@ import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
 import { createEchoTracker } from "./monitor/echo.js";
+import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
 import type { WebInboundMsg, WebMonitorTuning } from "./types.js";
 import { isLikelyWhatsAppCryptoError } from "./util.js";
@@ -541,7 +542,7 @@ export async function monitorWebChannel(
         );
       });
 
-      whatsappLog.info("Listening for personal WhatsApp inbound messages.");
+      whatsappLog.info(formatWhatsAppInboundListeningLog(account));
       if (process.stdout.isTTY || process.stderr.isTTY) {
         whatsappLog.raw("Ctrl+C to stop.");
       }
