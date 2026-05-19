@@ -262,12 +262,18 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
 function verifyHardlinkTargetsAgainstArchiveRoot(
   hardlinkTargets: Array<{ entryPath: string; normalized: string }>,
   archiveRoot: string,
+  entries: Set<string>,
 ): void {
   const normalizedRoot = normalizeArchiveRoot(archiveRoot);
   for (const target of hardlinkTargets) {
     if (!isArchivePathWithin(target.normalized, normalizedRoot)) {
       throw new Error(
         `Archive hardlink target is outside the declared archive root: ${target.entryPath} -> ${target.normalized}`,
+      );
+    }
+    if (!entries.has(target.normalized)) {
+      throw new Error(
+        `Archive hardlink target is missing from archive entries: ${target.entryPath} -> ${target.normalized}`,
       );
     }
   }
@@ -338,7 +344,11 @@ export async function backupVerifyCommand(
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
   const manifest = parseManifest(manifestRaw);
   verifyManifestAgainstEntries(manifest, normalizedEntrySet);
-  verifyHardlinkTargetsAgainstArchiveRoot(hardlinkTargets, manifest.archiveRoot);
+  verifyHardlinkTargetsAgainstArchiveRoot(
+    hardlinkTargets,
+    manifest.archiveRoot,
+    normalizedEntrySet,
+  );
 
   const result: BackupVerifyResult = {
     ok: true,
