@@ -212,6 +212,7 @@ describe("TwitchClientManager", () => {
 
       await manager.getClient(refreshingAccount);
 
+      expect(mockAddUserForToken).toHaveBeenCalledTimes(1);
       expect(mockAddUserForToken).toHaveBeenCalledWith(
         {
           accessToken: "mock-token-from-tests",
