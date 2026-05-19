@@ -517,4 +517,83 @@ describe("followup queue drain restart after idle window", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("does not drain another route's restored items when one route goes idle (per-key isolation)", async () => {
+    // Race the previous P1 was trying to fix had a subtler relative: even with
+    // the sweep moved to kickFollowupDrainIfIdle, a global sweep would drain
+    // route B's restored items when route A's idle-kick fires, because the
+    // caller only confirmed idle for A. Locks per-key isolation: A's idle-kick
+    // does NOT touch B's pending-restore entry or B's callback.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-isolation-"));
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+
+    const keyA = `test-restored-iso-A-${Date.now()}`;
+    const keyB = `test-restored-iso-B-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const drainsA: FollowupRun[] = [];
+    const drainsB: FollowupRun[] = [];
+
+    try {
+      // Seed two restored queues on disk, one per route.
+      enqueueFollowupRun(
+        keyA,
+        createRun({ prompt: "restored A" }),
+        settings,
+        "message-id",
+        undefined,
+        false,
+      );
+      enqueueFollowupRun(
+        keyB,
+        createRun({ prompt: "restored B" }),
+        settings,
+        "message-id",
+        undefined,
+        false,
+      );
+      FOLLOWUP_QUEUES.delete(keyA);
+      FOLLOWUP_QUEUES.delete(keyB);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      restoreFollowupQueues();
+
+      // Register callbacks for BOTH routes. Route B's callback would normally
+      // be registered during B's active turn (restartIfIdle=false).
+      rememberFollowupDrainCallback(keyA, async (run) => {
+        drainsA.push(run);
+      });
+      rememberFollowupDrainCallback(keyB, async (run) => {
+        drainsB.push(run);
+      });
+
+      // Only route A goes idle and kicks. Per-key isolation: B must not drain.
+      kickFollowupDrainIfIdle(keyA);
+      for (let i = 0; i < 10 && drainsA.length === 0; i++) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(drainsA).toHaveLength(1);
+      expect(drainsA[0]?.prompt).toBe("restored A");
+      expect(drainsB).toHaveLength(0);
+
+      // Now B's own idle-kick fires; B drains.
+      kickFollowupDrainIfIdle(keyB);
+      for (let i = 0; i < 10 && drainsB.length === 0; i++) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(drainsB).toHaveLength(1);
+      expect(drainsB[0]?.prompt).toBe("restored B");
+    } finally {
+      FOLLOWUP_QUEUES.delete(keyA);
+      FOLLOWUP_QUEUES.delete(keyB);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

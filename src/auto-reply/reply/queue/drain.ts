@@ -14,11 +14,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
-import {
-  clearRestoredPendingDrainKey,
-  peekRestoredPendingDrainKeys,
-  persistFollowupQueues,
-} from "./persist.js";
+import { clearRestoredPendingDrainKey, persistFollowupQueues } from "./persist.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import {
   completeFollowupRunLifecycle,
@@ -55,20 +51,17 @@ export function clearFollowupDrainCallback(key: string): void {
 
 /**
  * Restart the drain for `key` if it is currently idle, using the stored callback.
- * Also sweeps the pending-restore set: any restored queue whose callback is
- * now registered gets its drain scheduled via the same idle-aware path. The
- * caller (enqueue) has already confirmed `restartIfIdle && !queue.draining`
- * before reaching this function, so the active turn for `key` is finished.
+ * Also clears `key` from the pending-restore set — restored items for this
+ * specific route are now scheduled to drain via the same idle-aware path.
+ *
+ * The sweep is intentionally limited to the current key: `kickFollowupDrainIfIdle`
+ * only has the active-run/idle guarantee for the route the caller passed in.
+ * Other restored routes whose callbacks were registered during their own active
+ * turns must wait for their own enqueue idle-kick — draining them from here
+ * would reintroduce the concurrent/out-of-order delivery race.
  */
 export function kickFollowupDrainIfIdle(key: string): void {
-  for (const restoredKey of peekRestoredPendingDrainKeys()) {
-    const cb = FOLLOWUP_RUN_CALLBACKS.get(restoredKey);
-    if (!cb) {
-      continue;
-    }
-    clearRestoredPendingDrainKey(restoredKey);
-    scheduleFollowupDrain(restoredKey, cb);
-  }
+  clearRestoredPendingDrainKey(key);
   const cb = FOLLOWUP_RUN_CALLBACKS.get(key);
   if (!cb) {
     return;
