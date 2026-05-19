@@ -704,8 +704,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   root.addChild(footer);
   root.addChild(editor);
 
-  const resolveDynamicSlashCommandsKey = () =>
-    JSON.stringify([currentAgentId, sessionInfo.modelProvider ?? ""]);
+  const resolveDynamicSlashCommandsKey = () => currentAgentId;
 
   const applyAutocompleteProvider = () => {
     const dynamicKey = resolveDynamicSlashCommandsKey();
@@ -737,10 +736,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     dynamicSlashCommandsInFlightKey = key;
     const requestId = ++dynamicSlashCommandsRequestId;
     const agentId = currentAgentId;
-    const provider = sessionInfo.modelProvider;
-    void client.listCommands({
+    void client
+      .listCommands({
         agentId,
-        ...(provider ? { provider } : {}),
         scope: "text",
         includeArgs: false,
       })
