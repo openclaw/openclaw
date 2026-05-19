@@ -64,7 +64,7 @@ export async function resetStaleDailySessions(params: {
       if (resetPolicy.mode !== "daily") {
         continue;
       }
-      if (hasProviderOwnedSession(entry, resetPolicy.configured)) {
+      if (hasProviderOwnedSession(entry, resetPolicy.configured === true)) {
         continue;
       }
       checked += 1;
