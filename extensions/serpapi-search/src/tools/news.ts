@@ -4,8 +4,14 @@ import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
-  "q", "gl", "hl",
-  "topic_token", "publication_token", "section_token", "story_token", "so",
+  "q",
+  "gl",
+  "hl",
+  "topic_token",
+  "publication_token",
+  "section_token",
+  "story_token",
+  "so",
   "zero_trace",
 ] as const;
 
@@ -33,8 +39,16 @@ export function createSerpApiNewsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string", description: "News search query. Use 'when:1d' for time filter, e.g. 'AI when:7d'." },
-        count: { type: "number", description: "Number of results (1-10).", minimum: 1, maximum: 10 },
+        query: {
+          type: "string",
+          description: "News search query. Use 'when:1d' for time filter, e.g. 'AI when:7d'.",
+        },
+        count: {
+          type: "number",
+          description: "Number of results (1-10).",
+          minimum: 1,
+          maximum: 10,
+        },
         gl: { type: "string", description: "Country code (e.g. us, de, ua)." },
         hl: { type: "string", description: "Language code override (e.g. en, de, uk)." },
         so: {
@@ -42,12 +56,24 @@ export function createSerpApiNewsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
           description: "Sort: 0=relevance (default), 1=date.",
           enum: [0, 1],
         },
-        topic_token: { type: "string", description: "Google News topic token (from menu_links[].topic_token)." },
-        publication_token: { type: "string", description: "Publisher token (from related_publications[].publication_token)." },
-        section_token: { type: "string", description: "Sub-section token. Use with topic_token or publication_token." },
-        story_token: { type: "string", description: "Story token for full coverage of a specific story." },
+        topic_token: {
+          type: "string",
+          description: "Google News topic token (from menu_links[].topic_token).",
+        },
+        publication_token: {
+          type: "string",
+          description: "Publisher token (from related_publications[].publication_token).",
+        },
+        section_token: {
+          type: "string",
+          description: "Sub-section token. Use with topic_token or publication_token.",
+        },
+        story_token: {
+          type: "string",
+          description: "Story token for full coverage of a specific story.",
+        },
       },
-      required: ["query"],
+      required: [],
       additionalProperties: false,
     },
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
@@ -73,4 +99,3 @@ export function createSerpApiNewsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
     },
   };
 }
-
