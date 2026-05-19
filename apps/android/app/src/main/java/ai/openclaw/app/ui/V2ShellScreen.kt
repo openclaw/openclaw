@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayChannelsSummary
+import ai.openclaw.app.GatewayDreamingSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.HomeDestination
@@ -530,6 +531,7 @@ private fun V2SettingsShellScreen(
   val skillsSummary by viewModel.skillsSummary.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
   val channelsSummary by viewModel.channelsSummary.collectAsState()
+  val dreamingSummary by viewModel.dreamingSummary.collectAsState()
   var route by rememberSaveable { mutableStateOf(V2SettingsRoute.Home) }
 
   LaunchedEffect(isConnected) {
@@ -540,6 +542,7 @@ private fun V2SettingsShellScreen(
       viewModel.refreshSkills()
       viewModel.refreshNodesDevices()
       viewModel.refreshChannels()
+      viewModel.refreshDreaming()
     }
   }
 
@@ -582,6 +585,7 @@ private fun V2SettingsShellScreen(
               V2SettingsRow("Skills", skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = V2SettingsRoute.Skills),
               V2SettingsRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = V2SettingsRoute.NodesDevices),
               V2SettingsRow("Channels", channelsSummaryText(channelsSummary), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = V2SettingsRoute.Channels),
+              V2SettingsRow("Dreaming", dreamingSummaryText(dreamingSummary), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = V2SettingsRoute.Dreaming),
               V2SettingsRow("Canvas", "Screen surface", Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = V2SettingsRoute.Canvas),
               V2SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = V2SettingsRoute.Notifications),
               V2SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = V2SettingsRoute.PhoneCapabilities),
@@ -691,6 +695,20 @@ private fun channelsStatus(summary: GatewayChannelsSummary): Boolean? =
     summary.channels.any { it.error != null } -> false
     summary.channels.any { it.connected || it.running } -> true
     summary.channels.any { it.configured || it.linked } -> true
+    else -> null
+  }
+
+private fun dreamingSummaryText(summary: GatewayDreamingSummary): String =
+  when {
+    !summary.storeHealthy || !summary.phaseSignalHealthy -> "Needs attention"
+    summary.enabled -> "${summary.shortTermCount} waiting"
+    else -> "Off"
+  }
+
+private fun dreamingStatus(summary: GatewayDreamingSummary): Boolean? =
+  when {
+    !summary.storeHealthy || !summary.phaseSignalHealthy -> false
+    summary.enabled -> true
     else -> null
   }
 
