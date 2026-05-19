@@ -1569,6 +1569,15 @@ export async function dispatchReplyFromConfig(
     const shouldSuppressProgressDelivery = () =>
       sendPolicyDenied ||
       (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
+    const hasVisibleRegularVerboseToolProgress =
+      shouldEmitVerboseProgress() &&
+      !shouldEmitFullVerboseProgress() &&
+      shouldSendVerboseProgressMessages &&
+      ctx.InboundEventKind !== "room_event" &&
+      !shouldSuppressProgressDelivery();
+    const suppressToolErrorWarnings =
+      params.replyOptions?.suppressToolErrorWarnings ??
+      (hasVisibleRegularVerboseToolProgress ? true : undefined);
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -1609,6 +1618,7 @@ export async function dispatchReplyFromConfig(
         {
           ...params.replyOptions,
           sourceReplyDeliveryMode,
+          suppressToolErrorWarnings,
           typingPolicy: typing.typingPolicy,
           suppressTyping: typing.suppressTyping,
           onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply),
