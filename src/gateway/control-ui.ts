@@ -2,6 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { brotliCompressSync, gzipSync } from "node:zlib";
 import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
@@ -138,6 +139,16 @@ const STATIC_ASSET_EXTENSIONS = new Set([
 ]);
 
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
+const COMPRESSIBLE_STATIC_ASSET_EXTENSIONS = new Set([
+  ".html",
+  ".js",
+  ".css",
+  ".json",
+  ".map",
+  ".svg",
+  ".txt",
+  ".webmanifest",
+]);
 const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
   "apple-touch-icon.png",
   "favicon-32.png",
@@ -210,6 +221,7 @@ function respondHeadForFile(req: IncomingMessage, res: ServerResponse, filePath:
   }
   res.statusCode = 200;
   setStaticFileHeaders(res, filePath);
+  setStaticCompressionHeaders(req, res, filePath);
   res.end();
   return true;
 }
@@ -699,7 +711,7 @@ export async function handleControlUiAvatarRequest(
     return true;
   }
 
-  serveResolvedFile(res, safeAvatar.path, safeAvatar.buffer);
+  serveResolvedUncompressedFile(res, safeAvatar.path, safeAvatar.buffer);
   return true;
 }
 
@@ -711,12 +723,93 @@ function setStaticFileHeaders(res: ServerResponse, filePath: string) {
   res.setHeader("Cache-Control", "no-cache");
 }
 
-function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) {
+type StaticCompressionEncoding = "br" | "gzip";
+
+function acceptedEncodings(req: IncomingMessage): Set<string> {
+  const raw = req.headers?.["accept-encoding"];
+  const header = Array.isArray(raw) ? raw.join(",") : (raw ?? "");
+  const accepted = new Set<string>();
+  for (const token of header.split(",")) {
+    const [nameRaw, ...params] = token.trim().split(";");
+    const name = nameRaw?.trim().toLowerCase();
+    if (!name) {
+      continue;
+    }
+    const qParam = params.find((param) => param.trim().toLowerCase().startsWith("q="));
+    const q = qParam ? Number(qParam.split("=")[1]) : 1;
+    if (Number.isFinite(q) && q <= 0) {
+      continue;
+    }
+    accepted.add(name);
+  }
+  return accepted;
+}
+
+function resolveStaticCompressionEncoding(req: IncomingMessage): StaticCompressionEncoding | null {
+  const accepted = acceptedEncodings(req);
+  if (accepted.has("br")) {
+    return "br";
+  }
+  if (accepted.has("gzip") || accepted.has("x-gzip")) {
+    return "gzip";
+  }
+  return null;
+}
+
+function isCompressibleControlUiFile(filePath: string): boolean {
+  return COMPRESSIBLE_STATIC_ASSET_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+function setStaticCompressionHeaders(
+  req: IncomingMessage,
+  res: ServerResponse,
+  filePath: string,
+): StaticCompressionEncoding | null {
+  if (!isCompressibleControlUiFile(filePath)) {
+    return null;
+  }
+  res.setHeader("Vary", "Accept-Encoding");
+  const encoding = resolveStaticCompressionEncoding(req);
+  if (encoding) {
+    res.setHeader("Content-Encoding", encoding);
+  }
+  return encoding;
+}
+
+function serveControlUiBody(
+  req: IncomingMessage,
+  res: ServerResponse,
+  filePath: string,
+  body: Buffer | string,
+) {
+  const encoding = setStaticCompressionHeaders(req, res, filePath);
+  if (!encoding) {
+    res.end(body);
+    return;
+  }
+
+  const raw = Buffer.isBuffer(body) ? body : Buffer.from(body, "utf8");
+  const compressed = encoding === "br" ? brotliCompressSync(raw) : gzipSync(raw);
+  res.setHeader("Content-Length", String(compressed.length));
+  res.end(compressed);
+}
+
+function serveResolvedUncompressedFile(res: ServerResponse, filePath: string, body: Buffer) {
   setStaticFileHeaders(res, filePath);
   res.end(body);
 }
 
-function serveResolvedIndexHtml(res: ServerResponse, body: string) {
+function serveResolvedFile(
+  req: IncomingMessage,
+  res: ServerResponse,
+  filePath: string,
+  body: Buffer,
+) {
+  setStaticFileHeaders(res, filePath);
+  serveControlUiBody(req, res, filePath, body);
+}
+
+function serveResolvedIndexHtml(req: IncomingMessage, res: ServerResponse, body: string) {
   const hashes = computeInlineScriptHashes(body);
   if (hashes.length > 0) {
     res.setHeader(
@@ -726,7 +819,7 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string) {
   }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(body);
+  serveControlUiBody(req, res, "index.html", body);
 }
 
 function isExpectedSafePathError(error: unknown): boolean {
@@ -970,10 +1063,10 @@ export async function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"));
+        serveResolvedIndexHtml(req, res, fs.readFileSync(safeFile.fd, "utf8"));
         return true;
       }
-      serveResolvedFile(res, safeFile.path, fs.readFileSync(safeFile.fd));
+      serveResolvedFile(req, res, safeFile.path, fs.readFileSync(safeFile.fd));
       return true;
     } finally {
       fs.closeSync(safeFile.fd);
@@ -998,7 +1091,7 @@ export async function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"));
+      serveResolvedIndexHtml(req, res, fs.readFileSync(safeIndex.fd, "utf8"));
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);
