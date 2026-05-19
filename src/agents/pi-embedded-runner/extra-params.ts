@@ -15,6 +15,7 @@ import {
   resolveAnthropicBetas,
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
+import { createGoogleVertexLocationWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
 import {
   createMoonshotThinkingWrapper,
@@ -30,6 +31,24 @@ import {
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
 } from "./openai-stream-wrappers.js";
+
+/**
+ * Resolve a per-model regional endpoint override from config.
+ *
+ * Currently only consumed by the google-vertex provider, where preview and GA
+ * models require different regional endpoints under the same GCP project.
+ *
+ * @internal Exported for testing only
+ */
+export function resolveModelLocation(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelId: string;
+}): string | undefined {
+  const modelKey = `${params.provider}/${params.modelId}`;
+  const location = params.cfg?.agents?.defaults?.models?.[modelKey]?.location;
+  return typeof location === "string" && location.trim() ? location.trim() : undefined;
+}
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -228,6 +247,14 @@ export function applyExtraParamsToAgent(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
     );
     agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+  }
+
+  if (provider === "google-vertex") {
+    const location = resolveModelLocation({ cfg, provider, modelId });
+    if (location) {
+      log.debug(`applying google-vertex location=${location} for ${provider}/${modelId}`);
+      agent.streamFn = createGoogleVertexLocationWrapper(agent.streamFn, location);
+    }
   }
 
   if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {

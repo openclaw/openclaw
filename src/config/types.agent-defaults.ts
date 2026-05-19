@@ -14,6 +14,11 @@ export type AgentModelEntryConfig = {
   params?: Record<string, unknown>;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
+  /** Regional endpoint override for providers whose region/location is a per-model
+   *  attribute (e.g. google-vertex, where preview models require "global" and GA
+   *  models require regional endpoints like "us-central1"). Falls back to the
+   *  provider's environment variable when unset. */
+  location?: string;
 };
 
 export type AgentModelListConfig = {

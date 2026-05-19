@@ -32,6 +32,9 @@ export const AgentDefaultsSchema = z
             params: z.record(z.string(), z.unknown()).optional(),
             /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
             streaming: z.boolean().optional(),
+            /** Regional endpoint override for providers whose location is a per-model
+             *  attribute (e.g. google-vertex preview vs GA models). */
+            location: z.string().optional(),
           })
           .strict(),
       )

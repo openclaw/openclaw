@@ -90,3 +90,24 @@ export function createGoogleThinkingPayloadWrapper(
     });
   };
 }
+
+/** Inject a per-model `location` into the Vertex stream options so different
+ *  google-vertex models can target different regional endpoints under the same
+ *  GCP project. Preview models require "global" while GA models require regional
+ *  endpoints like "us-central1"; pi-ai falls back to GOOGLE_CLOUD_LOCATION when
+ *  options.location is absent. (#59509) */
+export function createGoogleVertexLocationWrapper(
+  baseStreamFn: StreamFn | undefined,
+  location: string,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model.api !== "google-vertex") {
+      return underlying(model, context, options);
+    }
+    return underlying(model, context, {
+      ...options,
+      location,
+    } as typeof options);
+  };
+}
