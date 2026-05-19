@@ -293,6 +293,14 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
     const currentEpoch = getSessionWriteEpoch(params.lockOptions.sessionFile);
     if (currentEpoch > fenceWriteEpoch + 1) {
+      // Epoch advanced by more than our own reacquire — at least one other
+      // in-process lock holder (heartbeat, cron, channel) wrote during the
+      // prompt I/O window. Accept the change and re-baseline.
+      //
+      // Trade-off: an external lock-bypassing write in the same window would
+      // also be accepted. This is intentional — external bypasses already
+      // violate the lock contract, and rejecting co-tenant writes would
+      // recreate the session-stall regression (#84071).
       fenceFingerprint = current;
       fenceWriteEpoch = currentEpoch;
       return;
