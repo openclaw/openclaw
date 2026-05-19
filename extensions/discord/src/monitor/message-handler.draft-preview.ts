@@ -77,6 +77,7 @@ export function createDiscordDraftPreviewController(params: {
   let draftText = "";
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
+  let finalReplyStarted = false;
   let finalReplyDelivered = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
@@ -149,6 +150,9 @@ export function createDiscordDraftPreviewController(params: {
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
     },
+    markFinalReplyStarted() {
+      finalReplyStarted = true;
+    },
     markFinalReplyDelivered() {
       finalReplyDelivered = true;
     },
@@ -169,7 +173,7 @@ export function createDiscordDraftPreviewController(params: {
       if (!draftStream) {
         return;
       }
-      if (finalReplyDelivered) {
+      if (finalReplyStarted || finalReplyDelivered) {
         return;
       }
       if (

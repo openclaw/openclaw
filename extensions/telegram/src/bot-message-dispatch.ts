@@ -662,6 +662,7 @@ export const dispatchTelegramMessage = async ({
       await renderProgressDraft({ flush: true });
     },
   });
+  let finalAnswerDeliveryStarted = false;
   let finalAnswerDelivered = false;
   const pushStreamToolProgress = async (
     line?: string | ChannelProgressDraftLine,
@@ -670,7 +671,7 @@ export const dispatchTelegramMessage = async ({
     if (!answerLane.stream) {
       return false;
     }
-    if (answerLane.finalized || finalAnswerDelivered) {
+    if (answerLane.finalized || finalAnswerDeliveryStarted || finalAnswerDelivered) {
       return false;
     }
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
@@ -1352,9 +1353,6 @@ export const dispatchTelegramMessage = async ({
                     }
                     const effectivePayload = deduped;
 
-                    if (info.kind === "final") {
-                      await enqueueDraftLaneEvent(async () => {});
-                    }
                     if (
                       shouldSuppressLocalTelegramExecApprovalPrompt({
                         cfg,
@@ -1372,9 +1370,15 @@ export const dispatchTelegramMessage = async ({
                     );
                     const segments = split.segments;
                     const reply = resolveSendableOutboundReplyParts(effectivePayload);
+                    if (info.kind === "final" && (reply.text.length > 0 || reply.hasMedia)) {
+                      finalAnswerDeliveryStarted = true;
+                    }
+                    if (info.kind === "final") {
+                      await enqueueDraftLaneEvent(async () => {});
+                    }
                     if (
                       info.kind === "tool" &&
-                      finalAnswerDelivered &&
+                      (finalAnswerDeliveryStarted || finalAnswerDelivered) &&
                       !reply.hasMedia &&
                       !hasExecApprovalPayload(effectivePayload)
                     ) {
