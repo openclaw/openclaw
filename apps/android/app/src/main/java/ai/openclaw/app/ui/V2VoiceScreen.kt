@@ -797,22 +797,22 @@ private fun V2VoiceTurnCard(entry: VoiceConversationEntry) {
   val isUser = entry.role == VoiceConversationRole.User
   Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
     Surface(
-      modifier = Modifier.fillMaxWidth(if (isUser) 0.88f else 0.94f),
-      shape = RoundedCornerShape(20.dp),
-      color = if (isUser) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
-      contentColor = if (isUser) ClawTheme.colors.primaryText else ClawTheme.colors.text,
+      modifier = Modifier.fillMaxWidth(if (isUser) 0.82f else 0.92f),
+      shape = RoundedCornerShape(ClawTheme.radii.panel),
+      color = if (isUser) ClawTheme.colors.surfacePressed else ClawTheme.colors.surfaceRaised,
+      contentColor = ClawTheme.colors.text,
       border = BorderStroke(1.dp, if (entry.isStreaming) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
     ) {
-      Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+      Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Text(
           text = if (isUser) "You" else "OpenClaw",
-          style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
-          color = if (isUser) ClawTheme.colors.primaryText.copy(alpha = 0.72f) else ClawTheme.colors.textSubtle,
+          style = ClawTheme.type.caption.copy(fontSize = 8.5.sp, lineHeight = 11.sp, fontWeight = FontWeight.SemiBold),
+          color = ClawTheme.colors.textSubtle,
         )
         Text(
           text = if (entry.isStreaming && entry.text.isBlank()) "Listening..." else entry.text,
-          style = ClawTheme.type.body,
-          color = if (isUser) ClawTheme.colors.primaryText else ClawTheme.colors.text,
+          style = ClawTheme.type.body.copy(fontSize = 9.4.sp, lineHeight = 12.8.sp),
+          color = ClawTheme.colors.text,
         )
       }
     }
