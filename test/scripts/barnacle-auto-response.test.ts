@@ -6,6 +6,7 @@ import {
   runBarnacleAutoResponse,
 } from "../../scripts/github/barnacle-auto-response.mjs";
 import {
+  PROOF_OVERRIDE_LABEL,
   PROOF_SUFFICIENT_LABEL,
   PROOF_SUPPLIED_LABEL,
 } from "../../scripts/github/real-behavior-proof-policy.mjs";
@@ -716,7 +717,7 @@ describe("barnacle-auto-response", () => {
     expect(calls.update).toStrictEqual([]);
   });
 
-  it("removes stale proof labels when override is present", async () => {
+  it("removes stale structural proof labels but preserves sufficient proof when override is present", async () => {
     const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
 
     await runBarnacleAutoResponse({
@@ -726,7 +727,7 @@ describe("barnacle-auto-response", () => {
         candidateLabels.mockOnlyProof,
         PROOF_SUPPLIED_LABEL,
         PROOF_SUFFICIENT_LABEL,
-        "proof: override",
+        PROOF_OVERRIDE_LABEL,
       ]),
       core: {
         info: () => undefined,
@@ -737,9 +738,36 @@ describe("barnacle-auto-response", () => {
       expectedRemoveLabel(123, candidateLabels.needsRealBehaviorProof),
       expectedRemoveLabel(123, candidateLabels.mockOnlyProof),
       expectedRemoveLabel(123, PROOF_SUPPLIED_LABEL),
-      expectedRemoveLabel(123, PROOF_SUFFICIENT_LABEL),
     ]);
     expect(calls.update).toStrictEqual([]);
+  });
+
+  it("preserves manually applied sufficient proof label when override is added", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          body: realBehaviorProofBody(
+            "![after](https://github.com/user-attachments/assets/gateway-ready)",
+          ),
+        },
+        [PROOF_OVERRIDE_LABEL, PROOF_SUFFICIENT_LABEL],
+        {
+          action: "labeled",
+          label: { name: PROOF_OVERRIDE_LABEL },
+          sender: { login: "maintainer", type: "User" },
+        },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([]);
+    expect(calls.addLabels).toEqual([]);
+    expect(calls.update).toEqual([]);
   });
 
   it("removes stale negative proof labels and adds supplied when proof is present", async () => {
@@ -861,6 +889,86 @@ describe("barnacle-auto-response", () => {
     expect(calls.removeLabel).toEqual([expectedRemoveLabel(123, PROOF_SUFFICIENT_LABEL)]);
   });
 
+  it("preserves stale sufficient proof while ClawSweeper automerge owns the PR", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          head: {
+            ref: "fix/memory-search-event-loop-yield-81172",
+            sha: "0ede3d716805e7d2ced8df37c6666af510dc9e19",
+          },
+          body: realBehaviorProofBody(
+            "![after](https://github.com/user-attachments/assets/gateway-ready)",
+          ),
+        },
+        [PROOF_SUPPLIED_LABEL, PROOF_SUFFICIENT_LABEL, "clawsweeper:automerge"],
+        { action: "synchronize" },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([]);
+  });
+
+  it("preserves stale sufficient proof on ClawSweeper branch updates", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          head: {
+            ref: "clawsweeper/repair-pr-83758",
+            sha: "0ede3d716805e7d2ced8df37c6666af510dc9e19",
+          },
+          body: realBehaviorProofBody(
+            "![after](https://github.com/user-attachments/assets/gateway-ready)",
+          ),
+        },
+        [PROOF_SUPPLIED_LABEL, PROOF_SUFFICIENT_LABEL],
+        { action: "synchronize" },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([]);
+  });
+
+  it("preserves stale sufficient proof on ClawSweeper-authored PR updates", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          body: realBehaviorProofBody(
+            "![after](https://github.com/user-attachments/assets/gateway-ready)",
+          ),
+          user: {
+            login: "clawsweeper[bot]",
+            type: "Bot",
+          },
+        },
+        [PROOF_SUPPLIED_LABEL, PROOF_SUFFICIENT_LABEL],
+        { action: "synchronize" },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).not.toContainEqual(
+      expect.objectContaining({ name: PROOF_SUFFICIENT_LABEL }),
+    );
+  });
+
   it("preserves ClawSweeper's sufficient proof label on ordinary label events", async () => {
     const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
 
@@ -879,6 +987,24 @@ describe("barnacle-auto-response", () => {
           sender: { login: "openclaw-clawsweeper[bot]", type: "Bot" },
         },
       ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([]);
+  });
+
+  it("preserves sufficient proof on unrelated label events even without body proof", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext({}, [PROOF_SUFFICIENT_LABEL], {
+        action: "labeled",
+        label: { name: "status: ready for maintainer look" },
+        sender: { login: "openclaw-clawsweeper[bot]", type: "Bot" },
+      }),
       core: {
         info: () => undefined,
       },

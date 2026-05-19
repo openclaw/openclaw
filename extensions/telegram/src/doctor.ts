@@ -26,6 +26,7 @@ import {
 import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 
 type TelegramAllowFromInvalidHit = { path: string; entry: string };
+type TelegramMalformedGroupsHit = { path: string; actualType: string };
 type TelegramSelectedQuoteToolProgressHit = { path: string; replyToMode: string };
 type TelegramApiRootBotEndpointHit = {
   path: string;
@@ -129,6 +130,53 @@ function collectTelegramAllowFromLists(
     }
   }
   return refs;
+}
+
+function describeConfigValueType(value: unknown): string {
+  if (Array.isArray(value)) {
+    return "array";
+  }
+  if (value === null) {
+    return "null";
+  }
+  return typeof value;
+}
+
+export function scanTelegramMalformedGroupsConfig(
+  cfg: OpenClawConfig,
+): TelegramMalformedGroupsHit[] {
+  const hits: TelegramMalformedGroupsHit[] = [];
+  for (const scope of collectTelegramAccountScopes(cfg)) {
+    if (!Object.prototype.hasOwnProperty.call(scope.account, "groups")) {
+      continue;
+    }
+    const groups = scope.account.groups;
+    if (asObjectRecord(groups)) {
+      continue;
+    }
+    hits.push({
+      path: `${scope.prefix}.groups`,
+      actualType: describeConfigValueType(groups),
+    });
+  }
+  return hits;
+}
+
+export function collectTelegramMalformedGroupsWarnings(params: {
+  hits: TelegramMalformedGroupsHit[];
+  doctorFixCommand: string;
+}): string[] {
+  if (params.hits.length === 0) {
+    return [];
+  }
+  const sample = params.hits[0] ?? {
+    path: "channels.telegram.groups",
+    actualType: "unknown",
+  };
+  return [
+    `- ${sanitizeForLog(sample.path)} has invalid Telegram groups shape (${sanitizeForLog(sample.actualType)}); expected an object map keyed by Telegram group/chat id, not an array, string, or null.`,
+    `- Example shape: channels.telegram.groups."-1001234567890".topics."99" = { agentId: "support" }. Use topics for forum-topic routing, then rerun ${params.doctorFixCommand} for any remaining Telegram config cleanup.`,
+  ];
 }
 
 export function scanTelegramInvalidAllowFromEntries(
@@ -557,6 +605,10 @@ export const telegramDoctor: ChannelDoctorAdapter = {
   normalizeCompatibilityConfig: normalizeTelegramCompatibilityConfig,
   collectPreviewWarnings: ({ cfg, doctorFixCommand, env }) => [
     ...collectTelegramMissingEnvTokenWarnings({ cfg, env }),
+    ...collectTelegramMalformedGroupsWarnings({
+      hits: scanTelegramMalformedGroupsConfig(cfg),
+      doctorFixCommand,
+    }),
     ...collectTelegramInvalidAllowFromWarnings({
       hits: scanTelegramInvalidAllowFromEntries(cfg),
       doctorFixCommand,

@@ -147,6 +147,7 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
+import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynamic-headers.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
@@ -916,6 +917,40 @@ describe("resolveModel", () => {
     });
   });
 
+  it("adds GitHub Copilot IDE headers to dynamic resolved model headers for Pi-native compaction", () => {
+    const result = resolveModelForTest("github-copilot", "gpt-5.5", "/tmp/agent");
+    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
+
+    expect(model.headers).toEqual({
+      ...buildCopilotIdeHeaders(),
+      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+      "Openai-Organization": "github-copilot",
+    });
+  });
+
+  it("adds GitHub Copilot IDE headers to configured resolved model headers for Pi-native compaction", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "https://api.githubcopilot.com",
+            api: "openai-responses",
+            models: [makeModel("gpt-5.5")],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("github-copilot", "gpt-5.5", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
+
+    expect(model.headers).toEqual({
+      ...buildCopilotIdeHeaders(),
+      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+      "Openai-Organization": "github-copilot",
+    });
+  });
+
   it("includes provider headers in provider fallback model", () => {
     const cfg = {
       models: {
@@ -1575,6 +1610,31 @@ describe("resolveModel", () => {
     } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("microsoft-foundry", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.model?.input).toEqual(["text", "image"]);
+  });
+
+  it("repairs stale text-only Anthropic fallback rows for Claude vision models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            api: "anthropic-messages",
+            models: [
+              {
+                ...makeModel("claude-sonnet-4-5"),
+                name: "claude-sonnet-4-5",
+                api: "anthropic-messages",
+                input: ["text"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("anthropic", "claude-sonnet-4-5", "/tmp/agent", cfg);
 
     expect(result.model?.input).toEqual(["text", "image"]);
   });

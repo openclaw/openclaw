@@ -1677,7 +1677,21 @@ export async function runEmbeddedAttempt(
       ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
       warn: (message) => log.warn(message),
     });
-    const uncompactedEffectiveTools = [...tools, ...filteredBundledTools];
+    const normalizedBundledTools =
+      filteredBundledTools.length > 0
+        ? normalizeAgentRuntimeTools({
+            runtimePlan: params.runtimePlan,
+            tools: filteredBundledTools,
+            provider: params.provider,
+            config: params.config,
+            workspaceDir: effectiveWorkspace,
+            env: process.env,
+            modelId: params.modelId,
+            modelApi: params.model.api,
+            model: params.model,
+          })
+        : filteredBundledTools;
+    const uncompactedEffectiveTools = [...tools, ...normalizedBundledTools];
     let effectiveTools = uncompactedEffectiveTools;
     const catalogToolHookContext = {
       agentId: sessionAgentId,
@@ -3591,11 +3605,7 @@ export async function runEmbeddedAttempt(
           effectivePrompt = annotateInterSessionPromptText(effectivePrompt, params.inputProvenance);
         }
         const effectiveTranscriptPrompt =
-          params.transcriptPrompt === undefined
-            ? undefined
-            : isRawModelRun
-              ? params.transcriptPrompt
-              : annotateInterSessionPromptText(params.transcriptPrompt, params.inputProvenance);
+          params.transcriptPrompt === undefined ? undefined : params.transcriptPrompt;
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
         const heartbeatSummary =
@@ -3622,7 +3632,7 @@ export async function runEmbeddedAttempt(
               : "runtime-event",
           });
           const promptForModel = buildCurrentInboundPrompt({
-            context: promptSubmission.runtimeOnly ? undefined : params.currentInboundContext,
+            context: params.currentInboundContext,
             prompt: promptSubmission.prompt,
           });
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();

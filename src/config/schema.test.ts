@@ -390,6 +390,44 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
+  it("keeps per-agent model overrides limited to model selection", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            model: {
+              primary: "openai/gpt-5.5",
+              timeoutMs: 30_000,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects per-agent subagent model timeout config", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              model: {
+                primary: "openai/gpt-5.5",
+                timeoutMs: 30_000,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("accepts exec command highlighting config in global and agent scopes", () => {
     const tools = ToolsSchema.parse({
       exec: {
