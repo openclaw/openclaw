@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -38,8 +39,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
@@ -48,6 +51,7 @@ import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PhoneDisabled
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -129,6 +133,20 @@ fun V2VoiceScreen(viewModel: MainViewModel) {
     return
   }
 
+  if (voiceCaptureMode == VoiceCaptureMode.ManualMic || micEnabled || micIsSending) {
+    V2DictationScreen(
+      liveTranscript = micLiveTranscript,
+      conversation = micConversation,
+      listening = micEnabled,
+      sending = micIsSending,
+      statusText = activeStatus,
+      gatewayStatus = gatewayStatus,
+      onCancel = { viewModel.setMicEnabled(false) },
+      onSend = { viewModel.setMicEnabled(false) },
+    )
+    return
+  }
+
   Column(
     modifier =
       Modifier
@@ -189,6 +207,138 @@ fun V2VoiceScreen(viewModel: MainViewModel) {
       showThinking = micIsSending && activeConversation.none { it.role == VoiceConversationRole.Assistant && it.isStreaming },
       modifier = Modifier.weight(1f),
     )
+  }
+}
+
+@Composable
+private fun V2DictationScreen(
+  liveTranscript: String?,
+  conversation: List<VoiceConversationEntry>,
+  listening: Boolean,
+  sending: Boolean,
+  statusText: String,
+  gatewayStatus: String,
+  onCancel: () -> Unit,
+  onSend: () -> Unit,
+) {
+  val lastUserText = conversation.lastOrNull { it.role == VoiceConversationRole.User }?.text
+  val draftText = liveTranscript?.takeIf { it.isNotBlank() } ?: lastUserText.orEmpty()
+  val speechProviderReady = gatewayStatus.isVoiceGatewayReady()
+  Column(
+    modifier =
+      Modifier
+        .fillMaxSize()
+        .imePadding()
+        .padding(horizontal = 20.dp, vertical = 12.dp),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
+  ) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+      V2VoicePlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to voice", onClick = onCancel)
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(text = "Dictation", style = ClawTheme.type.title, color = ClawTheme.colors.text)
+        Text(text = "Transcribe then send", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      }
+      V2VoicePlainIconButton(icon = Icons.Default.Settings, contentDescription = "Dictation settings", onClick = {})
+    }
+
+    Surface(
+      modifier = Modifier.fillMaxWidth().aspectRatio(0.74f),
+      shape = RoundedCornerShape(ClawTheme.radii.sheet),
+      color = ClawTheme.colors.surface,
+      border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+    ) {
+      Column(modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 14.dp), verticalArrangement = Arrangement.SpaceBetween) {
+        Text(
+          text = draftText.ifBlank { if (sending) "Sending to chat..." else "Start speaking..." },
+          style = ClawTheme.type.title,
+          color = if (draftText.isBlank()) ClawTheme.colors.textSubtle else ClawTheme.colors.text,
+          maxLines = 7,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          V2DictationWaveform(active = listening || sending)
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(17.dp), tint = if (listening) ClawTheme.colors.success else ClawTheme.colors.textMuted)
+            Text(text = statusText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          }
+        }
+      }
+    }
+
+    ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)) {
+      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Surface(
+          modifier = Modifier.size(34.dp),
+          shape = CircleShape,
+          color = ClawTheme.colors.surfacePressed,
+          border = BorderStroke(1.dp, ClawTheme.colors.border),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(imageVector = Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(18.dp), tint = ClawTheme.colors.text)
+          }
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+          Text(text = "Speech provider", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Text(text = gatewayStatus.voiceGatewayLabel(), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+          Text(
+            text =
+              when {
+                sending -> "Sending"
+                speechProviderReady -> "Ready"
+                else -> "Offline"
+              },
+            style = ClawTheme.type.caption,
+            color =
+              when {
+                sending -> ClawTheme.colors.warning
+                speechProviderReady -> ClawTheme.colors.success
+                else -> ClawTheme.colors.textMuted
+              },
+          )
+          Box(
+            modifier =
+              Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(
+                  when {
+                    sending -> ClawTheme.colors.warning
+                    speechProviderReady -> ClawTheme.colors.success
+                    else -> ClawTheme.colors.textSubtle
+                  },
+                ),
+          )
+        }
+      }
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+      Icon(imageVector = Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.textMuted)
+      Text(text = "Tip: stop listening to send the captured turn.", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+    }
+
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+      ClawSecondaryButton(text = "Cancel", icon = Icons.Default.Close, onClick = onCancel, modifier = Modifier.weight(0.95f))
+      ClawPrimaryButton(text = if (sending) "Sending" else "Send to Chat", icon = Icons.AutoMirrored.Filled.Send, onClick = onSend, enabled = !sending, modifier = Modifier.weight(1.25f))
+    }
+  }
+}
+
+@Composable
+private fun V2DictationWaveform(active: Boolean) {
+  Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+    List(40) { index ->
+      val height = if (active) 4 + ((index * 7) % 18) else 4 + (index % 3) * 3
+      Box(
+        modifier =
+          Modifier
+            .size(width = 3.dp, height = height.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (active) ClawTheme.colors.text else ClawTheme.colors.textSubtle),
+      )
+    }
   }
 }
 
@@ -689,8 +839,15 @@ private fun voiceStatusLabel(
     micIsSending -> "Sending dictation"
     voiceCaptureMode == VoiceCaptureMode.ManualMic -> micStatusText.ifBlank { "Listening" }
     micQueuedMessages > 0 -> "$micQueuedMessages queued"
-    gatewayStatus.lowercase().contains("offline") -> "Gateway offline"
+    !gatewayStatus.isVoiceGatewayReady() -> "Gateway offline"
     else -> "Ready to talk"
   }
+
+private fun String.isVoiceGatewayReady(): Boolean {
+  val status = lowercase()
+  return !status.contains("offline") && !status.contains("not connected") && !status.contains("failed") && !status.contains("error")
+}
+
+private fun String.voiceGatewayLabel(): String = if (isVoiceGatewayReady()) "Connected and ready" else "Gateway not connected"
 
 private fun Context.hasRecordAudioPermission(): Boolean = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
