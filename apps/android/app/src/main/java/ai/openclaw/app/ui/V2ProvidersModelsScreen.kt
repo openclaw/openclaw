@@ -75,7 +75,7 @@ internal fun V2ProvidersModelsScreen(
 
   ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 13.dp, end = 20.dp, bottom = 13.dp)) {
     Box(modifier = Modifier.fillMaxSize()) {
-      LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp), contentPadding = PaddingValues(bottom = 52.dp)) {
+      LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp), contentPadding = PaddingValues(bottom = 112.dp)) {
         item {
           Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
