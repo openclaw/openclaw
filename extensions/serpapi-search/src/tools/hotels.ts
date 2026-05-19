@@ -58,7 +58,7 @@ export function createSerpApiHotelsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
           type: "string",
           description: "Check-out date YYYY-MM-DD (default: check-in + 2 nights).",
         },
-        adults: { type: "string", description: "Number of adults (default: 1)." },
+        adults: { type: "number", description: "Number of adults (default: 1).", minimum: 1 },
         currency: { type: "string", description: "Currency code (e.g. USD, EUR)." },
         gl: { type: "string", description: "Country code (e.g. us, de, ua)." },
         sort_by: {
@@ -97,7 +97,7 @@ export function createSerpApiHotelsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
           q: readStringParam(args, "query", { required: true }),
           check_in_date: readStringParam(args, "check_in_date") ?? isoDateOffset(1),
           check_out_date: readStringParam(args, "check_out_date") ?? isoDateOffset(3),
-          adults: readStringParam(args, "adults") ?? undefined,
+          adults: readNumberParam(args, "adults", { integer: true }) ?? undefined,
           currency: readStringParam(args, "currency") ?? undefined,
           gl: readStringParam(args, "gl") ?? undefined,
           sort_by: readNumberParam(args, "sort_by", { integer: true }) ?? undefined,

@@ -1,5 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  jsonResult,
+  readNumberParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
@@ -45,7 +49,11 @@ export function createSerpApiFlightsTool(api: OpenClawPluginApi, ctx?: SerpApiTo
           enum: ["1", "2"],
           description: "1 = round trip (default), 2 = one-way.",
         },
-        adults: { type: "string", description: "Number of adult passengers (default: 1)." },
+        adults: {
+          type: "number",
+          description: "Number of adult passengers (default: 1).",
+          minimum: 1,
+        },
         currency: { type: "string", description: "Currency code (default: USD)." },
         gl: { type: "string", description: "Country code (e.g. us, de, ua)." },
       },
@@ -64,7 +72,7 @@ export function createSerpApiFlightsTool(api: OpenClawPluginApi, ctx?: SerpApiTo
           outbound_date: readStringParam(args, "outbound_date", { required: true }),
           return_date: readStringParam(args, "return_date") ?? undefined,
           type: readStringParam(args, "type") ?? undefined,
-          adults: readStringParam(args, "adults") ?? undefined,
+          adults: readNumberParam(args, "adults", { integer: true }) ?? undefined,
           currency: readStringParam(args, "currency") ?? undefined,
           gl: readStringParam(args, "gl") ?? undefined,
         },
