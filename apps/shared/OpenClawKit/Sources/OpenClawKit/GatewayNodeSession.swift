@@ -245,7 +245,7 @@ public actor GatewayNodeSession {
 
         do {
             try await channel.connect()
-            _ = await self.waitForSnapshot(timeoutMs: 500)
+            _ = await self.waitForSnapshot(timeoutMs: 5000)
             await self.notifyConnectedIfNeeded()
         } catch {
             throw error
@@ -457,7 +457,8 @@ public actor GatewayNodeSession {
             let req = BridgeInvokeRequest(
                 id: request.id,
                 command: request.command,
-                paramsJSON: request.paramsJSON)
+                paramsJSON: request.paramsJSON,
+                nodeId: request.nodeId)
             self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
             let response = await Self.invokeWithTimeout(
                 request: req,
