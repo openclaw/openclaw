@@ -258,6 +258,9 @@ async function runFallbackCandidate<T>(params: {
     if (isCommandLaneTaskTimeoutError(err)) {
       throw err;
     }
+    if (isNonProviderRuntimeCoordinationError(err)) {
+      throw err;
+    }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
     // so they become FailoverErrors and continue the fallback loop instead of aborting.
     const normalizedFailover = coerceToFailoverError(err, {
