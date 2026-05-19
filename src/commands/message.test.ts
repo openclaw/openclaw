@@ -308,11 +308,12 @@ describe("messageCommand", () => {
       to: "channel:general",
       handledBy: "plugin",
       payload: {
+        ok: true,
         result: {
           messageId: "msg-json-1",
           channelId: "general",
         },
-      },
+      } as { ok: boolean } & Record<string, unknown>,
       dryRun: false,
     });
 
@@ -325,6 +326,7 @@ describe("messageCommand", () => {
     const json = JSON.parse(String(output)) as { messageId?: string; payload?: unknown };
     expect(json.messageId).toBe("msg-json-1");
     expect(json.payload).toEqual({
+      ok: true,
       result: {
         messageId: "msg-json-1",
         channelId: "general",
