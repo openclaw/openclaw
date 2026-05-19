@@ -557,9 +557,12 @@ Completed `agentMessage` items and pre-tool raw assistant
 `rawResponseItem/completed` items arm the assistant-output release: if Codex then
 goes quiet without `turn/completed`, OpenClaw best-effort interrupts the native
 turn and releases the session lane. Post-tool raw assistant progress keeps
-waiting for `turn/completed` or the terminal watchdog. Timeout diagnostics
-include the last app-server notification method and, for raw assistant response
-items, the item type, role, id, and a bounded assistant text preview.
+waiting for `turn/completed` while a completion-idle guard stays armed; the guard
+uses `appServer.postToolRawAssistantCompletionIdleTimeoutMs` when configured and
+falls back to the assistant completion idle timeout otherwise. Timeout
+diagnostics include the last app-server notification method and, for raw
+assistant response items, the item type, role, id, and a bounded assistant text
+preview.
 
 Environment overrides remain available for local testing:
 
