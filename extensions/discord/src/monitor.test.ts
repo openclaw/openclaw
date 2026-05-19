@@ -942,6 +942,9 @@ vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueS
 const heartbeatRuntimeModule = await import("openclaw/plugin-sdk/heartbeat-runtime");
 vi.spyOn(heartbeatRuntimeModule, "requestHeartbeat").mockImplementation(requestHeartbeatSpy);
 
+const heartbeatWakeModule = await import("../../../src/infra/heartbeat-wake.js");
+vi.spyOn(heartbeatWakeModule, "requestHeartbeat").mockImplementation(requestHeartbeatSpy);
+
 const routingModule = await import("openclaw/plugin-sdk/routing");
 vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRouteMock);
 
@@ -1040,6 +1043,7 @@ function getReactionClientFetchChannelMock(client: DiscordReactionClient) {
 }
 
 function makeReactionListenerParams(overrides?: {
+  cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
   botUserId?: string;
   dmEnabled?: boolean;
   groupDmEnabled?: boolean;
@@ -1051,7 +1055,7 @@ function makeReactionListenerParams(overrides?: {
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }) {
   return {
-    cfg: {} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
+    cfg: overrides?.cfg ?? ({} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig),
     accountId: "acc-1",
     runtime: {} as import("openclaw/plugin-sdk/runtime-env").RuntimeEnv,
     botUserId: overrides?.botUserId ?? "bot-1",
@@ -1119,7 +1123,7 @@ describe("discord DM reaction handling", () => {
     }
   });
 
-  it("wakes the routed session when an accepted reaction event is enqueued", async () => {
+  it("queues accepted reaction events without waking by default", async () => {
     enqueueSystemEventSpy.mockReturnValue(true);
     const data = makeReactionEvent({ botAsAuthor: true });
     const client = makeReactionClient({ channelType: ChannelType.DM });
@@ -1128,12 +1132,57 @@ describe("discord DM reaction handling", () => {
     await listener.handle(data, client);
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
+    expect(requestHeartbeatSpy).not.toHaveBeenCalled();
+  });
+
+  it("wakes the routed session when notificationWake opts in", async () => {
+    enqueueSystemEventSpy.mockReturnValue(true);
+    const data = makeReactionEvent({ botAsAuthor: true });
+    const client = makeReactionClient({ channelType: ChannelType.DM });
+    const listener = new DiscordReactionListener(
+      makeReactionListenerParams({
+        cfg: {
+          channels: {
+            discord: {
+              notificationWake: { reactions: "wake" },
+            },
+          },
+        } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
+      }),
+    );
+
+    await listener.handle(data, client);
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
     expect(requestHeartbeatSpy).toHaveBeenCalledWith({
       source: "notifications-event",
       intent: "immediate",
-      reason: "discord-reaction",
+      reason: "notification-wake:discord-reaction",
+      agentId: "default",
       sessionKey: "discord:acc-1:dm:user-1",
     });
+  });
+
+  it("skips reaction notification enqueue when notificationWake is off", async () => {
+    enqueueSystemEventSpy.mockReturnValue(true);
+    const data = makeReactionEvent({ botAsAuthor: true });
+    const client = makeReactionClient({ channelType: ChannelType.DM });
+    const listener = new DiscordReactionListener(
+      makeReactionListenerParams({
+        cfg: {
+          channels: {
+            discord: {
+              notificationWake: { reactions: "off" },
+            },
+          },
+        } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
+      }),
+    );
+
+    await listener.handle(data, client);
+
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    expect(requestHeartbeatSpy).not.toHaveBeenCalled();
   });
 
   it("does not wake when a reaction event is deduplicated", async () => {
@@ -1165,7 +1214,7 @@ describe("discord DM reaction handling", () => {
     expect(requireRecord(opts, "system event options").contextKey).toContain(
       "discord:reaction:added:msg-1:user-1:custom_emoji:123456789012345678",
     );
-    expect(requestHeartbeatSpy).toHaveBeenCalledOnce();
+    expect(requestHeartbeatSpy).not.toHaveBeenCalled();
   });
 
   it("blocks DM reactions when dmPolicy is disabled", async () => {

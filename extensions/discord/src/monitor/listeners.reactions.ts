@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import {
+  enqueueNotificationSystemEvent,
+  enqueueSystemEvent,
+} from "openclaw/plugin-sdk/system-event-runtime";
 import {
   ChannelType,
   type Client,
@@ -508,19 +510,26 @@ async function handleDiscordReactionEvent(
         },
         parentPeer: parentPeerId ? { kind: "channel", id: parentPeerId } : undefined,
       });
-      const enqueued = enqueueSystemEvent(text, {
+      const result = enqueueNotificationSystemEvent({
+        cfg: params.cfg,
+        channel: "discord",
+        accountId: params.accountId,
+        agentId: route.agentId,
         sessionKey: route.sessionKey,
+        family: "reactions",
+        text,
         contextKey,
         forceSenderIsOwnerFalse: true,
         trusted: false,
+        reason: "discord-reaction",
+        enqueueSystemEvent,
       });
-      if (enqueued) {
-        requestHeartbeat({
-          source: "notifications-event",
-          intent: "immediate",
-          reason: "discord-reaction",
-          sessionKey: route.sessionKey,
-        });
+      if (result.status === "skipped") {
+        logVerbose(`discord: reaction event skipped by notificationWake policy: ${text}`);
+        return;
+      }
+      if (result.status === "deduped") {
+        logVerbose(`discord: skipped duplicate reaction event: ${text}`);
       }
     };
     const shouldNotifyReaction = (options: {
