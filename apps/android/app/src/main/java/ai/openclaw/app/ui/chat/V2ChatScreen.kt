@@ -37,7 +37,6 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -125,7 +124,6 @@ fun V2ChatScreen(
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
       onBack = onBack,
-      onPin = {},
       onMore = {
         viewModel.refreshChat()
         viewModel.refreshChatSessions(limit = 100)
@@ -174,7 +172,6 @@ private fun V2ChatHeader(
   healthOk: Boolean,
   pendingRunCount: Int,
   onBack: () -> Unit,
-  onPin: () -> Unit,
   onMore: () -> Unit,
 ) {
   Row(
@@ -213,7 +210,6 @@ private fun V2ChatHeader(
       )
     }
 
-    V2HeaderIcon(icon = Icons.Default.StarBorder, contentDescription = "Pin chat", onClick = onPin)
     V2HeaderIcon(icon = Icons.Default.MoreVert, contentDescription = "Chat options", onClick = onMore)
   }
 }
