@@ -550,6 +550,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       result,
       params.builtinToolNames,
     );
+    if (
+      params.sourceReplyDeliveryMode === "message_tool_only" &&
+      cleanedText &&
+      filteredMediaUrls.length === 0 &&
+      hasCommittedMessagingToolDeliveryEvidence({
+        messagingToolSentTexts,
+        messagingToolSentMediaUrls,
+        messagingToolSentTargets,
+      })
+    ) {
+      return;
+    }
     if (!cleanedText && filteredMediaUrls.length === 0) {
       return;
     }

@@ -169,6 +169,9 @@ export function createDiscordDraftPreviewController(params: {
       if (!draftStream) {
         return;
       }
+      if (finalReplyDelivered) {
+        return;
+      }
       if (
         options?.toolName !== undefined &&
         !isChannelProgressDraftWorkToolName(options.toolName)
@@ -228,6 +231,9 @@ export function createDiscordDraftPreviewController(params: {
     },
     async pushReasoningProgress(text?: string) {
       if (!draftStream || discordStreamMode !== "progress" || !text) {
+        return;
+      }
+      if (finalReplyDelivered) {
         return;
       }
       reasoningProgressRawText = mergeReasoningProgressText(reasoningProgressRawText, text);

@@ -669,6 +669,9 @@ export const dispatchTelegramMessage = async ({
     if (!answerLane.stream) {
       return false;
     }
+    if (answerLane.finalized) {
+      return false;
+    }
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
       return false;
     }
@@ -1364,6 +1367,14 @@ export const dispatchTelegramMessage = async ({
                     );
                     const segments = split.segments;
                     const reply = resolveSendableOutboundReplyParts(effectivePayload);
+                    if (
+                      info.kind === "tool" &&
+                      answerLane.finalized &&
+                      !reply.hasMedia &&
+                      !hasExecApprovalPayload(effectivePayload)
+                    ) {
+                      return;
+                    }
 
                     const deliverFinalAnswerText = async (
                       answerPayload: ReplyPayload,
