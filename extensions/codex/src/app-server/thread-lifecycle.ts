@@ -30,8 +30,8 @@ import {
   type CodexThreadResumeParams,
   type CodexThreadStartParams,
   type CodexTurnStartParams,
-  type CodexUserInput,
   type JsonObject,
+  type CodexUserInput,
   type JsonValue,
 } from "./protocol.js";
 import {
