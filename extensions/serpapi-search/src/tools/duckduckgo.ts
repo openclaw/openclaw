@@ -5,7 +5,7 @@ import {
   wrapWebContent,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
-import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
+import { type SerpApiToolCtx, readBooleanArg, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
   "q",
@@ -101,10 +101,10 @@ export function createSerpApiDuckDuckGoTool(api: OpenClawPluginApi, ctx?: SerpAp
     },
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
-      const searchAssist =
-        args.search_assist === true || args.search_assist === "true" ? "true" : undefined;
+      const searchAssist = readBooleanArg(args, "search_assist");
+      const searchAssistParam = searchAssist === true ? "true" : undefined;
       const m = readNumberParam(args, "m", { integer: true });
-      if (searchAssist && m != null) {
+      if (searchAssist === true && m != null) {
         throw new Error("serpapi_duckduckgo: search_assist and m are mutually exclusive");
       }
       const raw = await callSerpApi({
@@ -118,7 +118,7 @@ export function createSerpApiDuckDuckGoTool(api: OpenClawPluginApi, ctx?: SerpAp
           df: readStringParam(args, "df") ?? undefined,
           m: m ?? undefined,
           start: readNumberParam(args, "start", { integer: true }) ?? undefined,
-          search_assist: searchAssist,
+          search_assist: searchAssistParam,
         },
         signal,
       });

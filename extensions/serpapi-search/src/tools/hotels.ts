@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
-import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
+import { type SerpApiToolCtx, readBooleanArg, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
   "q",
@@ -84,6 +84,7 @@ export function createSerpApiHotelsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
     },
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
+      const vacationRentals = readBooleanArg(args, "vacation_rentals");
       const raw = await callSerpApi({
         cfg,
         engine: "google_hotels",
@@ -100,10 +101,7 @@ export function createSerpApiHotelsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
           max_price: readNumberParam(args, "max_price") ?? undefined,
           hotel_class: readStringParam(args, "hotel_class") ?? undefined,
           rating: readNumberParam(args, "rating", { integer: true }) ?? undefined,
-          vacation_rentals:
-            typeof args["vacation_rentals"] === "boolean"
-              ? String(args["vacation_rentals"])
-              : undefined,
+          vacation_rentals: vacationRentals !== undefined ? String(vacationRentals) : undefined,
           next_page_token: readStringParam(args, "next_page_token") ?? undefined,
         },
         signal,

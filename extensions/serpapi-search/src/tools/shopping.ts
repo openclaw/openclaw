@@ -1,12 +1,20 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
-import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
+import { type SerpApiToolCtx, readBooleanArg, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
-  "q", "gl", "hl",
-  "min_price", "max_price", "sort_by", "free_shipping", "on_sale",
-  "shoprs", "start", "zero_trace",
+  "q",
+  "gl",
+  "hl",
+  "min_price",
+  "max_price",
+  "sort_by",
+  "free_shipping",
+  "on_sale",
+  "shoprs",
+  "start",
+  "zero_trace",
 ] as const;
 
 function extract(raw: Record<string, unknown>, maxCount: number): Record<string, unknown> {
@@ -32,7 +40,12 @@ export function createSerpApiShoppingTool(api: OpenClawPluginApi, ctx?: SerpApiT
       type: "object",
       properties: {
         query: { type: "string", description: "Product search query." },
-        count: { type: "number", description: "Number of results (1-20).", minimum: 1, maximum: 20 },
+        count: {
+          type: "number",
+          description: "Number of results (1-20).",
+          minimum: 1,
+          maximum: 20,
+        },
         gl: { type: "string", description: "Country code (e.g. us, de, ua)." },
         min_price: { type: "number", description: "Minimum price filter." },
         max_price: { type: "number", description: "Maximum price filter." },
@@ -55,6 +68,8 @@ export function createSerpApiShoppingTool(api: OpenClawPluginApi, ctx?: SerpApiT
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const count = readNumberParam(args, "count", { integer: true }) ?? 5;
+      const freeShipping = readBooleanArg(args, "free_shipping");
+      const onSale = readBooleanArg(args, "on_sale");
       const raw = await callSerpApi({
         cfg,
         engine: "google_shopping",
@@ -65,12 +80,8 @@ export function createSerpApiShoppingTool(api: OpenClawPluginApi, ctx?: SerpApiT
           min_price: readNumberParam(args, "min_price") ?? undefined,
           max_price: readNumberParam(args, "max_price") ?? undefined,
           sort_by: readNumberParam(args, "sort_by", { integer: true }) ?? undefined,
-          free_shipping:
-            typeof args["free_shipping"] === "boolean"
-              ? String(args["free_shipping"])
-              : undefined,
-          on_sale:
-            typeof args["on_sale"] === "boolean" ? String(args["on_sale"]) : undefined,
+          free_shipping: freeShipping !== undefined ? String(freeShipping) : undefined,
+          on_sale: onSale !== undefined ? String(onSale) : undefined,
           shoprs: readStringParam(args, "shoprs") ?? undefined,
           start: readNumberParam(args, "start", { integer: true }) ?? undefined,
         },

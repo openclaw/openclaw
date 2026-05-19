@@ -10,3 +10,11 @@ export type SerpApiToolCtx = Pick<
 export function resolveToolConfig(api: OpenClawPluginApi, ctx?: SerpApiToolCtx): OpenClawConfig {
   return ctx?.getRuntimeConfig?.() ?? ctx?.runtimeConfig ?? ctx?.config ?? api.config;
 }
+
+/** Reads a boolean tool argument that may arrive as a real boolean or as "true"/"false" string. */
+export function readBooleanArg(args: Record<string, unknown>, key: string): boolean | undefined {
+  const v = args[key];
+  if (v === true || v === "true") return true;
+  if (v === false || v === "false") return false;
+  return undefined;
+}
