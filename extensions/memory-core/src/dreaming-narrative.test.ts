@@ -833,6 +833,7 @@ describe("generateAndAppendDreamNarrative", () => {
   it("falls back to a local narrative when subagent runtime is request-scoped", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = createMockSubagent("");
+    subagent.deleteSession.mockRejectedValueOnce(new RequestScopedSubagentRuntimeError());
     subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
     const logger = createMockLogger();
 
@@ -850,6 +851,7 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining(workspaceDir));
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("narrative pre-cleanup"));
     expect(logger.warn).not.toHaveBeenCalledWith(
       expect.stringContaining("narrative session cleanup failed"),
     );

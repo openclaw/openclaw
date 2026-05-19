@@ -347,6 +347,7 @@ describe("memory-core dreaming phases", () => {
     expect(dreams).toContain("Move backups to S3 Glacier.");
     expect(logger.error).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("narrative pre-cleanup"));
     expect(subagent.deleteSession).toHaveBeenCalledOnce();
   });
 

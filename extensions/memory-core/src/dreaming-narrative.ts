@@ -910,9 +910,11 @@ export async function generateAndAppendDreamNarrative(params: {
         try {
           await params.subagent.deleteSession({ sessionKey: attemptSessionKey });
         } catch (preCleanupErr) {
-          params.logger.warn(
-            `memory-core: narrative pre-cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(preCleanupErr)}`,
-          );
+          if (!isRequestScopedSubagentRuntimeError(preCleanupErr)) {
+            params.logger.warn(
+              `memory-core: narrative pre-cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(preCleanupErr)}`,
+            );
+          }
         }
 
         const runId = await startNarrativeRunOrFallback({
