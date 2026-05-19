@@ -34,6 +34,7 @@ import type {
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import {
   extractToolResultMediaArtifact,
+  extractToolErrorCode,
   extractMessagingToolSend,
   extractToolErrorMessage,
   extractToolResultText,
@@ -934,9 +935,11 @@ export async function handleToolExecutionEnd(
   ctx.state.toolSummaryById.delete(toolCallId);
   if (isToolError) {
     const errorMessage = extractToolErrorMessage(sanitizedResult);
+    const errorCode = extractToolErrorCode(sanitizedResult);
     ctx.state.lastToolError = {
       toolName,
       meta,
+      ...(errorCode ? { errorCode } : {}),
       error: errorMessage,
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
       mutatingAction: callSummary?.mutatingAction,

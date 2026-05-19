@@ -22,11 +22,6 @@ export type CronPayloadOutcome = {
   pendingPresentationWarningError?: string;
 };
 
-type CronDenialSignal = {
-  token: string;
-  field: string;
-};
-
 type CronFailureSignal = {
   kind?: string;
   source?: string;
@@ -40,55 +35,6 @@ type NormalizedCronFailureSignal = CronFailureSignal & {
   message: string;
   fatalForCron: true;
 };
-
-const CRON_DENIAL_EXACT_TOKENS = ["SYSTEM_RUN_DENIED", "INVALID_REQUEST"] as const;
-const CRON_DENIAL_CASE_INSENSITIVE_TOKENS = [
-  "approval cannot safely bind",
-  "runtime denied",
-  "could not run",
-  "did not run",
-  "was denied",
-] as const;
-
-export function detectCronDenialToken(text: string | undefined): string | undefined {
-  const normalized = normalizeOptionalString(text);
-  if (!normalized) {
-    return undefined;
-  }
-  for (const token of CRON_DENIAL_EXACT_TOKENS) {
-    if (normalized.includes(token)) {
-      return token;
-    }
-  }
-  const lowerText = normalized.toLowerCase();
-  for (const token of CRON_DENIAL_CASE_INSENSITIVE_TOKENS) {
-    if (lowerText.includes(token)) {
-      return token;
-    }
-  }
-  return undefined;
-}
-
-function resolveCronDenialSignal(
-  fields: Array<{ field: string; text?: string | undefined }>,
-): CronDenialSignal | undefined {
-  const seen = new Set<string>();
-  for (const { field, text } of fields) {
-    if (seen.has(field)) {
-      continue;
-    }
-    seen.add(field);
-    const token = detectCronDenialToken(text);
-    if (token) {
-      return { token, field };
-    }
-  }
-  return undefined;
-}
-
-function formatCronDenialSignal(signal: CronDenialSignal): string {
-  return `cron classifier: denial token "${signal.token}" detected in ${signal.field}`;
-}
 
 function normalizeCronFailureSignal(
   signal: CronFailureSignal | undefined,
@@ -318,32 +264,15 @@ export function resolveCronPayloadOutcome(params: {
       : synthesizedText
         ? [{ text: synthesizedText }]
         : [];
-  const denialSignal = resolveCronDenialSignal([
-    { field: "summary", text: summary },
-    { field: "outputText", text: outputText },
-    { field: "synthesizedText", text: synthesizedText },
-    { field: "fallbackSummary", text: fallbackSummary },
-    { field: "fallbackOutputText", text: fallbackOutputText },
-    ...params.payloads.map((payload, index) => ({
-      field: `payloads[${index}].text`,
-      text: payload?.text,
-    })),
-  ]);
   const failureSignal = normalizeCronFailureSignal(params.failureSignal);
   const runLevelError = formatCronRunLevelError(params.runLevelError);
   const hasFatalErrorPayload =
-    hasFatalStructuredErrorPayload ||
-    failureSignal !== undefined ||
-    denialSignal !== undefined ||
-    runLevelError !== undefined;
+    hasFatalStructuredErrorPayload || failureSignal !== undefined || runLevelError !== undefined;
   const structuredErrorText = hasFatalStructuredErrorPayload
     ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
     : undefined;
   const shouldUseRunLevelErrorPayload =
-    runLevelError !== undefined &&
-    structuredErrorText === undefined &&
-    failureSignal === undefined &&
-    denialSignal === undefined;
+    runLevelError !== undefined && structuredErrorText === undefined && failureSignal === undefined;
   const fatalDeliveryText =
     structuredErrorText ??
     failureSignal?.message ??
@@ -365,9 +294,7 @@ export function resolveCronPayloadOutcome(params: {
       ? structuredErrorText
       : failureSignal
         ? formatCronFailureSignal(failureSignal)
-        : denialSignal
-          ? formatCronDenialSignal(denialSignal)
-          : runLevelError,
+        : runLevelError,
     pendingPresentationWarningError: hasPendingPresentationWarning
       ? lastErrorPayloadText
       : undefined,
