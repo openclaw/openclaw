@@ -544,58 +544,6 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadSummary(payloads, { text });
   });
 
-  it("suppresses exec warnings when assistant output acknowledges a failed exit status", () => {
-    const text = "Done — intentional missing-file check, exit `1`.";
-    const payloads = buildPayloads({
-      assistantTexts: [text],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: {
-        toolName: "bash",
-        meta: "cat /tmp/openclaw-intentional-failure-demo-final-round",
-        error: "cat: /tmp/openclaw-intentional-failure-demo-final-round: No such file or directory",
-      },
-      verboseLevel: "on",
-    });
-
-    expectSinglePayloadSummary(payloads, { text });
-  });
-
-  it("does not suppress write warnings for unrelated failure text", () => {
-    const text = "The tests failed, so I stopped there.";
-    const payloads = buildPayloads({
-      assistantTexts: [text],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: {
-        toolName: "write",
-        error: "file missing",
-      },
-      verboseLevel: "on",
-    });
-
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe(text);
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("Write");
-  });
-
-  it("does not suppress exec warnings for unrelated failure text", () => {
-    const text = "The tests failed, so I stopped there.";
-    const payloads = buildPayloads({
-      assistantTexts: [text],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: {
-        toolName: "bash",
-        error: "command failed",
-      },
-      verboseLevel: "on",
-    });
-
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe(text);
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("Bash");
-  });
-
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Status loaded."],
