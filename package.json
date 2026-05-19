@@ -1,19 +1,20 @@
 {
-  "name": "openclaw",
-  "version": "2026.5.12-beta.1",
-  "description": "Multi-channel AI gateway with extensible messaging integrations",
-  "keywords": [],
-  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "name": "claworks",
+  "version": "2026.5.0-alpha.1",
+  "description": "Enterprise robot runtime — EventKernel · ObjectStore · PlaybookEngine · A2A",
+  "keywords": ["industrial", "robot", "automation", "playbook", "ontology", "a2a"],
+  "homepage": "https://github.com/claworks/claworks#readme",
   "bugs": {
-    "url": "https://github.com/openclaw/openclaw/issues"
+    "url": "https://github.com/claworks/claworks/issues"
   },
   "license": "MIT",
   "author": "",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openclaw/openclaw.git"
+    "url": "git+https://github.com/claworks/claworks.git"
   },
   "bin": {
+    "claworks": "openclaw.mjs",
     "openclaw": "openclaw.mjs"
   },
   "directories": {
