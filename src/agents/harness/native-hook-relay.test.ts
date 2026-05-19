@@ -207,6 +207,18 @@ describe("native hook relay registry", () => {
         allowedEvents: ["post_tool_use"],
       },
     );
+    const secondExpiresAtMs = requireRecord(
+      testing.getNativeHookRelayRegistrationForTests(first.relayId),
+      "replacement native hook relay registration",
+    ).expiresAtMs;
+
+    first.renew(60_000);
+    expect(
+      requireRecord(
+        testing.getNativeHookRelayRegistrationForTests(first.relayId),
+        "replacement native hook relay registration",
+      ).expiresAtMs,
+    ).toBe(secondExpiresAtMs);
 
     first.unregister();
     expectRecordFields(

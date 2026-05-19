@@ -334,7 +334,7 @@ export function registerNativeHookRelay(
       }),
     renew: (ttlMs) => {
       const current = relays.get(relayId);
-      if (!current) {
+      if (current !== registration) {
         return;
       }
       const expiresAtMs = Date.now() + normalizePositiveInteger(ttlMs, DEFAULT_RELAY_TTL_MS);
