@@ -108,7 +108,8 @@ export async function handleDiscordMessageAction(
       allowEmpty: true,
     });
     const filename = readStringParam(params, "filename");
-    const replyTo = readStringParam(params, "replyTo");
+    const useReply = readBooleanParam(params, "useReply") !== false;
+    const replyTo = useReply ? readStringParam(params, "replyTo") : undefined;
     const rawEmbeds = params.embeds;
     const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const silent = readBooleanParam(params, "silent") === true;

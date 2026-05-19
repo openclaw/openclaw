@@ -3,10 +3,12 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
+  ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import { Type } from "typebox";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
 import { readDiscordComponentSpec } from "./components.js";
@@ -156,9 +158,24 @@ function describeDiscordMessageTool({
   if (discovery.isEnabled("presence", false)) {
     actions.add("set-presence");
   }
+  const schema: ChannelMessageToolSchemaContribution[] = [];
+  if (actions.has("send")) {
+    schema.push({
+      actions: ["send"],
+      properties: {
+        useReply: Type.Optional(
+          Type.Boolean({
+            description:
+              'Discord-only opt-out for action="send". Set false to send without a platform-native reply even when reply context is available.',
+          }),
+        ),
+      },
+    });
+  }
   return {
     actions: Array.from(actions),
     capabilities: ["presentation"],
+    schema: schema.length > 0 ? schema : null,
   };
 }
 

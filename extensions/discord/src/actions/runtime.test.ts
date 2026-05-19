@@ -554,6 +554,24 @@ describe("handleDiscordMessagingAction", () => {
     expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
   });
 
+  it("omits native replies when useReply is false", async () => {
+    sendMessageDiscord.mockClear();
+    await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "hello",
+        replyTo: "message-1",
+        useReply: false,
+      },
+      enableAllActions,
+    );
+
+    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
+    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
+    expect(sendOptions.replyTo).toBeUndefined();
+  });
+
   it("ignores empty components objects for regular media sends", async () => {
     sendMessageDiscord.mockClear();
     sendDiscordComponentMessage.mockClear();

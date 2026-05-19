@@ -203,6 +203,40 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("omits Discord native replies when useReply is false", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        target: "channel:123",
+        message: "hello",
+        replyTo: "message-1",
+        useReply: false,
+      },
+      cfg,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "sendMessage",
+        accountId: undefined,
+        to: "channel:123",
+        content: "hello",
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
+        components: undefined,
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
+  });
+
   it("notifies inbound event delivery after message sends", async () => {
     const markDelivered = vi.fn();
     const end = beginDiscordInboundEventDeliveryCorrelation(
