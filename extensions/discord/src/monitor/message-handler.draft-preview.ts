@@ -78,6 +78,7 @@ export function createDiscordDraftPreviewController(params: {
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
   let finalReplyDelivered = false;
+  let visibleReplyDelivered = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
   const suppressDefaultToolProgressMessages =
@@ -151,6 +152,10 @@ export function createDiscordDraftPreviewController(params: {
     },
     markFinalReplyDelivered() {
       finalReplyDelivered = true;
+      visibleReplyDelivered = true;
+    },
+    markVisibleReplyDelivered() {
+      visibleReplyDelivered = true;
     },
     markPreviewFinalized() {
       finalizedViaPreviewMessage = true;
@@ -376,7 +381,7 @@ export function createDiscordDraftPreviewController(params: {
         if (!finalReplyDelivered) {
           await draftStream?.discardPending();
         }
-        if (!finalReplyDelivered && !finalizedViaPreviewMessage && draftStream?.messageId()) {
+        if (!visibleReplyDelivered && !finalizedViaPreviewMessage && draftStream?.messageId()) {
           await draftStream.clear();
         }
       } catch (err) {

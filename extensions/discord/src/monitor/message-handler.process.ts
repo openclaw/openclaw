@@ -724,6 +724,7 @@ export async function processDiscordMessage(
           kind: info.kind,
         });
         replyReference.markSent();
+        draftPreview.markVisibleReplyDelivered();
         if (isFinal) {
           observer?.onFinalReplyDelivered?.();
         }

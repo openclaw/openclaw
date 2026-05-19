@@ -2101,6 +2101,34 @@ describe("processDiscordMessage draft streaming", () => {
     expect(finalDelivery.kind).toBe("final");
   });
 
+  it("retains already-visible draft previews when a tool error is the only delivered reply", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({ text: "partial answer..." });
+      await params?.dispatcher.sendToolResult({
+        text: "Canvas failed",
+        isError: true,
+      } as never);
+      return { queuedFinal: false, counts: { final: 0, tool: 1, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith("partial answer...");
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    const toolDelivery = requireRecord(
+      firstMockCall(deliverDiscordReply, "tool delivery")[0],
+      "tool delivery",
+    );
+    expect(toolDelivery.kind).toBe("tool");
+  });
+
   it("suppresses reasoning payload delivery to Discord", async () => {
     mockDispatchSingleBlockReply({ text: "thinking...", isReasoning: true });
     await processStreamOffDiscordMessage();
