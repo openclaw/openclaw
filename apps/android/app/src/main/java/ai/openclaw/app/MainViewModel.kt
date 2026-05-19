@@ -101,6 +101,10 @@ class MainViewModel(
     runtimeState(initial = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())) { it.nodesDevicesSummary }
   val nodesDevicesRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.nodesDevicesRefreshing }
   val nodesDevicesErrorText: StateFlow<String?> = runtimeState(initial = null) { it.nodesDevicesErrorText }
+  val channelsSummary: StateFlow<GatewayChannelsSummary> =
+    runtimeState(initial = GatewayChannelsSummary(channels = emptyList())) { it.channelsSummary }
+  val channelsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.channelsRefreshing }
+  val channelsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.channelsErrorText }
   val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
   val seamColorArgb: StateFlow<Long> = runtimeState(initial = 0xFF0EA5E9) { it.seamColorArgb }
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
@@ -397,6 +401,10 @@ class MainViewModel(
 
   fun refreshNodesDevices() {
     ensureRuntime().refreshNodesDevices()
+  }
+
+  fun refreshChannels() {
+    ensureRuntime().refreshChannels()
   }
 
   fun loadChat(sessionKey: String) {

@@ -342,6 +342,12 @@ class NodeRuntime(
   val nodesDevicesRefreshing: StateFlow<Boolean> = _nodesDevicesRefreshing.asStateFlow()
   private val _nodesDevicesErrorText = MutableStateFlow<String?>(null)
   val nodesDevicesErrorText: StateFlow<String?> = _nodesDevicesErrorText.asStateFlow()
+  private val _channelsSummary = MutableStateFlow(GatewayChannelsSummary(channels = emptyList()))
+  val channelsSummary: StateFlow<GatewayChannelsSummary> = _channelsSummary.asStateFlow()
+  private val _channelsRefreshing = MutableStateFlow(false)
+  val channelsRefreshing: StateFlow<Boolean> = _channelsRefreshing.asStateFlow()
+  private val _channelsErrorText = MutableStateFlow<String?>(null)
+  val channelsErrorText: StateFlow<String?> = _channelsErrorText.asStateFlow()
 
   private val _isForeground = MutableStateFlow(true)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
@@ -393,6 +399,7 @@ class NodeRuntime(
             pendingDevices = emptyList(),
             pairedDevices = emptyList(),
           )
+        _channelsSummary.value = GatewayChannelsSummary(channels = emptyList())
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
         updateStatus()
@@ -663,6 +670,7 @@ class NodeRuntime(
       refreshUsageFromGateway()
       refreshSkillsFromGateway()
       refreshNodesDevicesFromGateway()
+      refreshChannelsFromGateway()
     }
   }
 
@@ -699,6 +707,12 @@ class NodeRuntime(
   fun refreshNodesDevices() {
     scope.launch {
       refreshNodesDevicesFromGateway()
+    }
+  }
+
+  fun refreshChannels() {
+    scope.launch {
+      refreshChannelsFromGateway()
     }
   }
 
@@ -1762,6 +1776,31 @@ class NodeRuntime(
     }
   }
 
+  private suspend fun refreshChannelsFromGateway() {
+    _channelsRefreshing.value = true
+    _channelsErrorText.value = null
+    if (!operatorConnected) {
+      _channelsSummary.value = GatewayChannelsSummary(channels = emptyList())
+      _channelsRefreshing.value = false
+      return
+    }
+    try {
+      val res = operatorSession.request("channels.status", """{"probe":false,"timeoutMs":8000}""")
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      _channelsSummary.value =
+        GatewayChannelsSummary(
+          updatedAtMs = root.long("ts"),
+          partial = root.boolean("partial"),
+          warnings = parseStringArray(root?.get("warnings") as? JsonArray),
+          channels = parseChannelSummaries(root),
+        )
+    } catch (_: Throwable) {
+      _channelsErrorText.value = "Could not load channels."
+    } finally {
+      _channelsRefreshing.value = false
+    }
+  }
+
   private fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
     models
       ?.mapNotNull { item ->
@@ -1940,6 +1979,67 @@ class NodeRuntime(
           updatedAtMs = obj.long("rotatedAtMs") ?: obj.long("createdAtMs") ?: obj.long("lastUsedAtMs"),
         )
       }.orEmpty()
+
+  private fun parseChannelSummaries(root: JsonObject?): List<GatewayChannelSummary> {
+    val order = parseStringArray(root?.get("channelOrder") as? JsonArray)
+    val labels = parseStringMap(root?.get("channelLabels").asObjectOrNull())
+    val channels = root?.get("channels").asObjectOrNull()
+    val accounts = root?.get("channelAccounts").asObjectOrNull()
+    val ids = (order + channels.orEmpty().keys + accounts.orEmpty().keys).distinct()
+    return ids
+      .map { id ->
+        val summary = channels?.get(id).asObjectOrNull()
+        val accountRows = parseChannelAccounts(accounts?.get(id) as? JsonArray)
+        GatewayChannelSummary(
+          id = id,
+          label = labels[id] ?: channelDisplayLabel(id),
+          accountCount = accountRows.size,
+          enabled = summary.boolean("enabled") || accountRows.any { it.enabled },
+          configured = summary.boolean("configured") || accountRows.any { it.configured },
+          linked = summary.boolean("linked") || accountRows.any { it.linked },
+          running = summary.boolean("running") || accountRows.any { it.running },
+          connected = summary.boolean("connected") || accountRows.any { it.connected },
+          error =
+            summary
+              ?.get("lastError")
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf { it.isNotEmpty() }
+              ?: accountRows.firstNotNullOfOrNull { it.error },
+        )
+      }.sortedWith(compareByDescending<GatewayChannelSummary> { it.enabled || it.configured }.thenBy { it.label.lowercase() })
+  }
+
+  private fun parseChannelAccounts(accounts: JsonArray?): List<GatewayChannelAccountSummary> =
+    accounts
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val accountId = obj["accountId"].asStringOrNull()?.trim().orEmpty()
+        if (accountId.isEmpty()) return@mapNotNull null
+        GatewayChannelAccountSummary(
+          enabled = obj.boolean("enabled"),
+          configured = obj.boolean("configured"),
+          linked = obj.boolean("linked"),
+          running = obj.boolean("running"),
+          connected = obj.boolean("connected"),
+          error =
+            obj["lastError"]
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf { it.isNotEmpty() },
+        )
+      }.orEmpty()
+
+  private fun parseStringMap(map: JsonObject?): Map<String, String> =
+    map
+      ?.mapNotNull { (key, value) ->
+        value
+          .asStringOrNull()
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() }
+          ?.let { key to it }
+      }?.toMap()
+      .orEmpty()
 
   private fun parseStringArray(items: JsonArray?): List<String> =
     items
@@ -2320,6 +2420,34 @@ data class GatewayDeviceTokenSummary(
   val updatedAtMs: Long?,
 )
 
+data class GatewayChannelsSummary(
+  val updatedAtMs: Long? = null,
+  val partial: Boolean = false,
+  val warnings: List<String> = emptyList(),
+  val channels: List<GatewayChannelSummary>,
+)
+
+data class GatewayChannelSummary(
+  val id: String,
+  val label: String,
+  val accountCount: Int,
+  val enabled: Boolean,
+  val configured: Boolean,
+  val linked: Boolean,
+  val running: Boolean,
+  val connected: Boolean,
+  val error: String?,
+)
+
+private data class GatewayChannelAccountSummary(
+  val enabled: Boolean,
+  val configured: Boolean,
+  val linked: Boolean,
+  val running: Boolean,
+  val connected: Boolean,
+  val error: String?,
+)
+
 private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()
 
 private fun JsonObject?.double(key: String): Double? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toDoubleOrNull()
@@ -2341,6 +2469,21 @@ fun providerDisplayName(provider: String): String =
         .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
         .replace(" Ai", " AI")
         .ifBlank { "Provider" }
+  }
+
+fun channelDisplayLabel(channel: String): String =
+  when (channel.trim().lowercase()) {
+    "imessage" -> "iMessage"
+    "googlechat" -> "Google Chat"
+    "whatsapp" -> "WhatsApp"
+    else ->
+      channel
+        .replace('-', ' ')
+        .replace('_', ' ')
+        .split(' ')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
+        .ifBlank { "Channel" }
   }
 
 @Serializable

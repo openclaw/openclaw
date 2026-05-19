@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.HomeDestination
@@ -528,6 +529,7 @@ private fun V2SettingsShellScreen(
   val usageSummary by viewModel.usageSummary.collectAsState()
   val skillsSummary by viewModel.skillsSummary.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
+  val channelsSummary by viewModel.channelsSummary.collectAsState()
   var route by rememberSaveable { mutableStateOf(V2SettingsRoute.Home) }
 
   LaunchedEffect(isConnected) {
@@ -537,6 +539,7 @@ private fun V2SettingsShellScreen(
       viewModel.refreshUsage()
       viewModel.refreshSkills()
       viewModel.refreshNodesDevices()
+      viewModel.refreshChannels()
     }
   }
 
@@ -578,6 +581,7 @@ private fun V2SettingsShellScreen(
               V2SettingsRow("Usage", usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = V2SettingsRoute.Usage),
               V2SettingsRow("Skills", skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = V2SettingsRoute.Skills),
               V2SettingsRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = V2SettingsRoute.NodesDevices),
+              V2SettingsRow("Channels", channelsSummaryText(channelsSummary), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = V2SettingsRoute.Channels),
               V2SettingsRow("Canvas", "Screen surface", Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = V2SettingsRoute.Canvas),
               V2SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = V2SettingsRoute.Notifications),
               V2SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = V2SettingsRoute.PhoneCapabilities),
@@ -670,6 +674,23 @@ private fun nodesDevicesStatus(summary: GatewayNodesDevicesSummary): Boolean? =
     summary.pendingDevices.isNotEmpty() -> false
     summary.nodes.any { it.connected } -> true
     summary.pairedDevices.isNotEmpty() -> true
+    else -> null
+  }
+
+private fun channelsSummaryText(summary: GatewayChannelsSummary): String {
+  val connected = summary.channels.count { it.connected }
+  return when {
+    summary.channels.any { it.error != null } -> "${summary.channels.count { it.error != null }} issue"
+    summary.channels.isNotEmpty() -> "$connected/${summary.channels.size} connected"
+    else -> "No channels"
+  }
+}
+
+private fun channelsStatus(summary: GatewayChannelsSummary): Boolean? =
+  when {
+    summary.channels.any { it.error != null } -> false
+    summary.channels.any { it.connected || it.running } -> true
+    summary.channels.any { it.configured || it.linked } -> true
     else -> null
   }
 
