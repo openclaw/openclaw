@@ -1369,6 +1369,10 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(testing.shouldForceMessageTool(params)).toBe(true);
 
+    params.disableMessageTool = true;
+    expect(testing.shouldForceMessageTool(params)).toBe(false);
+
+    params.disableMessageTool = false;
     params.sourceReplyDeliveryMode = "automatic";
     expect(testing.shouldForceMessageTool(params)).toBe(false);
   });
@@ -1378,14 +1382,22 @@ describe("runCodexAppServerAttempt", () => {
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.sourceReplyDeliveryMode = "message_tool_only";
 
-    expect(testing.buildDeveloperInstructions(params)).toContain(
-      "Visible channel replies: use `message`",
-    );
+    expect(
+      testing.buildDeveloperInstructions(params, {
+        dynamicTools: [createRuntimeDynamicTool("message")],
+      }),
+    ).toContain("To send a visible message, use the `message` tool.");
+
+    const withoutMessageToolInstructions = testing.buildDeveloperInstructions(params, {
+      dynamicTools: [],
+    });
+    expect(withoutMessageToolInstructions).toContain("active Codex delivery path");
+    expect(withoutMessageToolInstructions).not.toContain("use the `message` tool");
 
     params.sourceReplyDeliveryMode = "automatic";
     const automaticInstructions = testing.buildDeveloperInstructions(params);
     expect(automaticInstructions).toContain("active Codex delivery path");
-    expect(automaticInstructions).not.toContain("Visible channel replies: use `message`");
+    expect(automaticInstructions).not.toContain("use the `message` tool");
   });
 
   it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
@@ -4675,12 +4687,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
-  it("passes OpenClaw bootstrap files through Codex turn context", async () => {
+  it("passes SOUL.md as Codex developer instructions and other bootstrap files as turn context", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS guidance.");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "User profile goes here.");
     const harness = createStartedThreadHarness();
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -4696,7 +4709,11 @@ describe("runCodexAppServerAttempt", () => {
     };
     const config = threadStartParams.config;
 
-    expect(threadStartParams.developerInstructions).not.toContain("Soul voice goes here.");
+    expect(threadStartParams.developerInstructions).toContain("OpenClaw Agent Soul");
+    expect(threadStartParams.developerInstructions).toContain(
+      "A soul document defines who you are.",
+    );
+    expect(threadStartParams.developerInstructions).toContain("Soul voice goes here.");
     expect(threadStartParams.developerInstructions).not.toContain("Codex loads AGENTS.md natively");
     expect(threadStartParams.developerInstructions).not.toContain("Follow AGENTS guidance.");
     expect(config?.instructions).toBeUndefined();
@@ -4707,8 +4724,10 @@ describe("runCodexAppServerAttempt", () => {
     };
     const inputText = turnStartParams.input?.[0]?.text ?? "";
     expect(inputText).toContain("OpenClaw runtime context for this turn:");
-    expect(inputText).toContain("not developer policy");
-    expect(inputText).toContain("Soul voice goes here.");
+    expect(inputText).not.toContain("does not override Codex system/developer instructions");
+    expect(inputText).not.toContain("not developer policy");
+    expect(inputText).not.toContain("Soul voice goes here.");
+    expect(inputText).toContain("User profile goes here.");
     expect(inputText).toContain("Codex loads AGENTS.md natively");
     expect(inputText).not.toContain("Follow AGENTS guidance.");
     expect(inputText).toContain("Current user request:\nhello");
@@ -4834,7 +4853,9 @@ describe("runCodexAppServerAttempt", () => {
     expect(llmInputPayload.prompt).toBe("hello");
     expect(llmInputPayload.imagesCount).toBe(0);
     expect(llmInputPayload.historyMessages?.[0]?.role).toBe("assistant");
-    expect(llmInputPayload.systemPrompt).toContain("Running inside OpenClaw");
+    expect(llmInputPayload.systemPrompt).toContain(
+      "You are a personal agent running inside OpenClaw.",
+    );
     expect(llmInputPayload.systemPrompt).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     expect(llmInputContext.runId).toBe("run-1");
     expect(llmInputContext.sessionId).toBe("session-1");

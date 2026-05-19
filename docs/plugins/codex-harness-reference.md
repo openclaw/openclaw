@@ -361,11 +361,12 @@ filenames for persona files, because Codex fallbacks only apply when
 `AGENTS.md` is missing.
 
 For OpenClaw workspace parity, the Codex harness resolves the other bootstrap
-files, including `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`,
-`HEARTBEAT.md`, `BOOTSTRAP.md`, and `MEMORY.md` when present, and forwards them
-as OpenClaw turn input reference context. This keeps workspace persona and
-profile context visible to the native Codex turn without promoting it above
-Codex-owned system/developer instructions or duplicating `AGENTS.md`.
+files. `SOUL.md` is forwarded as OpenClaw Codex developer instructions because
+it defines the active agent's persona and operating style. `TOOLS.md`,
+`IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, and `MEMORY.md` when
+present are forwarded as OpenClaw turn input reference context. This keeps the
+active workspace context visible to the native Codex turn without duplicating
+`AGENTS.md` or repeating `SOUL.md` in every user turn.
 
 ## Environment overrides
 

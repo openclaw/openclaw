@@ -31,11 +31,11 @@ when it uses Codex-flavored OpenAI auth or transport.
 Native Codex keeps Codex-owned base/model/personality instructions and
 project-doc behavior according to the active Codex thread config. Lightweight
 OpenClaw runs still preserve their existing project-doc suppression. OpenClaw
-developer instructions are limited to OpenClaw runtime concerns such as
-source-channel delivery, OpenClaw dynamic tools, ACP delegation, and adapter
-context. OpenClaw skill catalogs and non-AGENTS
+developer instructions cover OpenClaw runtime concerns such as source-channel
+delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
+active agent `SOUL.md`. OpenClaw skill catalogs and non-AGENTS/non-SOUL
 workspace bootstrap files are projected as turn input reference context for
-native Codex instead of being promoted into Codex developer instructions.
+native Codex.
 
 ## Thread bindings and model changes
 
