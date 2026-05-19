@@ -156,7 +156,7 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(events).toEqual(["acquire-1", "release", "events-drained", "acquire-2", "release"]);
   });
 
-  it("rejects post-prompt writes when another owner advances the session file", async () => {
+  it("rejects post-prompt writes when another owner queues a new user turn", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});
     const acquireSessionWriteLock = vi.fn(async () => ({ release }));
@@ -166,7 +166,11 @@ describe("embedded attempt session lock lifecycle", () => {
     });
 
     await controller.releaseForPrompt();
-    await fs.appendFile(sessionFile, '{"type":"message","id":"takeover"}\n', "utf8");
+    await fs.appendFile(
+      sessionFile,
+      '{"type":"message","id":"takeover","message":{"role":"user","content":"new turn"}}\n',
+      "utf8",
+    );
 
     await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
       EmbeddedAttemptSessionTakeoverError,
@@ -177,6 +181,297 @@ describe("embedded attempt session lock lifecycle", () => {
     await cleanupLock.release();
 
     expect(release).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts post-prompt writes when only the runner's own transcript entries appear", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    // Runner-owned writers (e.g. appendSessionTranscriptMessageLocked via
+    // allowReentrant:true) append assistant replies and persisted tool outputs
+    // during the released-lock window. These must not trip the takeover fence.
+    // Persisted role names follow isAgentMessage in transcript-file-state.ts.
+    await fs.appendFile(
+      sessionFile,
+      '{"type":"message","id":"assistant-1","message":{"role":"assistant","content":"calling tool"}}\n',
+      "utf8",
+    );
+    await fs.appendFile(
+      sessionFile,
+      '{"type":"message","id":"toolresult-1","message":{"role":"toolResult","toolCallId":"call-1","toolName":"exec","isError":false,"content":[{"type":"text","text":"ok"}]}}\n',
+      "utf8",
+    );
+    await fs.appendFile(
+      sessionFile,
+      '{"type":"message","id":"bash-1","message":{"role":"bashExecution","command":"ls","output":"","exitCode":0,"cancelled":false,"truncated":false}}\n',
+      "utf8",
+    );
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).resolves.toBe("late-write");
+    expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
+  it("rejects post-prompt writes when an accepted runner-owned role is malformed", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    // toolResult requires toolCallId, toolName, isError, and array content
+    // per the persisted message contract. An entry that carries the role
+    // but omits required fields is not a real runner-owned write and must
+    // trip the takeover fence.
+    await fs.appendFile(
+      sessionFile,
+      '{"type":"message","id":"malformed-1","message":{"role":"toolResult","toolCallId":"call-1"}}\n',
+      "utf8",
+    );
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("rejects post-prompt writes when a runner-owned message entry omits id", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    // Canonical persisted session entries require a non-empty string id. An
+    // appended assistant message that omits the outer entry base is not a
+    // valid runner-owned write and must trip the takeover fence, matching
+    // the behavior current main exhibits via its stat-mismatch path.
+    await fs.appendFile(
+      sessionFile,
+      '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n',
+      "utf8",
+    );
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("rejects post-prompt writes when a non-message entry is appended", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    // Custom/compaction/branch_summary entries are session-state mutations
+    // outside the runner-owned transcript-write path. Appending one during the
+    // released-lock window must trip the takeover fence even though it grew
+    // the file append-only and no user-role entry appeared.
+    await fs.appendFile(
+      sessionFile,
+      '{"type":"custom","id":"custom-1","customType":"branch_marker","data":{}}\n',
+      "utf8",
+    );
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("rejects post-prompt writes when a tail line parses to a non-object value", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    // A literal JSON null parses cleanly but is not a session entry. The
+    // slow path must fail closed as takeover rather than letting the
+    // canonical validator dereference a non-object.
+    await fs.appendFile(sessionFile, "null\n", "utf8");
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("keeps the fence consistent when a guarded operation throws after assertion", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    const assistantEntry = (id: string) =>
+      `{"type":"message","id":"${id}","parentId":null,"timestamp":"2026-05-19T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"x"}]}}\n`;
+
+    await controller.releaseForPrompt();
+    // First append-then-assert advances the fence over a runner-owned tail.
+    // The guarded operation then throws, which skips refreshSessionFileFence
+    // and used to leave the snapshot describing the new size but holding
+    // the old prefix hash. A second runner-owned append would then false-
+    // positive on prefix-hash mismatch in the next slow path.
+    await fs.appendFile(sessionFile, assistantEntry("a1"), "utf8");
+    await expect(
+      controller.withSessionWriteLock(() => {
+        throw new Error("post-assert");
+      }),
+    ).rejects.toThrow("post-assert");
+    expect(controller.hasSessionTakeover()).toBe(false);
+
+    await fs.appendFile(sessionFile, assistantEntry("a2"), "utf8");
+    await expect(controller.withSessionWriteLock(() => "ok")).resolves.toBe("ok");
+    expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
+  it("refuses to bless a snapshot when the file is rewritten in place during snapshot creation", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    // Simulate a same-size in-place rewrite landing between snapshot's stat
+    // and its read. Spy on fs.readFile so the very first call (made during
+    // releaseForPrompt's snapshot) atomically rewrites the file with new
+    // content of identical byte length before delegating to the real read.
+    // The post-read re-stat then sees a different mtime/ctime and the
+    // snapshot returns prefixHashHex: null, which makes the next
+    // withSessionWriteLock fail closed even on an otherwise valid append.
+    const originalSize = (await fs.stat(sessionFile)).size;
+    const rewritten = Buffer.alloc(originalSize, 0x78); // same length, different content
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    readFileSpy.mockImplementationOnce(async (target) => {
+      readFileSpy.mockRestore();
+      await fs.writeFile(target as string, rewritten);
+      return fs.readFile(target as string);
+    });
+
+    try {
+      await controller.releaseForPrompt();
+      await fs.appendFile(
+        sessionFile,
+        '{"type":"message","id":"a1","parentId":null,"timestamp":"2026-05-19T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"x"}]}}\n',
+        "utf8",
+      );
+
+      await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+        EmbeddedAttemptSessionTakeoverError,
+      );
+      expect(controller.hasSessionTakeover()).toBe(true);
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
+  it("refuses to bless a slow-path verification when the file is rewritten in place during the slow-path read", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    // Snapshot the fence cleanly first, then inject the race during the
+    // slow path's read. The slow path stats, then reads, then re-stats; the
+    // injected rewrite changes mtime between the two stats and the
+    // verification refuses to bless the post-rewrite content as runner-owned.
+    await controller.releaseForPrompt();
+    await fs.appendFile(
+      sessionFile,
+      '{"type":"message","id":"a1","parentId":null,"timestamp":"2026-05-19T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"x"}]}}\n',
+      "utf8",
+    );
+
+    const sizeBeforeRace = (await fs.stat(sessionFile)).size;
+    const rewritten = Buffer.alloc(sizeBeforeRace, 0x79);
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    readFileSpy.mockImplementationOnce(async (target) => {
+      readFileSpy.mockRestore();
+      await fs.writeFile(target as string, rewritten);
+      return fs.readFile(target as string);
+    });
+
+    try {
+      await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+        EmbeddedAttemptSessionTakeoverError,
+      );
+      expect(controller.hasSessionTakeover()).toBe(true);
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
+  it("rejects post-prompt writes when the session file is rewritten in place", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    // Concurrent compaction or another owner rewriting the transcript in place
+    // would change the file's stat without an append-only growth. The fence
+    // must still trip even though no user-role entry was added.
+    await fs.writeFile(sessionFile, '{"type":"session","compacted":true}\n', "utf8");
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("rejects post-prompt writes when the session file is replaced", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    // A different owner could atomically replace the session file (unlink +
+    // recreate). dev/ino change must trip the fence regardless of content.
+    await fs.rm(sessionFile);
+    await fs.writeFile(
+      sessionFile,
+      '{"type":"session"}\n{"type":"message","id":"new-owner","message":{"role":"assistant","content":"hello"}}\n',
+      "utf8",
+    );
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
   });
 
   it("returns a no-op cleanup lock after prompt lock reacquisition times out", async () => {

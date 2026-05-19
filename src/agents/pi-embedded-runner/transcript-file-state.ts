@@ -193,22 +193,18 @@ function isAgentMessage(value: unknown): boolean {
   }
 }
 
-function hasSessionEntryBase(entry: FileEntry): boolean {
-  const candidate = entry as {
-    id?: unknown;
-    parentId?: unknown;
-    timestamp?: unknown;
-  };
+function hasSessionEntryBase(entry: Record<string, unknown>): boolean {
   return (
-    isString(candidate.id) &&
-    (candidate.parentId === undefined ||
-      candidate.parentId === null ||
-      isString(candidate.parentId)) &&
-    (candidate.timestamp === undefined || isString(candidate.timestamp))
+    isString(entry.id) &&
+    (entry.parentId === undefined || entry.parentId === null || isString(entry.parentId)) &&
+    (entry.timestamp === undefined || isString(entry.timestamp))
   );
 }
 
-function isSessionEntry(entry: FileEntry): entry is SessionEntry {
+export function isSessionEntry(entry: unknown): entry is SessionEntry {
+  if (!isRecord(entry) || typeof entry.type !== "string") {
+    return false;
+  }
   if (
     entry.type === "session" ||
     !sessionEntryTypes.has(entry.type) ||
@@ -374,7 +370,7 @@ function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
     if (!isRecord(rawEntry)) {
       continue;
     }
-    const entry = rawEntry as FileEntry;
+    const entry = rawEntry;
     const id = rawEntry.id;
     if (!isSessionEntry(entry)) {
       if (isString(id)) {

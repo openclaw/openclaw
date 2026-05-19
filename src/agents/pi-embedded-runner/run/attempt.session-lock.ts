@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { isSessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
+import { isSessionEntry } from "../transcript-file-state.js";
 
 type SessionLock = Awaited<ReturnType<typeof acquireSessionWriteLock>>;
 type AcquireSessionWriteLock = typeof acquireSessionWriteLock;
@@ -107,6 +109,7 @@ type SessionFileFingerprint =
       size: bigint;
       mtimeNs: bigint;
       ctimeNs: bigint;
+      birthtimeNs: bigint;
     };
 
 function sameSessionFileFingerprint(
@@ -124,7 +127,8 @@ function sameSessionFileFingerprint(
     left.ino === right.ino &&
     left.size === right.size &&
     left.mtimeNs === right.mtimeNs &&
-    left.ctimeNs === right.ctimeNs
+    left.ctimeNs === right.ctimeNs &&
+    left.birthtimeNs === right.birthtimeNs
   );
 }
 
@@ -138,6 +142,7 @@ async function readSessionFileFingerprint(sessionFile: string): Promise<SessionF
       size: stat.size,
       mtimeNs: stat.mtimeNs,
       ctimeNs: stat.ctimeNs,
+      birthtimeNs: stat.birthtimeNs,
     };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
@@ -145,6 +150,155 @@ async function readSessionFileFingerprint(sessionFile: string): Promise<SessionF
     }
     throw err;
   }
+}
+
+// The runner's own transcript appends during the released prompt window
+// (appendSessionTranscriptMessageLocked with allowReentrant:true) change the
+// session file's stat without going through refreshSessionFileFence, so any
+// stat mismatch needs a tighter check before being treated as a takeover.
+// We only tolerate a fingerprint mismatch when ALL of these hold:
+//   - same dev/ino (no atomic replacement)
+//   - file grew (size only increases between fence set and assert)
+//   - bytes [0, fenceSize) hash identical to the fenced prefix hash
+//   - bytes [fenceSize, currentSize) contain only message entries whose
+//     role is in the runner-owned persisted set: assistant, toolResult,
+//     or bashExecution. Non-message tail entries (custom, branch_summary,
+//     compaction, session) and any other role are rejected.
+// Anything else — file replacement, shrink, in-place rewrite of earlier
+// bytes, a new user-role entry, or a malformed tail — remains a real takeover.
+
+type FenceSnapshot = {
+  fingerprint: SessionFileFingerprint;
+  prefixHashHex: string | null;
+};
+
+async function snapshotSessionFileFence(sessionFile: string): Promise<FenceSnapshot> {
+  const fingerprint = await readSessionFileFingerprint(sessionFile);
+  if (!fingerprint.exists) {
+    return { fingerprint, prefixHashHex: null };
+  }
+  const buffer = await fs.readFile(sessionFile).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  });
+  if (!buffer) {
+    return { fingerprint: { exists: false }, prefixHashHex: null };
+  }
+  // Confirm the read buffer matches the pre-read stat; otherwise an in-place
+  // rewrite (same size or otherwise) between the two could leave us hashing
+  // post-rewrite content against a pre-rewrite fingerprint. Re-stat and
+  // compare every fingerprint field, including mtimeNs / ctimeNs, so a
+  // same-size rewrite still fails closed. Returning prefixHashHex: null
+  // forces the next assertSessionFileFence to treat the file as taken over
+  // instead of blessing a mixed-snapshot baseline.
+  const postReadFingerprint = await readSessionFileFingerprint(sessionFile);
+  const fenceOffset = Number(fingerprint.size);
+  if (
+    !Number.isSafeInteger(fenceOffset) ||
+    buffer.byteLength !== fenceOffset ||
+    !sameSessionFileFingerprint(fingerprint, postReadFingerprint)
+  ) {
+    return { fingerprint, prefixHashHex: null };
+  }
+  return {
+    fingerprint,
+    prefixHashHex: createHash("sha256").update(buffer.subarray(0, fenceOffset)).digest("hex"),
+  };
+}
+
+type AppendOnlyVerification = { ok: true; nextSnapshot: FenceSnapshot } | { ok: false };
+
+async function verifyAppendOnlyRunnerOwnedExtension(
+  sessionFile: string,
+  fence: FenceSnapshot,
+): Promise<AppendOnlyVerification> {
+  if (!fence.fingerprint.exists || fence.prefixHashHex === null) {
+    return { ok: false };
+  }
+  const fenceOffset = Number(fence.fingerprint.size);
+  if (!Number.isSafeInteger(fenceOffset) || fenceOffset < 0) {
+    return { ok: false };
+  }
+  const fingerprint = await readSessionFileFingerprint(sessionFile);
+  if (!fingerprint.exists) {
+    return { ok: false };
+  }
+  // dev/ino guard catches replacement onto a new inode; birthtime guard catches
+  // the unlink+recreate-same-inode case (common on tmpfs/ext4 with rapid
+  // recreation), where dev and ino are reused but the inode itself is fresh.
+  if (
+    fingerprint.dev !== fence.fingerprint.dev ||
+    fingerprint.ino !== fence.fingerprint.ino ||
+    fingerprint.birthtimeNs !== fence.fingerprint.birthtimeNs
+  ) {
+    return { ok: false };
+  }
+  if (fingerprint.size <= fence.fingerprint.size) {
+    return { ok: false };
+  }
+  const buffer = await fs.readFile(sessionFile).catch(() => null);
+  const currentOffset = Number(fingerprint.size);
+  if (
+    !buffer ||
+    !Number.isSafeInteger(currentOffset) ||
+    buffer.byteLength !== currentOffset ||
+    buffer.byteLength < fenceOffset
+  ) {
+    // Refuse when a concurrent write between stat and read left the buffer
+    // and fingerprint out of sync; otherwise the snapshot we return would
+    // describe a different file than the next slow path reads.
+    return { ok: false };
+  }
+  // Re-stat after the read so a same-size in-place rewrite during the
+  // stat -> read gap fails closed: the post-read fingerprint will differ
+  // in mtimeNs / ctimeNs from the pre-read one even when byte length and
+  // dev/ino/birthtime are identical.
+  const postReadFingerprint = await readSessionFileFingerprint(sessionFile);
+  if (!sameSessionFileFingerprint(fingerprint, postReadFingerprint)) {
+    return { ok: false };
+  }
+  const prefixHash = createHash("sha256").update(buffer.subarray(0, fenceOffset)).digest("hex");
+  if (prefixHash !== fence.prefixHashHex) {
+    return { ok: false };
+  }
+  const tail = buffer.subarray(fenceOffset).toString("utf8");
+  for (const line of tail.split("\n")) {
+    if (!line) {
+      continue;
+    }
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      // Malformed tail line (partial write); refuse to bless the change.
+      return { ok: false };
+    }
+    // Delegate the whole-entry contract (record shape, type, id, parentId,
+    // timestamp, message shape) to the canonical isSessionEntry validator,
+    // then narrow to the runner-owned role subset. User and custom roles
+    // remain real takeover signals even when the underlying entry is
+    // well-formed.
+    if (!isSessionEntry(entry) || entry.type !== "message") {
+      return { ok: false };
+    }
+    const role = (entry.message as { role?: unknown }).role;
+    if (role !== "assistant" && role !== "toolResult" && role !== "bashExecution") {
+      return { ok: false };
+    }
+  }
+  // The gate-check prefixHash above covers only the bytes up to the old
+  // fence offset. The next slow path will rehash the file up to the new
+  // fingerprint.size, so the stored snapshot must describe the full
+  // current file. Otherwise a guarded operation that throws between
+  // assertSessionFileFence and refreshSessionFileFence leaves a poisoned
+  // fence (next legitimate runner append false-positives as takeover).
+  const nextPrefixHash = createHash("sha256").update(buffer).digest("hex");
+  return {
+    ok: true,
+    nextSnapshot: { fingerprint, prefixHashHex: nextPrefixHash },
+  };
 }
 
 async function waitForSessionEventQueue(session: unknown): Promise<void> {
@@ -263,7 +417,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
 
   let heldLock: SessionLock | undefined = await acquireLock();
   const activeWriteLock = new AsyncLocalStorage<SessionLock>();
-  let fenceFingerprint: SessionFileFingerprint | undefined;
+  let fenceSnapshot: FenceSnapshot | undefined;
   let fenceActive = false;
   let takeoverDetected = false;
 
@@ -282,19 +436,27 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   }
 
   async function assertSessionFileFence(): Promise<void> {
-    if (!fenceActive) {
+    if (!fenceActive || !fenceSnapshot) {
       return;
     }
     const current = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-    if (!sameSessionFileFingerprint(fenceFingerprint, current)) {
+    if (sameSessionFileFingerprint(fenceSnapshot.fingerprint, current)) {
+      return;
+    }
+    const verified = await verifyAppendOnlyRunnerOwnedExtension(
+      params.lockOptions.sessionFile,
+      fenceSnapshot,
+    );
+    if (!verified.ok) {
       takeoverDetected = true;
       throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
     }
+    fenceSnapshot = verified.nextSnapshot;
   }
 
   async function refreshSessionFileFence(): Promise<void> {
     if (fenceActive && !takeoverDetected) {
-      fenceFingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+      fenceSnapshot = await snapshotSessionFileFence(params.lockOptions.sessionFile);
     }
   }
 
@@ -307,7 +469,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
       const lock = heldLock;
       heldLock = undefined;
-      fenceFingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+      fenceSnapshot = await snapshotSessionFileFence(params.lockOptions.sessionFile);
       fenceActive = true;
       await lock.release();
     },
