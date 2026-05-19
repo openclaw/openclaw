@@ -777,6 +777,7 @@ export class RealtimeCallHandler {
           providerCallId: callSid,
           timestamp: Date.now(),
           text,
+          source: "realtime",
         });
       },
       onToolCall: (toolEvent, session) => {

@@ -560,6 +560,7 @@ describe("processEvent (functional)", () => {
       providerCallId: "provider-bot-speech",
       timestamp: now + 1,
       text: "I would like to make a reservation.",
+      source: "realtime",
     });
 
     const call = ctx.activeCalls.get("call-bot-speech");
@@ -570,6 +571,54 @@ describe("processEvent (functional)", () => {
       expect.objectContaining({
         speaker: "bot",
         text: "I would like to make a reservation.",
+        isFinal: true,
+      }),
+    ]);
+  });
+
+  it("does not duplicate provider TTS speaking events that speak already records", () => {
+    const now = Date.now();
+    const ctx = createContext();
+    ctx.activeCalls.set("call-provider-speech", {
+      callId: "call-provider-speech",
+      providerCallId: "provider-provider-speech",
+      provider: "telnyx",
+      direction: "outbound",
+      state: "listening",
+      from: "+15550000000",
+      to: "+15550000001",
+      startedAt: now,
+      transcript: [
+        {
+          timestamp: now,
+          speaker: "bot",
+          text: "One moment please.",
+          isFinal: true,
+        },
+      ],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-provider-speech", "call-provider-speech");
+
+    processEvent(ctx, {
+      id: "evt-provider-speech",
+      type: "call.speaking",
+      callId: "call-provider-speech",
+      providerCallId: "provider-provider-speech",
+      timestamp: now + 1,
+      text: "One moment please.",
+    });
+
+    const call = ctx.activeCalls.get("call-provider-speech");
+    if (!call) {
+      throw new Error("expected call to remain active");
+    }
+    expect(call.state).toBe("speaking");
+    expect(call.transcript).toEqual([
+      expect.objectContaining({
+        speaker: "bot",
+        text: "One moment please.",
         isFinal: true,
       }),
     ]);

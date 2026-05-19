@@ -103,6 +103,7 @@ const NormalizedEventSchema = z.discriminatedUnion("type", [
   BaseEventSchema.extend({
     type: z.literal("call.speaking"),
     text: z.string(),
+    source: z.enum(["realtime"]).optional(),
   }),
   BaseEventSchema.extend({
     type: z.literal("call.speech"),

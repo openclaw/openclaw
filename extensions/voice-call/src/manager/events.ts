@@ -276,7 +276,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       break;
 
     case "call.speaking":
-      if (event.text.trim()) {
+      if (event.source === "realtime" && event.text.trim()) {
         addTranscriptEntry(call, "bot", event.text);
       }
       transitionState(call, "speaking");
