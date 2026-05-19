@@ -403,6 +403,13 @@ export function scheduleFollowupDrain(
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         const droppedBeforeDebounce = await dropAbortedFollowups(queue.items, effectiveRunFollowup);
+        if (droppedBeforeDebounce > 0) {
+          // dropAbortedFollowups splices items out of the queue. If the gateway
+          // exits between that splice and the next persist call, the state file
+          // would still contain the aborted items and abortSignal is not
+          // serialized — so restart would replay items the source already canceled.
+          persistDrainAcknowledgement();
+        }
         if (droppedBeforeDebounce > 0 && queue.items.length === 0) {
           clearFollowupQueueSummaryState(queue);
         }
@@ -411,6 +418,9 @@ export function scheduleFollowupDrain(
         }
         await waitForQueueDebounce(queue);
         const droppedAfterDebounce = await dropAbortedFollowups(queue.items, effectiveRunFollowup);
+        if (droppedAfterDebounce > 0) {
+          persistDrainAcknowledgement();
+        }
         if (droppedAfterDebounce > 0 && queue.items.length === 0) {
           clearFollowupQueueSummaryState(queue);
         }

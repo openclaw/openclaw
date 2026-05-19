@@ -596,4 +596,73 @@ describe("followup queue drain restart after idle window", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("persists the queue after dropAbortedFollowups removes an aborted item", async () => {
+    // Bot P2 (drain.ts:336-344): the abort-drop path splices items out of the
+    // queue without immediately persisting. A gateway crash between the splice
+    // and the next persist would leave the aborted item on disk — and because
+    // abortSignal is not serialized, restore would replay an item the source
+    // already canceled.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-abort-"));
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+
+    const key = `test-abort-drop-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const drainCalls: FollowupRun[] = [];
+    const drained = createDeferred<void>();
+
+    try {
+      // Enqueue first with a non-aborted signal — enqueueFollowupRun rejects
+      // already-aborted runs upfront. Then abort the signal so dropAbortedFollowups
+      // catches it on the next drain iteration.
+      const aborter = new AbortController();
+      enqueueFollowupRun(
+        key,
+        { ...createRun({ prompt: "aborted item" }), abortSignal: aborter.signal },
+        settings,
+      );
+
+      // State file should contain the queued item right now (size > empty stub).
+      const statePath = path.join(tmpDir, "live-chat-followup-queues.json");
+      expect(fs.existsSync(statePath)).toBe(true);
+      const beforeRaw = fs.readFileSync(statePath, "utf8");
+      expect(beforeRaw).toContain("aborted item");
+
+      // Abort after enqueue so dropAbortedFollowups will splice it out.
+      aborter.abort();
+
+      const runFollowup = async (run: FollowupRun) => {
+        drainCalls.push(run);
+        drained.resolve();
+      };
+      scheduleFollowupDrain(key, runFollowup);
+      await drained.promise;
+      // Spin a few microtasks so the drain loop's finally + cleanup run.
+      for (let i = 0; i < 10; i++) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+
+      // After the drain, the queue is empty and the state file should not
+      // contain the aborted item anymore — either the file is gone (persist
+      // deletes on empty) or it contains no entries for this key.
+      if (fs.existsSync(statePath)) {
+        const afterRaw = fs.readFileSync(statePath, "utf8");
+        expect(afterRaw).not.toContain("aborted item");
+      }
+      // Confirm the abort path actually ran (the callback was invoked with
+      // the aborted run before splice).
+      expect(drainCalls.some((r) => r.prompt === "aborted item")).toBe(true);
+    } finally {
+      FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
