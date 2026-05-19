@@ -428,6 +428,7 @@ banner(logStream, "Running Polytropos bundled plugin deps helper...");
     fail(`Polytropos helper not found at ${helperPath}`);
   }
   await shTee(logStream, "node", [helperPath]);
+  banner(logStream, "Bundled plugin deps helper completed.");
 }
 
 banner(logStream, "Activation required: restart the gateway to run the new code");
