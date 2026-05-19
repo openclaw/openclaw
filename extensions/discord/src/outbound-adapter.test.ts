@@ -1,3 +1,4 @@
+import { adaptMessagePresentationForChannel } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordOutboundHoisted,
@@ -578,6 +579,47 @@ describe("discordOutbound", () => {
       channel: "discord",
       messageId: "msg-2",
       channelId: "ch-1",
+    });
+  });
+
+  it("preserves disabled presentation buttons through channel adaptation", async () => {
+    const adaptedPresentation = adaptMessagePresentationForChannel({
+      capabilities: discordOutbound.presentationCapabilities,
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Already handled", value: "done", disabled: true }],
+          },
+        ],
+      },
+    });
+
+    const payload = await discordOutbound.renderPresentation?.({
+      payload: { text: "Action state" },
+      presentation: adaptedPresentation,
+      ctx: {
+        cfg: {},
+        to: "channel:123456",
+      },
+    } as never);
+
+    if (!payload) {
+      throw new Error("expected Discord presentation payload");
+    }
+
+    const discordData = payload.channelData?.discord as
+      | { presentationComponents?: { blocks?: Array<{ type?: string; buttons?: unknown[] }> } }
+      | undefined;
+    const button = discordData?.presentationComponents?.blocks?.find(
+      (block) => block.type === "actions",
+    )?.buttons?.[0];
+
+    expect(button).toEqual({
+      label: "Already handled",
+      style: "secondary",
+      callbackData: "done",
+      disabled: true,
     });
   });
 
