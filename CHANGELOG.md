@@ -70,6 +70,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI: reject explicit port numbers above 65535 before they reach Gateway or Node bind paths. Fixes #83900. (#84008) Thanks @hclsys.
 - Codex app-server: preserve plugin tool auth profiles when Codex owns model transport so OpenClaw dynamic tools can resolve their provider credentials. (#83603) Thanks @rubencu.
 - Memory/search: scan the JS-side fallback vector path (used when the sqlite-vec index is unavailable or has a mismatched dimension) in bounded rowid batches and yield to the event loop between batches so large chunk tables can no longer pin the Node.js main thread for multi-second windows. Also keeps the SQL prepared statement rooted in a local so node:sqlite cannot finalize it mid-scan under heap pressure. Fixes #81172. Thanks @dev23xyz-oss.
 - Memory Wiki: preserve fs-safe diagnostics when bridge source page writes fail for non-symlink filesystem safety reasons, so directory collisions are reported with the underlying error code. (#83776) Thanks @TurboTheTurtle.
