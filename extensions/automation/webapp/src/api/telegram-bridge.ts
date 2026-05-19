@@ -1,57 +1,12 @@
 // Telegram WebApp API bridge with safe fallback behavior.
 
-export type TelegramTheme = 'light' | 'dark'
-
-export type TelegramUser = {
-  id?: number
-  first_name?: string
-  last_name?: string
-  username?: string
-  language_code?: string
-}
-
-export type HapticFeedbackType =
-  | 'selection'
-  | 'success'
-  | 'warning'
-  | 'error'
-  | 'light'
-  | 'medium'
-  | 'heavy'
-  | 'rigid'
-  | 'soft'
-
-type TelegramWebApp = {
-  initDataUnsafe?: {
-    user?: TelegramUser
-  }
-  colorScheme?: TelegramTheme
-  showConfirm?: (message: string, callback?: (ok: boolean) => void) => void
-  HapticFeedback?: {
-    impactOccurred?: (
-      style?: 'light' | 'medium' | 'heavy' | 'rigid' | 'soft',
-    ) => void
-    notificationOccurred?: (type?: 'error' | 'success' | 'warning') => void
-    selectionChanged?: () => void
-  }
-  CloudStorage?: {
-    getItem?: (
-      key: string,
-      callback: (error: string | null, value: string | null) => void,
-    ) => void
-    setItem?: (
-      key: string,
-      value: string,
-      callback: (error: string | null, stored?: boolean) => void,
-    ) => void
-  }
-}
-
-type TelegramWindow = Window & {
-  Telegram?: {
-    WebApp?: TelegramWebApp
-  }
-}
+import type {
+  HapticFeedbackType,
+  TelegramTheme,
+  TelegramUser,
+  TelegramWebApp,
+  TelegramWindow,
+} from './types'
 
 function getWebApp(): TelegramWebApp | undefined {
   return (window as TelegramWindow).Telegram?.WebApp

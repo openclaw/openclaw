@@ -1,0 +1,73 @@
+.confirm-trigger {
+  border: 1px solid var(--tgui--button_color, #3b82f6);
+  background: var(--tgui--button_color, #3b82f6);
+  color: var(--tgui--button_text_color, #fff);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.confirm-trigger-danger {
+  border-color: #ef4444;
+  background: #ef4444;
+}
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.56);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.confirm-modal {
+  width: min(420px, 100%);
+  border: 1px solid var(--tgui--section_separator_color, #e5e7eb);
+  border-radius: 8px;
+  background: var(--tgui--bg_color, #fff);
+  padding: 14px;
+}
+
+.confirm-modal h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.confirm-modal p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--tgui--hint_color, #64748b);
+}
+
+.confirm-actions {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.confirm-cancel,
+.confirm-accept {
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.confirm-cancel {
+  border: 1px solid var(--tgui--hint_color, #94a3b8);
+  background: var(--tgui--bg_color, #fff);
+  color: var(--tgui--text_color, #111827);
+}
+
+.confirm-accept {
+  border: 1px solid var(--tgui--button_color, #3b82f6);
+  background: var(--tgui--button_color, #3b82f6);
+  color: var(--tgui--button_text_color, #fff);
+}
+
+.confirm-accept-danger {
+  border-color: #ef4444;
+  background: #ef4444;
+}

@@ -6,6 +6,15 @@
     "onStartup": true
   },
   "enabledByDefault": true,
+  "contracts": {
+    "tools": [
+      "automation_classify_intent",
+      "automation_codex_execute",
+      "automation_workflow",
+      "automation_confirm_gate",
+      "automation_status"
+    ]
+  },
   "commandAliases": [
     {
       "name": "menu",

@@ -2,7 +2,12 @@ import { Tabbar } from '@telegram-apps/telegram-ui'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { AgentControl } from './pages/AgentControl'
 import { CodeWorkspace } from './pages/CodeWorkspace'
+import { CronManager } from './pages/CronManager'
 import { Dashboard } from './pages/Dashboard'
+import { DevOpsPanel } from './pages/DevOpsPanel'
+import { ModelSelector } from './pages/ModelSelector'
+import { Settings } from './pages/Settings'
+import { WorkflowEditor } from './pages/WorkflowEditor'
 import './App.css'
 
 type RouteItem = {
@@ -12,11 +17,6 @@ type RouteItem = {
 }
 
 const routeItems: RouteItem[] = [
-  { path: '/workflows', title: '工作流管理', description: '啟動與追蹤內建自動流程。' },
-  { path: '/cron', title: '排程管理', description: '查看、啟用與手動執行排程。' },
-  { path: '/models', title: '模型切換', description: '瀏覽模型並切換會話模型。' },
-  { path: '/devops', title: 'DevOps 面板', description: '追蹤 CI/CD 與 PR 狀態。' },
-  { path: '/settings', title: '設定中心', description: '通知、安全與偏好設定。' },
 ]
 
 type TabItem = {
@@ -52,6 +52,11 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/agents" element={<AgentControl />} />
           <Route path="/code" element={<CodeWorkspace />} />
+          <Route path="/workflows" element={<WorkflowEditor />} />
+          <Route path="/cron" element={<CronManager />} />
+          <Route path="/models" element={<ModelSelector />} />
+          <Route path="/devops" element={<DevOpsPanel />} />
+          <Route path="/settings" element={<Settings />} />
           {routeItems.map((item) => (
             <Route
               key={item.path}

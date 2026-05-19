@@ -1,37 +1,13 @@
 // WebSocket JSON-RPC 2.0 client for OpenClaw Gateway.
 
-export type JsonRpcId = number
-
-export type GatewayEventHandler = (payload: unknown) => void
-
-type JsonRpcRequest = {
-  jsonrpc: '2.0'
-  id: JsonRpcId
-  method: string
-  params?: Record<string, unknown>
-}
-
-type JsonRpcSuccessResponse = {
-  jsonrpc: '2.0'
-  id: JsonRpcId
-  result: unknown
-}
-
-type JsonRpcErrorResponse = {
-  jsonrpc: '2.0'
-  id: JsonRpcId
-  error: {
-    code: number
-    message: string
-    data?: unknown
-  }
-}
-
-type JsonRpcEventMessage = {
-  jsonrpc?: '2.0'
-  method: string
-  params?: unknown
-}
+import type {
+  GatewayEventHandler,
+  JsonRpcErrorResponse,
+  JsonRpcEventMessage,
+  JsonRpcId,
+  JsonRpcRequest,
+  JsonRpcSuccessResponse,
+} from './types'
 
 type PendingCall = {
   resolve: (value: unknown) => void

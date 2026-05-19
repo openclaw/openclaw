@@ -1,0 +1,83 @@
+.progress-tracker {
+  border: 1px solid var(--tgui--section_separator_color, #e5e7eb);
+  border-radius: 8px;
+  background: var(--tgui--bg_color, #ffffff);
+  padding: 12px;
+}
+
+.progress-tracker-empty {
+  border: 1px dashed var(--tgui--section_separator_color, #cbd5e1);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 13px;
+  color: var(--tgui--hint_color, #64748b);
+}
+
+.progress-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.progress-step {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 10px;
+}
+
+.step-rail {
+  display: grid;
+  justify-items: center;
+}
+
+.step-node {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  border: 1px solid transparent;
+}
+
+.step-pending {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.step-running {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.step-success {
+  background: #ecfdf5;
+  border-color: #86efac;
+}
+
+.step-failed {
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+
+.step-line {
+  width: 2px;
+  min-height: 18px;
+  background: #cbd5e1;
+  margin-top: 2px;
+}
+
+.step-content h3 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.step-content p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--tgui--hint_color, #64748b);
+}

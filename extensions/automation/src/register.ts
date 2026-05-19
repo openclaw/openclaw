@@ -1,4 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { registerPromptBuildHook } from "./hooks/prompt-build.js";
 import { registerLifecycleHooks } from "./hooks/lifecycle.js";
 import { registerFileWatcher } from "./hooks/file-watcher.js";
@@ -74,12 +77,113 @@ export type { WorkflowDefinition, WorkflowExecution, WorkflowNode, WorkflowEdge 
 // ── Shared Types ──
 export type { InteractiveReply } from "./telegram-ui/types.js";
 
+const WEBAPP_ROUTE_PREFIX = "/superclaw";
+
+function resolveWebAppDistDir(): string {
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
+  const pluginRoot = path.resolve(currentDir, "..");
+  return path.join(pluginRoot, "dist-webapp");
+}
+
+function inferContentType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case ".html":
+      return "text/html; charset=utf-8";
+    case ".js":
+      return "application/javascript; charset=utf-8";
+    case ".css":
+      return "text/css; charset=utf-8";
+    case ".json":
+      return "application/json; charset=utf-8";
+    case ".svg":
+      return "image/svg+xml";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".webp":
+      return "image/webp";
+    case ".ico":
+      return "image/x-icon";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+function sanitizeSubPath(requestPath: string): string {
+  const normalized = requestPath.replace(/\\/g, "/");
+  const withoutPrefix = normalized.startsWith(WEBAPP_ROUTE_PREFIX)
+    ? normalized.slice(WEBAPP_ROUTE_PREFIX.length)
+    : normalized;
+  const trimmed = withoutPrefix.replace(/^\/+/, "");
+  if (!trimmed || trimmed.endsWith("/")) {
+    return "index.html";
+  }
+  return trimmed;
+}
+
+function registerWebAppHttpRoute(api: OpenClawPluginApi): void {
+  const webappRoot = resolveWebAppDistDir();
+
+  api.registerHttpRoute({
+    path: WEBAPP_ROUTE_PREFIX,
+    auth: "plugin",
+    match: "prefix",
+    handler: async (req, res) => {
+      const requestUrl = req.url ?? WEBAPP_ROUTE_PREFIX;
+      const pathname = new URL(requestUrl, "http://local.openclaw").pathname;
+      const subPath = sanitizeSubPath(pathname);
+      const requestedPath = path.resolve(webappRoot, subPath);
+
+      if (!requestedPath.startsWith(webappRoot)) {
+        res.statusCode = 403;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Forbidden");
+        return true;
+      }
+
+      let finalPath = requestedPath;
+      let body: Buffer | null = null;
+
+      try {
+        body = await readFile(finalPath);
+      } catch {
+        // SPA fallback: unknown route -> index.html
+        if (subPath !== "index.html") {
+          finalPath = path.join(webappRoot, "index.html");
+          try {
+            body = await readFile(finalPath);
+          } catch {
+            res.statusCode = 503;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("Web app bundle not found. Please build webapp first.");
+            return true;
+          }
+        } else {
+          res.statusCode = 503;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end("Web app bundle not found. Please build webapp first.");
+          return true;
+        }
+      }
+
+      res.statusCode = 200;
+      res.setHeader("Content-Type", inferContentType(finalPath));
+      res.end(body);
+      return true;
+    },
+  });
+}
+
 export function registerAutomationPlugin(api: OpenClawPluginApi) {
   registerPromptBuildHook(api);
   registerLifecycleHooks(api);
   registerFileWatcher(api);
   registerCommands(api);
   registerSuperClawInteractiveHandler(api);
+  registerWebAppHttpRoute(api);
 
   api.registerTool(createIntentRouterTool(api), { names: ["automation_classify_intent"] });
   api.registerTool(createCodexDispatchTool(api), { names: ["automation_codex_execute"] });

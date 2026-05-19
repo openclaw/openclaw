@@ -1,41 +1,21 @@
 import { create } from 'zustand'
 import { createGatewayWsRpcClient } from '../api/gateway-ws'
-
-export type AgentPhase = 'idle' | 'running' | 'waiting' | 'error'
-
-export type ActiveTask = {
-  id: string
-  title: string
-  progress: number
-}
-
-export type AgentInfo = {
-  id: string
-  name: string
-  status: string
-  model?: string
-  turns?: number
-}
-
-export type CronJobInfo = {
-  id: string
-  name: string
-  schedule: string
-  enabled: boolean
-}
-
-export type ModelInfo = {
-  id: string
-  provider?: string
-  displayName: string
-  active?: boolean
-}
-
-export type AttentionItem = {
-  id: string
-  title: string
-  urgency: 'low' | 'medium' | 'high'
-}
+import type {
+  ActiveTask,
+  AgentInfo,
+  AgentPhase,
+  AttentionItem,
+  CronJobInfo,
+  ModelInfo,
+} from '../api/types'
+export type {
+  ActiveTask,
+  AgentInfo,
+  AgentPhase,
+  AttentionItem,
+  CronJobInfo,
+  ModelInfo,
+} from '../api/types'
 
 type UsageStats = {
   tokensToday: number

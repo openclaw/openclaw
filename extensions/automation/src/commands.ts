@@ -91,7 +91,7 @@ export function registerCommands(api: OpenClawPluginApi) {
   });
 
   api.registerCommand({
-    name: "model",
+    name: "sc_model",
     description: "切換 AI 模型",
     channels: ["telegram"],
     handler: async () => {
@@ -104,7 +104,7 @@ export function registerCommands(api: OpenClawPluginApi) {
   });
 
   api.registerCommand({
-    name: "agents",
+    name: "sc_agents",
     description: "Agent 管理面板",
     channels: ["telegram"],
     handler: async () => {
@@ -139,7 +139,7 @@ export function registerCommands(api: OpenClawPluginApi) {
   });
 
   api.registerCommand({
-    name: "status",
+    name: "sc_status",
     description: "系統狀態總覽",
     channels: ["telegram"],
     handler: async () => {
@@ -163,7 +163,7 @@ export function registerCommands(api: OpenClawPluginApi) {
   });
 
   api.registerCommand({
-    name: "reset",
+    name: "sc_reset",
     description: "重置當前對話",
     channels: ["telegram"],
     requireAuth: true,

@@ -122,31 +122,31 @@ extensions/automation/
   - 使用 WebSocket 訂閱 agent 輸出
   - Diff 檢視器（展開/收合）
 
-- [ ] 建立 `webapp/src/pages/WorkflowEditor.tsx` — 工作流管理
+- [x] 建立 `webapp/src/pages/WorkflowEditor.tsx` — 工作流管理
   - 工作流清單（卡片式，顯示步驟數）
   - 點擊執行 → 即時進度追蹤
   - 每步驟狀態: ⏳ 等待 → 🔄 執行中 → ✅ 完成 / ❌ 失敗
   - 4 個內建工作流: auto-pr, code-review, daily-scan, refactor
 
-- [ ] 建立 `webapp/src/pages/CronManager.tsx` — 排程管理
+- [x] 建立 `webapp/src/pages/CronManager.tsx` — 排程管理
   - Cron 列表（卡片式，顯示 schedule + 下次執行時間）
   - Toggle 開關（啟用/停用）
   - 「立即執行」按鈕
   - 呼叫 GatewayRPC: `cron.list`, `cron.update`, `cron.run`
 
-- [ ] 建立 `webapp/src/pages/ModelSelector.tsx` — 模型切換
+- [x] 建立 `webapp/src/pages/ModelSelector.tsx` — 模型切換
   - 模型列表按 provider 分組
   - 當前模型高亮標記
   - 點擊切換（帶確認 + 載入動畫）
   - 呼叫 GatewayRPC: `models.list`, `sessions.patch`
 
-- [ ] 建立 `webapp/src/pages/DevOpsPanel.tsx` — DevOps 面板
+- [x] 建立 `webapp/src/pages/DevOpsPanel.tsx` — DevOps 面板
   - CI/CD 狀態看板（emoji 狀態 + repo + branch）
   - PR 列表（number, title, state, draft 標記）
   - 部署確認按鈕（danger 風格）
   - 呼叫 GatewayRPC: `ci.statuses`, `github.prs.list`
 
-- [ ] 建立 `webapp/src/pages/Settings.tsx` — 設定面板
+- [x] 建立 `webapp/src/pages/Settings.tsx` — 設定面板
   - 通知級別選擇（silent / quiet / loud）
   - 安全設定（auto-approve patterns）
   - 偏好設定存 Telegram Cloud Storage
@@ -156,42 +156,42 @@ extensions/automation/
 
 ## 🔨 Phase 3: 共用元件
 
-- [ ] 建立 `webapp/src/components/LiveStream.tsx` — 即時輸出
+- [x] 建立 `webapp/src/components/LiveStream.tsx` — 即時輸出
   - Terminal 風格渲染（monospace, 黑底）
   - 自動捲動到底部
   - ANSI 色彩支援
   - 複製按鈕
 
-- [ ] 建立 `webapp/src/components/DiffViewer.tsx` — Diff 檢視器
+- [x] 建立 `webapp/src/components/DiffViewer.tsx` — Diff 檢視器
   - Unified diff 格式
   - 語法高亮（紅=刪除, 綠=新增）
   - 檔案路徑標題
   - 展開/收合
 
-- [ ] 建立 `webapp/src/components/ProgressTracker.tsx` — 進度追蹤
+- [x] 建立 `webapp/src/components/ProgressTracker.tsx` — 進度追蹤
   - 多步驟垂直時間線
   - 每步狀態 emoji
   - 動態更新（WebSocket 推送）
   - 耗時顯示
 
-- [ ] 建立 `webapp/src/components/ConfirmDialog.tsx` — 確認對話框
+- [x] 建立 `webapp/src/components/ConfirmDialog.tsx` — 確認對話框
   - 使用 Telegram 原生 `showConfirm()` 如可用
   - 否則 fallback 到自訂 modal
   - 支援 danger 風格（紅色按鈕）
   - 可選生物辨識確認
 
-- [ ] 建立 `webapp/src/components/AgentCard.tsx` — Agent 卡片
+- [x] 建立 `webapp/src/components/AgentCard.tsx` — Agent 卡片
   - 狀態指示燈（🟢 online / 🟡 busy / 🔴 offline）
   - Agent 名稱 + 模型
   - Session 統計（turns 數）
   - 操作按鈕（切換 / 重置）
 
-- [ ] 建立 `webapp/src/components/StatusBar.tsx` — 狀態列
+- [x] 建立 `webapp/src/components/StatusBar.tsx` — 狀態列
   - 連線狀態（WebSocket）
   - 今日統計（tokens + tasks）
   - Agent 狀態摘要
 
-- [ ] 建立 `webapp/src/components/NavBar.tsx` — 導航列
+- [x] 建立 `webapp/src/components/NavBar.tsx` — 導航列
   - 麵包屑導航
   - 返回按鈕
   - 標題
@@ -200,7 +200,7 @@ extensions/automation/
 
 ## 🔨 Phase 4: Hooks
 
-- [ ] 建立 `webapp/src/hooks/useGateway.ts` — Gateway 連線 Hook
+- [x] 建立 `webapp/src/hooks/useGateway.ts` — Gateway 連線 Hook
   ```typescript
   function useGateway() {
     // 連線管理 + RPC 呼叫 + 重連
@@ -208,14 +208,14 @@ extensions/automation/
   }
   ```
 
-- [ ] 建立 `webapp/src/hooks/useTelegram.ts` — Telegram API Hook
+- [x] 建立 `webapp/src/hooks/useTelegram.ts` — Telegram API Hook
   ```typescript
   function useTelegram() {
     return { user, theme, showConfirm, haptic, cloudStorage };
   }
   ```
 
-- [ ] 建立 `webapp/src/hooks/useAgent.ts` — Agent 狀態 Hook
+- [x] 建立 `webapp/src/hooks/useAgent.ts` — Agent 狀態 Hook
   ```typescript
   function useAgent() {
     // 訂閱 agent 狀態變化
@@ -223,12 +223,12 @@ extensions/automation/
   }
   ```
 
-- [ ] 建立 `webapp/src/hooks/useTheme.ts` — 主題同步 Hook
+- [x] 建立 `webapp/src/hooks/useTheme.ts` — 主題同步 Hook
   - 監聽 Telegram `themeChanged` 事件
   - 同步 CSS variables
   - dark / light 模式
 
-- [ ] 建立 `webapp/src/hooks/useStream.ts` — 串流 Hook
+- [x] 建立 `webapp/src/hooks/useStream.ts` — 串流 Hook
   ```typescript
   function useStream(sessionKey: string) {
     // WebSocket 訂閱 agent 輸出
@@ -240,11 +240,11 @@ extensions/automation/
 
 ## 🔨 Phase 5: 整合與部署
 
-- [ ] 在 `extensions/automation/src/register.ts` 加入 HTTP route 註冊
+- [x] 在 `extensions/automation/src/register.ts` 加入 HTTP route 註冊
   - `api.registerHttpRoute({ path: "/superclaw", ... })` 靜態檔案服務
   - 從 `dist-webapp/` 目錄伺服 React 建置產物
 
-- [ ] 建立 `webapp/src/api/types.ts` — 共用型別
+- [x] 建立 `webapp/src/api/types.ts` — 共用型別
   - 複用 `extensions/automation/src/telegram-ui/` 的型別定義
   - AgentPhase, ActiveTask, AttentionItem, SystemState
   - AgentInfo, CronJobInfo, ModelInfo, CIStatus
