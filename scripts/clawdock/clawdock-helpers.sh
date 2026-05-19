@@ -49,13 +49,35 @@ CLAWDOCK_COMMON_PATHS=(
 )
 
 _clawdock_filter_warnings() {
-  grep -v "^WARN\|^time="
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      WARN*|time=*)
+        ;;
+      *)
+        printf "%s\n" "$line"
+        ;;
+    esac
+  done
 }
 
 _clawdock_trim_quotes() {
   local value="$1"
   value="${value#\"}"
   value="${value%\"}"
+  printf "%s" "$value"
+}
+
+_clawdock_urlencode() {
+  local value="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$value"
+    return 0
+  fi
+  if command -v node >/dev/null 2>&1; then
+    node -e 'process.stdout.write(encodeURIComponent(process.argv[1] || ""))' "$value"
+    return 0
+  fi
   printf "%s" "$value"
 }
 
@@ -73,6 +95,27 @@ _clawdock_mask_value() {
   printf "%s" "<redacted:${length} chars>"
 }
 
+_clawdock_first_url() {
+  local line rest url
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      *https://*)
+        rest="${line#*https://}"
+        url="https://${rest%%[[:space:]]*}"
+        printf "%s" "$url"
+        return 0
+        ;;
+      *http://*)
+        rest="${line#*http://}"
+        url="http://${rest%%[[:space:]]*}"
+        printf "%s" "$url"
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
 _clawdock_read_config_dir() {
   if [[ ! -f "$CLAWDOCK_CONFIG" ]]; then
     return 1
@@ -83,6 +126,27 @@ _clawdock_read_config_dir() {
     return 1
   fi
   _clawdock_trim_quotes "$raw"
+}
+
+_clawdock_expand_home_path() {
+  local value="$1"
+  case "$value" in
+    "~")
+      printf "%s" "$HOME"
+      ;;
+    "~/"*)
+      printf "%s/%s" "$HOME" "${value#"~/"}"
+      ;;
+    "\$HOME/"*)
+      printf "%s/%s" "$HOME" "${value#"\$HOME/"}"
+      ;;
+    "\${HOME}/"*)
+      printf "%s/%s" "$HOME" "${value#"\${HOME}/"}"
+      ;;
+    *)
+      printf "%s" "$value"
+      ;;
+  esac
 }
 
 # Ensure CLAWDOCK_DIR is set and valid
@@ -168,6 +232,92 @@ _clawdock_read_env_token() {
     return 1
   fi
   _clawdock_trim_quotes "$raw"
+}
+
+_clawdock_read_project_env_var() {
+  _clawdock_ensure_dir || return 1
+  local name="$1"
+  if [[ ! -f "${CLAWDOCK_DIR}/.env" ]]; then
+    return 1
+  fi
+  local raw value
+  raw=$(sed -n "s/^${name}=//p" "${CLAWDOCK_DIR}/.env" | head -n 1)
+  if [[ -z "$raw" ]]; then
+    return 1
+  fi
+  value=$(_clawdock_trim_quotes "$raw")
+  _clawdock_expand_home_path "$value"
+}
+
+_clawdock_config_dir_path() {
+  local config_dir
+  config_dir=$(_clawdock_read_project_env_var OPENCLAW_CONFIG_DIR 2>/dev/null)
+  if [[ -n "$config_dir" ]]; then
+    printf "%s" "$config_dir"
+    return 0
+  fi
+  printf "%s/.openclaw" "$HOME"
+}
+
+_clawdock_read_config_token() {
+  local config_dir config_file
+  config_dir=$(_clawdock_config_dir_path)
+  config_file="${config_dir}/openclaw.json"
+  if [[ ! -f "$config_file" ]]; then
+    return 1
+  fi
+  if command -v node >/dev/null 2>&1; then
+    node -e 'const fs = require("fs"); const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const token = data?.gateway?.auth?.token; if (typeof token === "string" && token.trim()) process.stdout.write(token.trim());' "$config_file"
+    return $?
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json, sys; data=json.load(open(sys.argv[1])); token=(((data.get("gateway") or {}).get("auth") or {}).get("token")); print(token.strip(), end="") if isinstance(token, str) and token.strip() else None' "$config_file"
+    return $?
+  fi
+  return 1
+}
+
+_clawdock_read_dashboard_token() {
+  local token
+  token=$(_clawdock_read_config_token 2>/dev/null)
+  if [[ -n "$token" ]]; then
+    printf "%s" "$token"
+    return 0
+  fi
+  _clawdock_read_env_token
+}
+
+_clawdock_gateway_published_authority() {
+  _clawdock_ensure_dir || return 1
+  local published host port
+  published=$(_clawdock_compose port openclaw-gateway 18789 2>/dev/null)
+  published="${published%%$'\n'*}"
+  published="${published//$'\r'/}"
+  if [[ -z "$published" ]]; then
+    return 1
+  fi
+  host="${published%:*}"
+  port="${published##*:}"
+  if [[ -z "$port" || "$port" == "$published" ]]; then
+    return 1
+  fi
+  case "$host" in
+    0.0.0.0|::|\[::\])
+      host="127.0.0.1"
+      ;;
+    \[*\])
+      ;;
+    *:*)
+      host="[$host]"
+      ;;
+  esac
+  printf "%s:%s" "$host" "$port"
+}
+
+_clawdock_gateway_http_url() {
+  local authority
+  authority=$(_clawdock_gateway_published_authority) || return 1
+  printf "http://%s/" "$authority"
 }
 
 # Basic Operations
@@ -371,10 +521,34 @@ clawdock-dashboard() {
   _clawdock_ensure_dir || return 1
 
   echo "🦞 Getting dashboard URL..."
-  local output exit_status url
+  local output exit_status filtered_output url display_url token encoded_token
+  local published_authority scheme rest url_path
+  published_authority=$(_clawdock_gateway_published_authority)
   output=$(_clawdock_compose run --rm openclaw-cli dashboard --no-open 2>&1)
   exit_status=$?
-  url=$(printf "%s\n" "$output" | _clawdock_filter_warnings | grep -o 'http[s]\?://[^[:space:]]*' | head -n 1)
+  filtered_output=$(printf "%s\n" "$output" | _clawdock_filter_warnings)
+  url=$(printf "%s\n" "$filtered_output" | _clawdock_first_url)
+  if [[ -n "$published_authority" ]]; then
+    case "$url" in
+      http://127.0.0.1:*|http://localhost:*|https://127.0.0.1:*|https://localhost:*)
+        scheme="${url%%://*}"
+        rest="${url#*://}"
+        if [[ "$rest" == */* ]]; then
+          url_path="/${rest#*/}"
+        else
+          url_path="/"
+        fi
+        url="${scheme}://${published_authority}${url_path}"
+        ;;
+    esac
+  fi
+  if [[ -n "$url" && "$url" != *"#token="* && "$filtered_output" == *"Token auto-auth included"* ]]; then
+    token=$(_clawdock_read_dashboard_token 2>/dev/null)
+    if [[ -n "$token" ]]; then
+      encoded_token=$(_clawdock_urlencode "$token")
+      url="${url%%#*}#token=${encoded_token}"
+    fi
+  fi
   if [[ $exit_status -ne 0 ]]; then
     echo "❌ Failed to get dashboard URL"
     echo -e "   Try restarting: $(_cmd clawdock-restart)"
@@ -382,8 +556,12 @@ clawdock-dashboard() {
   fi
 
   if [[ -n "$url" ]]; then
-    echo -e "✅ Opening: ${_CLR_CYAN}${url}${_CLR_RESET}"
-    open "$url" 2>/dev/null || xdg-open "$url" 2>/dev/null || echo -e "   Please open manually: ${_CLR_CYAN}${url}${_CLR_RESET}"
+    display_url="${url%%#token=*}"
+    if [[ "$url" == *"#token="* ]]; then
+      display_url="${display_url}#token=<redacted>"
+    fi
+    echo -e "✅ Opening: ${_CLR_CYAN}${display_url}${_CLR_RESET}"
+    open "$url" 2>/dev/null || xdg-open "$url" 2>/dev/null || echo -e "   Please open manually: ${_CLR_CYAN}${display_url}${_CLR_RESET}"
     echo ""
     echo -e "${_CLR_CYAN}💡 If you see ${_CLR_RED}'pairing required'${_CLR_CYAN} error:${_CLR_RESET}"
     echo -e "   1. Run: $(_cmd clawdock-devices)"
