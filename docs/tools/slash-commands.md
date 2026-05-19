@@ -124,7 +124,7 @@ Current source-of-truth:
 
 <AccordionGroup>
   <Accordion title="Sessions and runs">
-    - `/new [model]` starts a new session; `/reset` is the reset alias.
+    - `/new [model]` archives the current session and starts a fresh one; `/reset` wipes the current session in place. They are not aliases.
     - Control UI intercepts typed `/new` to create and switch to a fresh dashboard session, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; in that case `/new` resets the main session in place. Typed `/reset` still runs the Gateway's in-place reset.
     - `/reset soft [message]` keeps the current transcript, drops reused CLI backend session ids, and reruns startup/system-prompt loading in-place.
     - `/compact [instructions]` compacts the session context. See [Compaction](/concepts/compaction).
