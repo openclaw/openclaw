@@ -1678,7 +1678,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(result.payloads?.[0]?.isError).toBe(true);
   });
 
-  it("threads the run abort signal into engine-owned overflow compaction", async () => {
+  it("threads a composed run abort signal into engine-owned overflow compaction", async () => {
     mockedContextEngine.info.ownsCompaction = true;
     const abortController = new AbortController();
     mockedRunEmbeddedAttempt
@@ -1695,7 +1695,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     const compactArg = mockCallArg(mockedCompactDirect) as { abortSignal?: AbortSignal };
-    expect(compactArg.abortSignal).toBe(abortController.signal);
+    expect(compactArg.abortSignal).toBeInstanceOf(AbortSignal);
   });
 
   it("returns retry_limit when repeated retries never converge", async () => {

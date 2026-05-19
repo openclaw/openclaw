@@ -461,17 +461,20 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.codexThreadBindingInvalidated).toBe(true);
     expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
     expect(compact).toHaveBeenCalledTimes(1);
-    expect(compact).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile,
-      tokenBudget: 777,
-      currentTokenCount: 123,
-      compactionTarget: "threshold",
-      customInstructions: undefined,
-      force: true,
-      runtimeContext: { workspaceDir: tempDir, provider: "codex" },
-    });
+    expect(compact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        tokenBudget: 777,
+        currentTokenCount: 123,
+        compactionTarget: "threshold",
+        customInstructions: undefined,
+        force: true,
+        runtimeContext: { workspaceDir: tempDir, provider: "codex" },
+        abortSignal: expect.any(AbortSignal),
+      }),
+    );
     expect(maintain).toHaveBeenCalledTimes(1);
     const [maintainCall] = maintain.mock.calls[0] ?? [];
     const maintainParams = maintainCall as
@@ -720,7 +723,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       expect(vi.getTimerCount()).toBe(0);
     });
 
-    it("threads the caller abort signal into the owning context-engine compact()", async () => {
+    it("threads a composed caller abort signal into the owning context-engine compact()", async () => {
       const sessionFile = await writeTestBinding();
       const controller = new AbortController();
       const compact = vi.fn<ContextEngine["compact"]>(async () => ({
@@ -745,7 +748,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       });
 
       expect(compact).toHaveBeenCalledTimes(1);
-      expect(compact.mock.calls[0]?.[0]?.abortSignal).toBe(controller.signal);
+      expect(compact.mock.calls[0]?.[0]?.abortSignal).toBeInstanceOf(AbortSignal);
     });
 
     it("aborts a hung owning context-engine compact() when the caller signal fires", async () => {

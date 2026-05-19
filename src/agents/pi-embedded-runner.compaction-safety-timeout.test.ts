@@ -206,22 +206,55 @@ describe("compactContextEngineWithSafetyTimeout", () => {
     );
   });
 
-  it("threads the abort signal into the plugin compact() params", async () => {
+  it("threads a signal that follows the run abort signal into the plugin compact() params", async () => {
+    vi.useFakeTimers();
     const controller = new AbortController();
-    const compact = vi.fn<CompactFn>(async () => ({ ok: true, compacted: false }));
+    const reason = new Error("run aborted");
+    let compactAbortSignal: AbortSignal | undefined;
+    const compact = vi.fn<CompactFn>((params) => {
+      compactAbortSignal = params.abortSignal;
+      return new Promise<CompactResult>(() => {});
+    });
 
-    await compactContextEngineWithSafetyTimeout({ compact }, baseParams, 30, controller.signal);
+    const pending = compactContextEngineWithSafetyTimeout(
+      { compact },
+      baseParams,
+      30,
+      controller.signal,
+    );
+    const assertion = expect(pending).rejects.toBe(reason);
 
     expect(compact).toHaveBeenCalledTimes(1);
-    expect(compact.mock.calls[0]?.[0]?.abortSignal).toBe(controller.signal);
+    expect(compactAbortSignal).toBeInstanceOf(AbortSignal);
+    expect(compactAbortSignal?.aborted).toBe(false);
+
+    controller.abort(reason);
+    await assertion;
+    expect(compactAbortSignal?.aborted).toBe(true);
+    expect(compactAbortSignal?.reason).toBe(reason);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("does not add an abortSignal field when no signal is provided", async () => {
-    const compact = vi.fn<CompactFn>(async () => ({ ok: true, compacted: false }));
+  it("threads the host timeout abort signal into the plugin compact() params", async () => {
+    vi.useFakeTimers();
+    let compactAbortSignal: AbortSignal | undefined;
+    const compact = vi.fn<CompactFn>((params) => {
+      compactAbortSignal = params.abortSignal;
+      return new Promise<CompactResult>(() => {});
+    });
 
-    await compactContextEngineWithSafetyTimeout({ compact }, baseParams, 30);
+    const pending = compactContextEngineWithSafetyTimeout({ compact }, baseParams, 30);
+    const assertion = expect(pending).rejects.toThrow("Compaction timed out");
 
-    expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("abortSignal");
+    expect(compactAbortSignal).toBeInstanceOf(AbortSignal);
+    expect(compactAbortSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(30);
+    await assertion;
+    expect(compactAbortSignal?.aborted).toBe(true);
+    expect(compactAbortSignal?.reason).toBeInstanceOf(Error);
+    expect((compactAbortSignal?.reason as Error | undefined)?.message).toBe("Compaction timed out");
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("rejects promptly when the run abort signal fires before the timeout", async () => {
