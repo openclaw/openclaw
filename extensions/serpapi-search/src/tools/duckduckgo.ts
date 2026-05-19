@@ -1,10 +1,21 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readNumberParam, readStringParam, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  readNumberParam,
+  readStringParam,
+  wrapWebContent,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
-  "q", "kl", "safe", "df", "m", "start", "search_assist", "zero_trace",
+  "q",
+  "kl",
+  "safe",
+  "df",
+  "m",
+  "start",
+  "search_assist",
+  "zero_trace",
 ] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
@@ -15,12 +26,17 @@ function extract(raw: Record<string, unknown>): Record<string, unknown> {
   return {
     engine: "duckduckgo",
     results: organicResults.map((r) => ({
-      title: r.title,
+      title: typeof r.title === "string" ? wrapWebContent(r.title) : (r.title ?? null),
       url: r.link ?? null,
       snippet: typeof r.snippet === "string" ? wrapWebContent(r.snippet) : (r.snippet ?? null),
     })),
     knowledge_graph: kg
-      ? { title: kg.title, description: kg.description, website: kg.website, facts: kg.facts ?? null }
+      ? {
+          title: kg.title,
+          description: kg.description,
+          website: kg.website,
+          facts: kg.facts ?? null,
+        }
       : null,
     news_results: raw.news_results ?? [],
     related_searches: raw.related_searches ?? [],
@@ -45,7 +61,8 @@ export function createSerpApiDuckDuckGoTool(api: OpenClawPluginApi, ctx?: SerpAp
         },
         kl: {
           type: "string",
-          description: "Region code (e.g. us-en, uk-en, de-de, fr-fr). Controls language and region of results.",
+          description:
+            "Region code (e.g. us-en, uk-en, de-de, fr-fr). Controls language and region of results.",
         },
         safe: {
           type: "number",
@@ -54,22 +71,26 @@ export function createSerpApiDuckDuckGoTool(api: OpenClawPluginApi, ctx?: SerpAp
         },
         df: {
           type: "string",
-          description: "Date filter: d=past day, w=past week, m=past month, y=past year, or custom range '2024-01-01..2024-12-31'.",
+          description:
+            "Date filter: d=past day, w=past week, m=past month, y=past year, or custom range '2024-01-01..2024-12-31'.",
         },
         m: {
           type: "number",
-          description: "Maximum results to return (1–50, default: 50). Cannot be used with search_assist.",
+          description:
+            "Maximum results to return (1–50, default: 50). Cannot be used with search_assist.",
           minimum: 1,
           maximum: 50,
         },
         start: {
           type: "number",
-          description: "Result offset for pagination (default: 0). First page returns up to 35 results; subsequent pages up to 50.",
+          description:
+            "Result offset for pagination (default: 0). First page returns up to 35 results; subsequent pages up to 50.",
           minimum: 0,
         },
         search_assist: {
           type: "boolean",
-          description: "Include DuckDuckGo AI Search Assist answer in the response. Cannot be used with m.",
+          description:
+            "Include DuckDuckGo AI Search Assist answer in the response. Cannot be used with m.",
         },
       },
       required: ["query"],
@@ -77,7 +98,8 @@ export function createSerpApiDuckDuckGoTool(api: OpenClawPluginApi, ctx?: SerpAp
     },
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
-      const searchAssist = args.search_assist === true || args.search_assist === "true" ? "true" : undefined;
+      const searchAssist =
+        args.search_assist === true || args.search_assist === "true" ? "true" : undefined;
       const raw = await callSerpApi({
         cfg,
         engine: "duckduckgo",

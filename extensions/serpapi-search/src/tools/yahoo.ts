@@ -1,17 +1,29 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readNumberParam, readStringParam, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  readNumberParam,
+  readStringParam,
+  wrapWebContent,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
-  "p", "yahoo_domain", "vc", "vl", "b", "vm", "vs", "vf", "zero_trace",
+  "p",
+  "yahoo_domain",
+  "vc",
+  "vl",
+  "b",
+  "vm",
+  "vs",
+  "vf",
+  "zero_trace",
 ] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
   const organicResults = Array.isArray(raw.organic_results)
     ? (raw.organic_results as Record<string, unknown>[]).map((r) => ({
         position: r.position,
-        title: r.title,
+        title: typeof r.title === "string" ? wrapWebContent(r.title) : (r.title ?? null),
         url: r.link ?? null,
         displayed_link: r.displayed_link ?? null,
         snippet: typeof r.snippet === "string" ? wrapWebContent(r.snippet) : (r.snippet ?? null),
@@ -69,7 +81,8 @@ export function createSerpApiYahooTool(api: OpenClawPluginApi, ctx?: SerpApiTool
         },
         b: {
           type: "number",
-          description: "Result offset for pagination (default: 1; use 11 for page 2, 21 for page 3, ...).",
+          description:
+            "Result offset for pagination (default: 1; use 11 for page 2, 21 for page 3, ...).",
           minimum: 1,
         },
       },

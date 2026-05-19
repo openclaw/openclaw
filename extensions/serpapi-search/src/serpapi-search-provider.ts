@@ -16,21 +16,28 @@ function loadClientModule(): Promise<SerpApiClientModule> {
 }
 
 const ALLOWED_PARAMS = [
-  "q", "gl", "hl", "lr", "google_domain", "location", "uule",
-  "safe", "nfpr", "filter", "start", "zero_trace",
+  "q",
+  "gl",
+  "hl",
+  "lr",
+  "google_domain",
+  "location",
+  "uule",
+  "safe",
+  "nfpr",
+  "filter",
+  "start",
+  "zero_trace",
 ] as const;
 
-function extract(
-  raw: Record<string, unknown>,
-  maxCount: number,
-): Record<string, unknown> {
+function extract(raw: Record<string, unknown>, maxCount: number): Record<string, unknown> {
   const organicResults = Array.isArray(raw.organic_results)
     ? (raw.organic_results as Record<string, unknown>[])
     : [];
   return {
     engine: "google_light",
     results: organicResults.slice(0, maxCount).map((r) => ({
-      title: r.title,
+      title: typeof r.title === "string" ? wrapWebContent(r.title) : (r.title ?? null),
       url: r.link ?? null,
       snippet: typeof r.snippet === "string" ? wrapWebContent(r.snippet) : (r.snippet ?? null),
     })),
@@ -55,7 +62,8 @@ const SerpApiGoogleLightSearchSchema = {
     },
     location: {
       type: "string",
-      description: "Location to originate the search from (e.g. 'Austin, Texas'). Cannot be used with uule.",
+      description:
+        "Location to originate the search from (e.g. 'Austin, Texas'). Cannot be used with uule.",
     },
     google_domain: {
       type: "string",
@@ -72,7 +80,8 @@ const SerpApiGoogleLightSearchSchema = {
     },
     start: {
       type: "number",
-      description: "Result offset for pagination (0=first page, 10=second page, 20=third page, ...).",
+      description:
+        "Result offset for pagination (0=first page, 10=second page, 20=third page, ...).",
       minimum: 0,
     },
   },
