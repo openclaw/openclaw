@@ -55,19 +55,23 @@ function resolveCardHeader(
   };
 }
 
-/** Build a card note footer from agent identity and model context. */
+/** Build a card note footer from agent identity and model context.
+ *
+ * Uses " · " (middle dot) as the key/value separator instead of ": " because
+ * Feishu's card markdown renderer interprets "key: value" as definition-list
+ * syntax and hoists the value to the top of the rendered message (#59360). */
 function resolveCardNote(
   agentId: string,
   identity: OutboundIdentity | undefined,
   prefixCtx: { model?: string; provider?: string },
 ): string {
   const name = identity?.name?.trim() || agentId;
-  const parts: string[] = [`Agent: ${name}`];
+  const parts: string[] = [`Agent · ${name}`];
   if (prefixCtx.model) {
-    parts.push(`Model: ${prefixCtx.model}`);
+    parts.push(`Model · ${prefixCtx.model}`);
   }
   if (prefixCtx.provider) {
-    parts.push(`Provider: ${prefixCtx.provider}`);
+    parts.push(`Provider · ${prefixCtx.provider}`);
   }
   return parts.join(" | ");
 }

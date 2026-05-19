@@ -266,7 +266,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         replyInThread: undefined,
         rootId: "om_root_topic",
         header: { title: "agent", template: "blue" },
-        note: "Agent: agent",
+        note: "Agent · agent",
       }),
     );
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
@@ -285,7 +285,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\npartial answer\n```", {
-      note: "Agent: agent",
+      note: "Agent · agent",
     });
   });
 
@@ -299,13 +299,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(2);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n完整回复第一段\n```", {
-      note: "Agent: agent",
+      note: "Agent · agent",
     });
     expect(streamingInstances[1].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[1].close).toHaveBeenCalledWith(
       "```md\n完整回复第一段 + 第二段\n```",
       {
-        note: "Agent: agent",
+        note: "Agent · agent",
       },
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
@@ -322,7 +322,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("```md\n同一条回复\n```", {
-      note: "Agent: agent",
+      note: "Agent · agent",
     });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
@@ -388,7 +388,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(1);
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("hellolo world", {
-      note: "Agent: agent",
+      note: "Agent · agent",
     });
   });
 
@@ -620,7 +620,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         replyToMessageId: "om_msg",
         replyInThread: true,
         header: { title: "agent", template: "blue" },
-        note: "Agent: agent",
+        note: "Agent · agent",
       }),
     );
   });
