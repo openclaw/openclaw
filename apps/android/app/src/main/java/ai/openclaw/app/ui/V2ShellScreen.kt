@@ -97,6 +97,7 @@ fun V2ShellScreen(
 ) {
   ClawDesignTheme {
     var activeTab by rememberSaveable { mutableStateOf(V2Tab.Overview) }
+    var commandOpen by rememberSaveable { mutableStateOf(false) }
     val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
 
     LaunchedEffect(requestedHomeDestination) {
@@ -120,9 +121,18 @@ fun V2ShellScreen(
       activeTab = V2Tab.Overview
     }
 
+    BackHandler(enabled = commandOpen) {
+      commandOpen = false
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
       when (activeTab) {
-        V2Tab.Overview -> V2OverviewScreen(viewModel = viewModel, onSelectTab = { activeTab = it })
+        V2Tab.Overview ->
+          V2OverviewScreen(
+            viewModel = viewModel,
+            onSelectTab = { activeTab = it },
+            onOpenCommand = { commandOpen = true },
+          )
         V2Tab.Chat ->
           V2ChatShellScreen(
             viewModel = viewModel,
@@ -139,9 +149,42 @@ fun V2ShellScreen(
         V2Tab.Sessions ->
           V2SessionsScreen(
             viewModel = viewModel,
+            onOpenCommand = { commandOpen = true },
             onOpenChat = { activeTab = V2Tab.Chat },
           )
-        V2Tab.Settings -> V2SettingsShellScreen(viewModel = viewModel)
+        V2Tab.Settings -> V2SettingsShellScreen(viewModel = viewModel, onOpenCommand = { commandOpen = true })
+      }
+
+      if (commandOpen) {
+        V2CommandPalette(
+          viewModel = viewModel,
+          onDismiss = { commandOpen = false },
+          onOpenChat = {
+            activeTab = V2Tab.Chat
+            commandOpen = false
+          },
+          onOpenVoice = {
+            activeTab = V2Tab.Voice
+            commandOpen = false
+          },
+          onOpenSessions = {
+            activeTab = V2Tab.Sessions
+            commandOpen = false
+          },
+          onOpenProviders = {
+            activeTab = V2Tab.ProvidersModels
+            commandOpen = false
+          },
+          onOpenSettings = {
+            activeTab = V2Tab.Settings
+            commandOpen = false
+          },
+          onOpenSession = { sessionKey ->
+            viewModel.switchChatSession(sessionKey)
+            activeTab = V2Tab.Chat
+            commandOpen = false
+          },
+        )
       }
     }
   }
@@ -151,6 +194,7 @@ fun V2ShellScreen(
 private fun V2OverviewScreen(
   viewModel: MainViewModel,
   onSelectTab: (V2Tab) -> Unit,
+  onOpenCommand: () -> Unit,
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
@@ -181,7 +225,7 @@ private fun V2OverviewScreen(
               color = ClawTheme.colors.text,
               modifier = Modifier.weight(1f),
             )
-            V2PlainIconButton(icon = Icons.Default.Search, contentDescription = "Search", onClick = {})
+            V2PlainIconButton(icon = Icons.Default.Search, contentDescription = "Search", onClick = onOpenCommand)
             V2OverviewAvatar(text = "OC")
           }
         }
@@ -602,7 +646,7 @@ private fun providerRows(
   return (authRows + missingAuthRows).sortedWith(compareBy(::providerPriority, { it.name.lowercase() }))
 }
 
-private fun modelProviderReady(status: String): Boolean {
+internal fun modelProviderReady(status: String): Boolean {
   val normalized = status.trim().lowercase()
   return normalized == "ok" || normalized == "ready" || normalized == "healthy" || normalized == "configured"
 }
@@ -746,7 +790,10 @@ private fun modelCapabilityLabels(model: GatewayModelSummary): List<String> =
   }
 
 @Composable
-private fun V2SettingsShellScreen(viewModel: MainViewModel) {
+private fun V2SettingsShellScreen(
+  viewModel: MainViewModel,
+  onOpenCommand: () -> Unit,
+) {
   val displayName by viewModel.displayName.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
   val statusText by viewModel.statusText.collectAsState()
@@ -763,7 +810,7 @@ private fun V2SettingsShellScreen(viewModel: MainViewModel) {
           horizontalArrangement = Arrangement.spacedBy(9.dp),
         ) {
           Text(text = "Settings", style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
-          V2SettingsSearchButton(onClick = {})
+          V2SettingsSearchButton(onClick = onOpenCommand)
         }
       }
 
@@ -1088,6 +1135,7 @@ private fun V2MiniTag(text: String) {
 @Composable
 private fun V2SessionsScreen(
   viewModel: MainViewModel,
+  onOpenCommand: () -> Unit,
   onOpenChat: () -> Unit,
 ) {
   val sessions by viewModel.chatSessions.collectAsState()
@@ -1109,7 +1157,7 @@ private fun V2SessionsScreen(
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           Text(text = "Sessions", style = ClawTheme.type.display.copy(fontSize = 17.4.sp, lineHeight = 21.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
-          V2PlainIconButton(icon = Icons.Default.Search, contentDescription = "Search sessions", onClick = {})
+          V2PlainIconButton(icon = Icons.Default.Search, contentDescription = "Search sessions", onClick = onOpenCommand)
           V2PlainIconButton(icon = Icons.Default.MoreVert, contentDescription = "Session options", onClick = {})
         }
       }
