@@ -123,6 +123,7 @@ jobs:
       - name: Checkout dispatch ref
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ inputs.harness_ref || github.sha }}
           fetch-depth: 1
 

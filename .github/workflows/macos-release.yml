@@ -46,6 +46,7 @@ jobs:
       - name: Checkout selected tag
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
 

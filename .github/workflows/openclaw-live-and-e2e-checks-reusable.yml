@@ -310,6 +310,7 @@ jobs:
       - name: Checkout workflow repository
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Validate selected ref
@@ -474,6 +475,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
@@ -522,6 +524,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
@@ -564,6 +567,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
@@ -746,6 +750,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
@@ -753,6 +758,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
@@ -896,6 +902,7 @@ jobs:
       - name: Checkout trusted release harness
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
 
@@ -985,12 +992,14 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
@@ -1142,12 +1151,14 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
@@ -1277,12 +1288,14 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
@@ -1513,6 +1526,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
@@ -1651,6 +1665,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
@@ -1658,6 +1673,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
@@ -1772,12 +1788,14 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live Docker harness
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
@@ -2140,6 +2158,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
@@ -2147,6 +2166,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
@@ -2358,6 +2378,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
@@ -2365,6 +2386,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
@@ -2569,6 +2591,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
@@ -2576,6 +2599,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness

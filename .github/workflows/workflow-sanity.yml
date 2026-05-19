@@ -27,7 +27,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
 
+          persist-credentials: false
       - name: Fail on tabs in workflow files
         run: |
           python - <<'PY'
@@ -59,7 +61,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
 
+          persist-credentials: false
       - name: Install actionlint
         shell: bash
         run: |
@@ -91,7 +95,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
 
+          persist-credentials: false
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
