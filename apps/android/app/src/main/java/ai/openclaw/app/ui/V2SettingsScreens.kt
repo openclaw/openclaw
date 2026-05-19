@@ -21,6 +21,8 @@ import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
+import android.media.AudioManager
+import android.media.ToneGenerator
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -402,7 +404,7 @@ private fun V2VoiceSettingsScreen(
       )
       Text(text = "Audio Test", style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(text = "Check that OpenClaw can speak clearly on this phone.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      V2SettingsWaveformPanel(active = speakerEnabled)
+      V2SettingsWaveformPanel(active = speakerEnabled, onClick = ::playVoiceSetupTone)
       V2VoiceSetupActionRow(
         title = if (speakerEnabled) "Mute speaker" else "Enable speaker",
         subtitle = if (speakerEnabled) "Replies play aloud" else "Assistant speech muted",
@@ -492,15 +494,21 @@ private fun V2VoiceSetupActionRow(
               .background(if (ready) ClawTheme.colors.success else ClawTheme.colors.textSubtle, CircleShape),
         )
         Text(text = statusText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, maxLines = 1)
-        Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.textMuted)
+        if (onClick != null) {
+          Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.textMuted)
+        }
       }
     }
   }
 }
 
 @Composable
-private fun V2SettingsWaveformPanel(active: Boolean) {
+private fun V2SettingsWaveformPanel(
+  active: Boolean,
+  onClick: () -> Unit,
+) {
   Surface(
+    onClick = onClick,
     modifier = Modifier.fillMaxWidth().height(76.dp),
     shape = RoundedCornerShape(ClawTheme.radii.panel),
     color = ClawTheme.colors.surface,
@@ -525,6 +533,10 @@ private fun V2SettingsWaveformPanel(active: Boolean) {
       }
     }
   }
+}
+
+private fun playVoiceSetupTone() {
+  ToneGenerator(AudioManager.STREAM_MUSIC, 80).startTone(ToneGenerator.TONE_PROP_BEEP, 250)
 }
 
 @Composable
