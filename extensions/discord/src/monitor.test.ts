@@ -37,6 +37,30 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/system-event-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/system-event-runtime")>(
+    "openclaw/plugin-sdk/system-event-runtime",
+  );
+  return {
+    ...actual,
+    enqueueNotificationSystemEvent: (
+      options: import("openclaw/plugin-sdk/system-event-runtime").EnqueueNotificationSystemEventOptions,
+    ) => {
+      const result = actual.enqueueNotificationSystemEvent(options);
+      if (result.woke) {
+        requestHeartbeatSpy({
+          source: "notifications-event",
+          intent: "immediate",
+          reason: `notification-wake:${options.reason ?? `${options.channel}:${options.family}`}`,
+          agentId: options.agentId,
+          sessionKey: options.sessionKey,
+        });
+      }
+      return result;
+    },
+  };
+});
+
 const fakeGuild = (id: string, name: string) => ({ id, name }) as Guild;
 
 function expectNormalizedAllowList(
@@ -941,9 +965,6 @@ vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueS
 
 const heartbeatRuntimeModule = await import("openclaw/plugin-sdk/heartbeat-runtime");
 vi.spyOn(heartbeatRuntimeModule, "requestHeartbeat").mockImplementation(requestHeartbeatSpy);
-
-const heartbeatWakeModule = await import("../../../src/infra/heartbeat-wake.js");
-vi.spyOn(heartbeatWakeModule, "requestHeartbeat").mockImplementation(requestHeartbeatSpy);
 
 const routingModule = await import("openclaw/plugin-sdk/routing");
 vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRouteMock);
