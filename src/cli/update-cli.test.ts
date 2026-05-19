@@ -2885,6 +2885,191 @@ describe("update-cli", () => {
     );
   });
 
+  it("warns when a package update targets a managed service root outside the shell root", async () => {
+    const shellRoot = createCaseDir("openclaw-shell-root");
+    const serviceRoot = await createTrackedTempDir("openclaw-service-root-");
+    const serviceNode = path.join(path.dirname(serviceRoot), "bin", "node");
+    await fs.mkdir(path.join(serviceRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(serviceRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.5.18" }),
+      "utf-8",
+    );
+    mockPackageInstallStatus(shellRoot);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: [serviceNode, path.join(serviceRoot, "dist", "index.js"), "gateway"],
+    });
+
+    await updateCommand({ dryRun: true });
+
+    const logs = vi
+      .mocked(defaultRuntime.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(logs).toContain(`Targeting managed gateway service package root: ${serviceRoot}`);
+    expect(logs).toContain(
+      `Shell OpenClaw root differs from the managed gateway service root: ${shellRoot}`,
+    );
+    expect(logs).toContain("make sure `openclaw` on PATH resolves to the managed service root");
+    expect(logs).toContain(`Managed gateway service Node: ${serviceNode}`);
+  });
+
+  it("checks the managed service Node runtime before updating a redirected package root", async () => {
+    const shellRoot = createCaseDir("openclaw-shell-root");
+    const serviceRoot = await createTrackedTempDir("openclaw-service-root-");
+    const serviceNode = path.join(path.dirname(serviceRoot), "bin", "node");
+    await fs.mkdir(path.join(serviceRoot, "dist"), { recursive: true });
+    await fs.mkdir(path.dirname(serviceNode), { recursive: true });
+    await fs.writeFile(serviceNode, "", "utf-8");
+    await fs.writeFile(
+      path.join(serviceRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.5.18" }),
+      "utf-8",
+    );
+    mockPackageInstallStatus(shellRoot);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: [serviceNode, path.join(serviceRoot, "dist", "index.js"), "gateway"],
+    });
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "latest",
+      version: "2026.5.20",
+      nodeEngine: ">=22.19.0",
+    });
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[0] === serviceNode && argv[1] === "--version") {
+        return {
+          stdout: "v22.18.0\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+    nodeVersionSatisfiesEngine.mockReturnValue(false);
+
+    await updateCommand({ yes: true });
+
+    expect(nodeVersionSatisfiesEngine).toHaveBeenCalledWith("22.18.0", ">=22.19.0");
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain(`Node 22.18.0 at ${serviceNode} is too old`);
+    expect(errors.join("\n")).toContain(
+      "Upgrade the Node runtime that owns the managed Gateway service",
+    );
+  });
+
+  it("runs managed service package follow-up commands with the service Node", async () => {
+    const shellRoot = createCaseDir("openclaw-shell-root");
+    const servicePrefix = await createTrackedTempDir("openclaw-service-prefix-");
+    const nodeModules = path.join(servicePrefix, "lib", "node_modules");
+    const serviceRoot = path.join(nodeModules, "openclaw");
+    const serviceNode = path.join(servicePrefix, "bin", "node");
+    const serviceNpm = path.join(servicePrefix, "bin", "npm");
+    const entrypoint = path.join(serviceRoot, "dist", "index.js");
+    await fs.mkdir(path.dirname(entrypoint), { recursive: true });
+    await fs.mkdir(path.dirname(serviceNode), { recursive: true });
+    await fs.writeFile(serviceNode, "", "utf-8");
+    await fs.writeFile(serviceNpm, "", "utf-8");
+    const serviceNpmReal = await fs.realpath(serviceNpm);
+    await fs.writeFile(
+      path.join(serviceRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.5.18" }),
+      "utf-8",
+    );
+    await fs.writeFile(entrypoint, "", "utf-8");
+    await writePackageDistInventory(serviceRoot);
+    mockPackageInstallStatus(shellRoot);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: [serviceNode, entrypoint, "gateway"],
+    });
+    serviceLoaded.mockResolvedValue(true);
+    pathExists.mockImplementation(async (candidate: string) => {
+      try {
+        await fs.access(candidate);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[0] === serviceNode && argv[1] === "--version") {
+        return {
+          stdout: "v22.22.0\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (
+        Array.isArray(argv) &&
+        (argv[0] === serviceNpm || argv[0] === serviceNpmReal) &&
+        argv[1] === "root" &&
+        argv[2] === "-g"
+      ) {
+        return {
+          stdout: `${nodeModules}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (
+        Array.isArray(argv) &&
+        (argv[0] === serviceNpm || argv[0] === serviceNpmReal) &&
+        argv[1] === "i"
+      ) {
+        const stagePrefix = argv.includes("--prefix")
+          ? argv[argv.indexOf("--prefix") + 1]
+          : undefined;
+        const stageRoot = stagePrefix
+          ? path.join(stagePrefix, "lib", "node_modules", "openclaw")
+          : serviceRoot;
+        const stageEntryPoint = path.join(stageRoot, "dist", "index.js");
+        await fs.mkdir(path.dirname(stageEntryPoint), { recursive: true });
+        await fs.writeFile(
+          path.join(stageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.5.20" }),
+          "utf-8",
+        );
+        await fs.writeFile(stageEntryPoint, "export {};\n", "utf-8");
+        await writePackageDistInventory(stageRoot);
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ yes: true });
+
+    expect(doctorCommandCall()?.[0][0]).toBe(serviceNode);
+    expect(spawnCall()?.[0]).toBe(serviceNode);
+    const serviceInstallCall = commandCalls().find(
+      ([argv]) => argv[2] === "gateway" && argv[3] === "install",
+    );
+    expect(serviceInstallCall?.[0][0]).toBe(serviceNode);
+  });
+
   it("repairs legacy config before persisting a requested update channel", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
