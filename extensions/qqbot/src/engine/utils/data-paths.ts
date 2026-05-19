@@ -11,7 +11,7 @@
  */
 
 import path from "node:path";
-import { getQQBotDataPath } from "./platform.js";
+import { getQQBotDataPath, normalizePath } from "./platform.js";
 
 /**
  * Normalise an identifier so it is safe to embed in a filename.
@@ -19,6 +19,15 @@ import { getQQBotDataPath } from "./platform.js";
  */
 function safeName(id: string): string {
   return id.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function getCredentialBackupRoot(): string {
+  const stateDir =
+    process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim();
+  if (stateDir) {
+    return path.join(normalizePath(stateDir), "qqbot", "data");
+  }
+  return getQQBotDataPath("data");
 }
 
 // ---- credential backup ----
@@ -29,10 +38,10 @@ function safeName(id: string): string {
  * missing from the live config.
  */
 export function getCredentialBackupFile(accountId: string): string {
-  return path.join(getQQBotDataPath("data"), `credential-backup-${safeName(accountId)}.json`);
+  return path.join(getCredentialBackupRoot(), `credential-backup-${safeName(accountId)}.json`);
 }
 
 /** Legacy single-file credential backup (pre-multi-account-isolation). */
 export function getLegacyCredentialBackupFile(): string {
-  return path.join(getQQBotDataPath("data"), "credential-backup.json");
+  return path.join(getCredentialBackupRoot(), "credential-backup.json");
 }
