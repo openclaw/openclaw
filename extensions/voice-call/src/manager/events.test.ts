@@ -575,4 +575,75 @@ describe("processEvent (functional)", () => {
     expect(Array.from(ctx.processedEventIds)).toStrictEqual([]);
     expect(call.processedEventIds).toStrictEqual([]);
   });
+
+  it("persists assistant transcript when call.speaking events carry text", () => {
+    const now = Date.now();
+    const ctx = createContext();
+    ctx.activeCalls.set("call-bot-speech", {
+      callId: "call-bot-speech",
+      providerCallId: "provider-bot-speech",
+      provider: "telnyx",
+      direction: "inbound",
+      state: "answered",
+      from: "+15550000000",
+      to: "+15550000001",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-bot-speech", "call-bot-speech");
+
+    processEvent(ctx, {
+      id: "evt-bot-1",
+      type: "call.speaking",
+      callId: "call-bot-speech",
+      providerCallId: "provider-bot-speech",
+      timestamp: now + 1,
+      text: "Hi, this is Rosellen — how can I help?",
+    });
+
+    const call = ctx.activeCalls.get("call-bot-speech");
+    if (!call) {
+      throw new Error("expected speaking call to remain active");
+    }
+    expect(call.state).toBe("speaking");
+    expect(call.transcript).toHaveLength(1);
+    expect(call.transcript[0].speaker).toBe("bot");
+    expect(call.transcript[0].text).toBe("Hi, this is Rosellen — how can I help?");
+  });
+
+  it("does not push empty-text call.speaking events to the transcript", () => {
+    const now = Date.now();
+    const ctx = createContext();
+    ctx.activeCalls.set("call-bot-empty", {
+      callId: "call-bot-empty",
+      providerCallId: "provider-bot-empty",
+      provider: "telnyx",
+      direction: "inbound",
+      state: "answered",
+      from: "+15550000000",
+      to: "+15550000001",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-bot-empty", "call-bot-empty");
+
+    processEvent(ctx, {
+      id: "evt-bot-empty",
+      type: "call.speaking",
+      callId: "call-bot-empty",
+      providerCallId: "provider-bot-empty",
+      timestamp: now + 1,
+      text: "   ",
+    });
+
+    const call = ctx.activeCalls.get("call-bot-empty");
+    if (!call) {
+      throw new Error("expected speaking call to remain active");
+    }
+    expect(call.transcript).toHaveLength(0);
+  });
 });
