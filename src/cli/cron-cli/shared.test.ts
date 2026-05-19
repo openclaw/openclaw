@@ -5,6 +5,7 @@ import {
   coerceCronDeliveryPreviews,
   getCronChannelOptions,
   parseCronToolsAllow,
+  parseDurationMs,
   printCronList,
 } from "./shared.js";
 
@@ -278,5 +279,40 @@ describe("coerceCronDeliveryPreviews", () => {
         },
       }).size,
     ).toBe(0);
+  });
+});
+
+describe("parseDurationMs (#83906)", () => {
+  it("accepts ordinary positive durations in each unit", () => {
+    expect(parseDurationMs("500ms")).toBe(500);
+    expect(parseDurationMs("30s")).toBe(30_000);
+    expect(parseDurationMs("5m")).toBe(300_000);
+    expect(parseDurationMs("2h")).toBe(7_200_000);
+    expect(parseDurationMs("3d")).toBe(259_200_000);
+    expect(parseDurationMs("1.5h")).toBe(5_400_000);
+  });
+
+  it("returns null for non-positive and malformed input", () => {
+    expect(parseDurationMs("0s")).toBeNull();
+    expect(parseDurationMs("")).toBeNull();
+    expect(parseDurationMs("abc")).toBeNull();
+    expect(parseDurationMs("5x")).toBeNull();
+  });
+
+  it("rejects values that would overflow to Infinity after the unit factor (#83906)", () => {
+    // The pure-digit regex strips `e` notation, so the realistic overflow
+    // path is a long-digit number whose parseFloat result is finite but
+    // overflows when multiplied by the unit factor: `1e302 * 86_400_000`
+    // is `Infinity`. The new finite-check catches that.
+    const overflowDays = "1" + "0".repeat(302) + "d";
+    expect(parseDurationMs(overflowDays)).toBeNull();
+  });
+
+  it("returns null when the input itself parses to Infinity", () => {
+    // 310 consecutive 9s exceed Number.MAX_VALUE on parseFloat, so the
+    // existing `!Number.isFinite(n)` check already rejects this. Asserting
+    // here so a future refactor that moves the check around can't regress
+    // either failure mode.
+    expect(parseDurationMs("9".repeat(310) + "d")).toBeNull();
   });
 });

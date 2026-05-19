@@ -121,7 +121,17 @@ export function parseDurationMs(input: string): number | null {
           : unit === "h"
             ? 3_600_000
             : 86_400_000;
-  return Math.floor(n * factor);
+  const result = Math.floor(n * factor);
+  // `Number.parseFloat` accepts arbitrarily large positives, and `n * factor`
+  // overflows to `Infinity` (e.g. `1e308d`). `Math.floor(Infinity)` is still
+  // `Infinity`, which slips through every `null` / positive-number check at
+  // callers and lands as `everyMs=Infinity` or `cooldownMs=Infinity` in
+  // schedule payloads. Reject the overflow here so callers see a clean parse
+  // failure. See #83906.
+  if (!Number.isFinite(result)) {
+    return null;
+  }
+  return result;
 }
 
 export function parseCronStaggerMs(params: {
