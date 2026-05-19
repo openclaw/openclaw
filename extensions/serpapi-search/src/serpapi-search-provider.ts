@@ -3,6 +3,7 @@ import {
   readNumberParam,
   readStringParam,
   resolveSearchCount,
+  resolveSearchTimeoutSeconds,
   wrapWebContent,
 } from "openclaw/plugin-sdk/provider-web-search";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
@@ -105,7 +106,7 @@ export function createSerpApiWebSearchProvider(): WebSearchProviderPlugin {
       execute: async (args, context) => {
         const { callSerpApi: call } = await loadClientModule();
         const count = resolveSearchCount(
-          readNumberParam(args, "count", { integer: true }),
+          readNumberParam(args, "count", { integer: true }) ?? ctx.searchConfig?.maxResults,
           DEFAULT_SEARCH_COUNT,
         );
         const location = readStringParam(args, "location") ?? undefined;
@@ -128,6 +129,7 @@ export function createSerpApiWebSearchProvider(): WebSearchProviderPlugin {
             start: readNumberParam(args, "start", { integer: true }) ?? undefined,
           },
           signal: context?.signal,
+          timeoutSeconds: resolveSearchTimeoutSeconds(ctx.searchConfig),
         });
         return extract(raw, count);
       },
