@@ -24,7 +24,9 @@ function makeRuntime(): RuntimeEnv {
   };
 }
 
-function makeEvent(params: Partial<TrajectoryEvent> & { type: string; ts: string }): TrajectoryEvent {
+function makeEvent(
+  params: Partial<TrajectoryEvent> & { type: string; ts: string },
+): TrajectoryEvent {
   return {
     traceSchema: "openclaw-trajectory",
     schemaVersion: 1,
@@ -45,9 +47,17 @@ describe("sessionsTailCommand", () => {
   let tmpDir: string;
   let storePath: string;
   let trajectoryPath: string;
+  let previousStateDir: string | undefined;
 
   beforeEach(() => {
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-tail-"));
+    process.env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state");
+    mocks.getRuntimeConfig.mockReturnValue({
+      agents: {
+        list: [{ id: "main" }, { id: "ops" }],
+      },
+    });
     storePath = path.join(tmpDir, "sessions.json");
     trajectoryPath = path.join(tmpDir, "session-one.trajectory.jsonl");
     fs.writeFileSync(
@@ -64,6 +74,11 @@ describe("sessionsTailCommand", () => {
   });
 
   afterEach(() => {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -90,7 +105,10 @@ describe("sessionsTailCommand", () => {
 
     await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
 
-    const output = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0])).join("\n");
+    const output = vi
+      .mocked(runtime.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
     expect(output).toContain("12:04:18");
     expect(output).toContain("tool.call");
     expect(output).toContain("bash {...redacted...}");
@@ -119,9 +137,50 @@ describe("sessionsTailCommand", () => {
 
     await sessionsTailCommand({ store: storePath, sessionKey, tail: "2" }, runtime);
 
-    const output = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0])).join("\n");
+    const output = vi
+      .mocked(runtime.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
     expect(output).not.toContain("session.started");
     expect(output).toContain("tool.call");
     expect(output).toContain("tool.result");
+  });
+
+  it("resolves the target store from a fully qualified non-default agent session key", async () => {
+    const runtime = makeRuntime();
+    const opsSessionKey = "agent:ops:telegram:direct:owner";
+    const opsSessionsDir = path.join(process.env.OPENCLAW_STATE_DIR!, "agents", "ops", "sessions");
+    fs.mkdirSync(opsSessionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(opsSessionsDir, "sessions.json"),
+      `${JSON.stringify({
+        [opsSessionKey]: {
+          sessionId: "ops-session",
+          sessionFile: "ops-session.jsonl",
+          updatedAt: 3,
+          status: "done",
+        },
+      })}\n`,
+    );
+    writeJsonl(path.join(opsSessionsDir, "ops-session.trajectory.jsonl"), [
+      makeEvent({
+        sessionId: "ops-session",
+        sessionKey: opsSessionKey,
+        type: "tool.result",
+        ts: "2026-05-18T12:04:21.000Z",
+        data: { name: "bash", success: true },
+      }),
+    ]);
+
+    await sessionsTailCommand({ sessionKey: opsSessionKey }, runtime);
+
+    const output = vi
+      .mocked(runtime.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(output).toContain("agent:ops:telegram:direct:own…");
+    expect(output).toContain("tool.result");
+    expect(output).toContain("bash ok");
+    expect(output).not.toContain("No sessions found");
   });
 });

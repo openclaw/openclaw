@@ -5,6 +5,7 @@ import { loadSessionStore } from "../config/sessions.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTrajectoryFilePath } from "../trajectory/paths.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
@@ -313,6 +314,13 @@ async function followSelections(selections: TailSelection[], runtime: RuntimeEnv
   });
 }
 
+function resolveTailTargetAgent(opts: SessionsTailOptions): string | undefined {
+  if (opts.agent?.trim() || opts.store?.trim() || opts.allAgents === true) {
+    return opts.agent;
+  }
+  return opts.sessionKey?.trim() ? resolveAgentIdFromSessionKey(opts.sessionKey) : undefined;
+}
+
 export async function sessionsTailCommand(
   opts: SessionsTailOptions,
   runtime: RuntimeEnv,
@@ -329,7 +337,7 @@ export async function sessionsTailCommand(
     cfg,
     opts: {
       store: opts.store,
-      agent: opts.agent,
+      agent: resolveTailTargetAgent(opts),
       allAgents: opts.allAgents,
     },
     runtime,
