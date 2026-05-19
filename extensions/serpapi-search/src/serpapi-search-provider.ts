@@ -65,6 +65,10 @@ const SerpApiGoogleLightSearchSchema = {
       description:
         "Location to originate the search from (e.g. 'Austin, Texas'). Cannot be used with uule.",
     },
+    uule: {
+      type: "string",
+      description: "Google encoded location string. Cannot be used with location.",
+    },
     google_domain: {
       type: "string",
       description: "Google domain to use (e.g. google.com, google.de). Defaults to google.com.",
@@ -99,6 +103,11 @@ export function createSerpApiWebSearchProvider(): WebSearchProviderPlugin {
       execute: async (args, context) => {
         const { callSerpApi: call } = await loadClientModule();
         const count = readNumberParam(args, "count", { integer: true }) ?? 5;
+        const location = readStringParam(args, "location") ?? undefined;
+        const uule = readStringParam(args, "uule") ?? undefined;
+        if (location != null && uule != null) {
+          throw new Error("location and uule cannot be used together");
+        }
         const raw = await call({
           cfg: ctx.config,
           engine: "google_light",
@@ -106,7 +115,8 @@ export function createSerpApiWebSearchProvider(): WebSearchProviderPlugin {
           params: {
             q: readStringParam(args, "query", { required: true }),
             gl: readStringParam(args, "gl") ?? "us",
-            location: readStringParam(args, "location") ?? undefined,
+            location,
+            uule,
             google_domain: readStringParam(args, "google_domain") ?? undefined,
             lr: readStringParam(args, "lr") ?? undefined,
             safe: readStringParam(args, "safe") ?? undefined,
