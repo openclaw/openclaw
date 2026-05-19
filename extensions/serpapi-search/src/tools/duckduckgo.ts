@@ -32,9 +32,12 @@ function extract(raw: Record<string, unknown>): Record<string, unknown> {
     })),
     knowledge_graph: kg
       ? {
-          title: kg.title,
-          description: kg.description,
-          website: kg.website,
+          title: typeof kg.title === "string" ? wrapWebContent(kg.title) : (kg.title ?? null),
+          description:
+            typeof kg.description === "string"
+              ? wrapWebContent(kg.description)
+              : (kg.description ?? null),
+          website: kg.website ?? null,
           facts: kg.facts ?? null,
         }
       : null,
