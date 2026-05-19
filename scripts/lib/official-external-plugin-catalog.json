@@ -45,7 +45,8 @@
         "install": {
           "npmSpec": "@openclaw/brave-plugin",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.10"
+          "minHostVersion": ">=2026.4.10",
+          "allowInvalidConfigRecovery": true
         }
       }
     },
@@ -150,6 +151,23 @@
           "npmSpec": "@openclaw/memory-lancedb",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/openshell-sandbox",
+      "description": "OpenClaw OpenShell sandbox backend",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "openshell",
+          "label": "OpenShell Sandbox"
+        },
+        "install": {
+          "npmSpec": "@openclaw/openshell-sandbox",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.12-beta.1"
         }
       }
     },

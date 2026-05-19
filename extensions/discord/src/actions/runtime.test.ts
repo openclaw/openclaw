@@ -34,6 +34,7 @@ const discordSendMocks = {
     name: "edited",
   })),
   editMessageDiscord: vi.fn(async () => ({})),
+  fetchChannelInfoDiscord: vi.fn(async () => ({ id: "C1", type: 0 })),
   fetchChannelPermissionsDiscord: vi.fn(async () => ({})),
   fetchMessageDiscord: vi.fn(async () => ({})),
   fetchReactionsDiscord: vi.fn(async () => ({})),
@@ -64,6 +65,7 @@ const {
   createThreadDiscord,
   deleteChannelDiscord,
   editChannelDiscord,
+  fetchChannelInfoDiscord,
   fetchReactionsDiscord,
   fetchMessageDiscord,
   kickMemberDiscord,
@@ -387,6 +389,14 @@ describe("handleDiscordMessagingAction", () => {
     expect(payload.messages[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
   });
 
+  it("rejects unexpected readMessages payloads with a boundary error", async () => {
+    readMessagesDiscord.mockResolvedValueOnce({ ok: true } as never);
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions),
+    ).rejects.toThrow("Discord message read returned object with keys ok instead of an array.");
+  });
+
   it("threads provided cfg into readMessages calls", async () => {
     const cfg = {
       channels: {
@@ -594,6 +604,183 @@ describe("handleDiscordMessagingAction", () => {
     expect(sendOptions.filename).toBe("image.png");
   });
 
+  it("renames an existing thread when threadName is provided on sendMessage", async () => {
+    sendMessageDiscord.mockResolvedValueOnce({
+      messageId: "M1",
+      channelId: "T1",
+    });
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "T1",
+      type: 11,
+    });
+    editChannelDiscord.mockResolvedValueOnce({
+      id: "T1",
+      name: "new-thread",
+    });
+
+    const result = await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:T1",
+        content: "hello",
+        threadName: "new-thread",
+      },
+      enableAllActions,
+    );
+
+    expect(sendMessageDiscord).toHaveBeenCalledWith("channel:T1", "hello", {
+      cfg: DISCORD_TEST_CFG,
+      accountId: undefined,
+      mediaAccess: undefined,
+      mediaUrl: undefined,
+      filename: undefined,
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
+      replyTo: undefined,
+      components: undefined,
+      embeds: undefined,
+      silent: false,
+    });
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("T1", { cfg: DISCORD_TEST_CFG });
+    expect(editChannelDiscord).toHaveBeenCalledWith(
+      {
+        channelId: "T1",
+        name: "new-thread",
+      },
+      { cfg: DISCORD_TEST_CFG },
+    );
+    expect(result.details).toEqual({
+      ok: true,
+      result: {
+        messageId: "M1",
+        channelId: "T1",
+      },
+      threadRename: {
+        ok: true,
+        channelId: "T1",
+        name: "new-thread",
+      },
+    });
+  });
+
+  it("forwards sendMessage suppressEmbeds overrides", async () => {
+    sendMessageDiscord.mockClear();
+
+    await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "https://example.com",
+        suppressEmbeds: false,
+      },
+      enableAllActions,
+    );
+
+    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
+    expect(sendOptions.suppressEmbeds).toBe(false);
+  });
+
+  it("warns instead of renaming when threadName is provided but channel management is disabled", async () => {
+    sendMessageDiscord.mockResolvedValueOnce({
+      messageId: "M1",
+      channelId: "T1",
+    });
+
+    const messagesOnly = (key: keyof DiscordActionConfig) => key === "messages";
+    const result = await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:T1",
+        content: "hello",
+        threadName: "new-thread",
+      },
+      messagesOnly,
+    );
+
+    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
+    expect(fetchChannelInfoDiscord).not.toHaveBeenCalled();
+    expect(editChannelDiscord).not.toHaveBeenCalled();
+    expect(result.details).toEqual({
+      ok: true,
+      result: {
+        messageId: "M1",
+        channelId: "T1",
+      },
+      warning: "Discord threadName was ignored because Discord channel management is disabled.",
+    });
+  });
+
+  it("warns instead of renaming when threadName is provided for a non-thread send target", async () => {
+    sendMessageDiscord.mockResolvedValueOnce({
+      messageId: "M1",
+      channelId: "C1",
+    });
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "C1",
+      type: 0,
+    });
+
+    const result = await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:C1",
+        content: "hello",
+        threadName: "new-thread",
+      },
+      enableAllActions,
+    );
+
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("C1", { cfg: DISCORD_TEST_CFG });
+    expect(editChannelDiscord).not.toHaveBeenCalled();
+    expect(result.details).toEqual({
+      ok: true,
+      result: {
+        messageId: "M1",
+        channelId: "C1",
+      },
+      warning: "Discord threadName was ignored because the send target is not a thread.",
+    });
+  });
+
+  it("preserves message delivery and warns when thread rename fails", async () => {
+    sendMessageDiscord.mockResolvedValueOnce({
+      messageId: "M1",
+      channelId: "T1",
+    });
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "T1",
+      type: 11,
+    });
+    editChannelDiscord.mockRejectedValueOnce(new Error("missing permissions"));
+
+    const result = await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:T1",
+        content: "hello",
+        threadName: "new-thread",
+      },
+      enableAllActions,
+    );
+
+    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
+    expect(editChannelDiscord).toHaveBeenCalledWith(
+      {
+        channelId: "T1",
+        name: "new-thread",
+      },
+      { cfg: DISCORD_TEST_CFG },
+    );
+    expect(result.details).toEqual({
+      ok: true,
+      result: {
+        messageId: "M1",
+        channelId: "T1",
+      },
+      warning: "Discord message was sent, but thread rename failed: missing permissions",
+    });
+  });
+
   it("rejects voice messages that include content", async () => {
     await expect(
       handleMessagingAction(
@@ -746,6 +933,27 @@ describe("handleDiscordGuildAction - channel management", () => {
         type: 0,
       },
     });
+  });
+
+  it("prefers channelType when creating a channel", async () => {
+    await handleGuildAction(
+      "channelCreate",
+      {
+        guildId: "G1",
+        name: "forum-thread",
+        channelType: 11,
+        type: 0,
+      },
+      channelsEnabled,
+    );
+    expect(createChannelDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        guildId: "G1",
+        name: "forum-thread",
+        type: 11,
+      }),
+      { cfg: DISCORD_TEST_CFG },
+    );
   });
 
   it("respects channel gating for channelCreate", async () => {

@@ -8,7 +8,7 @@ import { validateJsonSchemaValue, type JsonSchemaObject } from "openclaw/plugin-
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import plugin, { __testing as googleMeetPluginTesting } from "./index.js";
+import plugin, { testing as googleMeetPluginTesting } from "./index.js";
 import {
   extractGoogleMeetUriFromCalendarEvent,
   findGoogleMeetCalendarEvent,
@@ -42,7 +42,7 @@ import {
   noopLogger,
   setupGoogleMeetPlugin,
 } from "./src/test-support/plugin-harness.js";
-import { __testing as chromeTransportTesting } from "./src/transports/chrome.js";
+import { testing as chromeTransportTesting } from "./src/transports/chrome.js";
 import {
   buildMeetDtmfSequence,
   normalizeDialInNumber,
@@ -786,16 +786,18 @@ describe("google-meet plugin", () => {
   it("advertises only the googlemeet CLI descriptor", () => {
     const { cliRegistrations } = setup();
 
-    expect(cliRegistrations).toContainEqual({
-      commands: ["googlemeet"],
-      descriptors: [
-        {
-          name: "googlemeet",
-          description: "Join and manage Google Meet calls",
-          hasSubcommands: true,
-        },
-      ],
-    });
+    expect(cliRegistrations).toEqual([
+      {
+        commands: ["googlemeet"],
+        descriptors: [
+          {
+            name: "googlemeet",
+            description: "Join and manage Google Meet calls",
+            hasSubcommands: true,
+          },
+        ],
+      },
+    ]);
   });
 
   it("registers the node-host command used by chrome-node transport", () => {

@@ -73,6 +73,7 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
     stopReason === "cancelled" ||
     stopReason === "canceled" ||
     stopReason === "killed" ||
+    stopReason === "auth-revoked" ||
     stopReason === "rpc" ||
     stopReason === "user" ||
     (record.aborted === true && stopReason === "stop")
@@ -240,6 +241,14 @@ function readChatProjectionText(payload: Record<string, unknown>): string | unde
   return text.length > 0 ? text : undefined;
 }
 
+function readChatProjectionDeltaText(payload: Record<string, unknown>): string | undefined {
+  return typeof payload.deltaText === "string" ? payload.deltaText : undefined;
+}
+
+function readChatProjectionReplace(payload: Record<string, unknown>): boolean {
+  return payload.replace === true;
+}
+
 function isAssistantRunEvent(event: OpenClawEvent): boolean {
   return event.type === "assistant.delta" || event.type === "assistant.message";
 }
@@ -259,9 +268,9 @@ function normalizeChatProjectionEvent(
   previousText: string | undefined,
 ): OpenClawEvent {
   const text = readChatProjectionText(projection.payload);
-  const isReplacement = Boolean(
-    previousText && text !== undefined && !text.startsWith(previousText),
-  );
+  const deltaText = readChatProjectionDeltaText(projection.payload);
+  const hasPreviousText = previousText !== undefined;
+  const isReplacement = readChatProjectionReplace(projection.payload);
   return {
     ...event,
     type: projection.state === "delta" ? "assistant.delta" : "run.completed",
@@ -270,7 +279,7 @@ function normalizeChatProjectionEvent(
         ? text !== undefined
           ? {
               text,
-              delta: isReplacement ? text : text.slice(previousText?.length ?? 0),
+              delta: hasPreviousText ? (deltaText ?? text) : text,
               ...(isReplacement ? { replace: true } : {}),
             }
           : event.data

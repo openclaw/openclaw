@@ -4,7 +4,8 @@ import { hostname as readHostName } from "node:os";
 import { z } from "zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
-const START_OPTIONS_KEY_SECRET = randomBytes(32);
+const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
+const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
 const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
 
@@ -100,6 +101,7 @@ export type CodexAppServerStartOptions = {
 
 export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
+  codeModeOnly: boolean;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
@@ -126,6 +128,7 @@ export type CodexPluginConfig = {
     authToken?: string;
     headers?: Record<string, string>;
     clearEnv?: string[];
+    codeModeOnly?: boolean;
     requestTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
@@ -145,6 +148,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "authToken",
   "headers",
   "clearEnv",
+  "codeModeOnly",
   "requestTimeoutMs",
   "turnCompletionIdleTimeoutMs",
   "approvalPolicy",
@@ -252,6 +256,7 @@ const codexPluginConfigSchema = z
         authToken: z.string().optional(),
         headers: z.record(z.string(), z.string()).optional(),
         clearEnv: z.array(z.string()).optional(),
+        codeModeOnly: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
@@ -366,6 +371,7 @@ export function resolveCodexAppServerRuntimeOptions(
       headers,
       ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
     },
+    codeModeOnly: config.codeModeOnly === true,
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
     turnCompletionIdleTimeoutMs: normalizePositiveNumber(
       config.turnCompletionIdleTimeoutMs,
@@ -387,6 +393,24 @@ export function resolveCodexAppServerRuntimeOptions(
       (policyMode === "guardian" ? "auto_review" : "user"),
     ...(serviceTier ? { serviceTier } : {}),
   };
+}
+
+export function isCodexAppServerApprovalPolicyAllowedByRequirements(
+  policy: CodexAppServerApprovalPolicy,
+  params: {
+    env?: NodeJS.ProcessEnv;
+    requirementsToml?: string | null;
+    requirementsPath?: string;
+    readRequirementsFile?: (path: string) => string | undefined;
+    platform?: NodeJS.Platform;
+  } = {},
+): boolean {
+  const content = readCodexRequirementsToml(params);
+  if (content === undefined) {
+    return true;
+  }
+  const allowedApprovalPolicies = parseAllowedApprovalPoliciesFromCodexRequirements(content);
+  return allowedApprovalPolicies === undefined || allowedApprovalPolicies.has(policy);
 }
 
 export function resolveCodexComputerUseConfig(
@@ -971,6 +995,14 @@ function hashSecretForKey(value: string | undefined, label: string): string | nu
     .update("\0")
     .update(value)
     .digest("hex");
+}
+
+function getStartOptionsKeySecret(): Buffer {
+  const globalState = globalThis as typeof globalThis & {
+    [START_OPTIONS_KEY_SECRET_SYMBOL]?: Buffer;
+  };
+  globalState[START_OPTIONS_KEY_SECRET_SYMBOL] ??= randomBytes(32);
+  return globalState[START_OPTIONS_KEY_SECRET_SYMBOL];
 }
 
 function splitShellWords(value: string): string[] {

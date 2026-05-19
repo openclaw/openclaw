@@ -95,6 +95,14 @@ function createDefaultSessionMessages(): unknown[] {
 export const sessionMessages: unknown[] = createDefaultSessionMessages();
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
+export const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { surface?: string }) =>
+  params?.surface === "subagent"
+    ? ["Subagent compact command guidance."]
+    : params?.surface === "acp_backend"
+      ? ["ACP compact command guidance."]
+      : ["Main compact command guidance."],
+);
+export const buildEmbeddedSystemPromptMock = vi.fn(() => "");
 export const resolveEmbeddedAgentStreamFnMock: Mock<
   (params?: unknown) => MockEmbeddedAgentStreamFn
 > = vi.fn((_params?: unknown) => vi.fn());
@@ -265,6 +273,16 @@ export function resetCompactSessionStateMocks(): void {
   maybeCompactAgentHarnessSessionMock.mockResolvedValue(undefined);
   rotateTranscriptAfterCompactionMock.mockReset();
   rotateTranscriptAfterCompactionMock.mockResolvedValue({ rotated: false });
+  listRegisteredPluginAgentPromptGuidanceMock.mockReset();
+  listRegisteredPluginAgentPromptGuidanceMock.mockImplementation((params?: { surface?: string }) =>
+    params?.surface === "subagent"
+      ? ["Subagent compact command guidance."]
+      : params?.surface === "acp_backend"
+        ? ["ACP compact command guidance."]
+        : ["Main compact command guidance."],
+  );
+  buildEmbeddedSystemPromptMock.mockReset();
+  buildEmbeddedSystemPromptMock.mockReturnValue("");
 }
 
 export function resetCompactHooksHarnessMocks(): void {
@@ -326,6 +344,11 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../../plugins/hook-runner-global.js", () => ({
     getGlobalHookRunner: () => hookRunner,
+    getGlobalPluginRegistry: vi.fn(() => null),
+    hasGlobalHooks: vi.fn(() => false),
+    initializeGlobalHookRunner: vi.fn(),
+    resetGlobalHookRunner: vi.fn(),
+    runGlobalGatewayStopSafely: vi.fn(async () => undefined),
   }));
 
   vi.doMock("../runtime-plugins.js", () => ({
@@ -333,11 +356,37 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+    captureCurrentPluginMetadataSnapshotState: vi.fn(() => ({
+      snapshot: undefined,
+      configFingerprint: undefined,
+      compatiblePolicyHashes: undefined,
+      compatibleConfigFingerprints: undefined,
+    })),
+    clearCurrentPluginMetadataSnapshot: vi.fn(),
     getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+    resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
+    restoreCurrentPluginMetadataSnapshotState: vi.fn(),
+    setCurrentPluginMetadataSnapshot: vi.fn(),
   }));
+
+  vi.doMock("../../plugins/command-registry-state.js", () => {
+    const pluginCommands = new Map<string, unknown>();
+    return {
+      clearPluginCommands: vi.fn(() => pluginCommands.clear()),
+      clearPluginCommandsForPlugin: vi.fn(),
+      isPluginCommandRegistryLocked: vi.fn(() => false),
+      isTrustedReservedCommandOwner: vi.fn(() => false),
+      listRegisteredPluginCommands: vi.fn(() => []),
+      listRegisteredPluginAgentPromptGuidance: listRegisteredPluginAgentPromptGuidanceMock,
+      pluginCommands,
+      restorePluginCommands: vi.fn(),
+      setPluginCommandRegistryLocked: vi.fn(),
+    };
+  });
 
   vi.doMock("../harness/selection.js", () => ({
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
+    resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "pi" })),
   }));
 
   vi.doMock("../../plugins/provider-runtime.js", () => ({
@@ -441,7 +490,15 @@ export async function loadCompactHooksHarness(): Promise<{
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({})),
-    getApiKeyForModel: vi.fn(async () => ({ apiKey: "test", mode: "env" })),
+    formatMissingAuthError: vi.fn(
+      (auth: { mode: string; source: string }, provider: string) =>
+        `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
+    ),
+    getApiKeyForModel: vi.fn(async () => ({
+      apiKey: "test",
+      mode: "env",
+      source: "test harness",
+    })),
     resolveModelAuthMode: vi.fn(() => "env"),
   }));
 
@@ -457,6 +514,11 @@ export async function loadCompactHooksHarness(): Promise<{
     acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
     resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
+    resolveSessionWriteLockOptions: vi.fn(() => ({
+      timeoutMs: 60_000,
+      staleMs: 1_800_000,
+      maxHoldMs: 300_000,
+    })),
   }));
 
   vi.doMock("../../context-engine/init.js", () => ({
@@ -737,7 +799,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("./system-prompt.js", () => ({
     applySystemPromptOverrideToSession: vi.fn(),
-    buildEmbeddedSystemPrompt: vi.fn(() => ""),
+    buildEmbeddedSystemPrompt: buildEmbeddedSystemPromptMock,
     createSystemPromptOverride: vi.fn(() => () => ""),
   }));
 

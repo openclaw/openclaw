@@ -3,6 +3,8 @@ import { join, relative, resolve } from "node:path";
 import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
 import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
 import { commandsLightTestFiles } from "../vitest/vitest.commands-light-paths.mjs";
 import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
 
@@ -34,6 +36,12 @@ const GATEWAY_SERVER_EXCLUDED_TESTS = new Set([
 ]);
 
 function listTestFiles(rootDir: string): string[] {
+  const gitFiles = listGitTrackedFiles({ pathspecs: rootDir });
+  expect(gitFiles).not.toBeNull();
+  if (gitFiles) {
+    return gitFiles.filter((line) => line.endsWith(".test.ts"));
+  }
+
   if (!existsSync(rootDir)) {
     return [];
   }
@@ -45,13 +53,13 @@ function listTestFiles(rootDir: string): string[] {
       if (entry.isDirectory()) {
         visit(path);
       } else if (entry.isFile() && entry.name.endsWith(".test.ts")) {
-        files.push(path.replaceAll("\\", "/"));
+        files.push(toRepoPath(path));
       }
     }
   };
 
   visit(rootDir);
-  return files.toSorted((a, b) => a.localeCompare(b));
+  return sortRepoPaths(files);
 }
 
 function listMatchedTestFiles(config: VitestConfig): string[] {
@@ -64,7 +72,7 @@ function listMatchedTestFiles(config: VitestConfig): string[] {
       dot: false,
       ignore: testConfig.exclude ?? [],
     })
-    .map((file) => relative(process.cwd(), resolve(cwd, file)).replaceAll("\\", "/"))
+    .map((file) => toRepoPath(relative(process.cwd(), resolve(cwd, file))))
     .toSorted((a, b) => a.localeCompare(b));
 }
 
@@ -78,6 +86,25 @@ function isGatewayServerTestFile(file: string): boolean {
 }
 
 describe("scripts/lib/ci-node-test-plan.mjs", () => {
+  it("creates split shards without walking test roots", () => {
+    const payload = expectNoNodeFsScans<{
+      includePatterns: number;
+      shards: number;
+    }>(`
+      const { createNodeTestShards } = await import("./scripts/lib/ci-node-test-plan.mjs");
+      const shards = createNodeTestShards();
+      return {
+        includePatterns: shards.reduce(
+          (total, shard) => total + (shard.includePatterns?.length ?? 0),
+          0,
+        ),
+        shards: shards.length,
+      };
+    `);
+    expect(payload.shards).toBeGreaterThan(0);
+    expect(payload.includePatterns).toBeGreaterThan(0);
+  });
+
   it("splits the slow core unit shards while keeping paired source/security coverage", () => {
     const coreUnitShards = createNodeTestShards()
       .filter((shard) => shard.shardName.startsWith("core-unit-"))
@@ -191,7 +218,6 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         configs: [
           "test/vitest/vitest.acp.config.ts",
-          "test/vitest/vitest.cron.config.ts",
           "test/vitest/vitest.shared-core.config.ts",
           "test/vitest/vitest.tasks.config.ts",
           "test/vitest/vitest.utils.config.ts",
@@ -200,7 +226,42 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         runner: undefined,
         shardName: "core-runtime-shared",
       },
+      {
+        configs: ["test/vitest/vitest.cron.config.ts"],
+        requiresDist: false,
+        runner: undefined,
+        shardName: "core-runtime-cron-core",
+      },
+      {
+        configs: ["test/vitest/vitest.cron.config.ts"],
+        requiresDist: false,
+        runner: undefined,
+        shardName: "core-runtime-cron-isolated-agent",
+      },
+      {
+        configs: ["test/vitest/vitest.cron.config.ts"],
+        requiresDist: false,
+        runner: undefined,
+        shardName: "core-runtime-cron-service",
+      },
     ]);
+  });
+
+  it("covers every cron test exactly once across core runtime cron shards", () => {
+    const cronShards = createNodeTestShards().filter((shard) =>
+      shard.shardName.startsWith("core-runtime-cron-"),
+    );
+    const actual = cronShards
+      .flatMap((shard) => shard.includePatterns ?? [])
+      .toSorted((a, b) => a.localeCompare(b));
+
+    expect(cronShards.map((shard) => shard.shardName)).toEqual([
+      "core-runtime-cron-core",
+      "core-runtime-cron-isolated-agent",
+      "core-runtime-cron-service",
+    ]);
+    expect(actual).toEqual(listTestFiles("src/cron"));
+    expect(new Set(actual).size).toBe(actual.length);
   });
 
   it("splits the agentic lane into control-plane, command, agent, gateway, SDK, and plugin shards", () => {

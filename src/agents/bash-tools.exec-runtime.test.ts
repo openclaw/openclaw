@@ -64,7 +64,7 @@ function expectExecTarget(
 }
 
 function requireSystemEventCall(): [string, Record<string, unknown>] {
-  const call = enqueueSystemEventMock.mock.calls.at(0);
+  const call = enqueueSystemEventMock.mock.calls[0];
   if (!call) {
     throw new Error("expected system event call");
   }
@@ -72,7 +72,7 @@ function requireSystemEventCall(): [string, Record<string, unknown>] {
 }
 
 function requireHeartbeatCall(): Record<string, unknown> {
-  const call = requestHeartbeatMock.mock.calls.at(0);
+  const call = requestHeartbeatMock.mock.calls[0];
   if (!call) {
     throw new Error("expected heartbeat call");
   }
@@ -489,6 +489,7 @@ describe("emitExecSystemEvent", () => {
         to: "telegram:-100123:topic:47",
         threadId: 47,
       },
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     const heartbeat = requireHeartbeatCall();
@@ -507,6 +508,7 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "agent:ops:primary",
       contextKey: "exec:run-cron",
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
@@ -528,6 +530,7 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "global",
       contextKey: "exec:run-global",
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
@@ -537,7 +540,7 @@ describe("emitExecSystemEvent", () => {
     expect(heartbeatParams.agentId).toBe("ops");
     expect(heartbeatParams.coalesceMs).toBe(0);
     expect(heartbeatParams.reason).toBe("exec-event");
-    expect(requestHeartbeatMock.mock.calls.at(0)?.[0]).not.toHaveProperty("sessionKey");
+    expect(requireHeartbeatCall()).not.toHaveProperty("sessionKey");
   });
 
   it("keeps wake unscoped for non-agent session keys", () => {
@@ -549,6 +552,7 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "global",
       contextKey: "exec:run-global",
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     const heartbeat = requireHeartbeatCall();
@@ -576,6 +580,7 @@ describe("emitExecSystemEvent", () => {
       sessionKey: "agent:main:subagent:abc-123",
       contextKey: "exec:run-sub",
       deliveryContext: undefined,
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     expect(requestHeartbeatMock).not.toHaveBeenCalled();

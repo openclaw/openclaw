@@ -101,7 +101,7 @@ function expectHookRegistered(on: ReturnType<typeof vi.fn>, hookName: string) {
 }
 
 function expectHookNotRegistered(on: ReturnType<typeof vi.fn>, hookName: string) {
-  expect(on.mock.calls.some(([name]) => name === hookName)).toBe(false);
+  expect(on.mock.calls.map(([name]) => name)).not.toContain(hookName);
 }
 
 function expectToolExecute(tool: unknown, name?: string) {
@@ -448,7 +448,7 @@ describe("memory plugin e2e", () => {
       expect(providerOptions.provider).toBe("openai");
       expect(providerOptions.fallback).toBe("none");
       expect(providerOptions.model).toBe("text-embedding-3-small");
-      expect(createProvider.mock.calls.at(0)?.[0]).not.toHaveProperty("remote");
+      expect(providerOptions).not.toHaveProperty("remote");
       expect(embedQuery).toHaveBeenCalledWith("project memory");
     } finally {
       vi.doUnmock("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
@@ -1758,11 +1758,9 @@ describe("memory plugin e2e", () => {
 
       expect(embeddingsCreate).toHaveBeenCalledTimes(2);
       expect(harness.add).toHaveBeenCalledTimes(1);
-      expect(
-        harness.logger.warn.mock.calls.some(([message]) =>
-          String(message).includes("memory-lancedb: capture failed:"),
-        ),
-      ).toBe(true);
+      expect(harness.logger.warn.mock.calls.map(([message]) => String(message))).toEqual([
+        "memory-lancedb: capture failed: Error: temporary embedding failure",
+      ]);
     } finally {
       await cleanupAutoCaptureCursorHarness();
     }
@@ -2134,6 +2132,19 @@ describe("memory plugin e2e", () => {
     expect(shouldCapture("My email is test@example.com")).toBe(true);
     expect(shouldCapture("Call me at +1234567890123")).toBe(true);
     expect(shouldCapture("I always want verbose output")).toBe(true);
+    expect(shouldCapture("记住这个")).toBe(true);
+    expect(shouldCapture("我喜欢")).toBe(true);
+    expect(shouldCapture("以后都用这个")).toBe(true);
+    expect(shouldCapture("重要")).toBe(true);
+    expect(shouldCapture("覚えて")).toBe(true);
+    expect(shouldCapture("私は猫が好き")).toBe(true);
+    expect(shouldCapture("기억해줘")).toBe(true);
+    expect(shouldCapture("중요")).toBe(true);
+    expect(shouldCapture("blue", { customTriggers: ["blue"] })).toBe(false);
+    expect(shouldCapture("记住这个", { customTriggers: ["记住"] })).toBe(true);
+    expect(shouldCapture("use the azure profile", { customTriggers: ["azure profile"] })).toBe(
+      true,
+    );
     expect(shouldCapture("x")).toBe(false);
     expect(shouldCapture("<relevant-memories>injected</relevant-memories>")).toBe(false);
     expect(shouldCapture("<system>status</system>")).toBe(false);

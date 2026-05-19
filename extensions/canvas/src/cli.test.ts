@@ -87,8 +87,30 @@ describe("canvas CLI", () => {
     expect(writtenFile.filePath).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
     expect(writtenFile.base64).toBe("aGk=");
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    const mediaMessage = runtime.log.mock.calls.at(0)?.[0];
+    const mediaMessage = runtime.log.mock.calls[0]?.[0];
     expect(mediaMessage?.startsWith("MEDIA:")).toBe(true);
     expect(mediaMessage?.endsWith(".png")).toBe(true);
+  });
+
+  it("rejects node-controlled snapshot formats before writing", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, writtenFiles } = createCanvasCliDeps();
+    vi.mocked(deps.callGatewayCli).mockResolvedValueOnce({
+      payload: {
+        format: "/../../target.sh",
+        base64: "aGk=",
+      },
+    });
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/invalid canvas\.snapshot payload/i);
+    expect(writtenFiles).toHaveLength(0);
   });
 });

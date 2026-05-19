@@ -42,6 +42,7 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
       args: ["app-server"],
       headers: {},
     },
+    codeModeOnly: false,
     requestTimeoutMs: 60_000,
     turnCompletionIdleTimeoutMs: 60_000,
     approvalPolicy: "never",
@@ -120,7 +121,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     });
 
     expect(request).toHaveBeenCalledTimes(1);
-    const [method, payload] = request.mock.calls.at(0) ?? [];
+    const [method, payload] = request.mock.calls[0] ?? [];
     if (method !== "thread/start") {
       throw new Error(`expected thread/start request, got ${method}`);
     }

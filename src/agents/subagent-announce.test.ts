@@ -46,6 +46,11 @@ const { subagentRegistryRuntimeMock } = vi.hoisted(() => ({
 
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: (request: unknown) => callGatewayMock(request),
+  dispatchGatewayMethodInProcess: (
+    method: string,
+    params: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ) => callGatewayMock({ method, params, timeoutMs: options?.timeoutMs }),
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
   getRuntimeConfig: () => mockConfig,
   loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
@@ -109,7 +114,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
         `[Internal task completion event]\n${params.triggerMessage}`,
         { steeringMode: "all" },
       );
-      return { delivered: true, path: "queue" };
+      return { delivered: true, path: "steered" };
     }
 
     const effectiveOrigin =
@@ -177,6 +182,22 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 vi.mock("./subagent-announce.registry.runtime.js", () => subagentRegistryRuntimeMock);
 import { applySubagentWaitOutcome } from "./subagent-announce-output.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+
+function requireQueuedMessageCall() {
+  const call = queueEmbeddedPiMessageWithOutcomeMock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected queued message call");
+  }
+  return call;
+}
+
+function requireAgentCall() {
+  const call = agentSpy.mock.calls[0]?.[0];
+  if (!call) {
+    throw new Error("expected agent call");
+  }
+  return call;
+}
 
 describe("subagent wait outcome timing", () => {
   it.each([
@@ -334,7 +355,7 @@ describe("subagent announce seam flow", () => {
       messages: {
         queue: {
           byChannel: {
-            discord: "steer",
+            discord: "followup",
           },
         },
       },
@@ -369,7 +390,7 @@ describe("subagent announce seam flow", () => {
     });
 
     expect(didAnnounce).toBe(true);
-    const queuedCall = queueEmbeddedPiMessageWithOutcomeMock.mock.calls.at(0);
+    const queuedCall = requireQueuedMessageCall();
     expect(queuedCall?.[0]).toBe("session-origin-provider-steer");
     expect(queuedCall?.[1]).toContain("[Internal task completion event]");
     expect(queuedCall?.[1]).toContain("task: do thing");
@@ -402,12 +423,12 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    const agentCall = agentSpy.mock.calls.at(0)?.[0];
-    expect(agentCall?.method).toBe("agent");
-    expect(agentCall?.params?.sessionKey).toBe("agent:main:main");
-    expect(agentCall?.params?.deliver).toBe(false);
-    expect(agentCall?.params?.bestEffortDeliver).toBe(true);
-    expect(agentCall?.params?.accountId).toBe("default");
+    const agentCall = requireAgentCall();
+    expect(agentCall.method).toBe("agent");
+    expect(agentCall.params?.sessionKey).toBe("agent:main:main");
+    expect(agentCall.params?.deliver).toBe(false);
+    expect(agentCall.params?.bestEffortDeliver).toBe(true);
+    expect(agentCall.params?.accountId).toBe("default");
   });
 
   it("keeps nested subagent completion announces channel-less in session-only mode", async () => {
@@ -435,8 +456,7 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    const call = agentSpy.mock.calls.at(0)?.[0];
-    const params = call?.params ?? {};
+    const params = requireAgentCall().params ?? {};
     expect(params.sessionKey).toBe("agent:main:subagent:orchestrator");
     expect(params.deliver).toBe(false);
     expect(params.bestEffortDeliver).toBe(true);
@@ -476,10 +496,10 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    const agentCall = agentSpy.mock.calls.at(0)?.[0];
-    expect(agentCall?.params?.deliver).toBe(true);
-    expect(agentCall?.params?.channel).toBe("telegram");
-    expect(agentCall?.params?.accountId).toBe("bot-123");
-    expect(agentCall?.params?.to).toBe("-1001234567890");
+    const agentCall = requireAgentCall();
+    expect(agentCall.params?.deliver).toBe(true);
+    expect(agentCall.params?.channel).toBe("telegram");
+    expect(agentCall.params?.accountId).toBe("bot-123");
+    expect(agentCall.params?.to).toBe("-1001234567890");
   });
 });

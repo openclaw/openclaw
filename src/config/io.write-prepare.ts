@@ -333,26 +333,85 @@ function normalizeAgentModelConfigForWrite(value: unknown): unknown {
   return mutated ? next : value;
 }
 
-function normalizeAgentDefaultModelRefsForWrite(config: unknown): unknown {
-  const defaults = getPathValue(config, ["agents", "defaults"]);
-  if (!isRecord(defaults)) {
+const AGENT_MODEL_CONFIG_KEYS = [
+  "model",
+  "imageModel",
+  "imageGenerationModel",
+  "videoGenerationModel",
+  "musicGenerationModel",
+  "pdfModel",
+] as const;
+
+function normalizeModelConfigPathForWrite(config: unknown, path: string[]): unknown {
+  const value = getPathValue(config, path);
+  if (value === undefined) {
+    return config;
+  }
+  const normalizedModel = normalizeAgentModelConfigForWrite(value);
+  return normalizedModel !== value ? setPathValue(config, path, normalizedModel) : config;
+}
+
+function normalizeModelStringPathForWrite(config: unknown, path: string[]): unknown {
+  const value = getPathValue(config, path);
+  if (typeof value !== "string") {
+    return config;
+  }
+  const normalized = normalizeAgentModelRefForConfig(value);
+  return normalized !== value ? setPathValue(config, path, normalized) : config;
+}
+
+function normalizeAgentModelRefsAtPathForWrite(config: unknown, path: string[]): unknown {
+  const agent = getPathValue(config, path);
+  if (!isRecord(agent)) {
     return config;
   }
 
   let next = config;
-  if (Object.prototype.hasOwnProperty.call(defaults, "model")) {
-    const normalizedModel = normalizeAgentModelConfigForWrite(defaults.model);
-    if (normalizedModel !== defaults.model) {
-      next = setPathValue(next, ["agents", "defaults", "model"], normalizedModel);
-    }
+  for (const key of AGENT_MODEL_CONFIG_KEYS) {
+    next = normalizeModelConfigPathForWrite(next, [...path, key]);
   }
-  if (isRecord(defaults.models)) {
-    const normalizedModels = normalizeAgentModelMapForConfig(defaults.models);
-    if (normalizedModels !== defaults.models) {
-      next = setPathValue(next, ["agents", "defaults", "models"], normalizedModels);
+  next = normalizeModelStringPathForWrite(next, [...path, "heartbeat", "model"]);
+  next = normalizeModelConfigPathForWrite(next, [...path, "subagents", "model"]);
+  next = normalizeModelStringPathForWrite(next, [...path, "compaction", "model"]);
+  next = normalizeModelStringPathForWrite(next, [...path, "compaction", "memoryFlush", "model"]);
+
+  const models = getPathValue(next, [...path, "models"]);
+  if (isRecord(models)) {
+    const normalizedModels = normalizeAgentModelMapForConfig(models);
+    if (normalizedModels !== models) {
+      next = setPathValue(next, [...path, "models"], normalizedModels);
     }
   }
   return next;
+}
+
+function normalizeAgentListModelRefsForWrite(config: unknown): unknown {
+  const list = getPathValue(config, ["agents", "list"]);
+  if (!Array.isArray(list)) {
+    return config;
+  }
+
+  let mutated = false;
+  const nextList = list.map((agent) => {
+    if (!isRecord(agent)) {
+      return agent;
+    }
+
+    const normalized = normalizeAgentModelRefsAtPathForWrite({ agent }, ["agent"]) as {
+      agent: unknown;
+    };
+    if (normalized.agent !== agent) {
+      mutated = true;
+      return normalized.agent;
+    }
+    return agent;
+  });
+
+  return mutated ? setPathValue(config, ["agents", "list"], nextList) : config;
+}
+
+function normalizeToolsModelRefsForWrite(config: unknown): unknown {
+  return normalizeModelConfigPathForWrite(config, ["tools", "subagents", "model"]);
 }
 
 function normalizeModelProviderCatalogRefsForWrite(config: unknown): unknown {
@@ -395,7 +454,13 @@ function normalizeModelProviderCatalogRefsForWrite(config: unknown): unknown {
 }
 
 function normalizeModelRefsForWrite(config: unknown): unknown {
-  return normalizeModelProviderCatalogRefsForWrite(normalizeAgentDefaultModelRefsForWrite(config));
+  return normalizeModelProviderCatalogRefsForWrite(
+    normalizeToolsModelRefsForWrite(
+      normalizeAgentListModelRefsForWrite(
+        normalizeAgentModelRefsAtPathForWrite(config, ["agents", "defaults"]),
+      ),
+    ),
+  );
 }
 
 function preserveUntouchedIncludes(params: {
