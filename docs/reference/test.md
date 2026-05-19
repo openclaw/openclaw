@@ -156,10 +156,11 @@ metrics, event-loop delay, and plugin lookup-table detail metrics. The script
 enables `OPENCLAW_GATEWAY_STARTUP_TRACE=1` in the child Gateway environment.
 
 Read `/healthz` as liveness: the HTTP server can answer. Read `/readyz` as
-usable readiness: startup plugin sidecars, channels, hooks, and ready-critical
-post-attach work have settled. Ready log time is the Gateway's internal ready
-log timestamp; it is useful for process-side attribution but is not a substitute
-for the external `/readyz` probe.
+usable readiness: startup plugin sidecars, channels, and ready-critical
+post-attach work have settled. Gateway startup hooks are dispatched
+asynchronously and are not part of the readiness guarantee. Ready log time is the
+Gateway's internal ready log timestamp; it is useful for process-side
+attribution but is not a substitute for the external `/readyz` probe.
 
 Use JSON output or `--output` when comparing changes. Use `--cpu-prof-dir` only
 after the trace output points at import, compile, or CPU-bound work that cannot
