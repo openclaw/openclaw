@@ -1,4 +1,5 @@
 import { logWarn } from "../../logger.js";
+import type { AnyAgentTool } from "../pi-tools.types.js";
 import { sanitizeCommandInput } from "./sanitize-command.js";
 
 /**
@@ -29,22 +30,19 @@ export function sanitizeToolArg(raw: unknown, toolName: string, argName: string)
   return cleaned;
 }
 
-// Path-like keys carried by the core file tools (read/write/edit) after
-// Claude-compat normalization. Content-bearing keys (content/oldText/newText)
-// are intentionally excluded: file contents may legitimately contain `<|`,
-// `<<`, quotes, etc. and must not be mutated.
-const PATH_LIKE_KEYS = ["path", "file_path"] as const;
-
 /**
- * Sanitize path-like string params on a normalized file-tool params record.
- * Returns a new record only when something changed; otherwise the original.
+ * Sanitize the given string keys on a params record. Returns a new record only
+ * when something changed; otherwise the original. Shared by the path-like
+ * (read/write/edit) and search-like (find/grep/ls) wrappers so the leak-strip
+ * behavior stays identical across every file tool.
  */
-export function sanitizeFileToolParams(
+function sanitizeRecordKeys(
   record: Record<string, unknown>,
-  toolName = "file",
+  keys: readonly string[],
+  toolName: string,
 ): Record<string, unknown> {
   let result = record;
-  for (const key of PATH_LIKE_KEYS) {
+  for (const key of keys) {
     if (!(key in result)) {
       continue;
     }
@@ -58,4 +56,59 @@ export function sanitizeFileToolParams(
     }
   }
   return result;
+}
+
+// Path-like keys carried by the core file tools (read/write/edit) after
+// Claude-compat normalization. Content-bearing keys (content/oldText/newText)
+// are intentionally excluded: file contents may legitimately contain `<|`,
+// `<<`, quotes, etc. and must not be mutated.
+const PATH_LIKE_KEYS = ["path", "file_path"] as const;
+
+// Search/list tool string args (find/grep/ls). These bypass
+// normalizeToolParams (no Claude-compat alias remapping) so they need their
+// own sanitize entry point. `pattern`/`glob` are search inputs: a leaked
+// sentinel prefix (`<|<|"foo`) makes the search silently miss and the model
+// then hallucinates a result — strip the same tokens as for bash/path args.
+// Content-bearing keys stay excluded for the same reason as PATH_LIKE_KEYS.
+const SEARCH_LIKE_KEYS = ["path", "file_path", "pattern", "glob"] as const;
+
+/**
+ * Sanitize path-like string params on a normalized file-tool params record.
+ * Returns a new record only when something changed; otherwise the original.
+ */
+export function sanitizeFileToolParams(
+  record: Record<string, unknown>,
+  toolName = "file",
+): Record<string, unknown> {
+  return sanitizeRecordKeys(record, PATH_LIKE_KEYS, toolName);
+}
+
+/**
+ * Sanitize string params on a find/grep/ls params record.
+ * Returns a new record only when something changed; otherwise the original.
+ */
+export function sanitizeSearchToolParams(
+  record: Record<string, unknown>,
+  toolName = "search",
+): Record<string, unknown> {
+  return sanitizeRecordKeys(record, SEARCH_LIKE_KEYS, toolName);
+}
+
+/**
+ * Wrap a search/list tool (find/grep/ls) so leaked LLM sentinel tokens are
+ * stripped from its path/pattern/glob args before execution. Mirrors the
+ * read/write/edit protection in pi-tools.params.ts for tools that skip
+ * normalizeToolParams. No-op for clean args.
+ */
+export function wrapSearchToolArgSanitization(tool: AnyAgentTool): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const sanitized =
+        params && typeof params === "object"
+          ? sanitizeSearchToolParams(params as Record<string, unknown>, tool.name)
+          : params;
+      return tool.execute(toolCallId, sanitized ?? params, signal, onUpdate);
+    },
+  };
 }

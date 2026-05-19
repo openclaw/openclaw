@@ -46,8 +46,24 @@ export function sanitizeCommandInput(raw: string): string {
   s = s.replace(/<\|"?\|?/g, ""); // <|" | <|" | <|
   s = s.replace(/\|>/g, ""); // |>
 
-  // 5) 결과가 비었거나 공백만 남으면 원본 반환 (오류 메시지 추적 가능하게)
+  // 5) 결과 검증
   const trimmed = s.trim();
+
+  // (5a) 원본 자체가 sentinel(`<`,`>`,`|`,`"`,공백)만으로 구성된 경우:
+  //      - 길이 1 (단독 `<`, `>`, `|`, `"`) → 정당한 redirect/pipe 단편일 수 있어 보존
+  //      - 길이 2+ (`<<`, `<|>`, `<<|"|>` 등) → 명령으로 의미 없고 bash syntax
+  //        error 만 유발하므로 "" 반환. 빈 문자열이면 bash 가 no-op 으로 처리되어
+  //        모델이 환각 답변을 만들지 않는다 (incident 2026-05-19 황선아 환각).
+  //      raw 기준으로 판정하는 이유: `<<|"|>` 는 룰 1~4 처리 후 `<` 잔재만 남아
+  //      단독 `<` 입력과 sanitize 결과가 같아진다. 둘을 구분하려면 원본을 본다.
+  //      정당한 bash 입력 (`cat <file`, `echo "x"`, `a | b`) 은 영문/숫자가
+  //      있어 이 정규식에 매칭되지 않으므로 영향 없음.
+  const rawTrimmed = raw.trim();
+  if (/^[<>|"\s]+$/.test(rawTrimmed)) {
+    return rawTrimmed.length === 1 ? rawTrimmed : "";
+  }
+
+  // (5b) 실내용이 있는 명령: sanitize 결과 사용. 비었으면 원본 반환(오류 추적용)
   if (trimmed.length === 0) {
     return raw;
   }

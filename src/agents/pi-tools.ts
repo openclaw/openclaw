@@ -56,6 +56,7 @@ import {
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
+import { wrapSearchToolArgSanitization } from "./tools/sanitize-tool-args.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
@@ -403,6 +404,13 @@ export function createOpenClawCodingTools(options?: {
       }
       const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+    }
+    // find/grep/ls bypass normalizeToolParams (no Claude-compat alias
+    // remapping) so leaked LLM sentinel tokens in path/pattern/glob reach the
+    // filesystem unstripped (incident 2026-05-19). Wrap them to strip the same
+    // tokens as read/write/edit and bash exec already do.
+    if (tool.name === "find" || tool.name === "grep" || tool.name === "ls") {
+      return [wrapSearchToolArgSanitization(tool)];
     }
     return [tool];
   });

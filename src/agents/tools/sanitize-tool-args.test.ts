@@ -4,7 +4,13 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { logWarn } from "../../logger.js";
 import { normalizeToolParams } from "../pi-tools.params.js";
-import { sanitizeFileToolParams, sanitizeToolArg } from "./sanitize-tool-args.js";
+import type { AnyAgentTool } from "../pi-tools.types.js";
+import {
+  sanitizeFileToolParams,
+  sanitizeSearchToolParams,
+  sanitizeToolArg,
+  wrapSearchToolArgSanitization,
+} from "./sanitize-tool-args.js";
 
 vi.mock("../../logger.js", () => ({
   logWarn: vi.fn(),
@@ -23,6 +29,14 @@ describe("sanitizeToolArg / sanitizeFileToolParams", () => {
   it("sanitizes a sentinel-leaked read file_path", () => {
     const out = sanitizeFileToolParams({ path: '<<|"|/tmp/notes.md' }, "read");
     expect(out.path).toBe("/tmp/notes.md");
+  });
+
+  // 1b) jsonl 격리본 실측 read path 값 (cc1646c8…hallucinated, 2026-05-19).
+  //     path 전체가 sentinel-only → "" 로 비워져 assertRequiredParams 가
+  //     명시적 retry 를 유도 (ENOENT 후 모델 환각보다 안전).
+  it("empties a sentinel-only read path (observed jsonl <|<|)", () => {
+    const out = sanitizeFileToolParams({ path: "<|<|" }, "read");
+    expect(out.path).toBe("");
   });
 
   // 2) write.file_path 에 sentinel → sanitize (and content is left untouched)
@@ -89,5 +103,83 @@ describe("sanitizeToolArg / sanitizeFileToolParams", () => {
     expect(readSrc).toMatch(/createOpenClawReadTool[\s\S]*normalizeToolParams\(params\)/);
     // write/edit entry point
     expect(paramsSrc).toMatch(/wrapToolParamNormalization[\s\S]*normalizeToolParams\(params\)/);
+  });
+});
+
+describe("sanitizeSearchToolParams / wrapSearchToolArgSanitization (find/grep/ls)", () => {
+  afterEach(() => {
+    vi.mocked(logWarn).mockClear();
+  });
+
+  // 1) path / pattern / glob 모두 sentinel strip
+  it("sanitizes path, pattern and glob on a search params record", () => {
+    const out = sanitizeSearchToolParams(
+      { pattern: '<|<|"황선아', path: '<<|"|claude-ref/', glob: '<|"|*.md' },
+      "grep",
+    );
+    expect(out.pattern).toBe("황선아");
+    expect(out.path).toBe("claude-ref/");
+    expect(out.glob).toBe("*.md");
+  });
+
+  // 2) clean args → no-op (same reference, content-style keys untouched)
+  it("is a no-op for clean search params", () => {
+    const input = { pattern: "황선아", path: "memory/", glob: "*.md" };
+    expect(sanitizeSearchToolParams(input, "find")).toBe(input);
+  });
+
+  // 3) 비-string args → no-op
+  it("leaves non-string search args unchanged", () => {
+    const input = { pattern: 42 as unknown as string };
+    expect(sanitizeSearchToolParams(input, "find")).toBe(input);
+  });
+
+  // 4) wrap helper strips leaked tokens before the tool runs
+  it("wrapSearchToolArgSanitization strips leaked tokens before execute", async () => {
+    let received: Record<string, unknown> | undefined;
+    const tool = {
+      name: "grep",
+      description: "",
+      parameters: {},
+      execute: async (_id: string, params: Record<string, unknown>) => {
+        received = params;
+        return { content: [] };
+      },
+    } as unknown as AnyAgentTool;
+    const wrapped = wrapSearchToolArgSanitization(tool);
+    await wrapped.execute(
+      "call-1",
+      { pattern: '<|<|"황선아', path: "claude-ref/" },
+      undefined,
+      undefined,
+    );
+    expect(received).toEqual({ pattern: "황선아", path: "claude-ref/" });
+  });
+
+  // 5) non-object params pass through untouched
+  it("wrapSearchToolArgSanitization passes non-object params untouched", async () => {
+    let received: unknown = "unset";
+    const tool = {
+      name: "ls",
+      description: "",
+      parameters: {},
+      execute: async (_id: string, params: unknown) => {
+        received = params;
+        return { content: [] };
+      },
+    } as unknown as AnyAgentTool;
+    const wrapped = wrapSearchToolArgSanitization(tool);
+    await wrapped.execute("call-2", undefined, undefined, undefined);
+    expect(received).toBe(undefined);
+  });
+
+  // 6) entry-point check: find/grep/ls route through the search sanitize wrapper
+  it("find/grep/ls route through wrapSearchToolArgSanitization", () => {
+    const piToolsSrc = readFileSync(path.join(agentsDir, "pi-tools.ts"), "utf-8");
+    expect(piToolsSrc).toContain('from "./tools/sanitize-tool-args.js"');
+    expect(piToolsSrc).toMatch(
+      /tool\.name === "find" \|\| tool\.name === "grep" \|\| tool\.name === "ls"/,
+    );
+    expect(piToolsSrc).toContain("wrapSearchToolArgSanitization(tool)");
   });
 });

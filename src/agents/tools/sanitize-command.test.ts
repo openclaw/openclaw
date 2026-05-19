@@ -56,8 +56,10 @@ describe("sanitizeCommandInput", () => {
   });
 
   // edge case (3건)
-  it("returns original if sanitize produces empty", () => {
-    expect(sanitizeCommandInput('<|"|')).toBe('<|"|');
+  it('returns "" for sentinel-only residue (rule 5 강화, 2026-05-19)', () => {
+    // 룰5 강화 전엔 추적 위해 원본을 반환했으나, sentinel-only 잔재는
+    // bash syntax error 만 유발하므로 이제 빈 문자열을 반환한다.
+    expect(sanitizeCommandInput('<|"|')).toBe("");
   });
 
   it("handles non-string gracefully", () => {
@@ -100,5 +102,31 @@ describe("sanitizeCommandInput", () => {
 
   it("preserves html-like <x> text (false-positive guard)", () => {
     expect(sanitizeCommandInput("<x>")).toBe("<x>");
+  });
+});
+
+describe("sentinel residue handling (5/19 황선아 환각 회귀)", () => {
+  it('empty for sentinel-only residue: <<|"|>', () => {
+    expect(sanitizeCommandInput('<<|"|>')).toBe("");
+  });
+  it("empty for double-lt residue: <<", () => {
+    expect(sanitizeCommandInput("<<")).toBe("");
+  });
+  it("empty for sentinel-only mix: <|>", () => {
+    expect(sanitizeCommandInput("<|>")).toBe("");
+  });
+  // jsonl 격리본 실측 exec command 값 (cc1646c8…hallucinated, 2026-05-19 17:02).
+  // 이 잔재가 bash 로 흘러가 syntax error → 모델이 황선아 환각 답변 생성.
+  it('empty for observed jsonl exec residue: <|<|"|', () => {
+    expect(sanitizeCommandInput('<|<|"|')).toBe("");
+  });
+  it("preserves single < (could be valid redirect target)", () => {
+    expect(sanitizeCommandInput("<")).toBe("<");
+  });
+  it("preserves bash heredoc with EOF marker", () => {
+    expect(sanitizeCommandInput("cat <<EOF\nhello\nEOF")).toBe("cat <<EOF\nhello\nEOF");
+  });
+  it("preserves bash input redirect", () => {
+    expect(sanitizeCommandInput("cat <file.txt")).toBe("cat <file.txt");
   });
 });
