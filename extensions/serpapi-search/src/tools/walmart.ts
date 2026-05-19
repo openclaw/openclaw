@@ -4,8 +4,16 @@ import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
-  "query", "walmart_domain", "sort", "cat_id", "facet", "store_id",
-  "min_price", "max_price", "page", "zero_trace",
+  "query",
+  "walmart_domain",
+  "sort",
+  "cat_id",
+  "facet",
+  "store_id",
+  "min_price",
+  "max_price",
+  "page",
+  "zero_trace",
 ] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
@@ -34,7 +42,8 @@ export function createSerpApiWalmartTool(api: OpenClawPluginApi, ctx?: SerpApiTo
         },
         walmart_domain: {
           type: "string",
-          description: "Walmart domain to use (e.g. walmart.ca, walmart.com.mx). Defaults to walmart.com.",
+          description:
+            "Walmart domain to use (e.g. walmart.ca, walmart.com.mx). Defaults to walmart.com.",
         },
         sort: {
           type: "string",
@@ -76,15 +85,20 @@ export function createSerpApiWalmartTool(api: OpenClawPluginApi, ctx?: SerpApiTo
     },
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
+      const query = readStringParam(args, "query");
+      const catId = readStringParam(args, "cat_id");
+      if (!query && !catId) {
+        throw new Error("serpapi_walmart: either query or cat_id is required");
+      }
       const raw = await callSerpApi({
         cfg,
         engine: "walmart",
         allowedParams: ALLOWED_PARAMS,
         params: {
-          query: readStringParam(args, "query") ?? undefined,
+          query: query ?? undefined,
           walmart_domain: readStringParam(args, "walmart_domain") ?? undefined,
           sort: readStringParam(args, "sort") ?? undefined,
-          cat_id: readStringParam(args, "cat_id") ?? undefined,
+          cat_id: catId ?? undefined,
           facet: readStringParam(args, "facet") ?? undefined,
           store_id: readStringParam(args, "store_id") ?? undefined,
           min_price: readNumberParam(args, "min_price") ?? undefined,
