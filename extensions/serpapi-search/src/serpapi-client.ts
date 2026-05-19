@@ -32,7 +32,7 @@ export async function callSerpApi(opts: SerpApiCallParams): Promise<Record<strin
   if (!apiKey) {
     throw new Error(
       "serpapi-search needs a SerpApi API key. Set SERPAPI_API_KEY in the Gateway environment, " +
-        "or configure plugins.entries.serpapi-search.config.apiKey.",
+        "or configure plugins.entries.serpapi-search.config.webSearch.apiKey.",
     );
   }
 
