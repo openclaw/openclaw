@@ -11,6 +11,7 @@ export function resolveSubagentThinkingOverride(params: {
   cfg: OpenClawConfig;
   targetAgentConfig?: unknown;
   thinkingOverrideRaw?: string;
+  callerThinkingRaw?: string;
 }) {
   const targetSubagents = asOptionalObjectRecord(
     asOptionalObjectRecord(params.targetAgentConfig)?.subagents,
@@ -19,7 +20,8 @@ export function resolveSubagentThinkingOverride(params: {
   const resolvedThinkingDefaultRaw =
     readString(targetSubagents ?? {}, "thinking") ?? readString(defaultSubagents ?? {}, "thinking");
 
-  const thinkingCandidateRaw = params.thinkingOverrideRaw || resolvedThinkingDefaultRaw;
+  const thinkingCandidateRaw =
+    params.thinkingOverrideRaw || resolvedThinkingDefaultRaw || params.callerThinkingRaw;
   if (!thinkingCandidateRaw) {
     return {
       status: "ok" as const,

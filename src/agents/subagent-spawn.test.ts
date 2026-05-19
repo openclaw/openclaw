@@ -10,6 +10,7 @@ import { installAcceptedSubagentGatewayMock } from "./test-helpers/subagent-gate
 
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
+  loadSessionStoreMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
   pruneLegacyStoreKeysMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
@@ -63,6 +64,7 @@ describe("spawnSubagentDirect seam flow", () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
       getRuntimeConfig: () => hoisted.configOverride,
+      loadSessionStoreMock: hoisted.loadSessionStoreMock,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
       pruneLegacyStoreKeysMock: hoisted.pruneLegacyStoreKeysMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
@@ -78,6 +80,7 @@ describe("spawnSubagentDirect seam flow", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
+    hoisted.loadSessionStoreMock.mockReset();
     hoisted.updateSessionStoreMock.mockReset();
     hoisted.pruneLegacyStoreKeysMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
@@ -89,6 +92,7 @@ describe("spawnSubagentDirect seam flow", () => {
     );
     hoisted.configOverride = createConfigOverride();
     installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
+    hoisted.loadSessionStoreMock.mockReturnValue({});
 
     hoisted.updateSessionStoreMock.mockImplementation(
       async (
@@ -257,6 +261,31 @@ describe("spawnSubagentDirect seam flow", () => {
     const agentParams = requireRecord(agentRequest.params);
     expect(agentParams.sessionKey).toBe(childSessionKey);
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
+  it("inherits requester thinking level when no spawn or subagent default is configured", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:main:main": { thinkingLevel: "high" },
+    });
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "inherit thinking",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const childSessionKey = result.childSessionKey as string;
+    expect(persistedStore?.[childSessionKey]?.thinkingLevel).toBe("high");
   });
 
   it("keeps controller ownership separate from completion ownership", async () => {

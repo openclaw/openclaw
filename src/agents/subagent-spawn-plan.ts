@@ -45,6 +45,7 @@ export function resolveSubagentModelAndThinkingPlan(params: {
   targetAgentConfig?: unknown;
   modelOverride?: string;
   thinkingOverrideRaw?: string;
+  callerThinkingRaw?: string;
 }) {
   const resolvedModel = resolveSubagentSpawnModelSelection({
     cfg: params.cfg,
@@ -56,6 +57,7 @@ export function resolveSubagentModelAndThinkingPlan(params: {
     cfg: params.cfg,
     targetAgentConfig: params.targetAgentConfig,
     thinkingOverrideRaw: params.thinkingOverrideRaw,
+    callerThinkingRaw: params.callerThinkingRaw,
   });
   if (thinkingPlan.status === "error") {
     const { provider, model } = splitModelRef(resolvedModel);
