@@ -20,7 +20,7 @@ import {
 export type SerpApiCallParams = {
   cfg?: OpenClawConfig;
   engine: string;
-  /** Security allowlist — only these keys (plus engine/hl) will be forwarded to SerpApi. */
+  /** Security allowlist — only these keys (plus engine/hl) will be forwarded to SerpApi. "engine" and "hl" in opts.params are ignored; they are always taken from opts.engine and cfg. */
   allowedParams: readonly string[];
   params: Record<string, string | number | boolean | undefined>;
   timeoutSeconds?: number;
@@ -37,13 +37,16 @@ export async function callSerpApi(opts: SerpApiCallParams): Promise<Record<strin
   }
 
   const hl = resolveSerpApiLanguage(opts.cfg);
-  // Build raw params; config hl is the default, caller params can override.
-  const rawParams: Record<string, string> = { engine: opts.engine, hl };
+  // Build raw params from caller-supplied params first, then pin reserved keys so
+  // callers cannot override engine or hl via opts.params (parameter injection guard).
+  const rawParams: Record<string, string> = {};
   for (const [k, v] of Object.entries(opts.params)) {
-    if (v !== undefined && v !== null && v !== "") {
+    if (k !== "engine" && k !== "hl" && v !== undefined && v !== null && v !== "") {
       rawParams[k] = String(v);
     }
   }
+  rawParams.engine = opts.engine;
+  rawParams.hl = hl;
 
   // Filter to caller-declared allowlist; engine and hl are always forwarded.
   const allowed = new Set(opts.allowedParams);
