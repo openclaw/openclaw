@@ -159,7 +159,7 @@ export const discordChannelConfigUiHints = {
   },
   "agentComponents.ttlMs": {
     label: "Discord Component TTL (ms)",
-    help: "How long sent Discord component callbacks remain registered. Default is 1800000 (30 minutes); maximum is 604800000 (7 days).",
+    help: "How long sent Discord component callbacks remain registered. Default is 1800000 (30 minutes); maximum is 86400000 (24 hours).",
   },
   "intents.presence": {
     label: "Discord Presence Intent",
