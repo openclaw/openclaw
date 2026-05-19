@@ -149,6 +149,21 @@ describe("gateway-processes", () => {
     );
   });
 
+  it("rejects SIGUSR1 on Windows", () => {
+    setPlatform("win32");
+    isGatewayArgvMock.mockReturnValueOnce(true);
+    spawnSyncMock.mockReturnValueOnce({
+      error: null,
+      status: 0,
+      stdout: "node.exe gateway run",
+    });
+    parseCmdScriptCommandLineMock.mockReturnValue(["node.exe", "gateway", "run"]);
+
+    expect(() => signalVerifiedGatewayPidSync(42, "SIGUSR1")).toThrow(
+      /SIGUSR1 is not supported on Windows/,
+    );
+  });
+
   it("dedupes and filters verified gateway listener pids on unix and windows", () => {
     setPlatform("linux");
     findGatewayPidsOnPortSyncMock.mockReturnValue([process.pid, 200, 200, 300, -1]);

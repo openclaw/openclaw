@@ -37,6 +37,11 @@ export function signalVerifiedGatewayPidSync(pid: number, signal: "SIGTERM" | "S
   if (!args || !isGatewayArgv(args, { allowGatewayBinary: true })) {
     throw new Error(`refusing to signal non-gateway process pid ${pid}`);
   }
+  if (process.platform === "win32" && signal === "SIGUSR1") {
+    throw new Error(
+      "SIGUSR1 is not supported on Windows; use the Windows scheduled task restart mechanism instead",
+    );
+  }
   process.kill(pid, signal);
 }
 
