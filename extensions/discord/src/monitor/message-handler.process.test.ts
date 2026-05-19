@@ -2402,6 +2402,38 @@ describe("processDiscordMessage draft streaming", () => {
     expect(updates.join("\n")).not.toContain("_Checking files_Thinking");
   });
 
+  it("appends reasoning deltas before formatting progress text", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Considering" });
+      await params?.replyOptions?.onReasoningStream?.({ text: " plugin" });
+      await params?.replyOptions?.onReasoningStream?.({ text: " installation" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "!" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n\n🛠️ Exec\n• _Considering plugin installation!_",
+    );
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates.join("\n")).not.toContain("• _!_");
+  });
+
   it("keeps Discord progress lines across assistant boundaries", async () => {
     const draftStream = createMockDraftStreamForTest();
 
