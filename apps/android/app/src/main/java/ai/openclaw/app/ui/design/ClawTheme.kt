@@ -174,56 +174,56 @@ private fun clawTypography(fontFamily: FontFamily) =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.Bold,
-        fontSize = 22.sp,
-        lineHeight = 27.sp,
+        fontSize = 26.sp,
+        lineHeight = 32.sp,
         letterSpacing = 0.sp,
       ),
     title =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 17.sp,
-        lineHeight = 22.sp,
+        fontSize = 20.sp,
+        lineHeight = 25.sp,
         letterSpacing = 0.sp,
       ),
     section =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 12.2.sp,
-        lineHeight = 16.sp,
+        fontSize = 15.sp,
+        lineHeight = 20.sp,
         letterSpacing = 0.sp,
       ),
     body =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.Medium,
-        fontSize = 10.8.sp,
-        lineHeight = 15.sp,
+        fontSize = 14.sp,
+        lineHeight = 19.sp,
         letterSpacing = 0.sp,
       ),
     label =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 11.2.sp,
-        lineHeight = 15.sp,
+        fontSize = 14.sp,
+        lineHeight = 18.sp,
         letterSpacing = 0.sp,
       ),
     caption =
       TextStyle(
         fontFamily = fontFamily,
         fontWeight = FontWeight.Medium,
-        fontSize = 9.6.sp,
-        lineHeight = 13.sp,
+        fontSize = 12.5.sp,
+        lineHeight = 16.sp,
         letterSpacing = 0.sp,
       ),
     mono =
       TextStyle(
         fontFamily = FontFamily.Monospace,
         fontWeight = FontWeight.Medium,
-        fontSize = 12.sp,
-        lineHeight = 16.sp,
+        fontSize = 13.sp,
+        lineHeight = 18.sp,
         letterSpacing = 0.sp,
       ),
   )

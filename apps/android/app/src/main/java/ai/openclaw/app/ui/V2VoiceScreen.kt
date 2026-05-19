@@ -233,7 +233,7 @@ private fun V2DictationScreen(
       V2VoicePlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to voice", onClick = onCancel)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(text = "Dictation", style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp), color = ClawTheme.colors.text)
-        Text(text = "Transcribe then send", style = ClawTheme.type.body.copy(fontSize = 10.sp, lineHeight = 13.sp), color = ClawTheme.colors.textMuted)
+        Text(text = "Transcribe then send", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
       V2VoicePlainIconButton(icon = Icons.Default.Settings, contentDescription = "Dictation settings", onClick = {})
     }
@@ -256,7 +256,7 @@ private fun V2DictationScreen(
           V2DictationWaveform(active = listening || sending)
           Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(15.dp), tint = if (listening) ClawTheme.colors.success else ClawTheme.colors.textMuted)
-            Text(text = statusText, style = ClawTheme.type.body.copy(fontSize = 9.8.sp, lineHeight = 13.sp), color = ClawTheme.colors.textMuted)
+            Text(text = statusText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
       }
@@ -275,8 +275,8 @@ private fun V2DictationScreen(
           }
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-          Text(text = "Speech provider", style = ClawTheme.type.section.copy(fontSize = 11.sp, lineHeight = 14.sp), color = ClawTheme.colors.text)
-          Text(text = gatewayStatus.voiceGatewayLabel(), style = ClawTheme.type.body.copy(fontSize = 9.8.sp, lineHeight = 12.5.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+          Text(text = "Speech provider", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Text(text = gatewayStatus.voiceGatewayLabel(), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
           Text(
@@ -286,7 +286,7 @@ private fun V2DictationScreen(
                 speechProviderReady -> "Ready"
                 else -> "Offline"
               },
-            style = ClawTheme.type.caption.copy(fontSize = 9.sp, lineHeight = 11.5.sp),
+            style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
             color =
               when {
                 sending -> ClawTheme.colors.warning
@@ -371,7 +371,7 @@ private fun V2TalkSessionScreen(
               } else {
                 "Connected"
               },
-            style = ClawTheme.type.body.copy(fontSize = 9.sp, lineHeight = 11.5.sp),
+            style = ClawTheme.type.body,
             color = ClawTheme.colors.textMuted,
           )
         }
@@ -442,8 +442,8 @@ private fun V2TalkTranscriptCard(
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-      Text(text = label, style = ClawTheme.type.section.copy(fontSize = 10.sp, lineHeight = 12.5.sp), color = ClawTheme.colors.text)
-      Text(text = text, style = ClawTheme.type.body.copy(fontSize = 8.8.sp, lineHeight = 11.5.sp), color = if (muted) ClawTheme.colors.textMuted else ClawTheme.colors.text)
+      Text(text = label, style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = text, style = ClawTheme.type.body, color = if (muted) ClawTheme.colors.textMuted else ClawTheme.colors.text)
     }
   }
 }
@@ -468,7 +468,7 @@ private fun V2TalkControl(
         Icon(imageVector = icon, contentDescription = label, modifier = Modifier.size(if (primary) 20.dp else 18.dp))
       }
     }
-    Text(text = label, style = ClawTheme.type.caption.copy(fontSize = 8.4.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textMuted)
+    Text(text = label, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
   }
 }
 
@@ -501,7 +501,7 @@ private fun V2VoiceHeader(
     ) {
       Text(
         text = "O P E N C L A W",
-        style = ClawTheme.type.title.copy(fontSize = 10.8.sp, lineHeight = 14.sp),
+        style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
         color = ClawTheme.colors.text,
         modifier = Modifier.weight(1f),
       )
@@ -517,7 +517,7 @@ private fun V2VoiceHeader(
         Text(text = "Voice", style = ClawTheme.type.display.copy(fontSize = 16.sp, lineHeight = 20.sp), color = ClawTheme.colors.text)
         Text(
           text = statusText,
-          style = ClawTheme.type.body.copy(fontSize = 9.6.sp, lineHeight = 12.5.sp),
+          style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
@@ -542,7 +542,7 @@ private fun V2VoiceAvatar(text: String) {
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Text(text = text.take(2).uppercase(), style = ClawTheme.type.label.copy(fontSize = 9.4.sp, lineHeight = 12.sp))
+      Text(text = text.take(2).uppercase(), style = ClawTheme.type.label)
     }
   }
 }
@@ -595,7 +595,7 @@ private fun V2VoiceHero(
             micEnabled -> "Dictation is listening"
             else -> "Ready to talk"
           },
-        style = ClawTheme.type.body.copy(fontSize = 9.sp, lineHeight = 12.sp),
+        style = ClawTheme.type.body,
         color = ClawTheme.colors.textMuted,
         textAlign = TextAlign.Center,
       )
@@ -665,8 +665,8 @@ private fun V2VoiceModeRow(
         }
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = title, style = ClawTheme.type.body.copy(fontSize = 9.4.sp, lineHeight = 12.sp), color = ClawTheme.colors.text, maxLines = 1)
-        Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 8.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+        Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
+        Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
       }
     }
   }
@@ -691,7 +691,7 @@ private fun V2VoicePrimaryAction(
       horizontalArrangement = Arrangement.Center,
     ) {
       Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(13.dp))
-      Text(text = text, modifier = Modifier.padding(start = 8.dp), style = ClawTheme.type.label.copy(fontSize = 9.6.sp, lineHeight = 12.sp))
+      Text(text = text, modifier = Modifier.padding(start = 8.dp), style = ClawTheme.type.label)
     }
   }
 }
@@ -778,10 +778,10 @@ private fun V2VoiceTranscript(
           Text(text = "Live transcript", style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
           ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 9.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-              Text(text = "No transcript yet", style = ClawTheme.type.section.copy(fontSize = 10.6.sp, lineHeight = 13.5.sp), color = ClawTheme.colors.text)
+              Text(text = "No transcript yet", style = ClawTheme.type.section, color = ClawTheme.colors.text)
               Text(
                 text = "Your words and OpenClaw replies will appear here.",
-                style = ClawTheme.type.body.copy(fontSize = 8.8.sp, lineHeight = 11.6.sp),
+                style = ClawTheme.type.body,
                 color = ClawTheme.colors.textMuted,
               )
             }
@@ -806,12 +806,12 @@ private fun V2VoiceTurnCard(entry: VoiceConversationEntry) {
       Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Text(
           text = if (isUser) "You" else "OpenClaw",
-          style = ClawTheme.type.caption.copy(fontSize = 8.5.sp, lineHeight = 11.sp, fontWeight = FontWeight.SemiBold),
+          style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
           color = ClawTheme.colors.textSubtle,
         )
         Text(
           text = if (entry.isStreaming && entry.text.isBlank()) "Listening..." else entry.text,
-          style = ClawTheme.type.body.copy(fontSize = 9.4.sp, lineHeight = 12.8.sp),
+          style = ClawTheme.type.body,
           color = ClawTheme.colors.text,
         )
       }
