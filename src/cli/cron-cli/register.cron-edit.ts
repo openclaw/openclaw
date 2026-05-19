@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
+import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import {
   applyExistingCronSchedulePatch,
   resolveCronEditScheduleRequest,
@@ -226,10 +227,11 @@ export function registerCronEditCommand(cron: Command) {
           const model = normalizeOptionalString(opts.model);
           const thinking = normalizeOptionalString(opts.thinking);
           const toolsAllow = parseCronToolsAllow(opts.tools);
-          const timeoutSeconds = opts.timeoutSeconds
-            ? Number.parseInt(String(opts.timeoutSeconds), 10)
-            : undefined;
-          const hasTimeoutSeconds = Boolean(timeoutSeconds && Number.isFinite(timeoutSeconds));
+          // Match register.cron-add.ts: positive-integer only, reject 0 / negative
+          // / non-numeric / floats so `cron edit --timeout-seconds 0` no longer
+          // silently forwards an unusable timeout to the gateway (#83909).
+          const timeoutSeconds = parsePositiveIntOrUndefined(opts.timeoutSeconds);
+          const hasTimeoutSeconds = timeoutSeconds !== undefined;
           const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
           const threadId = parseCronThreadIdOption(opts.threadId);
           const hasDeliveryThreadId = typeof threadId === "number";
