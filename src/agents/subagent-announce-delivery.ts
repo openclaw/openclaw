@@ -662,7 +662,7 @@ async function sendSubagentAnnounceDirectly(params: {
       sourceTool: params.sourceTool,
     });
     const expectedMediaUrls = collectExpectedMediaFromInternalEvents(params.internalEvents);
-    const completionWantsMessageToolDelivery =
+    const requiresMessageToolDelivery =
       agentMediatedCompletion &&
       (expectedMediaUrls.length > 0 ||
         completionRequiresMessageToolDelivery({
@@ -673,12 +673,12 @@ async function sendSubagentAnnounceDirectly(params: {
           directOrigin: effectiveDirectOrigin,
           requesterSessionOrigin,
         }));
-    const requiresMessageToolDelivery = userDeliveryEligible && completionWantsMessageToolDelivery;
-    const completionSourceReplyDeliveryMode = completionWantsMessageToolDelivery
+    const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
       : undefined;
+    const userRequiresMessageToolDelivery = userDeliveryEligible && requiresMessageToolDelivery;
     const shouldDeliverAgentFinal =
-      userDeliveryEligible && deliveryTarget.deliver && !requiresMessageToolDelivery;
+      userDeliveryEligible && deliveryTarget.deliver && !userRequiresMessageToolDelivery;
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
@@ -796,7 +796,7 @@ async function sendSubagentAnnounceDirectly(params: {
     }
 
     if (
-      requiresMessageToolDelivery &&
+      userRequiresMessageToolDelivery &&
       !hasGatewayAgentMessagingToolDelivery(directAnnounceResponse)
     ) {
       return {
