@@ -87,6 +87,13 @@ export function registerBrowserElementCommands(
     .action(async (xRaw: string, yRaw: string, opts, cmd) => {
       const x = Number(xRaw);
       const y = Number(yRaw);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        defaultRuntime.error(
+          danger(`invalid coordinates "${xRaw} ${yRaw}": x and y must be finite numbers`),
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
       await runElementAction({
         cmd,
         body: {

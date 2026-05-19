@@ -12,7 +12,9 @@ export async function runBrowserResizeWithOutput(params: {
 }): Promise<void> {
   const { width, height } = params;
   if (!Number.isFinite(width) || !Number.isFinite(height)) {
-    defaultRuntime.error(danger("width and height must be numbers"));
+    defaultRuntime.error(
+      danger(`invalid viewport size "${width} ${height}": width and height must be finite numbers`),
+    );
     defaultRuntime.exit(1);
     return;
   }

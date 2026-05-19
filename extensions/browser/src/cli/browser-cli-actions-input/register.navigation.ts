@@ -48,6 +48,10 @@ export function registerBrowserNavigationCommands(
     .argument("<height>", "Viewport height", (v: string) => Number(v))
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (width: number, height: number, opts, cmd) => {
+      // width/height isFinite guard is in `runBrowserResizeWithOutput`
+      // (`browser-cli-resize.ts`), shared with `browser set viewport`. Keeping
+      // a single source of truth avoids drift between the two resize entry
+      // points. See #83876.
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         await runBrowserResizeWithOutput({
