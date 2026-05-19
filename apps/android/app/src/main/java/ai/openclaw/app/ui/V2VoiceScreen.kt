@@ -4,7 +4,6 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.VoiceCaptureMode
 import ai.openclaw.app.ui.design.ClawAvatarMark
 import ai.openclaw.app.ui.design.ClawIconButton
-import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
@@ -152,8 +151,8 @@ fun V2VoiceScreen(viewModel: MainViewModel) {
       Modifier
         .fillMaxSize()
         .imePadding()
-        .padding(horizontal = 20.dp, vertical = 12.dp),
-    verticalArrangement = Arrangement.spacedBy(12.dp),
+        .padding(horizontal = 20.dp, vertical = 8.dp),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
     V2VoiceHeader(
       statusText = if (voiceActive) activeStatus else "Your voice command center.",
@@ -496,7 +495,7 @@ private fun V2VoiceHeader(
   speakerEnabled: Boolean,
   onToggleSpeaker: () -> Unit,
 ) {
-  Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+  Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Row(
       modifier = Modifier.fillMaxWidth(),
       verticalAlignment = Alignment.CenterVertically,
@@ -504,7 +503,7 @@ private fun V2VoiceHeader(
     ) {
       Text(
         text = "O P E N C L A W",
-        style = ClawTheme.type.title.copy(fontSize = 13.2.sp, lineHeight = 17.sp),
+        style = ClawTheme.type.title.copy(fontSize = 10.8.sp, lineHeight = 14.sp),
         color = ClawTheme.colors.text,
         modifier = Modifier.weight(1f),
       )
@@ -517,10 +516,10 @@ private fun V2VoiceHeader(
       horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(text = "Voice", style = ClawTheme.type.display, color = ClawTheme.colors.text)
+        Text(text = "Voice", style = ClawTheme.type.display.copy(fontSize = 16.sp, lineHeight = 20.sp), color = ClawTheme.colors.text)
         Text(
           text = statusText,
-          style = ClawTheme.type.body,
+          style = ClawTheme.type.body.copy(fontSize = 9.6.sp, lineHeight = 12.5.sp),
           color = ClawTheme.colors.textMuted,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
@@ -541,9 +540,9 @@ private fun V2VoicePlainIconButton(
   contentDescription: String,
   onClick: () -> Unit,
 ) {
-  Surface(onClick = onClick, modifier = Modifier.size(34.dp), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+  Surface(onClick = onClick, modifier = Modifier.size(29.dp), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(22.dp))
+      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
     }
   }
 }
@@ -559,7 +558,7 @@ private fun V2VoiceHero(
   onStartTalk: () -> Unit,
   onStartDictation: () -> Unit,
 ) {
-  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
     V2VoiceOrb(
       active = micEnabled || talkModeEnabled,
       listening = talkModeListening || voiceCaptureMode == VoiceCaptureMode.ManualMic,
@@ -583,7 +582,7 @@ private fun V2VoiceHero(
             micEnabled -> "Dictation is listening"
             else -> "Ready to talk"
           },
-        style = ClawTheme.type.body,
+        style = ClawTheme.type.body.copy(fontSize = 9.sp, lineHeight = 12.sp),
         color = ClawTheme.colors.textMuted,
         textAlign = TextAlign.Center,
       )
@@ -605,7 +604,7 @@ private fun V2VoiceHero(
       }
     }
 
-    ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
+    ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
       V2VoiceModeRow(
         title = if (talkModeEnabled) "End Talk" else "Realtime Talk",
         subtitle = if (talkModeEnabled) "Conversation is live" else "Natural conversation in real time",
@@ -620,11 +619,10 @@ private fun V2VoiceHero(
       )
     }
 
-    ClawPrimaryButton(
+    V2VoicePrimaryAction(
       text = if (talkModeEnabled) "End Talk" else "Start Talk",
       icon = if (talkModeEnabled) Icons.Default.PhoneDisabled else Icons.Default.Phone,
       onClick = onStartTalk,
-      modifier = Modifier.fillMaxWidth(),
     )
   }
 }
@@ -636,24 +634,53 @@ private fun V2VoiceModeRow(
   icon: androidx.compose.ui.graphics.vector.ImageVector,
   onClick: () -> Unit,
 ) {
-  ClawListItem(
-    title = title,
-    subtitle = subtitle,
-    leading = {
+  Surface(onClick = onClick, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
       Surface(
-        modifier = Modifier.size(34.dp),
+        modifier = Modifier.size(25.dp),
         shape = CircleShape,
         color = ClawTheme.colors.surface,
         contentColor = ClawTheme.colors.text,
         border = BorderStroke(1.dp, ClawTheme.colors.border),
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp))
+          Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(14.dp))
         }
       }
-    },
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(text = title, style = ClawTheme.type.body.copy(fontSize = 9.4.sp, lineHeight = 12.sp), color = ClawTheme.colors.text, maxLines = 1)
+        Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 8.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+      }
+    }
+  }
+}
+
+@Composable
+private fun V2VoicePrimaryAction(
+  text: String,
+  icon: androidx.compose.ui.graphics.vector.ImageVector,
+  onClick: () -> Unit,
+) {
+  Surface(
     onClick = onClick,
-  )
+    modifier = Modifier.fillMaxWidth().height(30.dp),
+    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    color = ClawTheme.colors.primary,
+    contentColor = ClawTheme.colors.primaryText,
+  ) {
+    Row(
+      modifier = Modifier.fillMaxSize(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.Center,
+    ) {
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(13.dp))
+      Text(text = text, modifier = Modifier.padding(start = 8.dp), style = ClawTheme.type.label.copy(fontSize = 9.6.sp, lineHeight = 12.sp))
+    }
+  }
 }
 
 @Composable
@@ -663,13 +690,13 @@ private fun V2VoiceOrb(
   speaking: Boolean,
 ) {
   Surface(
-    modifier = Modifier.size(126.dp),
+    modifier = Modifier.size(86.dp),
     shape = CircleShape,
     color = if (active) ClawTheme.colors.surfacePressed else ClawTheme.colors.surface,
     border = BorderStroke(1.dp, if (active) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Icon(
           imageVector =
             when {
@@ -678,7 +705,7 @@ private fun V2VoiceOrb(
               else -> Icons.Default.Mic
             },
           contentDescription = null,
-          modifier = Modifier.size(38.dp),
+          modifier = Modifier.size(26.dp),
           tint = ClawTheme.colors.text,
         )
         V2Waveform(active = active)
@@ -689,12 +716,12 @@ private fun V2VoiceOrb(
 
 @Composable
 private fun V2Waveform(active: Boolean) {
-  Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-    listOf(8, 14, 22, 30, 18, 12, 26, 18, 9).forEachIndexed { index, height ->
+  Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+    listOf(6, 11, 17, 23, 14, 9, 20, 14, 7).forEachIndexed { index, height ->
       Box(
         modifier =
           Modifier
-            .size(width = 3.dp, height = (if (active) height else 8 + index % 3 * 3).dp)
+            .size(width = 2.dp, height = (if (active) height else 6 + index % 3 * 3).dp)
             .clip(RoundedCornerShape(999.dp))
             .background(if (active) ClawTheme.colors.text else ClawTheme.colors.textSubtle),
       )
