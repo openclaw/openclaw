@@ -14,14 +14,24 @@ import { isMessageToolSendActionName } from "./pi-embedded-messaging.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import { normalizeToolName } from "./tool-policy.js";
 
+const TOOL_ARGS_MAX_CHARS = 4000;
 const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
+const TOOL_TRUNCATION_MARKER = "\n…(truncated)…";
 
-function truncateToolText(text: string): string {
-  if (text.length <= TOOL_RESULT_MAX_CHARS) {
+function truncateToolString(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
     return text;
   }
-  return `${truncateUtf16Safe(text, TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
+  return `${truncateUtf16Safe(text, maxChars)}${TOOL_TRUNCATION_MARKER}`;
+}
+
+function truncateToolArgsText(text: string): string {
+  return truncateToolString(text, TOOL_ARGS_MAX_CHARS);
+}
+
+function truncateToolText(text: string): string {
+  return truncateToolString(text, TOOL_RESULT_MAX_CHARS);
 }
 
 function normalizeToolErrorText(text: string): string | undefined {
@@ -116,16 +126,20 @@ function isHostDenialToolText(text: string): boolean {
   return normalized.toLowerCase().includes("approval cannot safely bind");
 }
 
-function redactStringsDeep(value: unknown, seen = new WeakSet<object>()): unknown {
+function redactStringsDeep(
+  value: unknown,
+  seen = new WeakSet<object>(),
+  maxChars = TOOL_RESULT_MAX_CHARS,
+): unknown {
   if (typeof value === "string") {
-    return redactToolPayloadText(value);
+    return truncateToolString(redactToolPayloadText(value), maxChars);
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {
       return "[Circular]";
     }
     seen.add(value);
-    return value.map((item) => redactStringsDeep(item, seen));
+    return value.map((item) => redactStringsDeep(item, seen, maxChars));
   }
   if (value && typeof value === "object") {
     if (seen.has(value)) {
@@ -136,8 +150,8 @@ function redactStringsDeep(value: unknown, seen = new WeakSet<object>()): unknow
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
       out[key] =
         typeof child === "string"
-          ? redactSensitiveFieldValue(key, child)
-          : redactStringsDeep(child, seen);
+          ? truncateToolString(redactSensitiveFieldValue(key, child), maxChars)
+          : redactStringsDeep(child, seen, maxChars);
     }
     return out;
   }
@@ -145,15 +159,18 @@ function redactStringsDeep(value: unknown, seen = new WeakSet<object>()): unknow
 }
 
 export function sanitizeToolArgs(args: unknown): unknown {
-  return redactStringsDeep(args);
+  if (typeof args === "string") {
+    return truncateToolArgsText(redactToolPayloadText(args));
+  }
+  return redactStringsDeep(args, new WeakSet<object>(), TOOL_ARGS_MAX_CHARS);
 }
 
 export function sanitizeToolResult(result: unknown): unknown {
   if (typeof result === "string") {
-    return redactToolPayloadText(result);
+    return truncateToolText(redactToolPayloadText(result));
   }
   if (Array.isArray(result)) {
-    return redactStringsDeep(result);
+    return redactStringsDeep(result, new WeakSet<object>(), TOOL_RESULT_MAX_CHARS);
   }
   if (!result || typeof result !== "object") {
     return result;
@@ -181,7 +198,11 @@ export function sanitizeToolResult(result: unknown): unknown {
   }
   // Deep-redact the entire result so any top-level or nested string is
   // protected, not just `details` and text content blocks.
-  const baseline = redactStringsDeep(preCleaned) as Record<string, unknown>;
+  const baseline = redactStringsDeep(
+    preCleaned,
+    new WeakSet<object>(),
+    TOOL_RESULT_MAX_CHARS,
+  ) as Record<string, unknown>;
   const out: Record<string, unknown> = { ...baseline };
   const content = Array.isArray(baseline.content) ? baseline.content : null;
   if (content) {
