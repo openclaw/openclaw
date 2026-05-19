@@ -319,16 +319,28 @@ async function hydrateViewer(): Promise<void> {
   syncDocumentTheme();
 
   for (const { host, payload } of cards) {
-    ensureShadowRoot(host);
-    const diff = new FileDiff(createRenderOptions(payload));
-    diff.hydrate({
-      fileContainer: host,
-      prerenderedHTML: payload.prerenderedHTML,
-      ...getHydrateProps(payload),
-    });
-    const controller = { payload, diff };
-    controllers.push(controller);
-    applyState(controller);
+    // Isolate per-card hydration failures so a defect in one card (corrupted
+    // prerenderedHTML, missing shadow root, upstream @pierre/diffs assertion,
+    // etc.) cannot abort the remaining cards on the page. The outer main()
+    // try/catch still owns truly fatal failures like preloadHighlighter
+    // throwing. See #83914.
+    try {
+      ensureShadowRoot(host);
+      const diff = new FileDiff(createRenderOptions(payload));
+      diff.hydrate({
+        fileContainer: host,
+        prerenderedHTML: payload.prerenderedHTML,
+        ...getHydrateProps(payload),
+      });
+      const controller = { payload, diff };
+      controllers.push(controller);
+      applyState(controller);
+    } catch (err) {
+      // Best-effort surface: tag the failed host so callers/tests can detect
+      // partial hydration without losing the other cards.
+      host.dataset.openclawDiffsCardError = "true";
+      console.warn("Failed to hydrate diff card", err);
+    }
   }
 }
 
