@@ -65,6 +65,14 @@ export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean 
   return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.WEBCHAT_UI;
 }
 
+export function isTuiClient(client?: GatewayClientInfoLike | null): boolean {
+  return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.TUI;
+}
+
+export function isInternalSourceSurfaceClient(client?: GatewayClientInfoLike | null): boolean {
+  return isWebchatClient(client) || isTuiClient(client);
+}
+
 export function isMarkdownCapableMessageChannel(raw?: string | null): boolean {
   const channel = normalizeMessageChannel(raw);
   if (!channel) {

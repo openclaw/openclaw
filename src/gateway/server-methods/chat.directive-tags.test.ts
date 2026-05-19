@@ -4,7 +4,11 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import {
+  REPLY_MEDIA_FAILURE_WARNING,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
@@ -16,6 +20,7 @@ import {
 import { ErrorCodes } from "../protocol/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
+import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
@@ -24,34 +29,10 @@ const mockState = vi.hoisted(() => ({
   sessionId: "sess-1",
   mainSessionKey: "main",
   finalText: "[[reply_to_current]]",
-  finalPayload: null as {
-    text?: string;
-    mediaUrl?: string;
-    mediaUrls?: string[];
-    spokenText?: string;
-    audioAsVoice?: boolean;
-    trustedLocalMedia?: boolean;
-    sensitiveMedia?: boolean;
-    replyToId?: string;
-    replyToCurrent?: boolean;
-    isReasoning?: boolean;
-    isError?: boolean;
-  } | null,
+  finalPayload: null as ReplyPayload | null,
   dispatchedReplies: [] as Array<{
     kind: "tool" | "block" | "final";
-    payload: {
-      text?: string;
-      mediaUrl?: string;
-      mediaUrls?: string[];
-      spokenText?: string;
-      ttsSupplement?: { spokenText: string };
-      audioAsVoice?: boolean;
-      trustedLocalMedia?: boolean;
-      replyToId?: string;
-      replyToCurrent?: boolean;
-      isReasoning?: boolean;
-      isError?: boolean;
-    };
+    payload: ReplyPayload;
   }>,
   dispatchError: null as Error | null,
   dispatchErrorAfterAgentRunStart: null as Error | null,
@@ -160,7 +141,6 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           replyToId?: string;
           replyToCurrent?: boolean;
           isReasoning?: boolean;
-          isError?: boolean;
         }) => boolean;
         sendBlockReply: (payload: {
           text?: string;
@@ -172,7 +152,6 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           replyToId?: string;
           replyToCurrent?: boolean;
           isReasoning?: boolean;
-          isError?: boolean;
         }) => boolean;
         sendToolResult: (payload: {
           text?: string;
@@ -184,7 +163,6 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           replyToId?: string;
           replyToCurrent?: boolean;
           isReasoning?: boolean;
-          isError?: boolean;
         }) => boolean;
         markComplete: () => void;
         waitForIdle: () => Promise<void>;
@@ -347,7 +325,11 @@ vi.mock("../../media/store.js", async () => {
 
 const { chatHandlers } = await import("./chat.js");
 
-async function waitForAssertion(assertion: () => void, timeoutMs = 1000, stepMs = 2) {
+async function waitForAssertion(
+  assertion: () => void | Promise<void>,
+  timeoutMs = 1000,
+  stepMs = 2,
+) {
   await vi.waitFor(assertion, { interval: stepMs, timeout: timeoutMs });
 }
 
@@ -1851,6 +1833,682 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(assistantUpdates).toStrictEqual([]);
   });
 
+  it("broadcasts internal source replies from agent runs as live chat finals", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-source-reply-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata(
+          {
+            text: "Summary visible in the TUI.",
+          },
+          {
+            deliverDespiteSourceReplySuppression: true,
+            sourceReplyTranscriptMirror: {
+              sessionKey: "main",
+              agentId: "main",
+              text: "Summary visible in the TUI.",
+              idempotencyKey: "idem-agent-source-reply:internal-source-reply:0",
+            },
+          },
+        ),
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-source-reply",
+    });
+
+    expect(payload?.runId).toBe("idem-agent-source-reply:internal-source-reply:0");
+    expect(payload?.state).toBe("final");
+    expect(getMessage(payload)?.role).toBe("assistant");
+    expect(extractFirstTextBlock(payload)).toBe("Summary visible in the TUI.");
+  });
+
+  it("broadcasts rich-only internal source replies from agent runs as live chat finals", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-rich-source-reply-");
+    const sourceReplyIdempotencyKey = "idem-agent-rich-source-reply:internal-source-reply:0";
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata(
+          {
+            presentation: {
+              title: "Approval needed",
+              blocks: [
+                { type: "text", text: "Choose the next step." },
+                {
+                  type: "buttons",
+                  buttons: [{ label: "Retry", value: "retry" }],
+                },
+              ],
+            },
+            channelData: { kind: "rich-source-reply" },
+          },
+          {
+            deliverDespiteSourceReplySuppression: true,
+            sourceReplyTranscriptMirror: {
+              sessionKey: "main",
+              agentId: "main",
+              idempotencyKey: sourceReplyIdempotencyKey,
+            },
+          },
+        ),
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-rich-source-reply",
+    });
+
+    const text = extractFirstTextBlock(payload);
+    expect(payload?.runId).toBe(sourceReplyIdempotencyKey);
+    expect(payload?.state).toBe("final");
+    expect(getMessage(payload)?.role).toBe("assistant");
+    expect(text).toContain("Approval needed");
+    expect(text).toContain("Choose the next step.");
+    expect(text).toContain("- Retry");
+    expect(text).toContain("Channel data:");
+    expect(text).toContain('"kind":"rich-source-reply"');
+    const index = await readSessionTranscriptIndex(mockState.transcriptPath);
+    const persisted = index?.entries.find((entry) => {
+      const message = entry.record.message as { idempotencyKey?: unknown } | undefined;
+      return message?.idempotencyKey === sourceReplyIdempotencyKey;
+    });
+    const persistedMessage = persisted?.record.message as Record<string, any> | undefined;
+    const persistedContent = persistedMessage?.content as Array<Record<string, any>> | undefined;
+    expect(persistedContent?.[0]?.text).toContain("Approval needed");
+    expect(persistedContent?.[0]?.text).toContain('"kind":"rich-source-reply"');
+  });
+
+  it("preserves rich controls on mixed text internal source reply mirrors", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-mixed-rich-source-reply-");
+    const sourceReplyIdempotencyKey = "idem-agent-mixed-rich-source-reply:internal-source-reply:0";
+    const mirror = await appendInjectedAssistantMessageToTranscript({
+      transcriptPath: mockState.transcriptPath,
+      message: "Status ready.",
+      content: [{ type: "text", text: "Status ready." }],
+      idempotencyKey: sourceReplyIdempotencyKey,
+      now: 0,
+    });
+    if (!mirror.ok) {
+      throw new Error(mirror.error ?? "source reply mirror append failed");
+    }
+    const mirrorMessageId = mirror.messageId;
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata(
+          {
+            text: "Status ready.",
+            presentation: {
+              title: "Approval needed",
+              blocks: [
+                {
+                  type: "buttons",
+                  buttons: [{ label: "Retry", value: "retry" }],
+                },
+              ],
+            },
+          },
+          {
+            deliverDespiteSourceReplySuppression: true,
+            sourceReplyTranscriptMirror: {
+              sessionKey: "main",
+              agentId: "main",
+              text: "Status ready.",
+              idempotencyKey: sourceReplyIdempotencyKey,
+            },
+          },
+        ),
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-mixed-rich-source-reply",
+    });
+
+    const text = extractFirstTextBlock(payload);
+    expect(payload?.runId).toBe(sourceReplyIdempotencyKey);
+    expect(text).toContain("Status ready.");
+    expect(text).toContain("Approval needed");
+    expect(text).toContain("- Retry");
+    const index = await readSessionTranscriptIndex(mockState.transcriptPath);
+    const persisted = index?.entries.find((entry) => {
+      const message = entry.record.message as { idempotencyKey?: unknown } | undefined;
+      return message?.idempotencyKey === sourceReplyIdempotencyKey;
+    });
+    const persistedMessage = persisted?.record.message as Record<string, any> | undefined;
+    const persistedContent = persistedMessage?.content as Array<Record<string, any>> | undefined;
+    expect(persisted?.id).not.toBe(mirrorMessageId);
+    expect(persistedContent?.[0]?.text).toContain("Status ready.");
+    expect(persistedContent?.[0]?.text).toContain("Approval needed");
+    expect(persistedContent?.[0]?.text).toContain("- Retry");
+  });
+
+  it("broadcasts legacy interactive-only internal source replies from agent runs", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-interactive-source-reply-");
+    const sourceReplyIdempotencyKey = "idem-agent-interactive-source-reply:internal-source-reply:0";
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata(
+          {
+            interactive: {
+              blocks: [
+                {
+                  type: "buttons",
+                  buttons: [{ label: "Retry", value: "retry" }],
+                },
+                {
+                  type: "select",
+                  placeholder: "Choose lane",
+                  options: [{ label: "Fast", value: "fast" }],
+                },
+              ],
+            },
+          },
+          {
+            deliverDespiteSourceReplySuppression: true,
+            sourceReplyTranscriptMirror: {
+              sessionKey: "main",
+              agentId: "main",
+              idempotencyKey: sourceReplyIdempotencyKey,
+            },
+          },
+        ),
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-interactive-source-reply",
+    });
+
+    const text = extractFirstTextBlock(payload);
+    expect(payload?.runId).toBe(sourceReplyIdempotencyKey);
+    expect(payload?.state).toBe("final");
+    expect(getMessage(payload)?.role).toBe("assistant");
+    expect(text).toContain("- Retry");
+    expect(text).toContain("Choose lane:");
+    expect(text).toContain("- Fast");
+    const index = await readSessionTranscriptIndex(mockState.transcriptPath);
+    const persisted = index?.entries.find((entry) => {
+      const message = entry.record.message as { idempotencyKey?: unknown } | undefined;
+      return message?.idempotencyKey === sourceReplyIdempotencyKey;
+    });
+    const persistedMessage = persisted?.record.message as Record<string, any> | undefined;
+    const persistedContent = persistedMessage?.content as Array<Record<string, any>> | undefined;
+    expect(persistedContent?.[0]?.text).toContain("- Retry");
+    expect(persistedContent?.[0]?.text).toContain("Choose lane:");
+  });
+
+  it("upgrades media-bearing internal source reply mirrors for durable chat history", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-source-media-reply-");
+    const sourceReplyIdempotencyKey = "idem-agent-source-media:internal-source-reply:0";
+    const audioPath = path.join(path.dirname(mockState.transcriptPath), "source.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    const mirror = await appendInjectedAssistantMessageToTranscript({
+      transcriptPath: mockState.transcriptPath,
+      message: `Audio visible in the TUI.\nMEDIA:${audioPath}\n[[audio_as_voice]]`,
+      content: [
+        {
+          type: "text",
+          text: `Audio visible in the TUI.\nMEDIA:${audioPath}\n[[audio_as_voice]]`,
+        },
+      ],
+      idempotencyKey: sourceReplyIdempotencyKey,
+      now: 0,
+    });
+    if (!mirror.ok) {
+      throw new Error(mirror.error ?? "source reply mirror append failed");
+    }
+    const mirrorMessageId = mirror.messageId;
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata(
+          {
+            text: "Audio visible in the TUI.",
+            mediaUrl: audioPath,
+            mediaUrls: [audioPath],
+            trustedLocalMedia: true,
+            audioAsVoice: true,
+          },
+          {
+            deliverDespiteSourceReplySuppression: true,
+            sourceReplyTranscriptMirror: {
+              sessionKey: "main",
+              agentId: "main",
+              text: "Audio visible in the TUI.",
+              mediaUrls: [audioPath],
+              idempotencyKey: sourceReplyIdempotencyKey,
+            },
+          },
+        ),
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-source-media",
+    });
+
+    const liveContent = getMessageContent(payload);
+    expect(payload?.runId).toBe(sourceReplyIdempotencyKey);
+    expect(liveContent.some((block) => block.type !== "text")).toBe(true);
+    const index = await readSessionTranscriptIndex(mockState.transcriptPath);
+    const activeMirror = index?.entries.find((entry) => {
+      const message = entry.record.message as { idempotencyKey?: unknown } | undefined;
+      return message?.idempotencyKey === sourceReplyIdempotencyKey;
+    });
+    const transcriptMessage = activeMirror?.record.message as Record<string, any> | undefined;
+    const transcriptContent = transcriptMessage?.content as Array<Record<string, any>> | undefined;
+    expect(activeMirror?.id).not.toBe(mirrorMessageId);
+    expect(transcriptContent?.[0]).toEqual({
+      type: "text",
+      text: "Audio visible in the TUI.",
+    });
+    expect(transcriptContent?.some((block) => block.type === "attachment")).toBe(true);
+  });
+
+  it("uses a synthetic label for image-only internal source reply mirrors", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-source-image-only-reply-");
+    const sourceReplyIdempotencyKey = "idem-agent-source-image:internal-source-reply:0";
+    const imagePath = path.join(path.dirname(mockState.transcriptPath), "source.png");
+    fs.writeFileSync(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const mirror = await appendInjectedAssistantMessageToTranscript({
+      transcriptPath: mockState.transcriptPath,
+      message: `MEDIA:${imagePath}`,
+      content: [{ type: "text", text: `MEDIA:${imagePath}` }],
+      idempotencyKey: sourceReplyIdempotencyKey,
+      now: 0,
+    });
+    if (!mirror.ok) {
+      throw new Error(mirror.error ?? "source reply mirror append failed");
+    }
+    const mirrorMessageId = mirror.messageId;
+    mockState.savedMediaResults = [
+      { path: imagePath, contentType: "image/png" },
+      { path: imagePath, contentType: "image/png" },
+    ];
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata(
+          {
+            mediaUrl: imagePath,
+            mediaUrls: [imagePath],
+          },
+          {
+            deliverDespiteSourceReplySuppression: true,
+            sourceReplyTranscriptMirror: {
+              sessionKey: "main",
+              agentId: "main",
+              mediaUrls: [imagePath],
+              idempotencyKey: sourceReplyIdempotencyKey,
+            },
+          },
+        ),
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-source-image",
+    });
+
+    const liveContent = getMessageContent(payload);
+    expect(payload?.runId).toBe(sourceReplyIdempotencyKey);
+    expect(liveContent[0]).toEqual({ type: "text", text: "Image reply" });
+    expect(liveContent.some((block) => block.type === "image")).toBe(true);
+    expect(JSON.stringify(payload?.message)).not.toContain("MEDIA:");
+    expect(JSON.stringify(payload?.message)).not.toContain(imagePath);
+    const index = await readSessionTranscriptIndex(mockState.transcriptPath);
+    const activeMirror = index?.entries.find((entry) => {
+      const message = entry.record.message as { idempotencyKey?: unknown } | undefined;
+      return message?.idempotencyKey === sourceReplyIdempotencyKey;
+    });
+    const transcriptMessage = activeMirror?.record.message as Record<string, any> | undefined;
+    const transcriptContent = transcriptMessage?.content as Array<Record<string, any>> | undefined;
+    expect(activeMirror?.id).not.toBe(mirrorMessageId);
+    expect(transcriptContent?.[0]).toEqual({
+      type: "text",
+      text: "Image reply",
+    });
+    expect(transcriptContent?.some((block) => block.type === "image")).toBe(true);
+    expect(JSON.stringify(transcriptContent)).not.toContain("MEDIA:");
+    expect(JSON.stringify(transcriptContent)).not.toContain(imagePath);
+  });
+
+  it("keeps sensitive internal source reply media out of durable mirrors", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-source-sensitive-media-reply-");
+    const sourceReplyIdempotencyKey = "idem-agent-source-sensitive-media:internal-source-reply:0";
+    const sensitiveImageUrl =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata(
+          {
+            mediaUrl: sensitiveImageUrl,
+            mediaUrls: [sensitiveImageUrl],
+            sensitiveMedia: true,
+          },
+          {
+            deliverDespiteSourceReplySuppression: true,
+            sourceReplyTranscriptMirror: {
+              sessionKey: "main",
+              agentId: "main",
+              idempotencyKey: sourceReplyIdempotencyKey,
+            },
+          },
+        ),
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-source-sensitive-media",
+    });
+
+    const liveContent = getMessageContent(payload);
+    expect(payload?.runId).toBe(sourceReplyIdempotencyKey);
+    expect(liveContent[0]).toEqual({ type: "text", text: "Image reply" });
+    expect(liveContent.some((block) => block.type === "input_image")).toBe(true);
+    expect(JSON.stringify(payload?.message)).toContain(sensitiveImageUrl);
+    const index = await readSessionTranscriptIndex(mockState.transcriptPath);
+    const activeMirror = index?.entries.find((entry) => {
+      const message = entry.record.message as { idempotencyKey?: unknown } | undefined;
+      return message?.idempotencyKey === sourceReplyIdempotencyKey;
+    });
+    const transcriptMessage = activeMirror?.record.message as Record<string, any> | undefined;
+    const transcriptContent = transcriptMessage?.content as Array<Record<string, any>> | undefined;
+    expect(transcriptContent).toEqual([{ type: "text", text: "Image reply" }]);
+    expect(JSON.stringify(transcriptMessage)).not.toContain("MEDIA:");
+    expect(JSON.stringify(transcriptMessage)).not.toContain(sensitiveImageUrl);
+    expect(fs.readFileSync(mockState.transcriptPath, "utf8")).not.toContain(sensitiveImageUrl);
+  });
+
+  it("upgrades internal source reply mirrors when display media is dropped", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-source-dropped-media-reply-");
+    const sourceReplyIdempotencyKey = "idem-agent-source-dropped-media:internal-source-reply:0";
+    const blockedMediaUrl = `file://${path.join(path.dirname(mockState.transcriptPath), "blocked.png")}`;
+    const mirror = await appendInjectedAssistantMessageToTranscript({
+      transcriptPath: mockState.transcriptPath,
+      message: `Blocked media visible in the TUI.\nMEDIA:${blockedMediaUrl}`,
+      content: [
+        {
+          type: "text",
+          text: `Blocked media visible in the TUI.\nMEDIA:${blockedMediaUrl}`,
+        },
+      ],
+      idempotencyKey: sourceReplyIdempotencyKey,
+      now: 0,
+    });
+    if (!mirror.ok) {
+      throw new Error(mirror.error ?? "source reply mirror append failed");
+    }
+    const mirrorMessageId = mirror.messageId;
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata(
+          {
+            text: "Blocked media visible in the TUI.",
+            mediaUrl: blockedMediaUrl,
+            mediaUrls: [blockedMediaUrl],
+          },
+          {
+            deliverDespiteSourceReplySuppression: true,
+            sourceReplyTranscriptMirror: {
+              sessionKey: "main",
+              agentId: "main",
+              text: "Blocked media visible in the TUI.",
+              mediaUrls: [blockedMediaUrl],
+              idempotencyKey: sourceReplyIdempotencyKey,
+            },
+          },
+        ),
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-source-dropped-media",
+    });
+
+    const text = extractFirstTextBlock(payload);
+    expect(payload?.runId).toBe(sourceReplyIdempotencyKey);
+    expect(text).toContain(REPLY_MEDIA_FAILURE_WARNING);
+    const index = await readSessionTranscriptIndex(mockState.transcriptPath);
+    const activeMirror = index?.entries.find((entry) => {
+      const message = entry.record.message as { idempotencyKey?: unknown } | undefined;
+      return message?.idempotencyKey === sourceReplyIdempotencyKey;
+    });
+    const transcriptMessage = activeMirror?.record.message as Record<string, any> | undefined;
+    const transcriptContent = transcriptMessage?.content as Array<Record<string, any>> | undefined;
+    expect(activeMirror?.id).not.toBe(mirrorMessageId);
+    expect(transcriptContent?.[0]?.text).toContain(REPLY_MEDIA_FAILURE_WARNING);
+    expect(JSON.stringify(transcriptContent)).not.toContain("MEDIA:");
+    expect(JSON.stringify(transcriptContent)).not.toContain(blockedMediaUrl);
+  });
+
+  it("waits for the source reply media mirror before upgrading durable chat history", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-source-media-delayed-mirror-");
+    const sourceReplyIdempotencyKey = "idem-agent-source-media-fallback:internal-source-reply:0";
+    const audioPath = path.join(path.dirname(mockState.transcriptPath), "fallback.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    let mirrorAppendError: Error | undefined;
+    mockState.onAfterAgentRunStart = () => {
+      setTimeout(() => {
+        void (async () => {
+          const mirror = await appendInjectedAssistantMessageToTranscript({
+            transcriptPath: mockState.transcriptPath,
+            message: `Fallback audio visible in the TUI.\nMEDIA:${audioPath}\n[[audio_as_voice]]`,
+            content: [
+              {
+                type: "text",
+                text: `Fallback audio visible in the TUI.\nMEDIA:${audioPath}\n[[audio_as_voice]]`,
+              },
+            ],
+            idempotencyKey: sourceReplyIdempotencyKey,
+            now: 0,
+          });
+          if (!mirror.ok) {
+            mirrorAppendError = new Error(mirror.error ?? "source reply mirror append failed");
+          }
+        })().catch((err) => {
+          mirrorAppendError = err instanceof Error ? err : new Error(String(err));
+        });
+      }, 25);
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata(
+          {
+            text: "Fallback audio visible in the TUI.",
+            mediaUrl: audioPath,
+            mediaUrls: [audioPath],
+            trustedLocalMedia: true,
+            audioAsVoice: true,
+          },
+          {
+            deliverDespiteSourceReplySuppression: true,
+            sourceReplyTranscriptMirror: {
+              sessionKey: "main",
+              agentId: "main",
+              text: "Fallback audio visible in the TUI.",
+              mediaUrls: [audioPath],
+              idempotencyKey: sourceReplyIdempotencyKey,
+            },
+          },
+        ),
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-source-media-fallback",
+    });
+
+    expect(payload?.runId).toBe(sourceReplyIdempotencyKey);
+    await waitForAssertion(async () => {
+      if (mirrorAppendError) {
+        throw mirrorAppendError;
+      }
+      const index = await readSessionTranscriptIndex(mockState.transcriptPath);
+      const sourceEntries = index?.entries.filter((entry) => {
+        const message = entry.record.message as { idempotencyKey?: unknown } | undefined;
+        return message?.idempotencyKey === sourceReplyIdempotencyKey;
+      });
+      expect(sourceEntries).toHaveLength(1);
+      const transcriptMessage = sourceEntries?.[0]?.record.message as
+        | Record<string, any>
+        | undefined;
+      const transcriptContent = transcriptMessage?.content as
+        | Array<Record<string, any>>
+        | undefined;
+      expect(transcriptContent?.some((block) => block.type === "attachment")).toBe(true);
+    }, 2_000);
+  });
+
+  it("upgrades each media-bearing internal source reply mirror in the same agent run", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-source-multi-media-reply-");
+    const sourceReplies = [
+      {
+        key: "idem-agent-source-multi:internal-source-reply:0",
+        text: "First audio visible in the TUI.",
+        file: "first.mp3",
+      },
+      {
+        key: "idem-agent-source-multi:internal-source-reply:1",
+        text: "Second audio visible in the TUI.",
+        file: "second.mp3",
+      },
+    ].map((reply) => ({
+      ...reply,
+      audioPath: path.join(path.dirname(mockState.transcriptPath), reply.file),
+    }));
+    for (const reply of sourceReplies) {
+      fs.writeFileSync(reply.audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+      const mirror = await appendInjectedAssistantMessageToTranscript({
+        transcriptPath: mockState.transcriptPath,
+        message: `${reply.text}\nMEDIA:${reply.audioPath}\n[[audio_as_voice]]`,
+        content: [
+          {
+            type: "text",
+            text: `${reply.text}\nMEDIA:${reply.audioPath}\n[[audio_as_voice]]`,
+          },
+        ],
+        idempotencyKey: reply.key,
+        now: 0,
+      });
+      if (!mirror.ok) {
+        throw new Error(mirror.error ?? "source reply mirror append failed");
+      }
+    }
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = sourceReplies.map((reply) => ({
+      kind: "final" as const,
+      payload: setReplyPayloadMetadata(
+        {
+          text: reply.text,
+          mediaUrl: reply.audioPath,
+          mediaUrls: [reply.audioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+        {
+          deliverDespiteSourceReplySuppression: true,
+          sourceReplyTranscriptMirror: {
+            sessionKey: "main",
+            agentId: "main",
+            text: reply.text,
+            mediaUrls: [reply.audioPath],
+            idempotencyKey: reply.key,
+          },
+        },
+      ),
+    }));
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-source-multi",
+      waitFor: "dedupe",
+    });
+
+    const broadcastCalls = (
+      context.broadcast as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls.filter((call) => call[0] === "chat");
+    expect(broadcastCalls).toHaveLength(2);
+    const index = await readSessionTranscriptIndex(mockState.transcriptPath);
+    for (const reply of sourceReplies) {
+      const activeMirror = index?.entries.find((entry) => {
+        const message = entry.record.message as { idempotencyKey?: unknown } | undefined;
+        return message?.idempotencyKey === reply.key;
+      });
+      const transcriptMessage = activeMirror?.record.message as Record<string, any> | undefined;
+      const transcriptContent = transcriptMessage?.content as
+        | Array<Record<string, any>>
+        | undefined;
+      expect(transcriptContent?.[0]).toEqual({
+        type: "text",
+        text: reply.text,
+      });
+      expect(transcriptContent?.some((block) => block.type === "attachment")).toBe(true);
+    }
+  });
+
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
     const transcriptDir = createTranscriptFixture("openclaw-chat-send-command-tts-final-");
     const audioPath = path.join(transcriptDir, "tts.mp3");
@@ -2708,8 +3366,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("chat.send still inherits external routes for UI clients on channel-scoped sessions", async () => {
-    createTranscriptFixture("openclaw-chat-send-ui-channel-scoped-inherit-");
+  it("chat.send does not inherit external routes for TUI clients on channel-scoped sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-tui-channel-scoped-no-inherit-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
       deliveryContext: {
@@ -2727,12 +3385,53 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await runNonStreamingChatSend({
       context,
       respond,
-      idempotencyKey: "idem-ui-channel-scoped-inherit",
+      idempotencyKey: "idem-tui-channel-scoped-no-inherit",
       client: {
         connect: {
           client: {
             mode: GATEWAY_CLIENT_MODES.UI,
-            id: "openclaw-tui",
+            id: GATEWAY_CLIENT_NAMES.TUI,
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:imessage:direct:+8619800001234",
+      deliver: true,
+      expectBroadcast: false,
+    });
+
+    expectDispatchContextFields({
+      OriginatingChannel: "webchat",
+      OriginatingTo: undefined,
+      ExplicitDeliverRoute: false,
+      AccountId: undefined,
+    });
+  });
+
+  it("chat.send still inherits external routes for non-source UI clients on channel-scoped sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-generic-ui-channel-scoped-inherit-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "imessage",
+        to: "+8619800001234",
+        accountId: "default",
+      },
+      lastChannel: "imessage",
+      lastTo: "+8619800001234",
+      lastAccountId: "default",
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-generic-ui-channel-scoped-inherit",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.UI,
+            id: GATEWAY_CLIENT_NAMES.TEST,
           },
         },
       } as unknown,

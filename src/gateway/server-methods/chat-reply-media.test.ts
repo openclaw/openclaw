@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { createManagedOutgoingImageBlocks } from "../managed-image-attachments.js";
@@ -175,6 +179,29 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     await expectPathMissing(path.join(stateDir, "media", "outbound"));
   });
 
+  it("marks staged workspace audio as trusted for WebChat audio embedding", async () => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const workspaceDir = path.join(stateDir, "workspace");
+    const audioPath = path.join(workspaceDir, "voice.mp3");
+    await fs.mkdir(path.dirname(audioPath), { recursive: true });
+    await fs.writeFile(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    const cfg = createConfig({ agentDir, workspaceDir, allowRead: false });
+
+    const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
+      cfg,
+      sessionKey: "agent:main:webchat:direct:user",
+      agentId: "main",
+      payloads: [{ mediaUrls: [audioPath], audioAsVoice: true }],
+    });
+
+    const normalizedPath = requireString(payload?.mediaUrls?.[0], "normalized audio path");
+    expect(normalizedPath).not.toBe(audioPath);
+    expect(normalizedPath.startsWith(path.join(stateDir, "media"))).toBe(true);
+    expect(payload?.trustedLocalMedia).toBe(true);
+    expect(payload?.audioAsVoice).toBe(true);
+  });
+
   it("does not preserve untrusted local audio paths before display normalization", async () => {
     const stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
     const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -226,6 +253,42 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     });
 
     expect(blocks).toHaveLength(2);
+  });
+
+  it("preserves reply payload metadata while staging mixed display media", async () => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const workspaceDir = path.join(stateDir, "workspace");
+    const sourcePath = await createCodexHomeImage({ agentDir });
+    const dataUrl = `data:image/png;base64,${PNG_BYTES.toString("base64")}`;
+    const cfg = createConfig({ agentDir, workspaceDir, allowRead: true });
+    const sourceReplyIdempotencyKey = "source-reply-idem";
+    const originalPayload = setReplyPayloadMetadata(
+      { mediaUrls: [dataUrl, sourcePath] },
+      {
+        deliverDespiteSourceReplySuppression: true,
+        sourceReplyTranscriptMirror: {
+          sessionKey: "main",
+          agentId: "main",
+          idempotencyKey: sourceReplyIdempotencyKey,
+        },
+      },
+    );
+
+    const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
+      cfg,
+      sessionKey: "agent:main:webchat:direct:user",
+      agentId: "main",
+      payloads: [originalPayload],
+    });
+
+    expect(payload).not.toBe(originalPayload);
+    expect(getReplyPayloadMetadata(payload ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        idempotencyKey: sourceReplyIdempotencyKey,
+      },
+    });
   });
 
   it("does not add a failure warning when a mixed inline image survives", async () => {

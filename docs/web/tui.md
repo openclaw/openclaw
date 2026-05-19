@@ -203,7 +203,7 @@ Tips:
 
 ## Connection details
 
-- The TUI registers with the Gateway as `mode: "tui"`.
+- The TUI registers with the Gateway as client id `openclaw-tui` and mode `ui`.
 - Reconnects show a system message; event gaps are surfaced in the log.
 
 ## Options

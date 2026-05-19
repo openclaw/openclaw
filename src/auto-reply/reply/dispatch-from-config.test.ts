@@ -6463,7 +6463,63 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
   });
 
-  it("keeps internal source reply metadata on TTS-cloned final payloads", async () => {
+  it("does not prewrite sensitive internal source reply media into transcript mirrors", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const sensitiveImageUrl =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    const sourceReply = setReplyPayloadMetadata(
+      {
+        mediaUrl: sensitiveImageUrl,
+        mediaUrls: [sensitiveImageUrl],
+        sensitiveMedia: true,
+      },
+      {
+        deliverDespiteSourceReplySuppression: true,
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:main",
+          agentId: "main",
+          mediaUrls: [sensitiveImageUrl],
+          idempotencyKey: "run-sensitive:internal-source-reply:0",
+        },
+      },
+    );
+    const replyResolver = vi.fn(async () => sourceReply satisfies ReplyPayload);
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "webchat", Surface: "webchat", SessionKey: "agent:main" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    const finalPayload = firstFinalReplyPayload(dispatcher);
+    expect(result.queuedFinal).toBe(true);
+    expect(finalPayload?.mediaUrl).toBe(sensitiveImageUrl);
+    expect(getReplyPayloadMetadata(finalPayload ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        sessionKey: "agent:main",
+        agentId: "main",
+        idempotencyKey: "run-sensitive:internal-source-reply:0",
+      },
+    });
+    expect(
+      getReplyPayloadMetadata(finalPayload ?? {})?.sourceReplyTranscriptMirror?.mediaUrls,
+    ).toBeUndefined();
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("preserves internal source reply metadata after final TTS synthesis", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
     sessionStoreMocks.currentEntry = {
@@ -6473,13 +6529,13 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     };
     const dispatcher = createDispatcher();
     const sourceReply = setReplyPayloadMetadata(
-      { text: "message tool reply" },
+      { text: "message tool reply long enough for synthesized audio" },
       {
         deliverDespiteSourceReplySuppression: true,
         sourceReplyTranscriptMirror: {
           sessionKey: "agent:main",
           agentId: "main",
-          text: "message tool reply",
+          text: "message tool reply long enough for synthesized audio",
           idempotencyKey: "run-tts:internal-source-reply:0",
         },
       },
@@ -6496,17 +6552,24 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       },
     });
 
+    const finalPayload = firstFinalReplyPayload(dispatcher);
     expect(result.queuedFinal).toBe(true);
-    const queuedPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[0];
-    expect(queuedPayload).toMatchObject({
-      text: "message tool reply",
-      mediaUrl: "https://example.com/tts-synth.opus",
-      audioAsVoice: true,
+    expect(finalPayload).not.toBe(sourceReply);
+    expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+    expect(getReplyPayloadMetadata(finalPayload ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        idempotencyKey: "run-tts:internal-source-reply:0",
+      },
     });
-    expect(getReplyPayloadMetadata(queuedPayload)?.sourceReplyTranscriptMirror).toMatchObject({
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
       sessionKey: "agent:main",
+      agentId: "main",
+      text: "message tool reply long enough for synthesized audio",
+      mediaUrls: undefined,
       idempotencyKey: "run-tts:internal-source-reply:0",
+      updateMode: "inline",
+      config: emptyConfig,
     });
   });
 

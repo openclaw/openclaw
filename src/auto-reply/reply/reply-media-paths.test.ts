@@ -20,6 +20,7 @@ vi.mock("../../media/read-capability.js", () => ({
   resolveAgentScopedOutboundMediaAccess,
 }));
 
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 
 type NormalizedReply = {
@@ -109,7 +110,7 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(mediaAccess.workspaceDir).toBe("/tmp/agent-workspace");
   });
 
-  it("preserves reply metadata when media normalization clones the payload", async () => {
+  it("preserves reply payload metadata when media paths are normalized", async () => {
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},
       sessionKey: "session-key",
@@ -117,15 +118,16 @@ describe("createReplyMediaPathNormalizer", () => {
     });
     const payload = setReplyPayloadMetadata(
       {
-        text: "Here is the image",
-        mediaUrls: ["./out/photo.png"],
+        text: "Audio visible in the TUI.",
+        mediaUrls: ["./out/audio.mp3"],
       },
       {
+        deliverDespiteSourceReplySuppression: true,
         sourceReplyTranscriptMirror: {
           sessionKey: "main",
-          text: "Here is the image",
-          mediaUrls: ["./out/photo.png"],
-          idempotencyKey: "source-reply:0",
+          agentId: "main",
+          text: "Audio visible in the TUI.",
+          idempotencyKey: "source-reply-idem",
         },
       },
     );
@@ -133,12 +135,12 @@ describe("createReplyMediaPathNormalizer", () => {
     const result = await normalize(payload);
 
     expect(result).not.toBe(payload);
-    expectMedia(result, "/tmp/outbound-media/photo.png", ["/tmp/outbound-media/photo.png"]);
-    expect(getReplyPayloadMetadata(result)?.sourceReplyTranscriptMirror).toEqual({
-      sessionKey: "main",
-      text: "Here is the image",
-      mediaUrls: ["./out/photo.png"],
-      idempotencyKey: "source-reply:0",
+    expectMedia(result, "/tmp/outbound-media/audio.mp3", ["/tmp/outbound-media/audio.mp3"]);
+    expect(getReplyPayloadMetadata(result)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        idempotencyKey: "source-reply-idem",
+      },
     });
   });
 

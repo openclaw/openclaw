@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -1114,6 +1115,115 @@ describe("gateway server chat", () => {
       expect(historyRes.ok).toBe(true);
       const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
       expect(historyTexts).toEqual(["main thread context"]);
+    });
+  });
+
+  test("delivers message-tool source replies to TUI clients over gateway chat events", async () => {
+    await withMainSessionStore(async () => {
+      let tuiWs: WebSocket | undefined;
+      try {
+        tuiWs = new WebSocket(`ws://127.0.0.1:${port}`);
+        trackConnectChallengeNonce(tuiWs);
+        await new Promise<void>((resolve) => tuiWs?.once("open", resolve));
+        await connectOk(tuiWs, {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.TUI,
+            version: "dev",
+            platform: "test",
+            mode: GATEWAY_CLIENT_MODES.UI,
+          },
+        });
+
+        const sourceReplyRunId = "idem-tui-source-reply:internal-source-reply:0";
+        const chatEvents: unknown[] = [];
+        const collectChatEvents = (data: WebSocket.RawData) => {
+          const obj = JSON.parse(data.toString()) as { event?: unknown; payload?: unknown };
+          if (obj.event === "chat") {
+            chatEvents.push(obj.payload);
+          }
+        };
+        tuiWs.on("message", collectChatEvents);
+        dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+          const [params] = args as [
+            {
+              dispatcher: {
+                sendFinalReply: (payload: ReplyPayload) => boolean;
+                markComplete: () => void;
+                waitForIdle: () => Promise<void>;
+                getQueuedCounts: () => { final: number; block: number; tool: number };
+              };
+              replyOptions?: {
+                runId?: string;
+                onAgentRunStart?: (runId: string) => void;
+              };
+            },
+          ];
+          params.replyOptions?.onAgentRunStart?.(
+            params.replyOptions.runId ?? "idem-tui-source-reply",
+          );
+          params.dispatcher.sendFinalReply(
+            setReplyPayloadMetadata(
+              {
+                text: "Summary visible in the TUI.",
+              },
+              {
+                deliverDespiteSourceReplySuppression: true,
+                sourceReplyTranscriptMirror: {
+                  sessionKey: "main",
+                  agentId: "main",
+                  text: "Summary visible in the TUI.",
+                  idempotencyKey: sourceReplyRunId,
+                },
+              },
+            ),
+          );
+          params.dispatcher.markComplete();
+          await params.dispatcher.waitForIdle();
+          return {
+            queuedFinal: true,
+            counts: params.dispatcher.getQueuedCounts(),
+          };
+        });
+
+        const sendRes = await rpcReq(tuiWs, "chat.send", {
+          sessionKey: "main",
+          message: "post a visible source reply",
+          idempotencyKey: "idem-tui-source-reply",
+        });
+        expect(sendRes.ok).toBe(true);
+
+        await vi.waitFor(
+          () => {
+            const sourceFinal = chatEvents.find(
+              (payload) =>
+                typeof payload === "object" &&
+                payload !== null &&
+                (payload as { state?: unknown }).state === "final" &&
+                (payload as { runId?: unknown }).runId === sourceReplyRunId &&
+                extractFirstTextBlock((payload as { message?: unknown }).message) ===
+                  "Summary visible in the TUI.",
+            );
+            if (!sourceFinal) {
+              throw new Error(`missing TUI source reply; seen=${JSON.stringify(chatEvents)}`);
+            }
+          },
+          { timeout: 8000 },
+        );
+        tuiWs.off("message", collectChatEvents);
+        const sourceFinal = chatEvents.find(
+          (payload) =>
+            typeof payload === "object" &&
+            payload !== null &&
+            (payload as { runId?: unknown }).runId === sourceReplyRunId,
+        );
+        expectRecordFields(sourceFinal, {
+          runId: sourceReplyRunId,
+          sessionKey: "agent:main:main",
+          state: "final",
+        });
+      } finally {
+        tuiWs?.close();
+      }
     });
   });
 

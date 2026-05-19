@@ -107,6 +107,7 @@ import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   markReplyPayloadAsTtsSupplement,
+  setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -696,6 +697,9 @@ async function mirrorInternalSourceReplyToTranscript(params: {
   if (!mirror) {
     return;
   }
+  if (!mirror.text?.trim() && !mirror.mediaUrls?.some((mediaUrl) => mediaUrl.trim())) {
+    return;
+  }
   const result = await appendAssistantMessageToSessionTranscript({
     sessionKey: mirror.sessionKey,
     agentId: mirror.agentId,
@@ -708,6 +712,25 @@ async function mirrorInternalSourceReplyToTranscript(params: {
   if (!result.ok) {
     logVerbose(`dispatch-from-config: internal source reply mirror skipped: ${result.reason}`);
   }
+}
+
+function sanitizeInternalSourceReplyMirrorPayload(payload: ReplyPayload): ReplyPayload {
+  if (payload.sensitiveMedia !== true) {
+    return payload;
+  }
+  const metadata = getReplyPayloadMetadata(payload);
+  const mirror = metadata?.sourceReplyTranscriptMirror;
+  if (!mirror?.mediaUrls?.some((mediaUrl) => mediaUrl.trim())) {
+    return payload;
+  }
+  const sanitizedPayload: ReplyPayload = { ...payload };
+  const sanitizedMirror = { ...mirror };
+  delete sanitizedMirror.mediaUrls;
+  setReplyPayloadMetadata(sanitizedPayload, {
+    ...metadata,
+    sourceReplyTranscriptMirror: sanitizedMirror,
+  });
+  return sanitizedPayload;
 }
 
 function runWithDispatchAbortSignal<T>(
@@ -1658,8 +1681,6 @@ export async function dispatchReplyFromConfig(
         }
       };
       throwIfFinalDeliveryAborted();
-      const sourceReplyTranscriptMirror =
-        getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
       const hasVisibleFinalContent = hasOutboundReplyContent(payload, { trimText: true });
       if (hasVisibleFinalContent) {
         markInboundDedupeReplayUnsafe();
@@ -1676,8 +1697,12 @@ export async function dispatchReplyFromConfig(
         accountId: replyRoute.accountId,
       });
       throwIfFinalDeliveryAborted();
-      const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
+      const normalizedPayload = sanitizeInternalSourceReplyMirrorPayload(
+        await normalizeReplyMediaPayload(ttsPayload),
+      );
       throwIfFinalDeliveryAborted();
+      const sourceReplyTranscriptMirror =
+        getReplyPayloadMetadata(normalizedPayload)?.sourceReplyTranscriptMirror;
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
       });

@@ -1,5 +1,5 @@
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPassThroughRemoteMediaSource } from "../../media/media-source-url.js";
@@ -21,6 +21,28 @@ function shouldPreserveDisplayMediaUrl(payload: ReplyPayload, mediaUrl: string):
     return true;
   }
   return payload.trustedLocalMedia === true;
+}
+
+function isTrustedDisplayAudioUrl(mediaUrl: string): boolean {
+  return (
+    isAudioFileName(mediaUrl) &&
+    !isDataUrlMedia(mediaUrl) &&
+    !isPassThroughRemoteMediaSource(mediaUrl)
+  );
+}
+
+function trustStagedDisplayAudio(payload: ReplyPayload): ReplyPayload {
+  if (payload.trustedLocalMedia === true) {
+    return payload;
+  }
+  const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
+  if (!mediaUrls.some(isTrustedDisplayAudioUrl)) {
+    return payload;
+  }
+  return copyReplyPayloadMetadata(payload, {
+    ...payload,
+    trustedLocalMedia: true,
+  });
 }
 
 export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
@@ -53,7 +75,7 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
     }
     const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
     if (!mediaUrls.some((mediaUrl) => shouldPreserveDisplayMediaUrl(payload, mediaUrl))) {
-      normalized.push(await normalizeMediaPaths(payload));
+      normalized.push(trustStagedDisplayAudio(await normalizeMediaPaths(payload)));
       continue;
     }
     if (!mediaUrls.some((mediaUrl) => !shouldPreserveDisplayMediaUrl(payload, mediaUrl))) {
@@ -62,6 +84,7 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
     }
     const mergedMediaUrls: string[] = [];
     let text = payload.text;
+    let hasTrustedStagedAudio = payload.trustedLocalMedia === true;
     for (const mediaUrl of mediaUrls) {
       if (shouldPreserveDisplayMediaUrl(payload, mediaUrl)) {
         mergedMediaUrls.push(mediaUrl);
@@ -76,14 +99,18 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
       if (normalizedMediaUrls.length === 0) {
         continue;
       }
+      hasTrustedStagedAudio ||= normalizedMediaUrls.some(isTrustedDisplayAudioUrl);
       mergedMediaUrls.push(...normalizedMediaUrls);
     }
-    normalized.push({
-      ...payload,
-      text,
-      mediaUrl: mergedMediaUrls[0],
-      mediaUrls: mergedMediaUrls,
-    });
+    normalized.push(
+      copyReplyPayloadMetadata(payload, {
+        ...payload,
+        text,
+        mediaUrl: mergedMediaUrls[0],
+        mediaUrls: mergedMediaUrls,
+        trustedLocalMedia: hasTrustedStagedAudio || undefined,
+      }),
+    );
   }
   return normalized;
 }
