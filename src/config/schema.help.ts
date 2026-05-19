@@ -243,6 +243,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-agent override for max characters of each workspace bootstrap file injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapMaxChars.",
   "agents.list[].bootstrapTotalMaxChars":
     "Per-agent override for max total characters across all workspace bootstrap files injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapTotalMaxChars.",
+  "agents.list[].experimental":
+    "Per-agent experimental flags. Omitted fields inherit agents.defaults.experimental.",
+  "agents.list[].experimental.localModelLean":
+    "Per-agent override for lean local-model mode. Enable it for one smaller local-model agent without trimming tools from every agent.",
   "agents.defaults.contextLimits":
     "Focused per-agent-context budget defaults for selected high-volume excerpts and injected prompt blocks. Use this to tune bounded read/injection sizes without reopening any unbounded call paths.",
   "agents.defaults.contextLimits.memoryGetMaxChars":

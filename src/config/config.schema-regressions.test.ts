@@ -157,6 +157,23 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts agents.list experimental localModelLean overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "gemma",
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts agents.defaults.compaction.truncateAfterCompaction", () => {
     const res = validateConfigObject({
       agents: {
