@@ -1436,8 +1436,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
           });
         }
-        const approvedHandoffBootstrapProfile =
-          handoffBootstrapProfile as DeviceBootstrapProfile | null;
+        const approvedHandoffBootstrapProfile = handoffBootstrapProfile;
         if (device && approvedHandoffBootstrapProfile) {
           for (const bootstrapRole of approvedHandoffBootstrapProfile.roles) {
             if (bootstrapDeviceTokens.some((entry) => entry.role === bootstrapRole)) {
