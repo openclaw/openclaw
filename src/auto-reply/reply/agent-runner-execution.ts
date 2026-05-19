@@ -1079,6 +1079,12 @@ export async function runAgentTurnWithFallback(params: {
   replyOperation?: ReplyOperation;
   opts?: GetReplyOptions;
   typingSignals: TypingSignaler;
+  /**
+   * Forwarded into `runEmbeddedPiAgent` so the message tool can stop the
+   * channel typing keepalive in lockstep with delivery when
+   * `sourceReplyDeliveryMode === "message_tool_only"` (issue #84276).
+   */
+  onSourceReplyDelivered?: () => void;
   blockReplyPipeline: BlockReplyPipeline | null;
   blockStreamingEnabled: boolean;
   blockReplyChunking?: {
@@ -1799,6 +1805,7 @@ export async function runAgentTurnWithFallback(params: {
                 sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                 forceMessageTool:
                   params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
+                onSourceReplyDelivered: params.onSourceReplyDelivered,
                 silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                 suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
                 onUserMessagePersisted: () => {

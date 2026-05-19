@@ -1463,6 +1463,11 @@ export async function runReplyAgent(params: {
         replyOperation,
         opts,
         typingSignals,
+        // Issue #84276: stop the channel typing keepalive immediately when the
+        // message tool delivers a visible reply in `message_tool_only` mode so
+        // Discord/etc. don't keep the typing bubble alive for the remainder of
+        // the channel-side TTL after the reply has already landed.
+        onSourceReplyDelivered: () => typing.markSourceReplyDelivered(),
         blockReplyPipeline,
         blockStreamingEnabled,
         blockReplyChunking,

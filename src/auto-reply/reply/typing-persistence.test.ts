@@ -113,9 +113,77 @@ describe("typing persistence bug fix", () => {
     inert.refreshTypingTtl();
     inert.markRunComplete();
     inert.markDispatchIdle();
+    inert.markSourceReplyDelivered();
     inert.cleanup();
 
     expect(inert.isActive()).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Issue #84276: in `message_tool_only` source-reply mode the visible reply is
+  // delivered through the message(action=send) tool. Without an explicit signal
+  // the keepalive loop can fire one more `sendTyping` while the tool is in
+  // flight, leaving the channel-side typing TTL refreshed for the full
+  // ~10 seconds after the user sees the reply. `markSourceReplyDelivered()`
+  // must stop the keepalive immediately and seal the controller.
+  describe("markSourceReplyDelivered (issue #84276)", () => {
+    it("stops the keepalive loop immediately on visible source-reply delivery", async () => {
+      await controller.startTypingLoop();
+      expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+
+      controller.markSourceReplyDelivered();
+
+      expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+
+      // No further keepalive ticks should issue typing pings after delivery.
+      vi.advanceTimersByTime(6000);
+      vi.advanceTimersByTime(6000);
+      vi.advanceTimersByTime(6000);
+      expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("seals the controller so late markRunComplete/markDispatchIdle are no-ops", async () => {
+      await controller.startTypingLoop();
+      controller.markSourceReplyDelivered();
+      expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+
+      controller.markRunComplete();
+      controller.markDispatchIdle();
+      controller.cleanup();
+
+      expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+      expect(controller.isActive()).toBe(false);
+    });
+
+    it("is idempotent across repeated calls", async () => {
+      await controller.startTypingLoop();
+      controller.markSourceReplyDelivered();
+      controller.markSourceReplyDelivered();
+      controller.markSourceReplyDelivered();
+
+      expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("clears the dispatch-idle grace timer if markRunComplete fired first", async () => {
+      await controller.startTypingLoop();
+      controller.markRunComplete();
+
+      // The 10 s grace timer is now armed; markSourceReplyDelivered should
+      // clean up immediately without waiting for it.
+      expect(onCleanupSpy).not.toHaveBeenCalled();
+      controller.markSourceReplyDelivered();
+      expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+
+      // Advancing past the original 10s grace must not trigger a second cleanup.
+      vi.advanceTimersByTime(10_000);
+      expect(onCleanupSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("is a no-op when typing was never started", () => {
+      controller.markSourceReplyDelivered();
+      // No keepalive started, so no channel cleanup signal should fire.
+      expect(onCleanupSpy).not.toHaveBeenCalled();
+      expect(onReplyStartSpy).not.toHaveBeenCalled();
+    });
   });
 });

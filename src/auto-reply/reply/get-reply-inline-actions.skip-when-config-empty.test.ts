@@ -47,6 +47,7 @@ const createTypingController = (): TypingController => ({
   isActive: () => false,
   markRunComplete: () => {},
   markDispatchIdle: () => {},
+  markSourceReplyDelivered: () => {},
   cleanup: vi.fn(),
 });
 

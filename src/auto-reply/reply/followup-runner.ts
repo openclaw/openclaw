@@ -718,6 +718,11 @@ export function createFollowupRunner(params: {
                 silentReplyPromptMode: run.silentReplyPromptMode,
                 sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
                 forceMessageTool: run.sourceReplyDeliveryMode === "message_tool_only",
+                // Issue #84276: stop channel typing keepalive immediately when
+                // the message tool delivers a visible reply in
+                // `message_tool_only` mode so the channel-side typing TTL is
+                // not refreshed after delivery.
+                onSourceReplyDelivered: () => typing.markSourceReplyDelivered(),
                 suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
                 onUserMessagePersisted: () => {
                   queuedUserMessagePersistedAcrossFallback = true;

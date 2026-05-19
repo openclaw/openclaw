@@ -122,6 +122,14 @@ export function createOpenClawTools(
     /** Visible source replies must be sent through the message tool when set to message_tool_only. */
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
     inboundEventKind?: InboundEventKind;
+    /**
+     * Invoked once the message tool successfully delivers a visible source
+     * reply via `action="send"` while `sourceReplyDeliveryMode === "message_tool_only"`.
+     * Wired to the typing controller so the keepalive can be stopped in lockstep
+     * with delivery instead of waiting for the dispatcher's grace timer
+     * (issue #84276).
+     */
+    onSourceReplyDelivered?: () => void;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
     /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
@@ -308,6 +316,7 @@ export function createOpenClawTools(
         inboundEventKind: options?.inboundEventKind,
         requesterSenderId: options?.requesterSenderId ?? undefined,
         senderIsOwner: options?.senderIsOwner,
+        onSourceReplyDelivered: options?.onSourceReplyDelivered,
       });
   const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");

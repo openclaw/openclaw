@@ -1433,6 +1433,7 @@ export async function runEmbeddedAttempt(
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             inboundEventKind: params.currentInboundEventKind,
+            onSourceReplyDelivered: params.onSourceReplyDelivered,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,

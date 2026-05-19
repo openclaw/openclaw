@@ -440,6 +440,12 @@ export function createOpenClawCodingTools(options?: {
   /** Visible source replies must be sent through the message tool when set to message_tool_only. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   inboundEventKind?: InboundEventKind;
+  /**
+   * Forwarded to the message tool. Invoked once the message tool successfully
+   * delivers a visible source reply via `action="send"` while
+   * `sourceReplyDeliveryMode === "message_tool_only"` (issue #84276).
+   */
+  onSourceReplyDelivered?: () => void;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
   /** Keep the message tool available even when the selected profile omits it. */
@@ -957,6 +963,7 @@ export function createOpenClawCodingTools(options?: {
           requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
           sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
           inboundEventKind: options?.inboundEventKind,
+          onSourceReplyDelivered: options?.onSourceReplyDelivered,
           disableMessageTool: options?.disableMessageTool,
           enableHeartbeatTool,
           disablePluginTools: !includePluginTools,

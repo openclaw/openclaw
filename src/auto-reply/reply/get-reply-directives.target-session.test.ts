@@ -28,6 +28,7 @@ function makeTypingController() {
     isActive: () => false,
     markRunComplete: () => {},
     markDispatchIdle: () => {},
+    markSourceReplyDelivered: () => {},
     cleanup: vi.fn(),
   };
 }
@@ -395,6 +396,7 @@ describe("resolveReplyDirectives", () => {
         isActive: () => false,
         markRunComplete: () => {},
         markDispatchIdle: () => {},
+        markSourceReplyDelivered: () => {},
         cleanup: vi.fn(),
       },
       opts: undefined,

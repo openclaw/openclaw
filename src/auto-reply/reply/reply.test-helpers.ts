@@ -7,6 +7,7 @@ export function createMockTypingController() {
     isActive: () => false,
     markRunComplete: () => undefined,
     markDispatchIdle: () => undefined,
+    markSourceReplyDelivered: () => undefined,
     cleanup: () => undefined,
   };
 }
