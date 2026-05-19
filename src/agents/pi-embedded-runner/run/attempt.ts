@@ -5196,12 +5196,17 @@ export async function runEmbeddedAttempt(
       } catch (err) {
         cleanupError = err;
       }
+      const synthesizedCleanupTakeoverError =
+        !cleanupError && promptError && sessionLockController.hasSessionTakeover()
+          ? new EmbeddedAttemptSessionTakeoverError(params.sessionFile)
+          : undefined;
+      const cleanupFailure = cleanupError ?? synthesizedCleanupTakeoverError;
       const shouldPreservePromptError = shouldPreservePromptErrorAfterCleanupError({
         promptError,
-        cleanupError,
+        cleanupError: cleanupFailure,
       });
       emitDiagnosticRunCompleted?.(
-        cleanupError
+        cleanupFailure
           ? "error"
           : beforeAgentRunBlocked
             ? "blocked"
@@ -5210,26 +5215,26 @@ export async function runEmbeddedAttempt(
               : aborted || timedOut || idleTimedOut || timedOutDuringCompaction
                 ? "aborted"
                 : "completed",
-        shouldPreservePromptError ? promptError : (cleanupError ?? promptError),
+        shouldPreservePromptError ? promptError : (cleanupFailure ?? promptError),
         beforeAgentRunBlocked
           ? { blockedBy: beforeAgentRunBlockedBy ?? "before_agent_run" }
           : undefined,
       );
-      if (cleanupError) {
+      if (cleanupFailure) {
         if (shouldPreservePromptError) {
           log.warn(
             `embedded attempt cleanup detected session takeover after prompt failure; preserving prompt error: ` +
               `runId=${params.runId} sessionId=${params.sessionId} ` +
-              `promptError=${formatErrorMessage(promptError)} cleanupError=${formatErrorMessage(cleanupError)}`,
+              `promptError=${formatErrorMessage(promptError)} cleanupError=${formatErrorMessage(cleanupFailure)}`,
           );
           await Promise.reject(
             new EmbeddedAttemptPromptErrorWithCleanupTakeoverError({
               promptError,
-              cleanupError: cleanupError as EmbeddedAttemptSessionTakeoverError,
+              cleanupError: cleanupFailure as EmbeddedAttemptSessionTakeoverError,
             }),
           );
         } else {
-          await Promise.reject(cleanupError);
+          await Promise.reject(cleanupFailure);
         }
       }
     }

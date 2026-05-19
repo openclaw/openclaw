@@ -1314,21 +1314,18 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
   });
 
-  it("preserves provider prompt errors while carrying cleanup session takeover", async () => {
+  it("preserves provider prompt errors when cleanup reacquire detects session takeover", async () => {
     const providerError = new Error("provider rejected request: HTTP 400");
-    let releasingCleanupLock = false;
-    let cleanupTakeover: EmbeddedAttemptSessionTakeoverError | undefined;
-    hoisted.flushPendingToolResultsAfterIdleMock.mockImplementation(async () => {
-      releasingCleanupLock = true;
+    let acquireCount = 0;
+    let cleanupReacquireSessionFile: string | undefined;
+    hoisted.acquireSessionWriteLockMock.mockImplementation(async (params) => {
+      acquireCount += 1;
+      if (acquireCount === 3) {
+        cleanupReacquireSessionFile = params.sessionFile;
+        await fs.appendFile(params.sessionFile, '{"type":"message","id":"takeover"}\n', "utf8");
+      }
+      return { release: async () => {} };
     });
-    hoisted.acquireSessionWriteLockMock.mockImplementation(async (params) => ({
-      release: async () => {
-        if (releasingCleanupLock) {
-          cleanupTakeover = new EmbeddedAttemptSessionTakeoverError(params.sessionFile);
-          throw cleanupTakeover;
-        }
-      },
-    }));
 
     const error = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -1342,8 +1339,13 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).name).toBe("EmbeddedAttemptSessionTakeoverError");
     expect((error as Error).message).toBe(providerError.message);
-    expect((error as Error).cause).toBe(cleanupTakeover);
+    expect((error as Error).cause).toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
+    if (!cleanupReacquireSessionFile) {
+      throw new Error("expected cleanup lock reacquire");
+    }
+    expect(((error as Error).cause as Error).message).toContain(cleanupReacquireSessionFile);
     expect((error as { promptError?: unknown }).promptError).toBe(providerError);
+    expect(hoisted.flushPendingToolResultsAfterIdleMock).not.toHaveBeenCalled();
   });
 
   it("keeps cleanup session takeover fatal when no provider prompt error exists", async () => {
