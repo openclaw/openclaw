@@ -63,8 +63,8 @@ describe("extractToolErrorMessage", () => {
           status: "failed",
           gatewayCode: "UNAVAILABLE",
           nodeError: {
-            code: "SYSTEM_RUN_DENIED",
-            message: "approval required",
+            code: "UNAVAILABLE",
+            message: "SYSTEM_RUN_DENIED: approval required",
           },
         },
       }),
@@ -107,8 +107,8 @@ describe("extractToolErrorMessage", () => {
     error.gatewayCode = "UNAVAILABLE";
     error.details = {
       nodeError: {
-        code: "SYSTEM_RUN_DENIED",
-        message: "approval required",
+        code: "UNAVAILABLE",
+        message: "SYSTEM_RUN_DENIED: approval required",
       },
     };
 
