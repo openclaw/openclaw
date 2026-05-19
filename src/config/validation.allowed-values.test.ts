@@ -81,6 +81,18 @@ describe("config validation allowed-values metadata", () => {
     }
   });
 
+  it("includes maximum values in ceiling rejection messages", () => {
+    const result = validateConfigObjectRaw({
+      session: { agentToAgent: { maxPingPongTurns: 21 } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, "session.agentToAgent.maxPingPongTurns");
+      expect(issue.message).toBe("Too big: expected number to be <=20 (maximum: 20)");
+    }
+  });
+
   it("surfaces specific sub-issue for invalid_union bindings errors instead of generic 'Invalid input'", () => {
     const result = validateConfigObjectRaw({
       bindings: [

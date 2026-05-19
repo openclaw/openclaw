@@ -543,10 +543,24 @@ export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigVal
   return collectUnsupportedMutableSecretRefIssues(raw);
 }
 
+function formatZodIssueMessage(record: UnknownIssueRecord | null): string {
+  const message = typeof record?.message === "string" ? record.message : "Invalid input";
+  if (record?.code !== "too_big") {
+    return message;
+  }
+
+  const maximum = record.maximum;
+  if (typeof maximum !== "number" && typeof maximum !== "bigint") {
+    return message;
+  }
+
+  return `${message} (maximum: ${maximum})`;
+}
+
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
   const path = formatConfigPath(toConfigPathSegments(record?.path));
-  const message = typeof record?.message === "string" ? record.message : "Invalid input";
+  const message = formatZodIssueMessage(record);
 
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
 
