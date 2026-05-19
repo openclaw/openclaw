@@ -22,6 +22,7 @@ import {
   WHATSAPP_WATCHDOG_TIMEOUT_ERROR,
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
+import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
 import { attachWebInboxToSocket, type WhatsAppGroupMetadataCache } from "../inbound/monitor.js";
 import {
   newConnectionId,
@@ -542,7 +543,18 @@ export async function monitorWebChannel(
         );
       });
 
-      whatsappLog.info(formatWhatsAppInboundListeningLog(account));
+      const inboundPolicy = resolveWhatsAppInboundPolicy({
+        cfg,
+        accountId: account.accountId,
+        selfE164: selfE164 ?? null,
+      });
+      whatsappLog.info(
+        formatWhatsAppInboundListeningLog({
+          groups: inboundPolicy.account.groups,
+          groupPolicy: inboundPolicy.groupPolicy,
+          hasGroupAllowFrom: inboundPolicy.groupAllowFrom.length > 0,
+        }),
+      );
       if (process.stdout.isTTY || process.stderr.isTTY) {
         whatsappLog.raw("Ctrl+C to stop.");
       }
