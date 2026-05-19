@@ -71,6 +71,8 @@ const MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN = new RegExp(
   `\\b(?:hit|encountered|ran into)\\b.{0,60}\\berror\\b.{0,100}\\b(?:while|trying to|when)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
   "u",
 );
+const EXEC_FAILURE_TERMINAL_STATUS_PATTERN =
+  /\b(?:(?:failed|failure|errored|exited?)\s+(?:with\s+)?(?:exit\s+)?(?:code\s+)?`?[1-9]\d*`?|exit(?:ed)?\s+(?:with\s+)?(?:code\s+)?`?[1-9]\d*`?|non[- ]zero\s+(?:exit\s+)?(?:status|code))(?=$|\W)/u;
 const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
 const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
 
@@ -79,7 +81,7 @@ function isRecoverableToolError(error: string | undefined): boolean {
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
 }
 
-function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
+function hasExplicitMutatingToolFailureAcknowledgement(text: string, toolName?: string): boolean {
   const normalizedText = normalizeTextForComparison(text);
   if (!normalizedText) {
     return false;
@@ -96,7 +98,10 @@ function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
   return (
     MUTATING_FAILURE_ACTION_THEN_FAILURE_PATTERN.test(normalizedText) ||
     MUTATING_FAILURE_FAILURE_THEN_ACTION_PATTERN.test(normalizedText) ||
-    MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN.test(normalizedText)
+    MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN.test(normalizedText) ||
+    (toolName !== undefined &&
+      isExecLikeToolName(toolName) &&
+      EXEC_FAILURE_TERMINAL_STATUS_PATTERN.test(normalizedText))
   );
 }
 
@@ -469,7 +474,10 @@ export function buildEmbeddedRunPayloads(params: {
       replyToCurrent,
     });
     hasUserFacingAssistantReply = true;
-    if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
+    if (
+      cleanedText &&
+      hasExplicitMutatingToolFailureAcknowledgement(cleanedText, params.lastToolError?.toolName)
+    ) {
       hasUserFacingFailureAcknowledgement = true;
     }
   }
