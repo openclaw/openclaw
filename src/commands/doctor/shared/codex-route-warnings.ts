@@ -1986,6 +1986,27 @@ function maybeMigrateLegacyLosslessCompactionConfig(params: {
   return changes;
 }
 
+function legacyEntryHasExplicitNonDefaultRuntimePin(
+  models: MutableRecord,
+  canonicalModelRef: string,
+): boolean {
+  for (const ref of Object.keys(models)) {
+    if (ref === canonicalModelRef) {
+      continue;
+    }
+    if (toCanonicalOpenAIModelRef(ref) !== canonicalModelRef) {
+      continue;
+    }
+    const legacyEntry = asMutableRecord(models[ref]);
+    const legacyRuntime = asMutableRecord(legacyEntry?.agentRuntime);
+    const id = normalizeString(legacyRuntime?.id);
+    if (id && id !== "auto" && id !== "default") {
+      return true;
+    }
+  }
+  return false;
+}
+
 function ensureCodexRuntimePolicy(params: {
   cfg: OpenClawConfig;
   agent: MutableRecord;
@@ -2012,6 +2033,9 @@ function ensureCodexRuntimePolicy(params: {
   const priorRuntime = asMutableRecord(entry.agentRuntime);
   const runtimeId = normalizeString(priorRuntime?.id);
   if (runtimeId && runtimeId !== "auto" && runtimeId !== "default") {
+    return;
+  }
+  if (legacyEntryHasExplicitNonDefaultRuntimePin(models, params.modelRef)) {
     return;
   }
   setModelRuntimePolicy({
