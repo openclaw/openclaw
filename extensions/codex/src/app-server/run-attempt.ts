@@ -296,7 +296,11 @@ function scheduleCodexNativeHookRelayUnregister(relay: NativeHookRelayRegistrati
 }
 
 function flushPendingCodexNativeHookRelayUnregistersForTests(): void {
-  for (const pending of [...pendingCodexNativeHookRelayUnregisters]) {
+  while (pendingCodexNativeHookRelayUnregisters.size > 0) {
+    const pending = pendingCodexNativeHookRelayUnregisters.values().next().value;
+    if (!pending) {
+      return;
+    }
     clearTimeout(pending.timeout);
     pending.unregister();
   }
