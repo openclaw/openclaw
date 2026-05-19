@@ -87,8 +87,8 @@ function loadRootAliasWithStubs(options?: {
     exports: Record<string, unknown>,
     require: NodeJS.Require,
     module: { exports: Record<string, unknown> },
-    __filename: string,
-    __dirname: string,
+    filename: string,
+    dirname: string,
   ) => void;
   const module = { exports: {} as Record<string, unknown> };
   const aliasPath = options?.aliasPath ?? rootAliasPath;
@@ -327,7 +327,7 @@ describe("plugin-sdk root alias", () => {
       expectedTryNative: false,
     },
     {
-      name: "prefers source loading on Windows even when compat resolves to dist",
+      name: "prefers native loading on Windows when compat resolves to dist",
       options: {
         distExists: true,
         env: { NODE_ENV: "production" },
@@ -336,7 +336,7 @@ describe("plugin-sdk root alias", () => {
           slowHelper: (): string => "loaded",
         },
       },
-      expectedTryNative: false,
+      expectedTryNative: true,
     },
   ])("$name", ({ options, expectedTryNative }) => {
     const lazyModule = loadRootAliasWithStubs(options);
@@ -579,7 +579,7 @@ describe("plugin-sdk root alias", () => {
     }
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
-    expect(rootSdk.__esModule).toBe(true);
+    expect(rootSdk["__esModule"]).toBe(true);
   });
 
   it("keeps legacy root export names present in the compat source", () => {

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   calculateCost,
@@ -15,6 +15,7 @@ import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {
   FunctionTool,
   ResponseCreateParamsStreaming,
+  ResponseFormatTextConfig,
   ResponseFunctionCallOutputItemList,
   ResponseInput,
   ResponseInputItem,
@@ -23,12 +24,14 @@ import type {
   ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import { redactIdentifier } from "../logging/redact-identifier.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
+import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import {
   emitModelTransportDebug,
   resolveModelPayloadDebugMode,
@@ -63,13 +66,18 @@ import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
 } from "./provider-transport-fetch.js";
+import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
-const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
+const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
+const AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS = 30_000;
+const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
+const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
+const RESPONSE_FAILED_NO_DETAILS_MESSAGE = "Unknown error (no error details in response)";
 const log = createSubsystemLogger("openai-transport");
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
@@ -77,6 +85,7 @@ type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?
 
 type BaseStreamOptions = {
   temperature?: number;
+  topP?: number;
   maxTokens?: number;
   signal?: AbortSignal;
   apiKey?: string;
@@ -85,13 +94,51 @@ type BaseStreamOptions = {
   onPayload?: (payload: unknown, model: Model<Api>) => unknown;
   headers?: Record<string, string>;
   openclawCodeModeToolSurface?: boolean;
+  responseFormat?: Record<string, unknown>;
 };
+
+type ModelStreamCooperativeScheduler = {
+  afterEvent: () => Promise<void>;
+};
+
+function throwIfModelStreamAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new Error("Request was aborted");
+  }
+}
+
+function createModelStreamCooperativeScheduler(
+  signal?: AbortSignal,
+): ModelStreamCooperativeScheduler {
+  let lastYieldedAt = Date.now();
+  let eventsSinceYield = 0;
+  return {
+    async afterEvent() {
+      throwIfModelStreamAborted(signal);
+      eventsSinceYield += 1;
+      const now = Date.now();
+      if (
+        eventsSinceYield < MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS &&
+        now - lastYieldedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS
+      ) {
+        return;
+      }
+      eventsSinceYield = 0;
+      lastYieldedAt = now;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      throwIfModelStreamAborted(signal);
+    },
+  };
+}
 
 type OpenAIResponsesOptions = BaseStreamOptions & {
   reasoning?: OpenAIReasoningEffort;
   reasoningEffort?: OpenAIReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
+  toolChoice?: ResponseCreateParamsStreaming["tool_choice"];
 };
 
 type OpenAICompletionsOptions = BaseStreamOptions & {
@@ -328,6 +375,288 @@ function stringifyRedactedEvent(value: unknown): string {
   return redacted.length > 2000 ? `${redacted.slice(0, 2000)}…<truncated>` : redacted;
 }
 
+type ResponsesFailedNoDetailsObservation = {
+  event: "openai_responses_response_failed_without_details";
+  provider: string;
+  api: Api;
+  transportModel: string;
+  providerRuntimeFailureKind: "no_error_details";
+  responseId: string;
+  responseStatus: string;
+  responseModel: string;
+  responseObject: string;
+  metadataKeys: string[];
+  requestIdHashes: string[];
+  failureFieldsPreview: string;
+  responsePreview: string;
+};
+
+type ResponsesFailedEventSummary = {
+  message: string;
+  responseId?: string;
+  observation?: ResponsesFailedNoDetailsObservation;
+};
+
+const RESPONSE_FAILED_FAILURE_FIELD_KEYS = [
+  "error",
+  "incomplete_details",
+  "status_details",
+  "failure_reason",
+  "last_error",
+  "provider_error",
+  "error_details",
+] as const;
+
+function readResponseFailedString(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string {
+  return stringifyUnknown(record?.[key]);
+}
+
+function buildResponsesFailedEventSummary(
+  message: string,
+  responseId: string | undefined,
+  observation?: ResponsesFailedNoDetailsObservation,
+): ResponsesFailedEventSummary {
+  const summary: ResponsesFailedEventSummary = { message };
+  if (responseId) {
+    summary.responseId = responseId;
+  }
+  if (observation) {
+    summary.observation = observation;
+  }
+  return summary;
+}
+
+function isResponseFailedIdentifierKey(key: string): boolean {
+  const normalized = key.replace(/[-_\s]/g, "").toLowerCase();
+  return (
+    normalized === "requestid" ||
+    normalized === "xrequestid" ||
+    normalized === "providerrequestid" ||
+    normalized === "providerresponseid" ||
+    normalized === "litellmrequestid" ||
+    (normalized.includes("request") && normalized.endsWith("id")) ||
+    (normalized.includes("provider") && normalized.endsWith("id"))
+  );
+}
+
+function collectResponseFailedIdentifierHashes(
+  value: unknown,
+  opts: {
+    path?: string;
+    depth?: number;
+    identifierKey?: string;
+    out?: string[];
+    seen?: WeakSet<object>;
+  } = {},
+): string[] {
+  const path = opts.path ?? "";
+  const depth = opts.depth ?? 0;
+  const identifierKey = opts.identifierKey ?? "";
+  const out = opts.out ?? [];
+  const seen = opts.seen ?? new WeakSet<object>();
+  if (out.length >= 12 || depth > 4 || !value || typeof value !== "object") {
+    return out;
+  }
+  if (seen.has(value)) {
+    return out;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      if (index >= 8 || out.length >= 12) {
+        break;
+      }
+      const itemString =
+        typeof item === "string" || typeof item === "number" ? String(item).trim() : "";
+      if (identifierKey && isResponseFailedIdentifierKey(identifierKey) && itemString) {
+        out.push(`${path}[${index}]=${redactIdentifier(itemString, { len: 12 })}`);
+        continue;
+      }
+      collectResponseFailedIdentifierHashes(item, {
+        path: `${path}[${index}]`,
+        depth: depth + 1,
+        identifierKey,
+        out,
+        seen,
+      });
+    }
+    return out;
+  }
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (out.length >= 12) {
+      break;
+    }
+    const childPath = path ? `${path}.${key}` : key;
+    const childString =
+      typeof child === "string" || typeof child === "number" ? String(child).trim() : "";
+    if (isResponseFailedIdentifierKey(key) && childString) {
+      out.push(`${childPath}=${redactIdentifier(childString, { len: 12 })}`);
+      continue;
+    }
+    collectResponseFailedIdentifierHashes(child, {
+      path: childPath,
+      depth: depth + 1,
+      identifierKey: isResponseFailedIdentifierKey(key) ? key : undefined,
+      out,
+      seen,
+    });
+  }
+  return out;
+}
+
+function redactResponseFailedDiagnosticValue(
+  value: unknown,
+  opts: {
+    key?: string;
+    depth?: number;
+    seen?: WeakSet<object>;
+  } = {},
+): unknown {
+  const key = opts.key ?? "";
+  const depth = opts.depth ?? 0;
+  if (typeof value === "string" || typeof value === "number") {
+    return key && isResponseFailedIdentifierKey(key)
+      ? redactIdentifier(String(value), { len: 12 })
+      : value;
+  }
+  if (depth > 6 || !value || typeof value !== "object") {
+    return value;
+  }
+  const seen = opts.seen ?? new WeakSet<object>();
+  if (seen.has(value)) {
+    return "<circular>";
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.slice(0, 16).map((item) =>
+      redactResponseFailedDiagnosticValue(item, {
+        key,
+        depth: depth + 1,
+        seen,
+      }),
+    );
+  }
+  const out: Record<string, unknown> = {};
+  for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
+    out[childKey] = redactResponseFailedDiagnosticValue(child, {
+      key: childKey,
+      depth: depth + 1,
+      seen,
+    });
+  }
+  return out;
+}
+
+function buildResponsesFailedFailureFields(
+  response: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!response) {
+    return {};
+  }
+  const fields: Record<string, unknown> = {};
+  for (const key of RESPONSE_FAILED_FAILURE_FIELD_KEYS) {
+    if (response[key] !== undefined && response[key] !== null) {
+      fields[key] = response[key];
+    }
+  }
+  return fields;
+}
+
+function buildResponsesFailedNoDetailsObservation(
+  event: Record<string, unknown>,
+  model: Model<Api>,
+  response: Record<string, unknown> | undefined = isRecord(event.response)
+    ? event.response
+    : undefined,
+): ResponsesFailedNoDetailsObservation {
+  const failureFields = redactResponseFailedDiagnosticValue(
+    buildResponsesFailedFailureFields(response),
+  ) as Record<string, unknown>;
+  const metadataKeys = isRecord(response?.metadata)
+    ? Object.keys(response.metadata).toSorted()
+    : [];
+  const responsePreview = {
+    id: readResponseFailedString(response, "id"),
+    status: readResponseFailedString(response, "status"),
+    model: readResponseFailedString(response, "model"),
+    object: readResponseFailedString(response, "object"),
+    failureFields,
+    metadataKeys,
+  };
+  return {
+    event: "openai_responses_response_failed_without_details",
+    provider: model.provider,
+    api: model.api,
+    transportModel: model.id,
+    providerRuntimeFailureKind: "no_error_details",
+    responseId: responsePreview.id,
+    responseStatus: responsePreview.status,
+    responseModel: responsePreview.model,
+    responseObject: responsePreview.object,
+    metadataKeys,
+    requestIdHashes: collectResponseFailedIdentifierHashes(event),
+    failureFieldsPreview: stringifyRedactedEvent(failureFields),
+    responsePreview: stringifyRedactedEvent(responsePreview),
+  };
+}
+
+function summarizeResponsesFailedNoDetailsObservation(
+  observation: ResponsesFailedNoDetailsObservation,
+): string {
+  const requestIds = observation.requestIdHashes.join(",");
+  const metadataKeys = observation.metadataKeys.join(",");
+  return (
+    `responseId=${safeDebugValue(observation.responseId || undefined)} ` +
+    `responseStatus=${safeDebugValue(observation.responseStatus || undefined)} ` +
+    `responseModel=${safeDebugValue(observation.responseModel || undefined)} ` +
+    `requestIds=${requestIds || "none"} metadataKeys=${metadataKeys || "none"} ` +
+    `failureFields=${observation.failureFieldsPreview}`
+  );
+}
+
+function normalizeResponsesFailedEvent(
+  event: Record<string, unknown>,
+  model: Model<Api>,
+): ResponsesFailedEventSummary {
+  const response = isRecord(event.response) ? event.response : undefined;
+  const responseId = readResponseFailedString(response, "id") || undefined;
+  const error = isRecord(response?.error) ? response.error : undefined;
+  if (error) {
+    const code = readResponseFailedString(error, "code").trim();
+    const message = readResponseFailedString(error, "message").trim();
+    if (code || message) {
+      return buildResponsesFailedEventSummary(
+        `${code || "unknown"}: ${message || "no message"}`,
+        responseId,
+      );
+    }
+  }
+  const incompleteDetails = isRecord(response?.incomplete_details)
+    ? response.incomplete_details
+    : undefined;
+  const incompleteReason = readResponseFailedString(incompleteDetails, "reason");
+  if (incompleteReason) {
+    return buildResponsesFailedEventSummary(`incomplete: ${incompleteReason}`, responseId);
+  }
+  return buildResponsesFailedEventSummary(
+    RESPONSE_FAILED_NO_DETAILS_MESSAGE,
+    responseId,
+    buildResponsesFailedNoDetailsObservation(event, model, response),
+  );
+}
+
+function logResponsesFailedNoDetails(observation: ResponsesFailedNoDetailsObservation): void {
+  log.warn(
+    `[responses] response.failed missing error details provider=${observation.provider} ` +
+      `api=${observation.api} model=${observation.transportModel} ` +
+      summarizeResponsesFailedNoDetailsObservation(observation),
+    observation,
+  );
+}
+
 function summarizeResponsesPayload(params: unknown): string {
   if (!params || typeof params !== "object") {
     return "payload=non-object";
@@ -393,11 +722,7 @@ export function resolveAzureOpenAIApiVersion(env = process.env): string {
 }
 
 function shortHash(value: string): string {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash * 31 + value.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash).toString(36);
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
@@ -439,14 +764,21 @@ function convertResponsesMessages(
   const messages: ResponseInput = [];
   const shouldReplayReasoningItems = options?.replayReasoningItems ?? true;
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
+  const shouldNormalizeSameModelToolCallIds = model.provider === "github-copilot";
+  const sanitizeIdPart = (part: string) => part.replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_+$/, "");
   const normalizeIdPart = (part: string) => {
-    const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const sanitized = sanitizeIdPart(part);
     const normalized = sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
     return normalized.replace(/_+$/, "");
   };
   const buildForeignResponsesItemId = (itemId: string) => {
     const normalized = `fc_${shortHash(itemId)}`;
     return normalized.length > 64 ? normalized.slice(0, 64) : normalized;
+  };
+  const buildSameProviderCopilotResponsesItemId = (itemId: string) => {
+    const sanitized = sanitizeIdPart(itemId);
+    const candidate = sanitized.startsWith("fc_") ? sanitized : `fc_${sanitized}`;
+    return candidate.length > 64 ? buildForeignResponsesItemId(itemId) : candidate;
   };
   const normalizeToolCallId = (
     id: string,
@@ -464,7 +796,9 @@ function convertResponsesMessages(
     const isForeignToolCall = source.provider !== model.provider || source.api !== model.api;
     let normalizedItemId = isForeignToolCall
       ? buildForeignResponsesItemId(itemId)
-      : normalizeIdPart(itemId);
+      : model.provider === "github-copilot"
+        ? buildSameProviderCopilotResponsesItemId(itemId)
+        : normalizeIdPart(itemId);
     if (!normalizedItemId.startsWith("fc_")) {
       normalizedItemId = normalizeIdPart(`fc_${normalizedItemId}`);
     }
@@ -474,6 +808,7 @@ function convertResponsesMessages(
     context.messages,
     model,
     normalizeToolCallId,
+    { normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds },
   );
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
@@ -512,7 +847,16 @@ function convertResponsesMessages(
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
         if (block.type === "thinking") {
-          if (shouldReplayReasoningItems && block.thinkingSignature) {
+          if (
+            shouldReplayReasoningItems &&
+            block.thinkingSignature &&
+            block.thinkingSignature.startsWith("{")
+          ) {
+            // openai-completions plain-text reasoning paths persist a
+            // provenance tag (e.g. "reasoning", "reasoning_details", "content")
+            // as thinkingSignature rather than a JSON-encoded reasoning item.
+            // Replaying those values would corrupt the next request payload
+            // (OpenRouter returns HTTP 500), so skip non-JSON signatures.
             const reasoningItem = JSON.parse(
               block.thinkingSignature,
             ) as ReplayableResponseReasoningItem;
@@ -606,8 +950,8 @@ function convertResponsesTools(
     transport: "responses",
     model,
   });
-  return tools.map((tool): FunctionTool => {
-    const base = {
+  return sortTransportToolsByName(tools).map((tool): FunctionTool => {
+    const result = {
       type: "function" as const,
       name: tool.name,
       description: tool.description,
@@ -616,8 +960,11 @@ function convertResponsesTools(
         strict === true,
         model.compat,
       ) as Record<string, unknown>,
-    };
-    return strict === undefined ? (base as FunctionTool) : { ...base, strict };
+    } as FunctionTool;
+    if (strict !== undefined) {
+      result.strict = strict;
+    }
+    return result;
   });
 }
 
@@ -649,6 +996,61 @@ function resolveOpenAIStrictToolFlagWithDiagnostics(
   return strict;
 }
 
+function createResponsesFirstEventTimeoutError(model: Model<Api>, timeoutMs: number): Error {
+  return new Error(
+    `Azure OpenAI Responses stream did not deliver a first event within ${timeoutMs}ms after HTTP streaming headers. ` +
+      `provider=${model.provider} model=${model.id}. ` +
+      "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
+  );
+}
+
+function withResponsesFirstEventTimeout(
+  openaiStream: AsyncIterable<unknown>,
+  model: Model<Api>,
+  timeoutMs: number | undefined,
+): AsyncIterable<unknown> {
+  if (timeoutMs === undefined || timeoutMs <= 0 || !Number.isFinite(timeoutMs)) {
+    return openaiStream;
+  }
+  return {
+    async *[Symbol.asyncIterator]() {
+      const iterator = openaiStream[Symbol.asyncIterator]();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const clear = () => {
+        if (timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+      };
+      try {
+        const first = await new Promise<IteratorResult<unknown>>((resolve, reject) => {
+          timer = setTimeout(
+            () => reject(createResponsesFirstEventTimeoutError(model, timeoutMs)),
+            timeoutMs,
+          );
+          iterator.next().then(resolve, reject);
+        }).finally(clear);
+        if (first.done) {
+          return;
+        }
+        yield first.value;
+        for (;;) {
+          const next = await iterator.next();
+          if (next.done) {
+            return;
+          }
+          yield next.value;
+        }
+      } catch (error) {
+        void iterator.return?.().catch(() => undefined);
+        throw error;
+      } finally {
+        clear();
+      }
+    },
+  };
+}
+
 async function processResponsesStream(
   openaiStream: AsyncIterable<unknown>,
   output: MutableAssistantOutput,
@@ -660,6 +1062,8 @@ async function processResponsesStream(
       usage: MutableAssistantOutput["usage"],
       serviceTier?: ResponseCreateParamsStreaming["service_tier"],
     ) => void;
+    firstEventTimeoutMs?: number;
+    signal?: AbortSignal;
   },
 ) {
   let currentItem: Record<string, unknown> | null = null;
@@ -669,7 +1073,14 @@ async function processResponsesStream(
   const eventTypes = new Map<string, number>();
   const sseDebugMode = resolveModelSseDebugMode();
   const blockIndex = () => output.content.length - 1;
-  for await (const rawEvent of openaiStream) {
+  const guardedStream = withResponsesFirstEventTimeout(
+    openaiStream,
+    model,
+    options?.firstEventTimeoutMs,
+  );
+  const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
+  for await (const rawEvent of guardedStream) {
+    throwIfModelStreamAborted(options?.signal);
     const event = rawEvent as Record<string, unknown>;
     const type = stringifyUnknown(event.type);
     eventCount += 1;
@@ -821,12 +1232,15 @@ async function processResponsesStream(
         | undefined;
       if (usage) {
         const cachedTokens = usage.input_tokens_details?.cached_tokens || 0;
+        const inputTokens = usage.input_tokens || 0;
+        const outputTokens = usage.output_tokens || 0;
+        const input = Math.max(0, inputTokens - cachedTokens);
         output.usage = {
-          input: (usage.input_tokens || 0) - cachedTokens,
-          output: usage.output_tokens || 0,
+          input,
+          output: outputTokens,
           cacheRead: cachedTokens,
           cacheWrite: 0,
-          totalTokens: usage.total_tokens || 0,
+          totalTokens: input + outputTokens + cachedTokens,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         };
       }
@@ -850,19 +1264,16 @@ async function processResponsesStream(
         `Error Code ${stringifyUnknown(event.code, "unknown")}: ${stringifyUnknown(event.message, "Unknown error")}`,
       );
     } else if (type === "response.failed") {
-      const response = event.response as
-        | {
-            error?: { code?: string; message?: string };
-            incomplete_details?: { reason?: string };
-          }
-        | undefined;
-      const msg = response?.error
-        ? `${response.error.code || "unknown"}: ${response.error.message || "no message"}`
-        : response?.incomplete_details?.reason
-          ? `incomplete: ${response.incomplete_details.reason}`
-          : "Unknown error (no error details in response)";
-      throw new Error(msg);
+      const failure = normalizeResponsesFailedEvent(event, model);
+      if (failure.responseId) {
+        output.responseId = failure.responseId;
+      }
+      if (failure.observation) {
+        logResponsesFailedNoDetails(failure.observation);
+      }
+      throw new Error(failure.message);
     }
+    await cooperativeScheduler.afterEvent();
   }
   const eventTypeSummary = [...eventTypes.entries()]
     .slice(0, 12)
@@ -1043,6 +1454,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           model,
           params as Record<string, unknown>,
         ) as typeof params;
+        params = sanitizeResponsesImagePayload(params as Record<string, unknown>) as typeof params;
         if (
           (options as { openclawCodeModeToolSurface?: unknown } | undefined)
             ?.openclawCodeModeToolSurface === true
@@ -1071,6 +1483,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         await processResponsesStream(responseStream, output, stream, model, {
           serviceTier: (options as OpenAIResponsesOptions | undefined)?.serviceTier,
           applyServiceTierPricing,
+          signal: options?.signal,
         });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
@@ -1205,7 +1618,22 @@ const OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS = [
   "prompt_cache_retention",
   "service_tier",
   "temperature",
+  "top_p",
 ] as const;
+
+function stripOpenAICodexResponsesUnsupportedTextFields(params: Record<string, unknown>): void {
+  const text = params.text;
+  if (!text || typeof text !== "object" || Array.isArray(text)) {
+    return;
+  }
+  const sanitizedText = { ...(text as Record<string, unknown>) };
+  delete sanitizedText.format;
+  if (Object.keys(sanitizedText).length > 0) {
+    params.text = sanitizedText;
+  } else {
+    delete params.text;
+  }
+}
 
 function sanitizeOpenAICodexResponsesParams<T extends Record<string, unknown>>(
   model: Model<Api>,
@@ -1217,6 +1645,7 @@ function sanitizeOpenAICodexResponsesParams<T extends Record<string, unknown>>(
   for (const key of OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS) {
     delete params[key];
   }
+  stripOpenAICodexResponsesUnsupportedTextFields(params);
   return params;
 }
 
@@ -1243,6 +1672,23 @@ function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Conte
   });
 }
 
+function resolveOpenAIResponsesTextFormat(
+  responseFormat: Record<string, unknown>,
+): ResponseFormatTextConfig {
+  if (
+    responseFormat.type === "json_schema" &&
+    responseFormat.json_schema &&
+    typeof responseFormat.json_schema === "object" &&
+    !Array.isArray(responseFormat.json_schema)
+  ) {
+    return {
+      ...(responseFormat.json_schema as Record<string, unknown>),
+      type: "json_schema",
+    } as unknown as ResponseFormatTextConfig;
+  }
+  return responseFormat as unknown as ResponseFormatTextConfig;
+}
+
 export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
@@ -1257,7 +1703,7 @@ export function buildOpenAIResponsesParams(
   const messages = convertResponsesMessages(
     model,
     context,
-    new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
+    new Set(["openai", "openai-codex", "opencode", "azure-openai-responses", "github-copilot"]),
     {
       includeSystemPrompt: !isCodexResponses,
       supportsDeveloperRole,
@@ -1288,6 +1734,15 @@ export function buildOpenAIResponsesParams(
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
   }
+  if (options?.topP !== undefined) {
+    params.top_p = options.topP;
+  }
+  if (options?.responseFormat !== undefined) {
+    params.text = {
+      ...params.text,
+      format: resolveOpenAIResponsesTextFormat(options.responseFormat),
+    };
+  }
   if (options?.serviceTier !== undefined && payloadPolicy.allowsServiceTier) {
     params.service_tier = options.serviceTier;
   }
@@ -1297,6 +1752,9 @@ export function buildOpenAIResponsesParams(
         transport: "stream",
       }),
     });
+    if (options?.toolChoice) {
+      params.tool_choice = options.toolChoice;
+    }
   }
   if (model.reasoning) {
     if (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary) {
@@ -1396,6 +1854,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           model,
           params as Record<string, unknown>,
         ) as typeof params;
+        params = sanitizeResponsesImagePayload(params as Record<string, unknown>) as typeof params;
         if (
           (options as { openclawCodeModeToolSurface?: unknown } | undefined)
             ?.openclawCodeModeToolSurface === true
@@ -1421,7 +1880,10 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
             `elapsedMs=${Date.now() - requestStartedAt}`,
         );
         stream.push({ type: "start", partial: output as never });
-        await processResponsesStream(responseStream, output, stream, model);
+        await processResponsesStream(responseStream, output, stream, model, {
+          firstEventTimeoutMs: AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
+          signal: options?.signal,
+        });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
         }
@@ -1621,7 +2083,9 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           buildOpenAISdkRequestOptions(model, options?.signal),
         )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
-        await processOpenAICompletionsStream(responseStream, output, model, stream);
+        await processOpenAICompletionsStream(responseStream, output, model, stream, {
+          signal: options?.signal,
+        });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
         }
@@ -1643,6 +2107,7 @@ async function processOpenAICompletionsStream(
   output: MutableAssistantOutput,
   model: Model<Api>,
   stream: { push(event: unknown): void },
+  options?: { signal?: AbortSignal },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
@@ -1790,8 +2255,11 @@ async function processOpenAICompletionsStream(
       appendVisibleTextDelta(part);
     }
   };
+  const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
   for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
+    throwIfModelStreamAborted(options?.signal);
     if (!rawChunk || typeof rawChunk !== "object") {
+      await cooperativeScheduler.afterEvent();
       continue;
     }
     const chunk = rawChunk as ChatCompletionChunk;
@@ -1801,6 +2269,7 @@ async function processOpenAICompletionsStream(
     }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     if (!choice) {
+      await cooperativeScheduler.afterEvent();
       continue;
     }
     const choiceUsage = (choice as unknown as { usage?: ChatCompletionChunk["usage"] }).usage;
@@ -1818,6 +2287,7 @@ async function processOpenAICompletionsStream(
       choice.delta ??
       (choice as unknown as { message?: ChatCompletionChunk["choices"][number]["delta"] }).message;
     if (!choiceDelta) {
+      await cooperativeScheduler.afterEvent();
       continue;
     }
     if (choiceDelta.content) {
@@ -1909,6 +2379,7 @@ async function processOpenAICompletionsStream(
       }
     }
     flushPendingPostToolCallDeltas();
+    await cooperativeScheduler.afterEvent();
   }
   flushDeepSeekTextFilterAtEnd();
   finishCurrentBlock();
@@ -2050,6 +2521,8 @@ function detectCompat(model: OpenAIModeModel) {
     openRouterRouting: {},
     vercelGatewayRouting: {},
     supportsStrictMode: compatDefaults.supportsStrictMode,
+    requiresReasoningContentOnAssistantMessages:
+      compatDefaults.requiresReasoningContentOnAssistantMessages,
   };
 }
 
@@ -2071,6 +2544,7 @@ function getCompat(model: OpenAIModeModel): {
   requiresStringContent: boolean;
   strictMessageKeys: boolean;
   visibleReasoningDetailTypes: string[];
+  requiresReasoningContentOnAssistantMessages: boolean;
 } {
   const detected = detectCompat(model);
   const compat = model.compat ?? {};
@@ -2102,6 +2576,8 @@ function getCompat(model: OpenAIModeModel): {
     strictMessageKeys: compat.strictMessageKeys === true,
     visibleReasoningDetailTypes:
       compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
+    requiresReasoningContentOnAssistantMessages:
+      detected.requiresReasoningContentOnAssistantMessages,
   };
 }
 
@@ -2116,8 +2592,11 @@ type OpenAIResponsesRequestParams = {
   store?: boolean;
   max_output_tokens?: number;
   temperature?: number;
+  top_p?: number;
+  text?: ResponseCreateParamsStreaming["text"];
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
   tools?: FunctionTool[];
+  tool_choice?: ResponseCreateParamsStreaming["tool_choice"];
   reasoning?:
     | { effort: OpenAIApiReasoningEffort }
     | {
@@ -2129,6 +2608,16 @@ type OpenAIResponsesRequestParams = {
 
 function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
   return options?.reasoningEffort ?? options?.reasoning ?? "high";
+}
+
+function resolveOpenAICompletionsMaxTokens(
+  model: OpenAIModeModel,
+  options: OpenAICompletionsOptions | undefined,
+): number | undefined {
+  const paramsMaxTokens = resolveMaxTokensParam(
+    (model as { params?: Record<string, unknown> }).params,
+  );
+  return (options?.maxTokens || undefined) ?? (paramsMaxTokens || undefined) ?? model.maxTokens;
 }
 
 function isQwenOpenAICompletionsThinkingFormat(format: string): boolean {
@@ -2169,6 +2658,21 @@ function applyQwenOpenAICompletionsThinkingParams(params: {
   return true;
 }
 
+function applyTogetherOpenAICompletionsThinkingParams(params: {
+  compatThinkingFormat: string;
+  modelReasoning: boolean;
+  payload: Record<string, unknown>;
+  requestedEffort: OpenAIReasoningEffort;
+}): boolean {
+  if (!params.modelReasoning || params.compatThinkingFormat !== "together") {
+    return false;
+  }
+  params.payload.reasoning = {
+    enabled: isOpenAICompletionsThinkingEnabled(params.requestedEffort),
+  };
+  return true;
+}
+
 function convertTools(
   tools: NonNullable<Context["tools"]>,
   compat: ReturnType<typeof getCompat>,
@@ -2185,9 +2689,13 @@ function convertTools(
       model,
     },
   );
-  return tools.map((tool) => ({
-    type: "function",
-    function: {
+  return sortTransportToolsByName(tools).map((tool) => {
+    const functionTool: {
+      name: string;
+      description: string | undefined;
+      parameters: ReturnType<typeof normalizeOpenAIStrictToolParameters>;
+      strict?: boolean;
+    } = {
       name: tool.name,
       description: tool.description,
       parameters: normalizeOpenAIStrictToolParameters(
@@ -2195,9 +2703,37 @@ function convertTools(
         strict === true,
         model.compat,
       ),
-      ...(strict === undefined ? {} : { strict }),
-    },
-  }));
+    };
+    if (strict !== undefined) {
+      functionTool.strict = strict;
+    }
+    return {
+      type: "function",
+      function: functionTool,
+    };
+  });
+}
+
+function compareTransportToolText(left: string | undefined, right: string | undefined): number {
+  const leftText = left ?? "";
+  const rightText = right ?? "";
+  if (leftText < rightText) {
+    return -1;
+  }
+  if (leftText > rightText) {
+    return 1;
+  }
+  return 0;
+}
+
+function sortTransportToolsByName<T extends { name?: string; description?: string }>(
+  tools: readonly T[],
+): T[] {
+  return tools.toSorted(
+    (left, right) =>
+      compareTransportToolText(left.name, right.name) ||
+      compareTransportToolText(left.description, right.description),
+  );
 }
 
 function extractGoogleThoughtSignature(toolCall: unknown): string | undefined {
@@ -2229,6 +2765,16 @@ function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
 
 function requiresGoogleCompatToolCallThoughtSignature(model: OpenAIModeModel): boolean {
   return model.id.toLowerCase().includes("gemini-3");
+}
+
+const GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;
+const GOOGLE_COMPAT_THOUGHT_SIGNATURE_BASE64_RE = /^[A-Za-z0-9+/=]+$/;
+
+function hasGoogleCompatThoughtSignatureTruncationFootprint(value: string): boolean {
+  return (
+    GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE.test(value) ||
+    (GOOGLE_COMPAT_THOUGHT_SIGNATURE_BASE64_RE.test(value) && value.length % 4 !== 0)
+  );
 }
 
 function injectToolCallThoughtSignatures(
@@ -2282,8 +2828,14 @@ function injectToolCallThoughtSignatures(
       if (typeof id !== "string") {
         continue;
       }
-      const sig = sigById.get(id) ?? fallbackSig;
-      if (!sig) {
+      let sig: string | undefined = sigById.get(id) ?? fallbackSig;
+      if (typeof sig === "string" && sig.length > 0) {
+        const trimmed = sig.trim();
+        if (hasGoogleCompatThoughtSignatureTruncationFootprint(trimmed)) {
+          sig = fallbackSig;
+        }
+      }
+      if (typeof sig !== "string" || sig.length === 0) {
         continue;
       }
       const extra =
@@ -2297,6 +2849,152 @@ function injectToolCallThoughtSignatures(
           : {};
       extra.google = google;
       google.thought_signature = sig;
+    }
+  }
+}
+
+const COMPLETIONS_REASONING_REPLAY_FIELDS = [
+  "reasoning_details",
+  "reasoning_content",
+  "reasoning",
+  "reasoning_text",
+] as const;
+
+function stripCompletionsReasoningReplayFields(record: Record<string, unknown>): void {
+  for (const field of COMPLETIONS_REASONING_REPLAY_FIELDS) {
+    if (field in record) {
+      delete record[field];
+    }
+  }
+}
+
+function sanitizeOpenRouterReasoningReplayFields(record: Record<string, unknown>): void {
+  const reasoningDetails = record.reasoning_details;
+  if (typeof reasoningDetails === "string") {
+    if (reasoningDetails.length > 0 && typeof record.reasoning !== "string") {
+      record.reasoning = reasoningDetails;
+    }
+    delete record.reasoning_details;
+  } else if (reasoningDetails !== undefined && !Array.isArray(reasoningDetails)) {
+    delete record.reasoning_details;
+  }
+
+  // Empty reasoning artifacts are rejected by OpenRouter/DeepSeek replay.
+  if ("reasoning" in record && (typeof record.reasoning !== "string" || record.reasoning === "")) {
+    delete record.reasoning;
+  }
+  if (
+    "reasoning_content" in record &&
+    (typeof record.reasoning_content !== "string" || record.reasoning_content === "")
+  ) {
+    delete record.reasoning_content;
+  }
+
+  const reasoningText = record.reasoning_text;
+  if (
+    typeof reasoningText === "string" &&
+    reasoningText.length > 0 &&
+    typeof record.reasoning !== "string" &&
+    typeof record.reasoning_content !== "string"
+  ) {
+    record.reasoning = reasoningText;
+  }
+  if ("reasoning_text" in record) {
+    delete record.reasoning_text;
+  }
+}
+
+function sanitizeReasoningContentReplayFields(record: Record<string, unknown>): void {
+  if ("reasoning_content" in record && typeof record.reasoning_content !== "string") {
+    delete record.reasoning_content;
+  }
+  delete record.reasoning_details;
+  delete record.reasoning;
+  delete record.reasoning_text;
+}
+
+const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
+  "deepseek-v4-flash",
+  "deepseek-v4-pro",
+  "kimi-for-coding",
+  "kimi-k2.5",
+  "kimi-k2.6",
+  "kimi-k2-thinking",
+  "kimi-k2-thinking-turbo",
+  "mimo-v2-pro",
+  "mimo-v2-omni",
+  "mimo-v2.5",
+  "mimo-v2.5-pro",
+  "mimo-v2.6-pro",
+]);
+
+function getReasoningContentReplayModelIdCandidates(modelId: unknown): string[] {
+  if (typeof modelId !== "string") {
+    return [];
+  }
+  const normalized = modelId.trim().toLowerCase();
+  if (!normalized) {
+    return [];
+  }
+  const parts = normalized.split("/").filter(Boolean);
+  const finalPart = parts[parts.length - 1] ?? normalized;
+  const candidates = [finalPart];
+  const colonParts = finalPart.split(":").filter(Boolean);
+  if (colonParts.length > 1) {
+    candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
+  }
+  return [...new Set(candidates.filter(Boolean))];
+}
+
+function shouldPreserveReasoningContentReplay(
+  model: OpenAIModeModel,
+  compat: { requiresReasoningContentOnAssistantMessages: boolean; thinkingFormat: string },
+): boolean {
+  if (
+    compat.requiresReasoningContentOnAssistantMessages ||
+    compat.thinkingFormat === "deepseek" ||
+    compat.thinkingFormat === "zai"
+  ) {
+    return true;
+  }
+  return getReasoningContentReplayModelIdCandidates(model.id).some((modelId) =>
+    REASONING_CONTENT_REPLAY_MODEL_IDS.has(modelId),
+  );
+}
+
+function shouldPreserveOpenRouterReasoningReplay(model: OpenAIModeModel): boolean {
+  if (model.provider !== "openrouter") {
+    return true;
+  }
+  const normalizedModelId = model.id.trim().toLowerCase();
+  return !(normalizedModelId.startsWith("anthropic/") || normalizedModelId.startsWith("x-ai/"));
+}
+
+// OpenAI Chat Completions assistant-message input does not define reasoning
+// replay fields, while OpenRouter and DeepSeek-style providers document
+// compatible pass-back contracts. Keep valid provider-owned replay fields, but
+// strip them for stock OpenAI before a follow-up request hits the wire.
+function sanitizeCompletionsReasoningReplayFields(
+  messages: unknown,
+  options: { preserveOpenRouterReasoning: boolean; preserveReasoningContent: boolean },
+): void {
+  if (!Array.isArray(messages)) {
+    return;
+  }
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const record = msg as Record<string, unknown>;
+    if (record.role !== "assistant") {
+      continue;
+    }
+    if (options.preserveOpenRouterReasoning) {
+      sanitizeOpenRouterReasoningReplayFields(record);
+    } else if (options.preserveReasoningContent) {
+      sanitizeReasoningContentReplayFields(record);
+    } else {
+      stripCompletionsReasoningReplayFields(record);
     }
   }
 }
@@ -2316,6 +3014,11 @@ export function buildOpenAICompletionsParams(
     : context;
   let messages = convertMessages(model as never, completionsContext, compat as never);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
+  sanitizeCompletionsReasoningReplayFields(messages, {
+    preserveOpenRouterReasoning:
+      compat.thinkingFormat === "openrouter" && shouldPreserveOpenRouterReasoningReplay(model),
+    preserveReasoningContent: shouldPreserveReasoningContentReplay(model, compat),
+  });
   if (compat.strictMessageKeys) {
     messages = stripCompletionMessagesToRoleContent(messages) as typeof messages;
   }
@@ -2326,8 +3029,10 @@ export function buildOpenAICompletionsParams(
       ? flattenCompletionMessagesToStringContent(messages)
       : messages,
     stream: true,
-    stream_options: { include_usage: true },
   };
+  if (compat.supportsUsageInStreaming) {
+    params.stream_options = { include_usage: true };
+  }
   if (compat.supportsStore) {
     params.store = false;
   }
@@ -2335,7 +3040,7 @@ export function buildOpenAICompletionsParams(
     params.prompt_cache_key = options.sessionId;
   }
   {
-    const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
+    const effectiveMaxTokens = resolveOpenAICompletionsMaxTokens(model, options);
     if (effectiveMaxTokens) {
       if (compat.maxTokensField === "max_tokens") {
         params.max_tokens = effectiveMaxTokens;
@@ -2346,6 +3051,12 @@ export function buildOpenAICompletionsParams(
   }
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
+  }
+  if (options?.topP !== undefined) {
+    params.top_p = options.topP;
+  }
+  if (options?.responseFormat !== undefined) {
+    params.response_format = options.responseFormat;
   }
   if (context.tools) {
     params.tools = convertTools(context.tools, compat, model);
@@ -2372,6 +3083,12 @@ export function buildOpenAICompletionsParams(
   const omitGpt54MiniToolReasoningEffort =
     isOpenAIGpt54MiniModel(model) && Array.isArray(params.tools) && params.tools.length > 0;
   const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
+    compatThinkingFormat: compat.thinkingFormat,
+    modelReasoning: model.reasoning,
+    payload: params,
+    requestedEffort: completionsReasoningEffort,
+  });
+  applyTogetherOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
     payload: params,
@@ -2443,7 +3160,7 @@ function mapStopReason(reason: string | null) {
   }
 }
 
-export const __testing = {
+export const testing = {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
   buildOpenAISdkClientOptions,
@@ -2455,7 +3172,13 @@ export const __testing = {
   sanitizeOpenAICodexResponsesParams,
   buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
+  processResponsesStream,
   formatModelTransportDebugBaseUrl,
+  buildResponsesFailedNoDetailsObservation,
+  normalizeResponsesFailedEvent,
+  summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,
   summarizeResponsesTools,
+  withResponsesFirstEventTimeout,
 };
+export { testing as __testing };

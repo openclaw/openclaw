@@ -54,11 +54,19 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
   }
 
   function expectWarnMessageWith(text: string): void {
-    expect(warnMessages().some((message) => message.includes(text))).toBe(true);
+    expect(warnMessages().join("\n")).toContain(text);
   }
 
   function expectNoWarnMessageWith(text: string): void {
-    expect(warnMessages().some((message) => message.includes(text))).toBe(false);
+    expect(warnMessages().join("\n")).not.toContain(text);
+  }
+
+  function runAttemptCall(index: number): { prompt?: string } {
+    const call = mockedRunEmbeddedAttempt.mock.calls[index];
+    if (!call) {
+      throw new Error(`Expected run embedded attempt call ${index}`);
+    }
+    return call[0] as { prompt?: string };
   }
 
   it("emits the before_agent_run hook block message as the agent payload", async () => {
@@ -341,6 +349,15 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       },
     ]);
     expect(result.meta.livenessState).toBe("blocked");
+    expect(warnMessages().join("\n")).toContain(
+      "strict-agentic execution contract triggered: runId=run-strict-agentic-auto-activated",
+    );
+    expect(warnMessages().join("\n")).toContain(
+      "provider=openai-codex/gpt-5.4 harness=codex contract=strict-agentic configured=unspecified",
+    );
+    expect(mockedLog.info.mock.calls.map(([message]) => String(message)).join("\n")).not.toContain(
+      "strict-agentic execution contract active",
+    );
   });
 
   it("respects explicit default contract opt-out on GPT-5 openai runs", async () => {
@@ -437,7 +454,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
@@ -472,7 +489,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    const onlyCall = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as { prompt?: string };
+    const onlyCall = runAttemptCall(0);
     expect(onlyCall.prompt).not.toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectNoWarnMessageWith("reasoning-only assistant turn detected");
@@ -641,7 +658,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
@@ -681,7 +698,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectWarnMessageWith("empty response detected");
   });
@@ -735,7 +752,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectWarnMessageWith("empty response detected");
   });
@@ -804,7 +821,76 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    const secondCall = mockedRunEmbeddedAttempt.mock.calls[1]?.[0] as { prompt?: string };
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expectWarnMessageWith("empty response detected");
+  });
+
+  it("retries empty Anthropic-compatible stop turns even when the provider is not Kimi", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedResolveModelAsync.mockResolvedValue({
+      model: {
+        id: "claude-opus-4-7",
+        provider: "sub2api",
+        contextWindow: 200000,
+        api: "anthropic-messages",
+      },
+      error: null,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          api: "anthropic-messages",
+          stopReason: "stop",
+          provider: "sub2api",
+          model: "claude-opus-4-7",
+          content: [],
+          usage: {
+            input: 2048,
+            output: 3100,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 5148,
+          },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible Anthropic-compatible answer."],
+        lastAssistant: {
+          role: "assistant",
+          api: "anthropic-messages",
+          stopReason: "stop",
+          provider: "sub2api",
+          model: "claude-opus-4-7",
+          content: [{ type: "text", text: "Visible Anthropic-compatible answer." }],
+          usage: {
+            input: 2300,
+            output: 8,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2308,
+          },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "sub2api",
+      model: "claude-opus-4-7",
+      runId: "run-empty-anthropic-compatible-stop-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectWarnMessageWith("empty response detected");
   });
@@ -1264,6 +1350,34 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
               type: "thinking",
               thinking: "internal reasoning",
               thinkingSignature: JSON.stringify({ id: "gemini_rs_helper", type: "reasoning" }),
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("retries signed reasoning-only Bedrock Converse turns with a visible-answer continuation", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "amazon-bedrock",
+      modelId: "openai.gpt-oss-120b-1:0",
+      modelApi: "bedrock-converse-stream",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "amazon-bedrock",
+          model: "openai.gpt-oss-120b-1:0",
+          content: [
+            {
+              type: "thinking",
+              thinking: "internal reasoning",
+              thinkingSignature: "bedrock-reasoning-signature",
             },
           ],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
@@ -1785,6 +1899,30 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(1);
   });
 
+  it("retries generic empty Bedrock Converse turns without visible text", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "amazon-bedrock",
+      modelId: "openai.gpt-oss-120b-1:0",
+      modelApi: "bedrock-converse-stream",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "amazon-bedrock",
+          model: "openai.gpt-oss-120b-1:0",
+          content: [{ type: "text", text: "" }],
+          usage: { input: 950, output: 103, totalTokens: 1053 },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
   it("treats clean empty assistant turns as silent only when the caller allows it", () => {
     const attempt = makeAttemptResult({
       assistantTexts: [],
@@ -1923,7 +2061,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    const onlyCall = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as { prompt?: string };
+    const onlyCall = runAttemptCall(0);
     expect(onlyCall.prompt).not.toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);

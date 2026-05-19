@@ -88,11 +88,20 @@ function createDispatcher(record: string[]): ReplyDispatcher {
 }
 
 function lastTypingDispatcherOptions(): Parameters<CreateReplyDispatcherWithTypingFn>[0] {
-  const [options] = hoisted.createReplyDispatcherWithTypingMock.mock.calls.at(-1) ?? [];
+  const calls = hoisted.createReplyDispatcherWithTypingMock.mock.calls;
+  const [options] = calls[calls.length - 1] ?? [];
   if (!options) {
     throw new Error("expected createReplyDispatcherWithTyping call");
   }
   return options as Parameters<CreateReplyDispatcherWithTypingFn>[0];
+}
+
+function requireReplyDispatcherOptions(index = 0): Parameters<CreateReplyDispatcherFn>[0] {
+  const call = hoisted.createReplyDispatcherMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected createReplyDispatcher call ${index}`);
+  }
+  return call[0] as Parameters<CreateReplyDispatcherFn>[0];
 }
 
 describe("withReplyDispatcher", () => {
@@ -218,7 +227,7 @@ describe("withReplyDispatcher", () => {
     });
 
     expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
   it("runs message_sending hooks before inbound dispatcher delivery", async () => {
@@ -243,7 +252,7 @@ describe("withReplyDispatcher", () => {
       replyResolver: async () => ({ text: "ok" }),
     });
 
-    const dispatcherOptions = hoisted.createReplyDispatcherMock.mock.calls[0]?.[0];
+    const dispatcherOptions = requireReplyDispatcherOptions();
     if (!dispatcherOptions?.beforeDeliver) {
       throw new Error("expected beforeDeliver hook");
     }

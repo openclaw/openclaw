@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { getGoogleChatAccessToken } from "./auth.js";
@@ -7,6 +8,14 @@ import type { GoogleChatReaction } from "./types.js";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
+
+async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
+  try {
+    return (await response.json()) as T;
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
+}
 
 const headersToObject = (headers?: HeadersInit): Record<string, string> =>
   headers instanceof Headers
@@ -70,7 +79,8 @@ async function fetchJson<T>(
       },
     },
     auditContext: "googlechat.api.json",
-    handleResponse: async (response) => (await response.json()) as T,
+    handleResponse: async (response) =>
+      await readGoogleChatJsonResponse<T>(response, "Google Chat API request failed"),
   });
 }
 
@@ -108,30 +118,14 @@ async function fetchBuffer(
           throw new Error(`Google Chat media exceeds max bytes (${maxBytes})`);
         }
       }
-      if (!maxBytes || !res.body) {
+      if (!maxBytes) {
         const buffer = Buffer.from(await res.arrayBuffer());
         const contentType = res.headers.get("content-type") ?? undefined;
         return { buffer, contentType };
       }
-      const reader = res.body.getReader();
-      const chunks: Buffer[] = [];
-      let total = 0;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        if (!value) {
-          continue;
-        }
-        total += value.length;
-        if (total > maxBytes) {
-          await reader.cancel();
-          throw new Error(`Google Chat media exceeds max bytes (${maxBytes})`);
-        }
-        chunks.push(Buffer.from(value));
-      }
-      const buffer = Buffer.concat(chunks, total);
+      const buffer = await readResponseWithLimit(res, maxBytes, {
+        onOverflow: () => new Error(`Google Chat media exceeds max bytes (${maxBytes})`),
+      });
       const contentType = res.headers.get("content-type") ?? undefined;
       return { buffer, contentType };
     },
@@ -232,9 +226,9 @@ export async function uploadGoogleChatAttachment(params: {
     auditContext: "googlechat.upload",
     errorPrefix: "Google Chat upload",
     handleResponse: async (response) =>
-      (await response.json()) as {
+      await readGoogleChatJsonResponse<{
         attachmentDataRef?: { attachmentUploadToken?: string };
-      },
+      }>(response, "Google Chat upload failed"),
   });
   return {
     attachmentUploadToken: payload.attachmentDataRef?.attachmentUploadToken,
