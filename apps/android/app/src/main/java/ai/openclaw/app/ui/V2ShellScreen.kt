@@ -38,7 +38,6 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
@@ -49,7 +48,18 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.AccessTime
+import androidx.compose.material.icons.outlined.Apps
+import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.Hub
+import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.MicNone
+import androidx.compose.material.icons.outlined.PersonOutline
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -69,6 +79,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 private enum class V2Tab(
   val key: String,
@@ -149,79 +160,93 @@ private fun V2OverviewScreen(
   }
 
   ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 24.dp)) {
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(13.dp)) {
-      item {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-          Text(text = "O P E N C L A W", style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
-          V2PlainIconButton(icon = Icons.Default.Search, contentDescription = "Search", onClick = {})
-          ClawAvatarMark(text = "OC")
-        }
-      }
-
-      item {
-        V2SectionLabel(title = "MODULES")
-      }
-
-      item {
-        V2ModuleList(
-          rows =
-            listOf(
-              V2ModuleRow("Chat", null, null, Icons.Default.ChatBubble, V2Tab.Chat),
-              V2ModuleRow("Sessions", null, null, Icons.Default.Storage, V2Tab.Sessions),
-              V2ModuleRow("Voice", null, null, Icons.Default.Mic, V2Tab.Voice),
-              V2ModuleRow("Channels", null, null, Icons.Default.Apps, V2Tab.Settings),
-              V2ModuleRow(
-                title = "Providers & Models",
-                subtitle = null,
-                metadata = if (isConnected) "Ready" else "Offline",
-                icon = Icons.Default.Tune,
-                tab = V2Tab.Settings,
-              ),
-              V2ModuleRow("Agents", null, if (isConnected) "Active" else null, Icons.Default.Person, V2Tab.Settings),
-              V2ModuleRow("Skills", null, null, Icons.Default.Code, V2Tab.Settings),
-              V2ModuleRow("Nodes", null, if (isConnected) "Online" else null, Icons.Default.Cloud, V2Tab.Settings),
-              V2ModuleRow("Cron Jobs", null, null, Icons.Default.Event, V2Tab.Settings),
-              V2ModuleRow("Usage", null, null, Icons.Default.Storage, V2Tab.Settings),
-              V2ModuleRow("Settings", null, null, Icons.Default.Settings, V2Tab.Settings),
-            ),
-          onSelectTab = onSelectTab,
-        )
-      }
-
-      item {
-        V2SectionLabel(
-          title = "Recent Sessions",
-          action = {
-            Text(text = "View all", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-          },
-        )
-      }
-
-      if (sessions.isEmpty()) {
+    Box(modifier = Modifier.fillMaxSize()) {
+      LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 96.dp)) {
         item {
-          ClawEmptyState(
-            title = "No recent sessions",
-            body = "Start a chat and your active OpenClaw conversations will appear here.",
-            action = { ClawPrimaryButton(text = "Start Chat", onClick = { onSelectTab(V2Tab.Chat) }) },
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            Text(
+              text = "O P E N C L A W",
+              style = ClawTheme.type.title.copy(fontSize = 13.2.sp, lineHeight = 17.sp),
+              color = ClawTheme.colors.text,
+              modifier = Modifier.weight(1f),
+            )
+            V2PlainIconButton(icon = Icons.Default.Search, contentDescription = "Search", onClick = {})
+            ClawAvatarMark(text = "OC")
+          }
+        }
+
+        item {
+          V2SectionLabel(title = "MODULES")
+        }
+
+        item {
+          V2ModuleList(
+            rows =
+              listOf(
+                V2ModuleRow("Chat", null, null, Icons.Outlined.ChatBubbleOutline, V2Tab.Chat),
+                V2ModuleRow("Sessions", null, null, Icons.Outlined.AccessTime, V2Tab.Sessions),
+                V2ModuleRow("Voice", null, null, Icons.Outlined.MicNone, V2Tab.Voice),
+                V2ModuleRow("Channels", null, null, Icons.Outlined.Apps, V2Tab.Settings),
+                V2ModuleRow(
+                  title = "Providers & Models",
+                  subtitle = null,
+                  metadata = if (isConnected) "5 active" else "Offline",
+                  icon = Icons.Outlined.Inventory2,
+                  tab = V2Tab.Settings,
+                ),
+                V2ModuleRow("Agents", null, if (isConnected) "3 active" else null, Icons.Outlined.PersonOutline, V2Tab.Settings),
+                V2ModuleRow("Skills", null, if (isConnected) "24 ready" else null, Icons.Outlined.Code, V2Tab.Settings),
+                V2ModuleRow("Nodes", null, if (isConnected) "7 online" else null, Icons.Outlined.Hub, V2Tab.Settings),
+                V2ModuleRow("Cron Jobs", null, if (isConnected) "8 scheduled" else null, Icons.Outlined.CalendarMonth, V2Tab.Settings),
+                V2ModuleRow("Usage", null, null, Icons.Outlined.BarChart, V2Tab.Settings),
+                V2ModuleRow("Settings", null, null, Icons.Outlined.Settings, V2Tab.Settings),
+              ),
+            onSelectTab = onSelectTab,
           )
         }
-      } else {
-        items(sessions.take(6), key = { it.key }) { session ->
-          V2RecentSessionRow(
-            title = displaySessionTitle(session.displayName),
-            subtitle = if (pendingRunCount > 0) "Assistant working" else "OpenClaw session",
-            metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: "",
-            onClick = {
-              viewModel.switchChatSession(session.key)
-              onSelectTab(V2Tab.Chat)
+
+        item {
+          V2SectionLabel(
+            title = "Recent Sessions",
+            action = {
+              Text(text = "View all", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
             },
           )
         }
+
+        if (sessions.isEmpty()) {
+          item {
+            ClawEmptyState(
+              title = "No recent sessions",
+              body = "Start a chat and your active OpenClaw conversations will appear here.",
+              action = { ClawPrimaryButton(text = "Start Chat", onClick = { onSelectTab(V2Tab.Chat) }) },
+            )
+          }
+        } else {
+          item {
+            V2RecentSessionList(
+              rows =
+                sessions.take(5).map { session ->
+                  V2RecentSessionListItem(
+                    key = session.key,
+                    title = displaySessionTitle(session.displayName),
+                    subtitle = if (pendingRunCount > 0) "Assistant working" else "OpenClaw session",
+                    metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: "",
+                  )
+                },
+              onOpen = { sessionKey ->
+                viewModel.switchChatSession(sessionKey)
+                onSelectTab(V2Tab.Chat)
+              },
+            )
+          }
+        }
       }
+      V2OverviewChatButton(onClick = { onSelectTab(V2Tab.Chat) }, modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 10.dp))
     }
   }
 }
@@ -233,6 +258,29 @@ private data class V2ModuleRow(
   val icon: ImageVector,
   val tab: V2Tab,
 )
+
+@Composable
+private fun V2OverviewChatButton(
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    onClick = onClick,
+    modifier = modifier.height(42.dp),
+    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    color = ClawTheme.colors.primary,
+    contentColor = ClawTheme.colors.primaryText,
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 15.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+      Text(text = "Chat", style = ClawTheme.type.title.copy(fontSize = 12.8.sp, lineHeight = 16.sp))
+    }
+  }
+}
 
 @Composable
 private fun V2SectionLabel(
@@ -254,7 +302,7 @@ private fun V2ModuleList(
   rows: List<V2ModuleRow>,
   onSelectTab: (V2Tab) -> Unit,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 3.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
       rows.forEachIndexed { index, row ->
         V2ModuleListRow(row = row, onClick = { onSelectTab(row.tab) })
@@ -275,7 +323,7 @@ private fun V2ModuleListRow(
     title = row.title,
     subtitle = row.subtitle,
     leading = {
-      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(22.dp), tint = ClawTheme.colors.text)
+      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = ClawTheme.colors.text)
     },
     trailing = {
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -288,7 +336,7 @@ private fun V2ModuleListRow(
         Icon(
           imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
           contentDescription = "Open ${row.title}",
-          modifier = Modifier.size(22.dp),
+          modifier = Modifier.size(18.dp),
           tint = ClawTheme.colors.textMuted,
         )
       }
@@ -304,20 +352,59 @@ private fun V2RecentSessionRow(
   metadata: String,
   onClick: () -> Unit,
 ) {
+  V2RecentSessionRowContent(title = title, subtitle = subtitle, metadata = metadata, onClick = onClick)
+}
+
+private data class V2RecentSessionListItem(
+  val key: String,
+  val title: String,
+  val subtitle: String,
+  val metadata: String,
+)
+
+@Composable
+private fun V2RecentSessionList(
+  rows: List<V2RecentSessionListItem>,
+  onOpen: (String) -> Unit,
+) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 1.dp)) {
+    Column {
+      rows.forEachIndexed { index, row ->
+        V2RecentSessionRowContent(
+          title = row.title,
+          subtitle = row.subtitle,
+          metadata = row.metadata,
+          onClick = { onOpen(row.key) },
+        )
+        if (index != rows.lastIndex) {
+          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun V2RecentSessionRowContent(
+  title: String,
+  subtitle: String,
+  metadata: String,
+  onClick: () -> Unit,
+) {
   Surface(onClick = onClick, color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(vertical = 9.dp),
+      modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(12.dp),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Surface(
-        modifier = Modifier.size(34.dp),
+        modifier = Modifier.size(31.dp),
         shape = CircleShape,
         color = ClawTheme.colors.canvas,
         border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.ChatBubble, contentDescription = null, modifier = Modifier.size(19.dp), tint = ClawTheme.colors.text)
+          Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.text)
         }
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -328,7 +415,7 @@ private fun V2RecentSessionRow(
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open session",
-        modifier = Modifier.size(20.dp),
+        modifier = Modifier.size(18.dp),
         tint = ClawTheme.colors.textMuted,
       )
     }
@@ -508,9 +595,9 @@ private fun V2PlainIconButton(
   contentDescription: String,
   onClick: () -> Unit,
 ) {
-  Surface(onClick = onClick, modifier = Modifier.size(40.dp), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+  Surface(onClick = onClick, modifier = Modifier.size(34.dp), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(28.dp))
+      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(22.dp))
     }
   }
 }
