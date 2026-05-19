@@ -516,6 +516,60 @@ describe("maybeCompactCodexAppServerSession", () => {
     );
   });
 
+  it("prefers contextEngineSessionKey for owning Codex context-engine compaction", async () => {
+    const sessionFile = await writeTestBinding();
+    const compact = vi.fn(async () => ({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "engine summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 55,
+      },
+    }));
+    const maintain = vi.fn(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+    const contextEngine: ContextEngine = {
+      info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
+      assemble: vi.fn() as never,
+      ingest: vi.fn() as never,
+      compact,
+      maintain,
+    };
+
+    await maybeCompactCodexAppServerSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      contextEngineSessionKey: "agent:main:session-1:heartbeat-run:codex",
+      sessionFile,
+      workspaceDir: tempDir,
+      contextEngine,
+      contextTokenBudget: 777,
+      contextEngineRuntimeContext: { workspaceDir: tempDir, provider: "codex" },
+      currentTokenCount: 123,
+      trigger: "manual",
+    });
+
+    expect(compact).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1:heartbeat-run:codex",
+      sessionFile,
+      tokenBudget: 777,
+      currentTokenCount: 123,
+      compactionTarget: "threshold",
+      customInstructions: undefined,
+      force: true,
+      runtimeContext: { workspaceDir: tempDir, provider: "codex" },
+    });
+    const [maintainCall] = maintain.mock.calls[0] ?? [];
+    expect((maintainCall as { sessionKey?: string } | undefined)?.sessionKey).toBe(
+      "agent:main:session-1:heartbeat-run:codex",
+    );
+  });
+
   it("adopts successor transcript handles after owning context-engine compaction", async () => {
     const sessionFile = await writeTestBinding();
     const successorFile = path.join(tempDir, "session.compacted.jsonl");

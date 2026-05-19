@@ -31,6 +31,13 @@ type CodexNativeCompactionWaiter = {
 const DEFAULT_CODEX_COMPACTION_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
 const warnedIgnoredCompactionOverrides = new Set<string>();
 
+function resolveContextEngineSessionKey(params: {
+  sessionKey?: string;
+  contextEngineSessionKey?: string;
+}): string | undefined {
+  return params.contextEngineSessionKey?.trim() || params.sessionKey?.trim() || undefined;
+}
+
 export async function maybeCompactCodexAppServerSession(
   params: CompactEmbeddedPiSessionParams,
   options: { pluginConfig?: unknown; clientFactory?: CodexAppServerClientFactory } = {},
@@ -48,7 +55,7 @@ export async function maybeCompactCodexAppServerSession(
       await runHarnessContextEngineMaintenance({
         contextEngine: activeContextEngine,
         sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
+        sessionKey: resolveContextEngineSessionKey(params),
         sessionFile: params.sessionFile,
         reason: "compaction",
         runtimeContext: params.contextEngineRuntimeContext,
@@ -90,7 +97,7 @@ async function compactOwningContextEngine(
       contextEngine,
       {
         sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
+        sessionKey: resolveContextEngineSessionKey(params),
         sessionFile: params.sessionFile,
         tokenBudget: params.contextTokenBudget,
         currentTokenCount: params.currentTokenCount,
@@ -123,7 +130,7 @@ async function compactOwningContextEngine(
       await runHarnessContextEngineMaintenance({
         contextEngine,
         sessionId: compactedSessionId,
-        sessionKey: params.sessionKey,
+        sessionKey: resolveContextEngineSessionKey(params),
         sessionFile: compactedSessionFile,
         reason: "compaction",
         runtimeContext: params.contextEngineRuntimeContext,

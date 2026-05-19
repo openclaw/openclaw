@@ -348,6 +348,34 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(openSpy).not.toHaveBeenCalled();
   });
 
+  it("prefers contextEngineSessionKey for Codex bootstrap and assemble", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("existing context", Date.now()) as never,
+    );
+    const contextEngine = createContextEngine();
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextEngineSessionKey = "agent:main:session-1:heartbeat-run:codex";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn();
+    await run;
+
+    const bootstrapParams = requireFirstCallArg(contextEngine.bootstrap, "bootstrap") as Parameters<
+      NonNullable<ContextEngine["bootstrap"]>
+    >[0];
+    expect(bootstrapParams.sessionKey).toBe("agent:main:session-1:heartbeat-run:codex");
+
+    const assembleParams = requireFirstCallArg(contextEngine.assemble, "assemble") as Parameters<
+      ContextEngine["assemble"]
+    >[0];
+    expect(assembleParams.sessionKey).toBe("agent:main:session-1:heartbeat-run:codex");
+  });
+
   it("uses the runtime token budget for large Codex context-engine projections", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -784,6 +812,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.contextEngine = contextEngine;
     params.contextTokenBudget = 400_000;
+    params.contextEngineSessionKey = "agent:main:session-1:heartbeat-run:codex";
 
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(() =>
@@ -812,7 +841,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(compact).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
+        sessionKey: "agent:main:session-1:heartbeat-run:codex",
         sessionFile,
         tokenBudget: 400_000,
         currentTokenCount: 400_000,
@@ -995,6 +1024,35 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(afterTurnCall.messages.some((message) => message.role === "user")).toBe(true);
     expect(afterTurnCall.messages.some((message) => message.role === "assistant")).toBe(true);
     expect(maintain).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers contextEngineSessionKey for Codex afterTurn and maintenance", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const afterTurn = vi.fn(
+      async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => undefined,
+    );
+    const maintain = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const contextEngine = createContextEngine({ afterTurn, maintain, bootstrap: undefined });
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 111;
+    params.contextEngineSessionKey = "agent:main:session-1:heartbeat-run:codex";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn();
+    await run;
+
+    const afterTurnCall = requireFirstCallArg(afterTurn, "afterTurn") as Parameters<
+      NonNullable<ContextEngine["afterTurn"]>
+    >[0];
+    expect(afterTurnCall.sessionKey).toBe("agent:main:session-1:heartbeat-run:codex");
+    const maintainCall = requireFirstCallArg(maintain, "maintain") as Parameters<
+      NonNullable<ContextEngine["maintain"]>
+    >[0];
+    expect(maintainCall.sessionKey).toBe("agent:main:session-1:heartbeat-run:codex");
   });
 
   it("reloads mirrored history after bootstrap mutates the session transcript", async () => {
