@@ -29,6 +29,8 @@ import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -425,7 +427,7 @@ private fun V2VoiceSettingsScreen(
         ready = speakerEnabled,
         onClick = { viewModel.setSpeakerEnabled(!speakerEnabled) },
       )
-      ClawPrimaryButton(text = "Save Voice Setup", onClick = onBack, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.GraphicEq)
+      ClawPrimaryButton(text = "Done", onClick = onBack, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.GraphicEq)
     }
   }
 }
@@ -548,7 +550,9 @@ private fun V2SettingsWaveformPanel(
 }
 
 private fun playVoiceSetupTone() {
-  ToneGenerator(AudioManager.STREAM_MUSIC, 80).startTone(ToneGenerator.TONE_PROP_BEEP, 250)
+  val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 80)
+  tone.startTone(ToneGenerator.TONE_PROP_BEEP, 250)
+  Handler(Looper.getMainLooper()).postDelayed({ tone.release() }, 300L)
 }
 
 @Composable
