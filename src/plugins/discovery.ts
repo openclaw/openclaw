@@ -73,6 +73,7 @@ export type PluginCandidate = {
   packageOptionalDependencies?: PluginDependencySpecMap;
   bundledManifest?: PluginManifest;
   bundledManifestPath?: string;
+  rawPackageManifest?: PackageManifest;
 };
 
 export type PluginDiscoveryResult = {
@@ -665,6 +666,7 @@ function addCandidate(params: {
     packageManifest: getPackageManifestMetadata(manifest ?? undefined),
     packageDependencies: packageDependencies.dependencies,
     packageOptionalDependencies: packageDependencies.optionalDependencies,
+    rawPackageManifest: manifest ?? undefined,
     bundledManifest: params.bundledManifest,
     bundledManifestPath: params.bundledManifestPath,
   });
