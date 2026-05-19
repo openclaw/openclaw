@@ -143,7 +143,16 @@ fun V2ShellScreen(
             onBack = { activeTab = V2Tab.Overview },
             onVoice = { activeTab = V2Tab.Voice },
           )
-        V2Tab.Voice -> V2VoiceShellScreen(viewModel = viewModel)
+        V2Tab.Voice ->
+          V2VoiceShellScreen(
+            viewModel = viewModel,
+            onOpenCommand = { commandOpen = true },
+            onOpenVoiceSettings = {
+              settingsRoute = V2SettingsRoute.Voice
+              returnToOverviewFromSettings = false
+              activeTab = V2Tab.Settings
+            },
+          )
         V2Tab.ProvidersModels ->
           V2ProvidersModelsScreen(
             viewModel = viewModel,
@@ -577,9 +586,13 @@ private fun V2ChatShellScreen(
 }
 
 @Composable
-private fun V2VoiceShellScreen(viewModel: MainViewModel) {
+private fun V2VoiceShellScreen(
+  viewModel: MainViewModel,
+  onOpenCommand: () -> Unit,
+  onOpenVoiceSettings: () -> Unit,
+) {
   ClawScaffold(contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 8.dp)) {
-    V2VoiceScreen(viewModel = viewModel)
+    V2VoiceScreen(viewModel = viewModel, onOpenCommand = onOpenCommand, onOpenVoiceSettings = onOpenVoiceSettings)
   }
 }
 
@@ -641,7 +654,7 @@ private fun V2SettingsShellScreen(
       }
 
       item {
-        V2ProfilePanel(displayName = displayName.ifBlank { "OpenClaw" })
+        V2ProfilePanel(displayName = displayName.ifBlank { "OpenClaw" }, onClick = { onRouteChange(V2SettingsRoute.Profile) })
       }
 
       item {
@@ -793,10 +806,17 @@ private data class V2SettingsRow(
 )
 
 @Composable
-private fun V2ProfilePanel(displayName: String) {
+private fun V2ProfilePanel(
+  displayName: String,
+  onClick: () -> Unit,
+) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) {
     Row(
-      modifier = Modifier.fillMaxWidth(),
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .clip(RoundedCornerShape(ClawTheme.radii.row))
+          .clickable(onClick = onClick),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {

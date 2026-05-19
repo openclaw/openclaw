@@ -75,7 +75,11 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 
 @Composable
-fun V2VoiceScreen(viewModel: MainViewModel) {
+fun V2VoiceScreen(
+  viewModel: MainViewModel,
+  onOpenCommand: () -> Unit,
+  onOpenVoiceSettings: () -> Unit,
+) {
   val context = LocalContext.current
   val gatewayStatus by viewModel.statusText.collectAsState()
   val voiceCaptureMode by viewModel.voiceCaptureMode.collectAsState()
@@ -128,6 +132,7 @@ fun V2VoiceScreen(viewModel: MainViewModel) {
       speakerEnabled = speakerEnabled,
       onToggleSpeaker = { viewModel.setSpeakerEnabled(!speakerEnabled) },
       onEndTalk = { viewModel.setTalkModeEnabled(false) },
+      onOpenVoiceSettings = onOpenVoiceSettings,
     )
     return
   }
@@ -142,6 +147,7 @@ fun V2VoiceScreen(viewModel: MainViewModel) {
       gatewayStatus = gatewayStatus,
       onCancel = { viewModel.setMicEnabled(false) },
       onSend = { viewModel.setMicEnabled(false) },
+      onOpenVoiceSettings = onOpenVoiceSettings,
     )
     return
   }
@@ -158,6 +164,7 @@ fun V2VoiceScreen(viewModel: MainViewModel) {
       statusText = if (voiceActive) activeStatus else "Your voice command center.",
       speakerEnabled = speakerEnabled,
       onToggleSpeaker = { viewModel.setSpeakerEnabled(!speakerEnabled) },
+      onOpenCommand = onOpenCommand,
     )
 
     V2VoiceHero(
@@ -220,6 +227,7 @@ private fun V2DictationScreen(
   gatewayStatus: String,
   onCancel: () -> Unit,
   onSend: () -> Unit,
+  onOpenVoiceSettings: () -> Unit,
 ) {
   val lastUserText = conversation.lastOrNull { it.role == VoiceConversationRole.User }?.text
   val draftText = liveTranscript?.takeIf { it.isNotBlank() } ?: lastUserText.orEmpty()
@@ -238,7 +246,7 @@ private fun V2DictationScreen(
         Text(text = "Dictation", style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp), color = ClawTheme.colors.text)
         Text(text = "Transcribe then send", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
-      V2VoicePlainIconButton(icon = Icons.Default.Settings, contentDescription = "Dictation settings", onClick = {})
+      V2VoicePlainIconButton(icon = Icons.Default.Settings, contentDescription = "Dictation settings", onClick = onOpenVoiceSettings)
     }
 
     Surface(
@@ -350,6 +358,7 @@ private fun V2TalkSessionScreen(
   speakerEnabled: Boolean,
   onToggleSpeaker: () -> Unit,
   onEndTalk: () -> Unit,
+  onOpenVoiceSettings: () -> Unit,
 ) {
   Column(
     modifier =
@@ -379,7 +388,7 @@ private fun V2TalkSessionScreen(
           )
         }
       }
-      V2VoicePlainIconButton(icon = Icons.Default.Info, contentDescription = "Talk info", onClick = {})
+      V2VoicePlainIconButton(icon = Icons.Default.Info, contentDescription = "Talk settings", onClick = onOpenVoiceSettings)
     }
 
     Surface(
@@ -405,7 +414,7 @@ private fun V2TalkSessionScreen(
     ) {
       V2TalkControl(icon = if (speakerEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff, label = if (speakerEnabled) "Mute" else "Unmute", onClick = onToggleSpeaker)
       V2TalkControl(icon = Icons.Default.PhoneDisabled, label = "End", primary = true, onClick = onEndTalk)
-      V2TalkControl(icon = Icons.Default.GraphicEq, label = "Voice", onClick = {})
+      V2TalkControl(icon = Icons.Default.GraphicEq, label = "Voice", onClick = onOpenVoiceSettings)
     }
   }
 }
@@ -495,6 +504,7 @@ private fun V2VoiceHeader(
   statusText: String,
   speakerEnabled: Boolean,
   onToggleSpeaker: () -> Unit,
+  onOpenCommand: () -> Unit,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Row(
@@ -508,7 +518,7 @@ private fun V2VoiceHeader(
         color = ClawTheme.colors.text,
         modifier = Modifier.weight(1f),
       )
-      V2VoicePlainIconButton(icon = Icons.Default.Search, contentDescription = "Search voice", onClick = {})
+      V2VoicePlainIconButton(icon = Icons.Default.Search, contentDescription = "Search voice", onClick = onOpenCommand)
       V2VoiceAvatar(text = "OC")
     }
     Row(

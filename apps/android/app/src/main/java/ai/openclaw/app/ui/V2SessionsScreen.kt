@@ -24,10 +24,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.MicNone
@@ -39,6 +39,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,6 +60,23 @@ internal fun V2SessionsScreen(
   val sessions by viewModel.chatSessions.collectAsState()
   val chatSessionKey by viewModel.chatSessionKey.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
+  var filter by rememberSaveable { mutableStateOf(V2SessionFilter.Recent) }
+  var compactLayout by rememberSaveable { mutableStateOf(false) }
+  var recentFirst by rememberSaveable { mutableStateOf(true) }
+  val visibleSessions =
+    sessions
+      .let { rows ->
+        when (filter) {
+          V2SessionFilter.Recent -> rows
+          V2SessionFilter.Live -> rows.filter { it.key == chatSessionKey }
+        }
+      }.let { rows ->
+        if (recentFirst) {
+          rows.sortedByDescending { it.updatedAtMs ?: 0L }
+        } else {
+          rows.sortedBy { it.updatedAtMs ?: 0L }
+        }
+      }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -74,51 +94,48 @@ internal fun V2SessionsScreen(
         ) {
           Text(text = "Sessions", style = ClawTheme.type.display.copy(fontSize = 17.4.sp, lineHeight = 21.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
           V2SessionPlainIconButton(icon = Icons.Default.Search, contentDescription = "Search sessions", onClick = onOpenCommand)
-          V2SessionPlainIconButton(icon = Icons.Default.MoreVert, contentDescription = "Session options", onClick = {})
+          V2SessionPlainIconButton(icon = Icons.Default.SwapVert, contentDescription = "Reverse session sort", onClick = { recentFirst = !recentFirst })
         }
       }
 
       item {
         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-          V2FilterPill(text = "Recent", icon = Icons.Outlined.AccessTime, active = true)
-          V2FilterPill(text = "Live", icon = Icons.Outlined.MicNone, active = false, live = true)
-          V2FilterPill(text = "Pinned", icon = Icons.Default.StarBorder, active = false)
+          V2FilterPill(text = "Recent", icon = Icons.Outlined.AccessTime, active = filter == V2SessionFilter.Recent, onClick = { filter = V2SessionFilter.Recent })
+          V2FilterPill(text = "Live", icon = Icons.Outlined.MicNone, active = filter == V2SessionFilter.Live, live = visibleSessions.any { it.key == chatSessionKey }, onClick = { filter = V2SessionFilter.Live })
         }
       }
 
       item {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-          Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            V2FilterPill(text = "Channel", dropdown = true)
-            V2FilterPill(text = "Agent", dropdown = true)
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(text = "Sort: ${if (recentFirst) "Newest" else "Oldest"}", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+            Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(11.dp), tint = ClawTheme.colors.textMuted)
           }
-          V2SessionOutlineIconButton(icon = Icons.Default.Storage, contentDescription = "Session layout", onClick = {})
+          V2SessionOutlineIconButton(icon = Icons.Default.Storage, contentDescription = "Toggle session layout", onClick = { compactLayout = !compactLayout })
         }
       }
 
       item {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-          Text(text = "Sort: Recent", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-          Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(11.dp), tint = ClawTheme.colors.textMuted)
-        }
+        Text(text = if (compactLayout) "Layout: Compact" else "Layout: Detailed", style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
       }
 
-      if (sessions.isEmpty()) {
+      if (visibleSessions.isEmpty()) {
         item {
           ClawEmptyState(
-            title = "No sessions yet",
-            body = "Start a new conversation and it will show up here.",
+            title = emptySessionTitle(filter),
+            body = emptySessionBody(filter),
             action = { ClawPrimaryButton(text = "Start Chat", onClick = onOpenChat) },
           )
         }
       } else {
-        items(sessions, key = { it.key }) { session ->
+        items(visibleSessions, key = { it.key }) { session ->
           val active = session.key == chatSessionKey
           V2SessionRow(
             title = displaySessionTitle(session.displayName),
             subtitle = if (active) "Current session" else "OpenClaw session",
             metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: "now",
             active = active,
+            compact = compactLayout,
             onClick = {
               viewModel.switchChatSession(session.key)
               onOpenChat()
@@ -141,8 +158,11 @@ private fun V2FilterPill(
   active: Boolean = false,
   live: Boolean = false,
   dropdown: Boolean = false,
+  onClick: (() -> Unit)? = null,
 ) {
   Surface(
+    onClick = onClick ?: {},
+    enabled = onClick != null,
     shape = RoundedCornerShape(7.dp),
     color = if (active) ClawTheme.colors.surfaceRaised else Color.Transparent,
     contentColor = ClawTheme.colors.text,
@@ -171,6 +191,7 @@ private fun V2SessionRow(
   subtitle: String,
   metadata: String,
   active: Boolean,
+  compact: Boolean,
   onClick: () -> Unit,
 ) {
   Surface(onClick = onClick, color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
@@ -210,15 +231,17 @@ private fun V2SessionRow(
               Box(modifier = Modifier.size(3.5.dp).clip(CircleShape).background(ClawTheme.colors.success))
             }
           }
-          Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
-          Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            V2SessionMiniTag(text = "Workspace")
-            V2SessionMiniTag(text = if (active) "Active" else "OpenClaw")
+          if (!compact) {
+            Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+              V2SessionMiniTag(text = "Workspace")
+              V2SessionMiniTag(text = if (active) "Active" else "OpenClaw")
+            }
           }
         }
 
         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(5.dp)) {
-          Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Session options", modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
+          Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
           Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
         }
       }
@@ -271,6 +294,23 @@ private fun V2SessionMiniTag(text: String) {
     Text(text = text, modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.5.dp), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), maxLines = 1)
   }
 }
+
+private enum class V2SessionFilter {
+  Recent,
+  Live,
+}
+
+private fun emptySessionTitle(filter: V2SessionFilter): String =
+  when (filter) {
+    V2SessionFilter.Recent -> "No sessions yet"
+    V2SessionFilter.Live -> "No live session"
+  }
+
+private fun emptySessionBody(filter: V2SessionFilter): String =
+  when (filter) {
+    V2SessionFilter.Recent -> "Start a new conversation and it will show up here."
+    V2SessionFilter.Live -> "Open Chat to start or resume the current session."
+  }
 
 private fun relativeSessionTime(updatedAtMs: Long): String {
   val deltaMs = (System.currentTimeMillis() - updatedAtMs).coerceAtLeast(0L)
