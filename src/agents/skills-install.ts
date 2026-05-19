@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -80,9 +81,7 @@ function fallbackCaseInsensitivePlatform(platform: NodeJS.Platform): boolean {
 }
 
 function probeCaseInsensitiveDirectory(dir: string, fsImpl: CaseProbeFs = fs): boolean | undefined {
-  const probeName = `.openclaw-case-probe-${process.pid}-${Date.now()}-${Math.random()
-    .toString(16)
-    .slice(2)}-a`;
+  const probeName = `.openclaw-case-probe-${randomUUID()}-caseprobea`;
   const alternateName = probeName.toUpperCase();
   if (alternateName === probeName) {
     return false;
