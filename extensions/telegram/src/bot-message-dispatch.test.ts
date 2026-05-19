@@ -302,6 +302,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     createSequencedTestDraftStream(startMessageId);
   const createNativeToolProgressDraft = (updateResult = true) => ({
     update: vi.fn(async () => updateResult),
+    freeze: vi.fn(),
     stop: vi.fn(),
   });
 
@@ -1262,6 +1263,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createNativeTelegramToolProgressDraft).toHaveBeenCalledWith(
       expect.objectContaining({
         chatId: 123,
+        mode: "status-with-typing",
         thread: { id: 777, scope: "dm" },
       }),
     );
@@ -1270,6 +1272,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Done ");
     expect(answerDraftStream.update).toHaveBeenLastCalledWith("Done answer.");
     expect(answerDraftStream.update).not.toHaveBeenCalledWith(expect.stringContaining("Exec"));
+    expect(nativeDraft.freeze).toHaveBeenCalled();
     expect(nativeDraft.stop).toHaveBeenCalled();
   });
 
@@ -1633,7 +1636,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createNativeTelegramToolProgressDraft).toHaveBeenCalled();
     expect(nativeDraft.update).toHaveBeenCalledWith("Working\n🛠️ Exec");
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Working\n`🛠️ Exec`");
+    expect(nativeDraft.freeze).toHaveBeenCalled();
     expectDeliveredReply(0, { text: "Done." });
+    expect(nativeDraft.freeze.mock.invocationCallOrder[0]).toBeLessThan(
+      deliverReplies.mock.invocationCallOrder[0],
+    );
   });
 
   it("delivers the final answer when native tool-progress draft sends are slow", async () => {

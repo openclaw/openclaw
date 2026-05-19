@@ -11,6 +11,11 @@ describe("createNativeTelegramToolProgressDraft", () => {
         _params?: Record<string, unknown>,
       ) => implementation?.(),
     );
+  const createSendChatActionMock = () =>
+    vi.fn(
+      async (_chatId: number | string, _action: string, _params?: Record<string, unknown>) =>
+        undefined,
+    );
 
   afterEach(() => {
     vi.useRealTimers();
@@ -51,6 +56,118 @@ describe("createNativeTelegramToolProgressDraft", () => {
     );
   });
 
+  it("uses Telegram's native thinking placeholder in smooth-thinking mode", async () => {
+    vi.useFakeTimers();
+    const sendMessageDraft = createSendMessageDraftMock();
+    const draft = createNativeTelegramToolProgressDraft({
+      api: { sendMessageDraft },
+      chatId: 123,
+      mode: "smooth-thinking",
+      thinkingKeepAliveMs: 20,
+    } as never);
+
+    expect(draft).toBeDefined();
+    await expect(draft?.update("Running command")).resolves.toBe(true);
+    await expect(draft?.update("Reading files")).resolves.toBe(true);
+
+    expect(sendMessageDraft).toHaveBeenCalledTimes(1);
+    const firstDraftId = sendMessageDraft.mock.calls[0]?.[1];
+    expect(sendMessageDraft).toHaveBeenLastCalledWith(
+      123,
+      firstDraftId,
+      "",
+      undefined,
+      expect.any(AbortSignal),
+    );
+
+    await vi.advanceTimersByTimeAsync(19);
+    expect(sendMessageDraft).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sendMessageDraft).toHaveBeenCalledTimes(2);
+    expect(sendMessageDraft).toHaveBeenLastCalledWith(
+      123,
+      firstDraftId,
+      "",
+      undefined,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("streams status text while keeping Telegram's native typing indicator alive", async () => {
+    vi.useFakeTimers();
+    const sendMessageDraft = createSendMessageDraftMock();
+    const sendChatAction = createSendChatActionMock();
+    const draft = createNativeTelegramToolProgressDraft({
+      api: { sendMessageDraft, sendChatAction },
+      chatId: 123,
+      mode: "status-with-typing",
+      typingKeepAliveMs: 20,
+    } as never);
+
+    expect(draft).toBeDefined();
+    await expect(draft?.update("Working\n🛠️ Exec")).resolves.toBe(true);
+
+    expect(sendMessageDraft).toHaveBeenCalledWith(
+      123,
+      expect.any(Number),
+      "Working\n🛠️ Exec",
+      undefined,
+      expect.any(AbortSignal),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sendChatAction).toHaveBeenCalledWith(123, "typing", undefined);
+
+    await vi.advanceTimersByTimeAsync(19);
+    expect(sendChatAction).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sendChatAction).toHaveBeenCalledTimes(2);
+    expect(sendChatAction).toHaveBeenLastCalledWith(123, "typing", undefined);
+  });
+
+  it("cancels status typing keepalives when frozen", async () => {
+    vi.useFakeTimers();
+    const sendMessageDraft = createSendMessageDraftMock();
+    const sendChatAction = createSendChatActionMock();
+    const draft = createNativeTelegramToolProgressDraft({
+      api: { sendMessageDraft, sendChatAction },
+      chatId: 123,
+      mode: "status-with-typing",
+      typingKeepAliveMs: 20,
+    } as never);
+
+    expect(draft).toBeDefined();
+    await expect(draft?.update("Working")).resolves.toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sendChatAction).toHaveBeenCalledTimes(1);
+    draft?.freeze();
+
+    await vi.runAllTimersAsync();
+
+    expect(sendChatAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels smooth-thinking keepalives when frozen", async () => {
+    vi.useFakeTimers();
+    const sendMessageDraft = createSendMessageDraftMock();
+    const draft = createNativeTelegramToolProgressDraft({
+      api: { sendMessageDraft },
+      chatId: 123,
+      mode: "smooth-thinking",
+      thinkingKeepAliveMs: 20,
+    } as never);
+
+    expect(draft).toBeDefined();
+    await expect(draft?.update("Running command")).resolves.toBe(true);
+    draft?.freeze();
+
+    await vi.runAllTimersAsync();
+    await expect(draft?.update("Late progress")).resolves.toBe(false);
+
+    expect(sendMessageDraft).toHaveBeenCalledTimes(1);
+  });
+
   it("stops after a Telegram rejection so later updates can fall back silently", async () => {
     const sendMessageDraft = createSendMessageDraftMock(async () => {
       throw new Error("Bad Request: method is unavailable");
@@ -76,6 +193,7 @@ describe("createNativeTelegramToolProgressDraft", () => {
     const draft = createNativeTelegramToolProgressDraft({
       api: { sendMessageDraft },
       chatId: 123,
+      idleUpdateDelayMs: 1_000,
       minUpdateIntervalMs: 1_000,
     } as never);
 
@@ -113,7 +231,7 @@ describe("createNativeTelegramToolProgressDraft", () => {
     await expect(draft?.update("Running checks")).resolves.toBe(true);
 
     expect(sendMessageDraft).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1_199);
+    await vi.advanceTimersByTimeAsync(899);
     expect(sendMessageDraft).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(1);
@@ -214,6 +332,26 @@ describe("createNativeTelegramToolProgressDraft", () => {
     draft?.stop();
 
     await vi.runAllTimersAsync();
+
+    expect(sendMessageDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("freezes native draft progress before final delivery without flushing queued text", async () => {
+    vi.useFakeTimers();
+    const sendMessageDraft = createSendMessageDraftMock();
+    const draft = createNativeTelegramToolProgressDraft({
+      api: { sendMessageDraft },
+      chatId: 123,
+      minUpdateIntervalMs: 1_000,
+    } as never);
+
+    expect(draft).toBeDefined();
+    await expect(draft?.update("Starting")).resolves.toBe(true);
+    await expect(draft?.update("Running tests")).resolves.toBe(true);
+    draft?.freeze();
+
+    await vi.runAllTimersAsync();
+    await expect(draft?.update("Late progress")).resolves.toBe(false);
 
     expect(sendMessageDraft).toHaveBeenCalledTimes(1);
   });

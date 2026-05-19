@@ -616,6 +616,7 @@ export const dispatchTelegramMessage = async ({
           chatId,
           thread: threadSpec,
           log: logVerbose,
+          mode: "status-with-typing",
         })
       : undefined;
   let streamToolProgressSuppressed = false;
@@ -815,7 +816,7 @@ export const dispatchTelegramMessage = async ({
     resetDraftLaneState(lane);
   };
   const rotateAnswerLaneAfterToolProgress = async () => {
-    nativeToolProgressDraft?.stop();
+    nativeToolProgressDraft?.freeze();
     if (!activeAnswerDraftIsToolProgressOnly) {
       return false;
     }
@@ -827,7 +828,7 @@ export const dispatchTelegramMessage = async ({
     return true;
   };
   const prepareAnswerLaneForText = async () => {
-    nativeToolProgressDraft?.stop();
+    nativeToolProgressDraft?.freeze();
     if (await rotateAnswerLaneAfterToolProgress()) {
       return;
     }
@@ -1239,6 +1240,7 @@ export const dispatchTelegramMessage = async ({
       payload: ReplyPayload,
       text: string,
     ): Promise<LaneDeliveryResult> => {
+      nativeToolProgressDraft?.freeze();
       if (activeAnswerDraftIsToolProgressOnly) {
         await rotateAnswerLaneAfterToolProgress();
       } else {
