@@ -175,6 +175,10 @@
             "minimum": 1,
             "default": 60000
           },
+          "postToolRawAssistantCompletionIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1
+          },
           "approvalPolicy": {
             "type": "string",
             "enum": ["never", "on-request", "on-failure", "untrusted"]
@@ -353,6 +357,11 @@
     "appServer.turnCompletionIdleTimeoutMs": {
       "label": "Turn Completion Idle Timeout",
       "help": "Maximum quiet time after Codex accepts a turn or after a turn-scoped app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "advanced": true
+    },
+    "appServer.postToolRawAssistantCompletionIdleTimeoutMs": {
+      "label": "Post-Tool Raw Assistant Completion Idle Timeout",
+      "help": "Completion-idle guard after a tool handoff when Codex emits raw assistant completion or progress without turn/completed. Defaults to the assistant completion idle timeout when unset.",
       "advanced": true
     },
     "appServer.approvalPolicy": {
