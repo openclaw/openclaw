@@ -254,9 +254,11 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(JSON.stringify(result?.content ?? [])).not.toContain("MEDIA:");
   });
 
-  it("uses operator.pairing plus operator.admin to approve exec-capable node pair requests", async () => {
+  // All node approvals require only operator.pairing scope to enable automation.
+  // See: https://github.com/openclaw/openclaw/issues/84144
+  it("uses only operator.pairing to approve exec-capable node pair requests", async () => {
     mockNodePairApproveFlow({
-      requiredApproveScopes: ["operator.pairing", "operator.admin"],
+      requiredApproveScopes: ["operator.pairing"],
     });
     const tool = createNodesTool();
 
@@ -265,12 +267,12 @@ describe("createNodesTool screen_record duration guardrails", () => {
       requestId: "req-1",
     });
 
-    expectNodePairApproveScopes(["operator.pairing", "operator.admin"]);
+    expectNodePairApproveScopes(["operator.pairing"]);
   });
 
-  it("uses operator.pairing plus operator.write to approve non-exec node pair requests", async () => {
+  it("uses only operator.pairing to approve non-exec node pair requests", async () => {
     mockNodePairApproveFlow({
-      requiredApproveScopes: ["operator.pairing", "operator.write"],
+      requiredApproveScopes: ["operator.pairing"],
     });
     const tool = createNodesTool();
 
@@ -279,7 +281,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
       requestId: "req-1",
     });
 
-    expectNodePairApproveScopes(["operator.pairing", "operator.write"]);
+    expectNodePairApproveScopes(["operator.pairing"]);
   });
 
   it("uses operator.pairing for commandless node pair requests", async () => {
@@ -296,6 +298,8 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expectNodePairApproveScopes(["operator.pairing"]);
   });
 
+  // All node approvals now require only operator.pairing regardless of commands.
+  // See: https://github.com/openclaw/openclaw/issues/84144
   it("falls back to command inspection when the gateway does not advertise required scopes", async () => {
     mockNodePairApproveFlow({
       commands: ["canvas.snapshot"],
@@ -307,7 +311,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
       requestId: "req-1",
     });
 
-    expectNodePairApproveScopes(["operator.pairing", "operator.write"]);
+    expectNodePairApproveScopes(["operator.pairing"]);
   });
 
   it("blocks invokeCommand system.run so exec stays the only shell path", async () => {

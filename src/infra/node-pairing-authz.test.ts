@@ -2,18 +2,16 @@ import { describe, expect, it } from "vitest";
 import { resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
 
 describe("resolveNodePairApprovalScopes", () => {
-  it("requires operator.admin for system.run commands", () => {
-    expect(resolveNodePairApprovalScopes(["system.run"])).toEqual([
-      "operator.pairing",
-      "operator.admin",
-    ]);
+  // All node approvals require only operator.pairing scope to enable
+  // automation workflows that cannot obtain operator.admin.
+  // See: https://github.com/openclaw/openclaw/issues/84144
+
+  it("requires only operator.pairing for system.run commands", () => {
+    expect(resolveNodePairApprovalScopes(["system.run"])).toEqual(["operator.pairing"]);
   });
 
-  it("requires operator.write for non-exec commands", () => {
-    expect(resolveNodePairApprovalScopes(["canvas.present"])).toEqual([
-      "operator.pairing",
-      "operator.write",
-    ]);
+  it("requires only operator.pairing for non-exec commands", () => {
+    expect(resolveNodePairApprovalScopes(["canvas.present"])).toEqual(["operator.pairing"]);
   });
 
   it("requires only operator.pairing without commands", () => {

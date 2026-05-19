@@ -1,22 +1,19 @@
-import { NODE_SYSTEM_RUN_COMMANDS } from "./node-commands.js";
-
 export type NodeApprovalScope = "operator.pairing" | "operator.write" | "operator.admin";
 
 const OPERATOR_PAIRING_SCOPE: NodeApprovalScope = "operator.pairing";
-const OPERATOR_WRITE_SCOPE: NodeApprovalScope = "operator.write";
-const OPERATOR_ADMIN_SCOPE: NodeApprovalScope = "operator.admin";
 
-export function resolveNodePairApprovalScopes(commands: unknown): NodeApprovalScope[] {
-  const normalized = Array.isArray(commands)
-    ? commands.filter((command): command is string => typeof command === "string")
-    : [];
-  if (
-    normalized.some((command) => NODE_SYSTEM_RUN_COMMANDS.some((allowed) => allowed === command))
-  ) {
-    return [OPERATOR_PAIRING_SCOPE, OPERATOR_ADMIN_SCOPE];
-  }
-  if (normalized.length > 0) {
-    return [OPERATOR_PAIRING_SCOPE, OPERATOR_WRITE_SCOPE];
-  }
+/**
+ * Resolves the scopes required to approve a node pairing request.
+ *
+ * All node approvals require only `operator.pairing` scope. This enables
+ * automation workflows (claws, CI) that cannot obtain `operator.admin` scope
+ * to provision nodes with exec capabilities.
+ *
+ * The previous behavior required `operator.admin` for exec-capable nodes,
+ * which blocked automation after 2026.5.18's node surface gate.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/84144
+ */
+export function resolveNodePairApprovalScopes(_commands: unknown): NodeApprovalScope[] {
   return [OPERATOR_PAIRING_SCOPE];
 }
