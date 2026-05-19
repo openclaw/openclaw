@@ -59,7 +59,17 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
   const username = normalizeOptionalString(identity.name);
   const iconUrl = normalizeOptionalString(identity.avatarUrl);
   const rawEmoji = normalizeOptionalString(identity.emoji);
-  const iconEmoji = !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
+  // Issue #84297: agents.list[].identity.emoji is commonly configured as a
+  // raw Unicode character (e.g. "📟") because that is what Slack renders in
+  // chat. Slack's chat.postMessage `icon_emoji` field accepts both the
+  // ":shortcode:" form and raw Unicode emoji, and the reply path at
+  // src/monitor/message-handler/dispatch.ts already passes the raw value
+  // through unchanged. Mirror that here so the outbound-adapter path used by
+  // cron --announce / heartbeat / runtimeSend stops silently dropping the
+  // overlay when the configured emoji is not in shortcode form. icon_url
+  // still wins because Slack treats icon_url and icon_emoji as mutually
+  // exclusive on chat.postMessage.
+  const iconEmoji = !iconUrl && rawEmoji ? rawEmoji : undefined;
   if (!username && !iconUrl && !iconEmoji) {
     return undefined;
   }

@@ -164,4 +164,86 @@ describe("slackOutbound", () => {
       blocks: [{ type: "divider" }],
     });
   });
+
+  // Issue #84297: per-agent identity overlay must reach sendMessageSlack on the
+  // outbound-adapter path, including the case where `agents.list[].identity.emoji`
+  // is configured as a raw Unicode emoji (e.g. "📟") rather than a Slack shortcode.
+  // The reply path at src/monitor/message-handler/dispatch.ts already passes the
+  // raw value through, so this lock-in keeps the announce/heartbeat path consistent.
+  describe("identity overlay (issue #84297)", () => {
+    it("forwards a raw Unicode emoji into iconEmoji on sendText", async () => {
+      sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
+
+      await slackOutbound.sendText!({
+        cfg,
+        to: "C123",
+        text: "status",
+        accountId: "default",
+        identity: { name: "Pulse", emoji: "📟" },
+      });
+
+      expect(sendMessageSlackMock).toHaveBeenCalledTimes(1);
+      const opts = sendMessageSlackMock.mock.calls[0]?.[2] as
+        | { identity?: { username?: string; iconEmoji?: string; iconUrl?: string } }
+        | undefined;
+      expect(opts?.identity).toEqual({
+        username: "Pulse",
+        iconUrl: undefined,
+        iconEmoji: "📟",
+      });
+    });
+
+    it("still accepts the :shortcode: form for callers that set it explicitly", async () => {
+      sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-shortcode" });
+
+      await slackOutbound.sendText!({
+        cfg,
+        to: "C123",
+        text: "status",
+        accountId: "default",
+        identity: { name: "Pulse", emoji: ":beeper:" },
+      });
+
+      const opts = sendMessageSlackMock.mock.calls[0]?.[2] as
+        | { identity?: { iconEmoji?: string } }
+        | undefined;
+      expect(opts?.identity?.iconEmoji).toBe(":beeper:");
+    });
+
+    it("prefers iconUrl over emoji when both are configured (Slack API exclusivity)", async () => {
+      sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-url" });
+
+      await slackOutbound.sendText!({
+        cfg,
+        to: "C123",
+        text: "status",
+        accountId: "default",
+        identity: {
+          name: "Pulse",
+          emoji: "📟",
+          avatarUrl: "https://example.invalid/avatar.png",
+        },
+      });
+
+      const opts = sendMessageSlackMock.mock.calls[0]?.[2] as
+        | { identity?: { iconUrl?: string; iconEmoji?: string } }
+        | undefined;
+      expect(opts?.identity?.iconUrl).toBe("https://example.invalid/avatar.png");
+      expect(opts?.identity?.iconEmoji).toBeUndefined();
+    });
+
+    it("omits identity entirely when no fields are configured", async () => {
+      sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-no-identity" });
+
+      await slackOutbound.sendText!({
+        cfg,
+        to: "C123",
+        text: "status",
+        accountId: "default",
+      });
+
+      const opts = sendMessageSlackMock.mock.calls[0]?.[2] as { identity?: unknown } | undefined;
+      expect(opts?.identity).toBeUndefined();
+    });
+  });
 });
