@@ -1,7 +1,7 @@
 {
   "id": "serpapi-search",
   "name": "SerpApi Search",
-  "description": "1 universal search tool covering web, news, flights, hotels, maps, shopping, YouTube, scholar, finance, events and 100+ engines via SerpApi",
+  "description": "Web search provider plus multiple specialized SerpApi tools for news, flights, hotels, maps, shopping, YouTube, scholar, finance, events, and 100+ search engines",
   "activation": {
     "onStartup": false
   },
