@@ -50,11 +50,7 @@ import {
   type NormalizedPluginsConfig,
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import {
-  discoverOpenClawPlugins,
-  type PluginCandidate,
-  type PluginDiscoveryResult,
-} from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { toSafeImportPath } from "./import-specifier.js";
@@ -202,14 +198,6 @@ export type PluginLoadOptions = {
   loadModules?: boolean;
   throwOnLoadError?: boolean;
   manifestRegistry?: PluginManifestRegistry;
-  /**
-   * Pre-computed plugin discovery result. When supplied, internal calls to
-   * `discoverOpenClawPlugins` are skipped. Callers in the same startup flow
-   * can compute one discovery result and share it across loader entry points
-   * to eliminate redundant filesystem walks. Ignored when `manifestRegistry`
-   * is also provided (the registry already implies a discovery snapshot).
-   */
-  discovery?: PluginDiscoveryResult;
 };
 
 function detailPluginStartupTrace(
@@ -1702,13 +1690,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           candidates: createPluginCandidatesFromManifestRegistry(suppliedManifestRegistry),
           diagnostics: [] as PluginDiagnostic[],
         }
-      : (options.discovery ??
-        discoverOpenClawPlugins({
+      : discoverOpenClawPlugins({
           workspaceDir: options.workspaceDir,
           extraPaths: normalized.loadPaths,
           env,
           installRecords,
-        }));
+        });
     const manifestRegistry =
       suppliedManifestRegistry ??
       loadPluginManifestRegistry({
@@ -2572,14 +2559,12 @@ export async function loadOpenClawPluginCliRegistry(
     activateGlobalSideEffects: false,
   });
 
-  const discovery =
-    options.discovery ??
-    discoverOpenClawPlugins({
-      workspaceDir: options.workspaceDir,
-      extraPaths: normalized.loadPaths,
-      env,
-      installRecords,
-    });
+  const discovery = discoverOpenClawPlugins({
+    workspaceDir: options.workspaceDir,
+    extraPaths: normalized.loadPaths,
+    env,
+    installRecords,
+  });
   const manifestRegistry = loadPluginManifestRegistry({
     config: cfg,
     workspaceDir: options.workspaceDir,
