@@ -912,6 +912,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const replyToId = resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
+    suppressReplies: channel === "discord" && readBooleanParam(params, "useReply") === false,
   });
   const { resolvedThreadId, outboundRoute } = await prepareOutboundMirrorRoute({
     cfg,
