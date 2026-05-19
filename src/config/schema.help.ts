@@ -812,17 +812,17 @@ export const FIELD_HELP: Record<string, string> = {
     "Ordered model preferences specifically for image understanding when you want to override shared media models. Put the most reliable multimodal model first to reduce fallback attempts.",
   "tools.media.image.scope":
     "Scope selector for when image understanding is attempted (for example only explicit requests versus broader auto-detection). Keep narrow scope in busy channels to control token and API spend.",
-  "tools.browser.enabled":
-    "Controls whether browser screenshot vision understanding is active. When `tools.browser.models` contains at least one valid provider/model entry, vision is enabled by default; set `enabled: false` to force-disable it without removing the model list. When no models are configured, this field has no effect and screenshots return image content blocks as before.",
-  "tools.browser.maxBytes":
+  "browser.visionEnabled":
+    "Controls whether browser screenshot vision understanding is active. When `browser.models` contains at least one valid provider/model entry, vision is enabled by default; set `visionEnabled: false` to force-disable it without removing the model list. When no models are configured, this field has no effect and screenshots return image content blocks as before.",
+  "browser.visionMaxBytes":
     "Maximum accepted screenshot byte size sent to the configured vision model. Keep the limit aligned with your provider caps so screenshots are not silently truncated; lower it on slow uplinks to keep request latency predictable.",
-  "tools.browser.maxChars":
+  "browser.visionMaxChars":
     "Maximum characters returned from the screenshot description after model response normalization. Use tighter limits to keep tool result payloads small for downstream main models, or increase it when screenshots include dense text the agent must read.",
-  "tools.browser.prompt":
+  "browser.visionPrompt":
     "Instruction template used when describing browser screenshots. Keep the prompt deterministic and focused on the viewport so descriptions stay consistent across turns; override for use cases that need UI-state-aware framing (for example accessibility tree summaries).",
-  "tools.browser.timeoutSeconds":
+  "browser.visionTimeoutSeconds":
     "Timeout in seconds for each browser screenshot description request before it is aborted. Increase for high-resolution screenshots that need careful OCR; lower it when latency matters more than completeness so the browser tool falls back to returning the raw image promptly.",
-  "tools.browser.models":
+  "browser.models":
     "Ordered vision model preferences for describing browser screenshots. Put the most reliable multimodal model first to reduce fallback attempts when the primary provider is unavailable; leave empty to keep the browser tool returning image blocks for multimodal main models to read directly.",
   ...MEDIA_AUDIO_FIELD_HELP,
   "tools.media.video.enabled":

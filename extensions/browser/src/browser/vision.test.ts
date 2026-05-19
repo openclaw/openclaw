@@ -17,30 +17,28 @@ describe("isBrowserVisionEnabled", () => {
     expect(isBrowserVisionEnabled(undefined)).toBe(false);
   });
 
-  it("returns false when tools.browser is missing", () => {
+  it("returns false when browser.models is missing", () => {
     expect(isBrowserVisionEnabled({})).toBe(false);
   });
 
-  it("returns false when tools.browser.models is empty", () => {
-    expect(isBrowserVisionEnabled({ tools: { browser: { models: [] } } })).toBe(false);
+  it("returns false when browser.models is empty", () => {
+    expect(isBrowserVisionEnabled({ browser: { models: [] } })).toBe(false);
   });
 
   it("returns false when no entry has both provider and model", () => {
     expect(
       isBrowserVisionEnabled({
-        tools: { browser: { models: [{ provider: "openai" }, { model: "gpt-vision" }] } },
+        browser: { models: [{ provider: "openai" }, { model: "gpt-vision" }] },
       }),
     ).toBe(false);
   });
 
-  it("returns false when enabled is explicitly false even if models exist", () => {
+  it("returns false when visionEnabled is explicitly false even if models exist", () => {
     expect(
       isBrowserVisionEnabled({
-        tools: {
-          browser: {
-            enabled: false,
-            models: [{ provider: "openai", model: "gpt-vision" }],
-          },
+        browser: {
+          visionEnabled: false,
+          models: [{ provider: "openai", model: "gpt-vision" }],
         },
       }),
     ).toBe(false);
@@ -49,10 +47,8 @@ describe("isBrowserVisionEnabled", () => {
   it("returns true when at least one entry has both provider and model", () => {
     expect(
       isBrowserVisionEnabled({
-        tools: {
-          browser: {
-            models: [{ provider: "openai", model: "gpt-vision" }, { provider: "incomplete" }],
-          },
+        browser: {
+          models: [{ provider: "openai", model: "gpt-vision" }, { provider: "incomplete" }],
         },
       }),
     ).toBe(true);
@@ -61,10 +57,8 @@ describe("isBrowserVisionEnabled", () => {
   it("ignores CLI-style entries", () => {
     expect(
       isBrowserVisionEnabled({
-        tools: {
-          browser: {
-            models: [{ type: "cli", provider: "openai", model: "gpt-vision", command: "cmd" }],
-          },
+        browser: {
+          models: [{ type: "cli", provider: "openai", model: "gpt-vision", command: "cmd" }],
         },
       }),
     ).toBe(false);
@@ -75,17 +69,19 @@ describe("getBrowserVisionConfig", () => {
   it("returns undefined when cfg is missing", () => {
     expect(getBrowserVisionConfig(undefined)).toBeUndefined();
     expect(getBrowserVisionConfig({})).toBeUndefined();
-    expect(getBrowserVisionConfig({ tools: {} })).toBeUndefined();
+    expect(getBrowserVisionConfig({ browser: {} })).toBeUndefined();
   });
 
-  it("returns the tools.browser block when present", () => {
+  it("returns the vision config from browser block when present", () => {
     const cfg = {
-      tools: {
-        browser: { prompt: "describe me", models: [{ provider: "openai", model: "gpt-vision" }] },
+      browser: {
+        visionPrompt: "describe me",
+        models: [{ provider: "openai", model: "gpt-vision" }],
       },
     };
     const visionCfg = getBrowserVisionConfig(cfg);
-    expect(visionCfg).toEqual(cfg.tools.browser);
+    expect(visionCfg?.models).toEqual(cfg.browser.models);
+    expect(visionCfg?.prompt).toBe("describe me");
   });
 });
 
@@ -104,10 +100,8 @@ describe("describeBrowserImageWithVision", () => {
     const result = await describeBrowserImageWithVision(
       {
         cfg: {
-          tools: {
-            browser: {
-              models: [{ provider: "openai", model: "gpt-vision" }],
-            },
+          browser: {
+            models: [{ provider: "openai", model: "gpt-vision" }],
           },
         },
         filePath: "/tmp/screenshot.png",
@@ -131,7 +125,7 @@ describe("describeBrowserImageWithVision", () => {
     await describeBrowserImageWithVision(
       {
         cfg: {
-          tools: { browser: { models: [{ provider: "openai", model: "gpt-vision" }] } },
+          browser: { models: [{ provider: "openai", model: "gpt-vision" }] },
         },
         filePath: "/tmp/screenshot.png",
         mediaUrl: "/Users/someone/.openclaw/media/browser/abc.jpg",
@@ -148,7 +142,7 @@ describe("describeBrowserImageWithVision", () => {
     await describeBrowserImageWithVision(
       {
         cfg: {
-          tools: { browser: { models: [{ provider: "openai", model: "gpt-vision" }] } },
+          browser: { models: [{ provider: "openai", model: "gpt-vision" }] },
         },
         filePath: "/tmp/screenshot.png",
         mediaUrl: "https://cdn.example.com/screenshot.jpg",
@@ -164,12 +158,10 @@ describe("describeBrowserImageWithVision", () => {
     await describeBrowserImageWithVision(
       {
         cfg: {
-          tools: {
-            browser: {
-              prompt: "Read the headlines",
-              timeoutSeconds: 45,
-              models: [{ provider: "openai", model: "gpt-vision" }],
-            },
+          browser: {
+            visionPrompt: "Read the headlines",
+            visionTimeoutSeconds: 45,
+            models: [{ provider: "openai", model: "gpt-vision" }],
           },
         },
         filePath: "/tmp/screenshot.png",
@@ -186,21 +178,19 @@ describe("describeBrowserImageWithVision", () => {
     await describeBrowserImageWithVision(
       {
         cfg: {
-          tools: {
-            browser: {
-              prompt: "default prompt",
-              timeoutSeconds: 10,
-              maxChars: 100,
-              models: [
-                {
-                  provider: "openai",
-                  model: "gpt-vision",
-                  prompt: "custom prompt",
-                  timeoutSeconds: 90,
-                  maxChars: 1000,
-                },
-              ],
-            },
+          browser: {
+            visionPrompt: "default prompt",
+            visionTimeoutSeconds: 10,
+            visionMaxChars: 100,
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-vision",
+                prompt: "custom prompt",
+                timeoutSeconds: 90,
+                maxChars: 1000,
+              },
+            ],
           },
         },
         filePath: "/tmp/screenshot.png",
@@ -221,13 +211,11 @@ describe("describeBrowserImageWithVision", () => {
     const result = await describeBrowserImageWithVision(
       {
         cfg: {
-          tools: {
-            browser: {
-              models: [
-                { provider: "primary", model: "p" },
-                { provider: "secondary", model: "fallback-vision" },
-              ],
-            },
+          browser: {
+            models: [
+              { provider: "primary", model: "p" },
+              { provider: "secondary", model: "fallback-vision" },
+            ],
           },
         },
         filePath: "/tmp/screenshot.png",
@@ -254,13 +242,11 @@ describe("describeBrowserImageWithVision", () => {
     const result = await describeBrowserImageWithVision(
       {
         cfg: {
-          tools: {
-            browser: {
-              models: [
-                { provider: "primary", model: "p" },
-                { provider: "secondary", model: "fallback-vision" },
-              ],
-            },
+          browser: {
+            models: [
+              { provider: "primary", model: "p" },
+              { provider: "secondary", model: "fallback-vision" },
+            ],
           },
         },
         filePath: "/tmp/screenshot.png",
@@ -283,13 +269,11 @@ describe("describeBrowserImageWithVision", () => {
       describeBrowserImageWithVision(
         {
           cfg: {
-            tools: {
-              browser: {
-                models: [
-                  { provider: "primary", model: "p" },
-                  { provider: "secondary", model: "s" },
-                ],
-              },
+            browser: {
+              models: [
+                { provider: "primary", model: "p" },
+                { provider: "secondary", model: "s" },
+              ],
             },
           },
           filePath: "/tmp/screenshot.png",
@@ -306,11 +290,9 @@ describe("describeBrowserImageWithVision", () => {
     const result = await describeBrowserImageWithVision(
       {
         cfg: {
-          tools: {
-            browser: {
-              maxChars: 100,
-              models: [{ provider: "openai", model: "gpt-vision" }],
-            },
+          browser: {
+            visionMaxChars: 100,
+            models: [{ provider: "openai", model: "gpt-vision" }],
           },
         },
         filePath: "/tmp/screenshot.png",
@@ -335,11 +317,9 @@ describe("describeBrowserImageWithVision", () => {
       describeBrowserImageWithVision(
         {
           cfg: {
-            tools: {
-              browser: {
-                maxBytes: 50,
-                models: [{ provider: "openai", model: "gpt-vision" }],
-              },
+            browser: {
+              visionMaxBytes: 50,
+              models: [{ provider: "openai", model: "gpt-vision" }],
             },
           },
           filePath: bigFile,
@@ -357,17 +337,15 @@ describe("describeBrowserImageWithVision", () => {
     await describeBrowserImageWithVision(
       {
         cfg: {
-          tools: {
-            browser: {
-              models: [
-                {
-                  provider: "openai",
-                  model: "gpt-vision",
-                  profile: "my-profile",
-                  preferredProfile: "my-preferred",
-                },
-              ],
-            },
+          browser: {
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-vision",
+                profile: "my-profile",
+                preferredProfile: "my-preferred",
+              },
+            ],
           },
         },
         filePath: "/tmp/screenshot.png",

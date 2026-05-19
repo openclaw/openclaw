@@ -78,7 +78,7 @@ export type BrowserVisionDeps = {
 };
 
 /**
- * Returns true when `tools.browser.models` contains at least one entry with a
+ * Returns true when `browser.models` contains at least one entry with a
  * resolvable provider+model. Other vision configuration is optional.
  */
 export function isBrowserVisionEnabled(cfg: OpenClawConfig | undefined): boolean {
@@ -89,7 +89,18 @@ export function isBrowserVisionEnabled(cfg: OpenClawConfig | undefined): boolean
 export function getBrowserVisionConfig(
   cfg: OpenClawConfig | undefined,
 ): BrowserVisionConfig | undefined {
-  return cfg?.tools?.browser;
+  const browser = cfg?.browser;
+  if (!browser?.models?.length) {
+    return undefined;
+  }
+  return {
+    enabled: browser.visionEnabled,
+    models: browser.models,
+    prompt: browser.visionPrompt,
+    maxChars: browser.visionMaxChars,
+    maxBytes: browser.visionMaxBytes,
+    timeoutSeconds: browser.visionTimeoutSeconds,
+  };
 }
 
 type ResolvedVisionCandidate = {

@@ -629,6 +629,28 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        models: z
+          .array(
+            z
+              .object({
+                provider: z.string().optional(),
+                model: z.string().optional(),
+                prompt: z.string().optional(),
+                maxChars: z.number().int().positive().optional(),
+                maxBytes: z.number().int().positive().optional(),
+                timeoutSeconds: z.number().int().positive().optional(),
+                type: z.union([z.literal("provider"), z.literal("cli")]).optional(),
+                profile: z.string().optional(),
+                preferredProfile: z.string().optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+        visionEnabled: z.boolean().optional(),
+        visionPrompt: z.string().optional(),
+        visionMaxChars: z.number().int().positive().optional(),
+        visionMaxBytes: z.number().int().positive().optional(),
+        visionTimeoutSeconds: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),
