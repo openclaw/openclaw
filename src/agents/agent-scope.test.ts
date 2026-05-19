@@ -180,7 +180,36 @@ describe("resolveAgentConfig", () => {
     });
   });
 
-  it("merges compaction and contextPruning from defaults with per-agent overrides", () => {
+  it("inherits default compaction and contextPruning when per-agent blocks are absent", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "default",
+            reserveTokensFloor: 20_000,
+            model: "gpt-5.4",
+          },
+          contextPruning: {
+            mode: "off",
+            minPrunableToolChars: 8_192,
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "main")?.compaction).toEqual({
+      mode: "default",
+      reserveTokensFloor: 20_000,
+      model: "gpt-5.4",
+    });
+    expect(resolveAgentConfig(cfg, "main")?.contextPruning).toEqual({
+      mode: "off",
+      minPrunableToolChars: 8_192,
+    });
+  });
+
+  it("replaces default compaction and contextPruning with per-agent blocks", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -210,15 +239,39 @@ describe("resolveAgentConfig", () => {
     };
 
     expect(resolveAgentConfig(cfg, "main")?.compaction).toEqual({
-      mode: "default",
       reserveTokensFloor: 24_000,
-      model: "gpt-5.4",
     });
     expect(resolveAgentConfig(cfg, "main")?.contextPruning).toEqual({
       mode: "cache-ttl",
-      minPrunableToolChars: 8_192,
       ttl: "15m",
     });
+  });
+
+  it("clears inherited compaction and contextPruning with explicit empty per-agent blocks", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            model: "gpt-5.4",
+            provider: "test-provider",
+          },
+          contextPruning: {
+            mode: "cache-ttl",
+            ttl: "15m",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            compaction: {},
+            contextPruning: {},
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "main")?.compaction).toEqual({});
+    expect(resolveAgentConfig(cfg, "main")?.contextPruning).toEqual({});
   });
 
   it("resolves explicit and effective model primary separately", () => {

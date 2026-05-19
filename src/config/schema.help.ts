@@ -1544,7 +1544,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.contextPruning.hardClear.placeholder":
     "Placeholder text inserted when hard clear removes transcript content. Keep this short and explicit so later turns know pruning happened.",
   "agents.list[].compaction":
-    "Optional per-agent compaction override block. Values deep-merge over agents.defaults.compaction and apply only to the matching agent.",
+    "Optional per-agent compaction block. Omit it to inherit agents.defaults.compaction; set it to replace the default for this agent; set {} to clear an inherited default.",
   "agents.list[].compaction.mode":
     'Use this per-agent compaction mode override to select "default" or "safeguard" behavior for the matching agent.',
   "agents.list[].compaction.provider":
@@ -1580,7 +1580,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].compaction.timeoutSeconds":
     "Use this per-agent compaction timeout override in seconds when the matching agent needs a different compaction budget.",
   "agents.list[].compaction.model":
-    "Per-agent exact compaction model override. This deep-merges over the default compaction block and stays exact instead of inheriting session fallback chains.",
+    "Per-agent exact compaction model. This stays exact instead of inheriting session fallback chains.",
   "agents.list[].compaction.truncateAfterCompaction":
     "Use this per-agent transcript rotation override to control whether the matching agent truncates transcript files after successful compaction.",
   "agents.list[].compaction.maxActiveTranscriptBytes":
@@ -1602,7 +1602,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].compaction.memoryFlush.systemPrompt":
     "Use this per-agent system prompt override to control memory flush turns before compaction.",
   "agents.list[].contextPruning":
-    "Optional per-agent transcript-pruning override block. Values deep-merge over agents.defaults.contextPruning and apply only to the matching agent.",
+    "Optional per-agent transcript-pruning block. Omit it to inherit agents.defaults.contextPruning; set it to replace the default for this agent; set {} to clear an inherited default.",
   "agents.list[].contextPruning.mode":
     'Use this per-agent transcript-pruning strategy to select "off" or "cache-ttl" behavior for the matching agent.',
   "agents.list[].contextPruning.ttl":
