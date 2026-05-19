@@ -3286,7 +3286,20 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     closeCleanup?.();
-    nativeHookRelay?.unregister();
+    // Defer relay unregister so in-flight `nativeHook.invoke` RPCs from
+    // codex's hook subprocess (spawned synchronously during the last
+    // tool dispatch) can still resolve. Without this delay, codex's
+    // subprocess→gateway RPC roundtrip can outlast the run-attempt
+    // teardown — late-arriving invocations then fail with
+    // `errorMessage=native hook relay not found` and the OC
+    // `before_tool_call` chain (firewall, MG, audit) is silently
+    // bypassed for the closing tool call of the run. 10s comfortably
+    // bounds the default 5s `hookTimeoutSec` plus subprocess startup
+    // and WS connect overhead. `unref()` avoids holding the event loop.
+    if (nativeHookRelay) {
+      const relay = nativeHookRelay;
+      setTimeout(() => relay.unregister(), 10_000).unref();
+    }
     await releaseSandboxExecEnvironment();
     runAbortController.signal.removeEventListener("abort", abortListener);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
