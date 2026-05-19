@@ -522,12 +522,14 @@ private fun V2SettingsShellScreen(
   val agents by viewModel.gatewayAgents.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val cronStatus by viewModel.cronStatus.collectAsState()
+  val usageSummary by viewModel.usageSummary.collectAsState()
   var route by rememberSaveable { mutableStateOf(V2SettingsRoute.Home) }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
       viewModel.refreshAgents()
       viewModel.refreshCronJobs()
+      viewModel.refreshUsage()
     }
   }
 
@@ -566,6 +568,7 @@ private fun V2SettingsShellScreen(
               V2SettingsRow("Agents", if (agents.isEmpty()) "Load from gateway" else "${agents.size} available", Icons.Default.Person, status = agents.isNotEmpty(), route = V2SettingsRoute.Agents),
               V2SettingsRow("Approvals", approvalsSummary(pendingToolCalls.size), Icons.Default.Lock, status = approvalsStatus(pendingToolCalls.size), route = V2SettingsRoute.Approvals),
               V2SettingsRow("Cron Jobs", cronJobsSummary(cronStatus.jobs), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = V2SettingsRoute.CronJobs),
+              V2SettingsRow("Usage", usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = V2SettingsRoute.Usage),
               V2SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = V2SettingsRoute.Notifications),
               V2SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = V2SettingsRoute.PhoneCapabilities),
               V2SettingsRow("Gateway", gatewaySummary(statusText, isConnected), Icons.Default.Cloud, status = isConnected, route = V2SettingsRoute.Gateway),
@@ -620,6 +623,13 @@ private fun cronJobsSummary(count: Int): String =
     0 -> "No scheduled jobs"
     1 -> "1 scheduled"
     else -> "$count scheduled"
+  }
+
+private fun usageSummaryText(count: Int): String =
+  when (count) {
+    0 -> "No provider usage"
+    1 -> "1 provider"
+    else -> "$count providers"
   }
 
 private data class V2SettingsRow(

@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayCronJobSummary
+import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
@@ -45,6 +46,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -72,6 +74,7 @@ internal enum class V2SettingsRoute {
   Agents,
   Approvals,
   CronJobs,
+  Usage,
   Notifications,
   PhoneCapabilities,
   Gateway,
@@ -93,12 +96,65 @@ internal fun V2SettingsDetailScreen(
     V2SettingsRoute.Agents -> V2AgentsSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Approvals -> V2ApprovalsSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.CronJobs -> V2CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    V2SettingsRoute.Usage -> V2UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Notifications -> V2NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.PhoneCapabilities -> V2PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Gateway -> V2GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Appearance -> V2AppearanceSettingsScreen(onBack = onBack)
     V2SettingsRoute.Health -> V2HealthSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.About -> V2AboutSettingsScreen(onBack = onBack)
+  }
+}
+
+@Composable
+private fun V2UsageSettingsScreen(
+  viewModel: MainViewModel,
+  onBack: () -> Unit,
+) {
+  val usageSummary by viewModel.usageSummary.collectAsState()
+  val usageRefreshing by viewModel.usageRefreshing.collectAsState()
+  val usageErrorText by viewModel.usageErrorText.collectAsState()
+  val isConnected by viewModel.isConnected.collectAsState()
+  val providerCount = usageSummary.providers.size
+  val issueCount = usageSummary.providers.count { it.error != null }
+
+  LaunchedEffect(isConnected) {
+    if (isConnected) {
+      viewModel.refreshUsage()
+    }
+  }
+
+  V2SettingsDetailFrame(title = "Usage", subtitle = "Provider limits and quota health.", icon = Icons.Default.Storage, onBack = onBack) {
+    V2SettingsMetricPanel(
+      rows =
+        listOf(
+          V2SettingsMetric("Providers", providerCount.toString()),
+          V2SettingsMetric("Issues", issueCount.toString()),
+          V2SettingsMetric("Updated", formatUsageUpdated(usageSummary.updatedAtMs)),
+        ),
+    )
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      ClawSecondaryButton(text = if (usageRefreshing) "Refreshing" else "Refresh", onClick = viewModel::refreshUsage, enabled = isConnected && !usageRefreshing, modifier = Modifier.weight(1f))
+    }
+    usageErrorText?.let { errorText ->
+      ClawPanel {
+        Text(text = errorText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+      }
+    }
+    when {
+      !isConnected ->
+        ClawPanel {
+          Text(text = "Connect the gateway to load usage.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+      usageSummary.providers.isEmpty() ->
+        ClawPanel {
+          Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(text = "No usage data yet.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+            Text(text = "Provider limits will appear here when your gateway reports them.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          }
+        }
+      else -> V2UsageProvidersPanel(providers = usageSummary.providers)
+    }
   }
 }
 
@@ -523,6 +579,41 @@ private fun V2CronJobsPanel(jobs: List<GatewayCronJobSummary>) {
 }
 
 @Composable
+private fun V2UsageProvidersPanel(providers: List<GatewayUsageProviderSummary>) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+    Column {
+      providers.forEachIndexed { index, provider ->
+        V2UsageProviderListRow(provider = provider)
+        if (index != providers.lastIndex) {
+          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun V2UsageProviderListRow(provider: GatewayUsageProviderSummary) {
+  val hasIssue = provider.error != null
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
+  ) {
+    Surface(modifier = Modifier.size(30.dp), shape = CircleShape, color = ClawTheme.colors.surfacePressed, border = BorderStroke(1.dp, ClawTheme.colors.border)) {
+      Box(contentAlignment = Alignment.Center) {
+        Text(text = provider.displayName.firstOrNull()?.uppercase() ?: "U", style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1)
+      }
+    }
+    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+      Text(text = provider.displayName, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Text(text = usageProviderSubtitle(provider), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+    ClawStatusPill(text = if (hasIssue) "Issue" else "OK", status = if (hasIssue) ClawStatus.Warning else ClawStatus.Success)
+  }
+}
+
+@Composable
 private fun V2CronJobListRow(job: GatewayCronJobSummary) {
   Row(
     modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
@@ -631,6 +722,26 @@ private fun approvalSubtitle(
 }
 
 private fun cronJobSubtitle(job: GatewayCronJobSummary): String = "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}"
+
+private fun usageProviderSubtitle(provider: GatewayUsageProviderSummary): String {
+  provider.error?.let { return it }
+  val window = provider.windows.maxByOrNull { it.usedPercent }
+  val quota = window?.let { "${(100.0 - it.usedPercent).coerceIn(0.0, 100.0).toInt()}% left ${it.label}" }
+  return listOfNotNull(provider.plan, quota).joinToString(" · ").ifBlank { "No limits reported" }
+}
+
+private fun formatUsageUpdated(updatedAtMs: Long?): String {
+  val updated = updatedAtMs ?: return "Never"
+  val deltaMs = (System.currentTimeMillis() - updated).coerceAtLeast(0L)
+  val minutes = deltaMs / 60_000L
+  val hours = minutes / 60L
+  return when {
+    minutes < 1 -> "Now"
+    hours < 1 -> "${minutes}m"
+    hours < 24 -> "${hours}h"
+    else -> "${hours / 24L}d"
+  }
+}
 
 private fun cronJobStatusText(job: GatewayCronJobSummary): String {
   if (!job.enabled) return "Off"

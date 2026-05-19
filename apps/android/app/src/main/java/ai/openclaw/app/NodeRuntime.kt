@@ -317,6 +317,12 @@ class NodeRuntime(
   val cronRefreshing: StateFlow<Boolean> = _cronRefreshing.asStateFlow()
   private val _cronErrorText = MutableStateFlow<String?>(null)
   val cronErrorText: StateFlow<String?> = _cronErrorText.asStateFlow()
+  private val _usageSummary = MutableStateFlow(GatewayUsageSummary(updatedAtMs = null, providers = emptyList()))
+  val usageSummary: StateFlow<GatewayUsageSummary> = _usageSummary.asStateFlow()
+  private val _usageRefreshing = MutableStateFlow(false)
+  val usageRefreshing: StateFlow<Boolean> = _usageRefreshing.asStateFlow()
+  private val _usageErrorText = MutableStateFlow<String?>(null)
+  val usageErrorText: StateFlow<String?> = _usageErrorText.asStateFlow()
 
   private val _isForeground = MutableStateFlow(true)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
@@ -360,6 +366,7 @@ class NodeRuntime(
         _modelAuthProviders.value = emptyList()
         _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
         _cronJobs.value = emptyList()
+        _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
         updateStatus()
@@ -627,6 +634,7 @@ class NodeRuntime(
       refreshAgentsFromGateway()
       refreshModelCatalogFromGateway()
       refreshCronFromGateway()
+      refreshUsageFromGateway()
     }
   }
 
@@ -645,6 +653,12 @@ class NodeRuntime(
   fun refreshCronJobs() {
     scope.launch {
       refreshCronFromGateway()
+    }
+  }
+
+  fun refreshUsage() {
+    scope.launch {
+      refreshUsageFromGateway()
     }
   }
 
@@ -1620,6 +1634,29 @@ class NodeRuntime(
     }
   }
 
+  private suspend fun refreshUsageFromGateway() {
+    _usageRefreshing.value = true
+    _usageErrorText.value = null
+    if (!operatorConnected) {
+      _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
+      _usageRefreshing.value = false
+      return
+    }
+    try {
+      val res = operatorSession.request("usage.status", "{}")
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      _usageSummary.value =
+        GatewayUsageSummary(
+          updatedAtMs = root.long("updatedAt"),
+          providers = parseUsageProviders(root?.get("providers") as? JsonArray),
+        )
+    } catch (_: Throwable) {
+      _usageErrorText.value = "Could not load usage."
+    } finally {
+      _usageRefreshing.value = false
+    }
+  }
+
   private fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
     models
       ?.mapNotNull { item ->
@@ -1677,6 +1714,33 @@ class NodeRuntime(
               .asStringOrNull()
               ?.trim()
               ?.takeIf { it.isNotEmpty() },
+        )
+      }.orEmpty()
+
+  private fun parseUsageProviders(providers: JsonArray?): List<GatewayUsageProviderSummary> =
+    providers
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val displayName = obj["displayName"].asStringOrNull()?.trim().orEmpty()
+        if (displayName.isEmpty()) return@mapNotNull null
+        GatewayUsageProviderSummary(
+          displayName = displayName,
+          plan = obj["plan"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          error = obj["error"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          windows = parseUsageWindows(obj["windows"] as? JsonArray),
+        )
+      }.orEmpty()
+
+  private fun parseUsageWindows(windows: JsonArray?): List<GatewayUsageWindowSummary> =
+    windows
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val label = obj["label"].asStringOrNull()?.trim().orEmpty()
+        if (label.isEmpty()) return@mapNotNull null
+        GatewayUsageWindowSummary(
+          label = label,
+          usedPercent = obj.double("usedPercent") ?: 0.0,
+          resetAtMs = obj.long("resetAt"),
         )
       }.orEmpty()
 
@@ -1971,7 +2035,27 @@ data class GatewayCronJobSummary(
   val lastRunStatus: String?,
 )
 
+data class GatewayUsageSummary(
+  val updatedAtMs: Long?,
+  val providers: List<GatewayUsageProviderSummary>,
+)
+
+data class GatewayUsageProviderSummary(
+  val displayName: String,
+  val plan: String?,
+  val error: String?,
+  val windows: List<GatewayUsageWindowSummary>,
+)
+
+data class GatewayUsageWindowSummary(
+  val label: String,
+  val usedPercent: Double,
+  val resetAtMs: Long?,
+)
+
 private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()
+
+private fun JsonObject?.double(key: String): Double? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toDoubleOrNull()
 
 private fun JsonObject?.boolean(key: String): Boolean = (this?.get(key) as? JsonPrimitive)?.content?.trim() == "true"
 
