@@ -272,6 +272,68 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
 }
 
+function isRecurringSchedule(schedule: CronJob["schedule"]) {
+  return schedule.kind === "every" || schedule.kind === "cron";
+}
+
+// Premium-tier markers for recurring cron cost guardrails. Source of truth shared
+// with scripts/audit-cron-cost-risk.py; keep the two lists aligned when adding models.
+// Mid-tier flagships (e.g. moonshotai/kimi-k2-thinking, ~10x nano) are intentionally NOT
+// in this list: they are an order of magnitude below the actual budget killers (opus,
+// gpt-5.4 non-mini/nano) and a daily/hourly cron on one of them is not the failure mode
+// this guardrail is designed to catch.
+const PREMIUM_CRON_MODEL_MARKERS = ["opus", "claude-4", "gpt-5.4", "gpt-5.5"] as const;
+const CHEAP_CRON_MODEL_MARKERS = ["mini", "nano"] as const;
+
+function isPremiumCronModel(model: string) {
+  const normalized = model.toLowerCase();
+  const hasPremiumMarker = PREMIUM_CRON_MODEL_MARKERS.some((m) => normalized.includes(m));
+  if (!hasPremiumMarker) {
+    return false;
+  }
+  // A premium marker plus a cheap-tier suffix (gpt-5.4-mini, gpt-5.4-nano, etc.) means
+  // the cheap variant of a premium family. Treat as not premium.
+  const hasCheapMarker = CHEAP_CRON_MODEL_MARKERS.some((m) => normalized.includes(m));
+  return !hasCheapMarker;
+}
+
+function isScriptRunnerPrompt(message: string) {
+  return /\b(run|exec|execute)\b[\s\S]{0,80}\b(python3?|bash|node|npm|pnpm|yarn|openclaw|scripts?\/)/i.test(message);
+}
+
+export function assertRecurringAgentTurnCostGuardrails(
+  job: Pick<CronJob, "schedule" | "sessionTarget" | "payload" | "description">,
+) {
+  if (!isRecurringSchedule(job.schedule) || job.payload.kind !== "agentTurn") {
+    return;
+  }
+  const payload = job.payload;
+  const justification = job.description ?? "";
+  const hasJustification = /cron-cost-allow|premium justified|persistent justified|budget justified/i.test(
+    justification,
+  );
+  if (!payload.model) {
+    throw new Error(
+      "cron cost guardrail: recurring agentTurn jobs must set payload.model explicitly",
+    );
+  }
+  if (isPremiumCronModel(payload.model) && !hasJustification) {
+    throw new Error(
+      "cron cost guardrail: recurring agentTurn jobs may not use premium models without description justification",
+    );
+  }
+  if (job.sessionTarget.startsWith("session:") && !hasJustification) {
+    throw new Error(
+      "cron cost guardrail: recurring agentTurn jobs may not use persistent session targets without description justification",
+    );
+  }
+  if (isScriptRunnerPrompt(payload.message) && payload.lightContext !== true) {
+    throw new Error(
+      "cron cost guardrail: recurring script-runner agentTurn jobs must set payload.lightContext=true",
+    );
+  }
+}
+
 function assertMainSessionAgentId(
   job: Pick<CronJob, "sessionTarget" | "agentId">,
   defaultAgentId: string | undefined,
@@ -718,6 +780,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     },
   };
   assertSupportedJobSpec(job);
+  assertRecurringAgentTurnCostGuardrails(job);
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
@@ -797,6 +860,7 @@ export function applyJobPatch(
     job.sessionKey = normalizeOptionalString((patch as { sessionKey?: unknown }).sessionKey);
   }
   assertSupportedJobSpec(job);
+  assertRecurringAgentTurnCostGuardrails(job);
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);

@@ -44,7 +44,7 @@ describe("Cron issue regressions", () => {
       schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
       sessionTarget: "isolated",
       wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "hi" },
+      payload: { kind: "agentTurn", message: "hi", model: "openrouter/openai/gpt-5.4-nano" },
     });
 
     const patched = await cron.update(unsafeToggle.id, {
@@ -56,6 +56,94 @@ describe("Cron issue regressions", () => {
       expect(patched.payload.allowUnsafeExternalContent).toBe(true);
       expect(patched.payload.message).toBe("hi");
     }
+
+    cron.stop();
+  });
+
+
+  it("rejects unsafe recurring agentTurn cron jobs", async () => {
+    const store = cronIssueRegressionFixtures.makeStorePath();
+    const cron = await startCronForStore({
+      storePath: store.storePath,
+      cronEnabled: false,
+    });
+
+    await expect(
+      cron.add({
+        name: "unset model recurring",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 600_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "Run: python3 scripts/check.py" },
+      }),
+    ).rejects.toThrow(/must set payload\.model explicitly/);
+
+    await expect(
+      cron.add({
+        name: "premium recurring",
+        enabled: true,
+        schedule: { kind: "cron", expr: "*/10 * * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "summarize",
+          model: "openrouter/anthropic/claude-opus-4.7",
+        },
+      }),
+    ).rejects.toThrow(/premium models/);
+
+    await expect(
+      cron.add({
+        name: "script runner without light context",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 600_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Run: python3 scripts/check.py",
+          model: "openrouter/openai/gpt-5.4-nano",
+        },
+      }),
+    ).rejects.toThrow(/lightContext=true/);
+
+    await expect(
+      cron.add({
+        name: "safe script runner",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 600_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Run: python3 scripts/check.py",
+          model: "openrouter/openai/gpt-5.4-nano",
+          lightContext: true,
+        },
+      }),
+    ).resolves.toMatchObject({ name: "safe script runner" });
+
+    // Policy lock-in: mid-tier flagship models (e.g. kimi-k2-thinking) are NOT
+    // classified as premium for this guardrail. They sit ~10x above nano but two
+    // orders below the actual budget killers (opus, gpt-5.4 non-mini/nano), and the
+    // guardrail is calibrated to catch the latter. Recurring kimi-k2 jobs are allowed
+    // without justification text; daily/hourly cost is bounded enough.
+    await expect(
+      cron.add({
+        name: "kimi mid-tier recurring",
+        enabled: true,
+        schedule: { kind: "cron", expr: "0 11 * * 4", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "summarize weekly metrics",
+          model: "openrouter/moonshotai/kimi-k2-thinking",
+        },
+      }),
+    ).resolves.toMatchObject({ name: "kimi mid-tier recurring" });
 
     cron.stop();
   });
@@ -72,7 +160,11 @@ describe("Cron issue regressions", () => {
         schedule: { kind: "every", everyMs: 300_000 },
         sessionTarget: "isolated",
         wakeMode: "now",
-        payload: { kind: "agentTurn", message: "poll workflow queue" },
+        payload: {
+          kind: "agentTurn",
+          message: "poll workflow queue",
+          model: "openrouter/openai/gpt-5.4-nano",
+        },
         state: {},
       },
     ]);
@@ -347,7 +439,7 @@ describe("Cron issue regressions", () => {
       schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
       sessionTarget: "isolated",
       wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "test" },
+      payload: { kind: "agentTurn", message: "test", model: "openrouter/openai/gpt-5.4-nano" },
       delivery: {
         mode: "announce",
         channel: "telegram",
