@@ -2,8 +2,6 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.VoiceCaptureMode
-import ai.openclaw.app.ui.design.ClawAvatarMark
-import ai.openclaw.app.ui.design.ClawIconButton
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
@@ -508,7 +506,7 @@ private fun V2VoiceHeader(
         modifier = Modifier.weight(1f),
       )
       V2VoicePlainIconButton(icon = Icons.Default.Search, contentDescription = "Search voice", onClick = {})
-      ClawAvatarMark(text = "OC")
+      V2VoiceAvatar(text = "OC")
     }
     Row(
       modifier = Modifier.fillMaxWidth(),
@@ -525,11 +523,26 @@ private fun V2VoiceHeader(
           overflow = TextOverflow.Ellipsis,
         )
       }
-      ClawIconButton(
+      V2VoicePlainIconButton(
         icon = if (speakerEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
         contentDescription = if (speakerEnabled) "Mute speaker" else "Unmute speaker",
         onClick = onToggleSpeaker,
       )
+    }
+  }
+}
+
+@Composable
+private fun V2VoiceAvatar(text: String) {
+  Surface(
+    modifier = Modifier.size(28.dp),
+    shape = CircleShape,
+    color = ClawTheme.colors.surfaceRaised,
+    contentColor = ClawTheme.colors.text,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      Text(text = text.take(2).uppercase(), style = ClawTheme.type.label.copy(fontSize = 9.4.sp, lineHeight = 12.sp))
     }
   }
 }
@@ -763,12 +776,12 @@ private fun V2VoiceTranscript(
       item {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
           Text(text = "Live transcript", style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
-          ClawPanel {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-              Text(text = "No transcript yet", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 9.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+              Text(text = "No transcript yet", style = ClawTheme.type.section.copy(fontSize = 10.6.sp, lineHeight = 13.5.sp), color = ClawTheme.colors.text)
               Text(
                 text = "Your words and OpenClaw replies will appear here.",
-                style = ClawTheme.type.body,
+                style = ClawTheme.type.body.copy(fontSize = 8.8.sp, lineHeight = 11.6.sp),
                 color = ClawTheme.colors.textMuted,
               )
             }
