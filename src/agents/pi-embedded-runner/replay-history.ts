@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
+import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -58,6 +59,7 @@ type ModelSnapshotEntry = {
   modelApi?: string | null;
   modelId?: string;
 };
+type AssistantReplayMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 type ProviderReplayHookParams = {
   config?: OpenClawConfig;
@@ -282,8 +284,9 @@ function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
 }
 
 function normalizeAssistantReplayTextContent(message: AgentMessage, replayContent: string) {
-  const strippedText = stripInboundMetadata(replayContent);
-  if (!strippedText.trim()) {
+  const strippedText = stripInternalMetadataForDisplay(replayContent);
+  const trimmed = strippedText.trim();
+  if (!trimmed || isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
     return null;
   }
   return {
@@ -305,13 +308,18 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
       sanitizedContent.push(block);
       continue;
     }
-    const strippedText = stripInboundMetadata(text);
+    const strippedText = stripInternalMetadataForDisplay(text);
     if (strippedText === text) {
-      sanitizedContent.push(block);
+      if (!isSilentReplyPayloadText(text.trim(), SILENT_REPLY_TOKEN)) {
+        sanitizedContent.push(block);
+      } else {
+        touched = true;
+      }
       continue;
     }
     touched = true;
-    if (strippedText.trim()) {
+    const trimmed = strippedText.trim();
+    if (trimmed && !isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
       sanitizedContent.push({ ...block, text: strippedText });
     }
   }
@@ -348,7 +356,8 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       touched = true;
       continue;
     }
-    const replayContent = (message as { content?: unknown }).content;
+    let assistantMessage: AssistantReplayMessage = message;
+    let replayContent = (message as { content?: unknown }).content;
     if (typeof replayContent === "string") {
       const normalized = normalizeAssistantReplayTextContent(message, replayContent);
       if (normalized) {
@@ -357,9 +366,15 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       touched = true;
       continue;
     }
+    if (!Array.isArray(replayContent)) {
+      replayContent =
+        replayContent != null && typeof replayContent === "object" ? [replayContent] : [];
+      assistantMessage = { ...message, content: replayContent } as AssistantReplayMessage;
+      touched = true;
+    }
     if (Array.isArray(replayContent)) {
-      const normalized = normalizeAssistantReplayBlockContent(message, replayContent);
-      if (normalized !== message) {
+      const normalized = normalizeAssistantReplayBlockContent(assistantMessage, replayContent);
+      if (normalized !== assistantMessage) {
         if (normalized) {
           out.push(normalized);
         }
@@ -384,17 +399,17 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       // or completion and no content. Leaving other non-error empty-content
       // turns untouched preserves silent-reply semantics on every other code
       // path.
-      const stopReason = (message as { stopReason?: unknown }).stopReason;
-      if (stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(message)) {
+      const stopReason = (assistantMessage as { stopReason?: unknown }).stopReason;
+      if (stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(assistantMessage)) {
         out.push({
-          ...message,
+          ...assistantMessage,
           content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
         });
         touched = true;
         continue;
       }
     }
-    out.push(message);
+    out.push(assistantMessage);
   }
 
   // Drop trailing stream-error / zero-usage-empty-stop placeholder turns. The

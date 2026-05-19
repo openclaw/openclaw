@@ -83,7 +83,7 @@ describe("Canvas tool", () => {
     await tool.execute("tool-call-1", { action: "snapshot" });
 
     expect(mocks.imageResultFromFile).toHaveBeenCalledTimes(1);
-    const imageResultParams = mocks.imageResultFromFile.mock.calls.at(0)?.[0] as
+    const imageResultParams = mocks.imageResultFromFile.mock.calls[0]?.[0] as
       | {
           label?: string;
           path?: string;
@@ -95,5 +95,20 @@ describe("Canvas tool", () => {
     expect(imageResultParams?.path).toMatch(/openclaw-canvas-snapshot-.*\.png$/);
     expect(imageResultParams?.details).toEqual({ format: "png" });
     expect(imageResultParams?.imageSanitization).toEqual({ maxDimensionPx: 1600 });
+  });
+
+  it("rejects node-controlled snapshot formats before creating image results", async () => {
+    mocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        format: "/../../target.sh",
+        base64: Buffer.from("not-a-real-png").toString("base64"),
+      },
+    });
+    const tool = createCanvasTool();
+
+    await expect(tool.execute("tool-call-1", { action: "snapshot" })).rejects.toThrow(
+      /invalid canvas\.snapshot payload/i,
+    );
+    expect(mocks.imageResultFromFile).not.toHaveBeenCalled();
   });
 });

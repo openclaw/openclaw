@@ -65,7 +65,7 @@ vi.mock("../config/sessions.js", () => {
 });
 
 const announceSpy = vi.fn(async (_params: unknown) => true);
-const runSubagentEndedHookMock = vi.fn(async (_event?: unknown, _ctx?: unknown) => {});
+const runSubagentEndedHookMock = vi.fn(async (eventValue?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.fn();
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
@@ -103,11 +103,19 @@ function requireSubagentEndedHookCall(runId: string): {
 }
 
 function requireSessionLifecycleEventCall(label: string): Record<string, unknown> {
-  const call = emitSessionLifecycleEventMock.mock.calls.at(0);
+  const call = emitSessionLifecycleEventMock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label}`);
   }
   return requireRecord(call[0], label);
+}
+
+function requireFirstAnnounceCall(): Record<string, unknown> {
+  const call = announceSpy.mock.calls[0];
+  if (!call) {
+    throw new Error("expected announce call");
+  }
+  return requireRecord(call[0], "announce params");
 }
 
 const noopContextEngine = {
@@ -158,7 +166,7 @@ describe("subagent registry steer restarts", () => {
   beforeEach(() => {
     vi.useRealTimers();
     lifecycleHandler = undefined;
-    mod.__testing.setDepsForTest({
+    mod.testing.setDepsForTest({
       ensureContextEnginesInitialized: () => {},
       ensureRuntimePluginsLoaded: () => {},
       resolveContextEngine: async () => noopContextEngine,
@@ -279,7 +287,7 @@ describe("subagent registry steer restarts", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
-    mod.__testing.setDepsForTest();
+    mod.testing.setDepsForTest();
     announceSpy.mockReset();
     announceSpy.mockResolvedValue(true);
     runSubagentEndedHookMock.mockReset();
@@ -332,7 +340,7 @@ describe("subagent registry steer restarts", () => {
       expect(hookCall.event.runId).toBe("run-new");
       expect(hookCall.ctx.runId).toBe("run-new");
 
-      const announce = (announceSpy.mock.calls.at(0)?.[0] ?? {}) as { childRunId?: string };
+      const announce = requireFirstAnnounceCall();
       expect(announce.childRunId).toBe("run-new");
     }
   });
@@ -523,6 +531,40 @@ describe("subagent registry steer restarts", () => {
     expect(mod.getSubagentSessionRuntimeMs(next, next.endedAt)).toBe(150_000);
   });
 
+  it("clears completion delivery metadata when replacing for steer restart", () => {
+    registerRun({
+      runId: "run-delivery-old",
+      childSessionKey: "agent:main:subagent:delivery-clear",
+      task: "clear old delivery timestamps",
+    });
+
+    const previous = listMainRuns()[0];
+    expect(previous?.runId).toBe("run-delivery-old");
+    if (!previous) {
+      throw new Error("missing previous run");
+    }
+    previous.completionEnqueuedAt = 1_000;
+    previous.completionDeliveredAt = 2_000;
+    previous.completionAnnouncedAt = 2_000;
+    previous.lastAnnounceDropReason = "sink_unavailable";
+
+    const replaced = mod.replaceSubagentRunAfterSteer({
+      previousRunId: "run-delivery-old",
+      nextRunId: "run-delivery-new",
+      fallback: previous,
+    });
+    expect(replaced).toBe(true);
+
+    const next = listMainRuns().find((entry) => entry.runId === "run-delivery-new");
+    if (!next) {
+      throw new Error("expected replacement run");
+    }
+    expect(next.completionEnqueuedAt).toBeUndefined();
+    expect(next.completionDeliveredAt).toBeUndefined();
+    expect(next.completionAnnouncedAt).toBeUndefined();
+    expect(next.lastAnnounceDropReason).toBeUndefined();
+  });
+
   it("preserves frozen completion as fallback when replacing for wake continuation", () => {
     registerRun({
       runId: "run-wake-old",
@@ -572,7 +614,7 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
-    const announce = (announceSpy.mock.calls.at(0)?.[0] ?? {}) as { childRunId?: string };
+    const announce = requireFirstAnnounceCall();
     expect(announce.childRunId).toBe("run-failed-restart");
   });
 
@@ -668,7 +710,7 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
-    const announce = (announceSpy.mock.calls.at(0)?.[0] ?? {}) as { childRunId?: string };
+    const announce = requireFirstAnnounceCall();
     expect(announce.childRunId).toBe("run-kill-race");
 
     const run = listMainRuns()[0];
@@ -728,7 +770,7 @@ describe("subagent registry steer restarts", () => {
     expect(countMatching(childRunIds, (id) => id === "run-child")).toBe(1);
   });
 
-  it("retries completion-mode announce delivery with backoff and then gives up after retry limit", async () => {
+  it("retries completion-mode announce delivery with backoff and suspends after retry limit", async () => {
     {
       vi.useFakeTimers();
       try {
@@ -760,7 +802,13 @@ describe("subagent registry steer restarts", () => {
 
         await vi.advanceTimersByTimeAsync(4_001);
         expect(announceSpy).toHaveBeenCalledTimes(3);
-        expect(listMainRuns()[0]?.cleanupCompletedAt).toBeTypeOf("number");
+        await waitForRegistrySideEffect(() => {
+          const run = listMainRuns()[0];
+          expect(run?.pendingFinalDelivery).toBe(true);
+          expect(run?.deliverySuspendedAt).toBeTypeOf("number");
+          expect(run?.deliverySuspendedReason).toBe("retry-limit");
+          expect(run?.cleanupCompletedAt).toBeUndefined();
+        });
       } finally {
         vi.useRealTimers();
       }

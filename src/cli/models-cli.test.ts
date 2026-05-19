@@ -111,7 +111,7 @@ describe("models cli", () => {
     expected: Record<string, unknown>,
   ) {
     expect(command).toHaveBeenCalledTimes(1);
-    const [options, context] = command.mock.calls.at(0) ?? [];
+    const [options, context] = command.mock.calls[0] ?? [];
     const optionRecord = options as Record<string, unknown> | undefined;
     for (const [key, value] of Object.entries(expected)) {
       expect(optionRecord?.[key]).toEqual(value);
@@ -206,6 +206,22 @@ describe("models cli", () => {
     expectCommandOptions(modelsAuthLoginCommand, {
       provider: "openai",
       method: "api-key",
+    });
+  });
+
+  it("maps --device-code to the provider device-code auth method", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "login",
+      "--provider",
+      "openai-codex",
+      "--device-code",
+    ]);
+
+    expectCommandOptions(modelsAuthLoginCommand, {
+      provider: "openai-codex",
+      method: "device-code",
     });
   });
 

@@ -55,7 +55,7 @@ const transcodeAudioBufferMock = vi.hoisted(() =>
   >(async () => ({ ok: false, reason: "platform-unsupported" })),
 );
 
-vi.mock("./audio-transcode.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   transcodeAudioBuffer: transcodeAudioBufferMock,
 }));
 
@@ -107,7 +107,8 @@ vi.mock("../api.js", async () => {
 });
 
 const {
-  _test,
+  testApi,
+  buildTtsSystemPromptHint,
   getTtsPersona,
   getTtsProvider,
   maybeApplyTtsToPayload,
@@ -186,6 +187,7 @@ async function expectTtsPayloadResult(params: {
   audioAsVoice: true | undefined;
   providerResult?: MockSpeechSynthesisResult;
   mediaExtension?: string;
+  kind?: "tool" | "block" | "final";
 }) {
   if (params.providerResult) {
     synthesizeMock.mockResolvedValueOnce(params.providerResult);
@@ -197,7 +199,7 @@ async function expectTtsPayloadResult(params: {
       payload: { text: params.text },
       cfg,
       channel: params.channel,
-      kind: "final",
+      kind: params.kind ?? "final",
     });
 
     expect(synthesizeMock).toHaveBeenCalled();
@@ -209,6 +211,8 @@ async function expectTtsPayloadResult(params: {
     expect(result.audioAsVoice).toBe(params.audioAsVoice);
     expect(result.mediaUrl).toMatch(new RegExp(`voice-\\d+\\.${params.mediaExtension ?? "ogg"}$`));
     expect(result.spokenText).toBe(params.text);
+    expect(result.ttsSupplement).toEqual({ spokenText: params.text });
+    expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBe(true);
 
     mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
   } finally {
@@ -229,11 +233,23 @@ describe("speech-core native voice-note routing", () => {
 
   it("resolves voice delivery support from channel capabilities", () => {
     for (const channel of nativeVoiceNoteChannels) {
-      expect(_test.supportsNativeVoiceNoteTts(channel)).toBe(true);
-      expect(_test.supportsNativeVoiceNoteTts(channel.toUpperCase())).toBe(true);
+      expect(testApi.supportsNativeVoiceNoteTts(channel)).toBe(true);
+      expect(testApi.supportsNativeVoiceNoteTts(channel.toUpperCase())).toBe(true);
     }
-    expect(_test.supportsNativeVoiceNoteTts("slack")).toBe(false);
-    expect(_test.supportsNativeVoiceNoteTts(undefined)).toBe(false);
+    expect(testApi.supportsNativeVoiceNoteTts("slack")).toBe(false);
+    expect(testApi.supportsNativeVoiceNoteTts(undefined)).toBe(false);
+  });
+
+  it("tells generic TTS guidance to defer to MEMORY voice-delivery instructions", () => {
+    const hint = buildTtsSystemPromptHint(createTtsConfig("openclaw-speech-core-tts-hint-test"));
+
+    expect(hint).toContain("Voice (TTS) is enabled.");
+    expect(hint).toContain(
+      "If workspace context (especially MEMORY.md) tells you not to use [[tts:...]] or to use a local/non-tagged voice workflow, follow that workspace instruction instead.",
+    );
+    expect(hint).toContain(
+      "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
+    );
   });
 
   it("marks Discord auto TTS replies as native voice messages", async () => {
@@ -384,7 +400,7 @@ describe("speech-core native voice-note routing", () => {
   it.each(["feishu", "whatsapp"] as const)(
     "marks %s voice-note TTS for channel-side transcoding when provider returns mp3",
     async (channel) => {
-      expect(_test.supportsTranscodedVoiceNoteTts(channel)).toBe(true);
+      expect(testApi.supportsTranscodedVoiceNoteTts(channel)).toBe(true);
       await expectTtsPayloadResult({
         channel,
         prefsName: `openclaw-speech-core-tts-${channel}-mp3-test`,
@@ -432,12 +448,43 @@ describe("speech-core native voice-note routing", () => {
       expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
       expect(result.audioAsVoice).toBe(true);
       expect(result.text).toBeUndefined();
+      expect(result.ttsSupplement).toBeUndefined();
       mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
     } finally {
       if (mediaDir) {
         rmSync(mediaDir, { recursive: true, force: true });
       }
     }
+  });
+
+  it("skips block delivery kind in final mode (accumulated final tail synthesizes instead)", async () => {
+    synthesizeMock.mockClear();
+    const cfg = createTtsConfig("openclaw-speech-core-block-kind-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: { text: "WebChat block stream chunks defer TTS to the final tail." },
+      cfg,
+      channel: "webchat",
+      kind: "block",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBeUndefined();
+    expect(result.text).toBe("WebChat block stream chunks defer TTS to the final tail.");
+  });
+
+  it("skips tool delivery kind in final mode", async () => {
+    synthesizeMock.mockClear();
+    const cfg = createTtsConfig("openclaw-speech-core-tool-kind-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: { text: "Intermediate tool output should not be spoken." },
+      cfg,
+      channel: "webchat",
+      kind: "tool",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBeUndefined();
+    expect(result.text).toBe("Intermediate tool output should not be spoken.");
   });
 
   it("keeps skipping untagged short TTS text", async () => {

@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchWithSsrFGuard, type RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
@@ -12,7 +13,7 @@ const roomCache = new Map<
   { kind?: "direct" | "group"; fetchedAt: number; error?: string }
 >();
 
-export const __testing = {
+export const testing = {
   resetRoomCache() {
     roomCache.clear();
   },
@@ -107,9 +108,9 @@ export async function resolveNextcloudTalkRoomKind(params: {
         return undefined;
       }
 
-      const payload = (await response.json()) as {
+      const payload = await readProviderJsonResponse<{
         ocs?: { data?: { type?: number | string } };
-      };
+      }>(response, "Nextcloud Talk room info failed");
       const type = coerceRoomType(payload.ocs?.data?.type);
       const kind = resolveRoomKindFromType(type);
       roomCache.set(key, { fetchedAt: Date.now(), kind });
@@ -126,3 +127,4 @@ export async function resolveNextcloudTalkRoomKind(params: {
     return undefined;
   }
 }
+export { testing as __testing };

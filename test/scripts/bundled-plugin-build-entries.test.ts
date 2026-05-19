@@ -6,13 +6,14 @@ import {
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 
 function expectNoPrefixMatches(values: string[], prefix: string) {
-  expect(values.some((value) => value.startsWith(prefix))).toBe(false);
+  expect(values.filter((value) => value.startsWith(prefix))).toEqual([]);
 }
 
 function expectSomePrefixMatch(values: string[], prefix: string) {
-  expect(values.some((value) => value.startsWith(prefix))).toBe(true);
+  expect(values.filter((value) => value.startsWith(prefix))).not.toEqual([]);
 }
 
 function pickEntries(entries: Record<string, string>, keys: readonly string[]) {
@@ -68,6 +69,33 @@ describe("bundled plugin build entries", () => {
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
+  it("keeps the Telegram ingress worker out of bundled plugin public-surface entries", () => {
+    const entries = listBundledPluginBuildEntries();
+
+    expect(entries["extensions/telegram/telegram-ingress-worker.runtime"]).toBeUndefined();
+  });
+
+  it("discovers repo plugin build entries without directory scans", () => {
+    const payload = expectNoNodeFsScans<{
+      artifacts: number;
+      entries: number;
+    }>(
+      `
+        const build = await import("./scripts/lib/bundled-plugin-build-entries.mjs");
+        const entries = build.listBundledPluginBuildEntries();
+        const artifacts = build.listBundledPluginPackArtifacts();
+        return {
+          artifacts: artifacts.length,
+          entries: Object.keys(entries).length,
+        };
+      `,
+      { counters: ["readdirSync"] },
+    );
+
+    expect(payload.entries).toBeGreaterThan(0);
+    expect(payload.artifacts).toBeGreaterThan(0);
+  });
+
   it("packs runtime core support packages without requiring plugin manifests", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
@@ -104,8 +132,30 @@ describe("bundled plugin build entries", () => {
       expectSomePrefixMatch(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
-    expectNoPrefixMatches(Object.keys(entries), "extensions/qqbot/");
-    expectNoPrefixMatches(artifacts, "dist/extensions/qqbot/");
+    for (const pluginId of ["qqbot", "whatsapp"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+  });
+
+  it("keeps external-only providers out of bundled dist entries", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    for (const pluginId of ["amazon-bedrock", "amazon-bedrock-mantle", "anthropic-vertex"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+  });
+
+  it("keeps externalized runtime-dependency plugins out of bundled dist entries", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    for (const pluginId of ["openshell", "slack"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
   });
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {

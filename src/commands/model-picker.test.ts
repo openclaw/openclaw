@@ -182,7 +182,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
-  const call = source.mock.calls.at(callIndex);
+  const call = source.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected mock call: ${label}`);
   }
@@ -218,6 +218,7 @@ function providerCallProviders() {
 }
 
 beforeEach(() => {
+  delete process.env.OPENCLAW_LOCALE;
   vi.clearAllMocks();
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
   listProfilesForProvider.mockReturnValue([]);
@@ -573,6 +574,39 @@ describe("promptDefaultModel", () => {
     ]);
   });
 
+  it("keeps the full catalog cold until browsing when no provider is preferred", async () => {
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "fleet-router/qwen3.6:latest",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: true,
+      includeManual: true,
+      ignoreAllowlist: true,
+      browseCatalogOnDemand: true,
+      loadCatalog: true,
+    });
+
+    expect(result).toStrictEqual({});
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    const params = pickerParams(select as MockCallSource);
+    expect(params.searchable).toBe(false);
+    expect(params.initialValue).toBe("__keep__");
+    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
+      "__keep__",
+      "__manual__",
+      "__browse__",
+    ]);
+  });
+
   it("loads the full model catalog when the user chooses to browse", async () => {
     loadModelCatalog.mockResolvedValue([
       {
@@ -617,7 +651,7 @@ describe("promptDefaultModel", () => {
     expect(result.model).toBe("openai-codex/gpt-5.5-pro");
     expect(loadModelCatalog).toHaveBeenCalledOnce();
     expect(select).toHaveBeenCalledTimes(2);
-    expect(select.mock.calls.at(1)?.[0]?.searchable).toBe(true);
+    expect(select.mock.calls[1]?.[0]?.searchable).toBe(true);
   });
 
   it("supports configuring vLLM during setup", async () => {
@@ -860,6 +894,25 @@ describe("promptModelAllowlist", () => {
     const options = pickerOptions(multiselect as MockCallSource);
     expect(optionValues(options)).toEqual(["anthropic/claude-opus-4-6"]);
     expect(result.scopeKeys).toEqual(["anthropic/claude-opus-4-6"]);
+  });
+
+  it("localizes the model allowlist picker", async () => {
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+    ]);
+
+    const multiselect = createSelectAllMultiselect();
+    const prompter = makePrompter({ multiselect });
+    const config = { agents: { defaults: {} } } as OpenClawConfig;
+
+    await promptModelAllowlist({ config, prompter });
+
+    expect(multiselect.mock.calls[0]?.[0]?.message).toBe("/model 选择器中的模型（多选）");
   });
 
   it("uses static manifest catalog rows for a preferred provider without loading runtime catalog", async () => {

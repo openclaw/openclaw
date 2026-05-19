@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
-import { __resetModelCatalogCacheForTest as resetGatewayModelCatalogCacheForTest } from "./server-model-catalog.js";
+import { resetModelCatalogCacheForTest as resetGatewayModelCatalogCacheForTest } from "./server-model-catalog.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
@@ -219,6 +219,19 @@ describe("gateway server agent", () => {
     expectChannels(call, "webchat");
     expect(call.deliver).toBe(false);
     expect(call.to).toBeUndefined();
+  });
+
+  test("agent forwards sourceReplyDeliveryMode to agentCommand", async () => {
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      sourceReplyDeliveryMode: "message_tool_only",
+      idempotencyKey: "idem-agent-source-reply-mode",
+    });
+    expect(res.ok).toBe(true);
+
+    const call = await waitForAgentCommandCall("idem-agent-source-reply-mode");
+    expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
   test("agent preserves spawnDepth on subagent sessions", async () => {

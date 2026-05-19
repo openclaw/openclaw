@@ -1,16 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { visibleWidth } from "./ansi.js";
 import { resolveNoteColumns, wrapNoteMessage } from "./note.js";
 import { renderTable } from "./table.js";
 
 describe("renderTable", () => {
-  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-
   afterEach(() => {
     vi.unstubAllEnvs();
-    if (originalPlatformDescriptor) {
-      Object.defineProperty(process, "platform", originalPlatformDescriptor);
-    }
+    vi.restoreAllMocks();
   });
 
   it("prefers shrinking flex columns to avoid wrapping non-flex labels", () => {
@@ -124,6 +121,40 @@ describe("renderTable", () => {
     expect(lines[0]).not.toContain("│ \x1b[2m Use when");
   });
 
+  it("keeps ANSI styling when a multiline cell wraps after an unstyled line", () => {
+    const muted = "\x1b[38;2;120;120;120m";
+    const resetForeground = "\x1b[39m";
+    const out = renderTable({
+      width: 62,
+      columns: [
+        { key: "Status", header: "Status", minWidth: 10 },
+        { key: "Source", header: "Source", minWidth: 24, flex: true },
+        { key: "Version", header: "Version", minWidth: 8 },
+      ],
+      rows: [
+        {
+          Status: "disabled",
+          Source:
+            "stock:codex/index.js\n" +
+            `${muted}Codex app-server harness and Codex-managed GPT model catalog.${resetForeground}`,
+          Version: "2026.5.12-beta.6",
+        },
+      ],
+    });
+
+    const descLines = out
+      .split("\n")
+      .filter((line) => line.includes("Codex") || line.includes("catalog."));
+    expect(descLines.length).toBeGreaterThan(1);
+    for (const line of descLines) {
+      expect(line).toContain(muted);
+      const resetIndex = line.lastIndexOf(resetForeground);
+      const lastSep = Math.max(line.lastIndexOf("│"), line.lastIndexOf("|"));
+      expect(resetIndex).toBeGreaterThan(-1);
+      expect(lastSep).toBeGreaterThan(resetIndex);
+    }
+  });
+
   it("respects explicit newlines in cell values", () => {
     const out = renderTable({
       width: 48,
@@ -181,7 +212,7 @@ describe("renderTable", () => {
   });
 
   it("falls back to ASCII borders on legacy Windows consoles", () => {
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    mockProcessPlatform("win32");
     vi.stubEnv("WT_SESSION", "");
     vi.stubEnv("TERM_PROGRAM", "");
     vi.stubEnv("TERM", "vt100");
@@ -199,7 +230,7 @@ describe("renderTable", () => {
   });
 
   it("keeps unicode borders on modern Windows terminals", () => {
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    mockProcessPlatform("win32");
     vi.stubEnv("WT_SESSION", "1");
     vi.stubEnv("TERM", "");
     vi.stubEnv("TERM_PROGRAM", "");

@@ -1,23 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveVisibleModelCatalog } from "./model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { createProviderAuthChecker } from "./model-provider-auth.js";
-
-vi.mock("./model-provider-auth.js", () => ({
-  createProviderAuthChecker: vi.fn(),
-}));
-
-const createProviderAuthCheckerMock = vi.mocked(createProviderAuthChecker);
 
 describe("resolveVisibleModelCatalog", () => {
-  beforeEach(() => {
-    createProviderAuthCheckerMock.mockReset();
-  });
-
   it("can use static auth checks for gateway read-only model lists", () => {
     const authChecker = vi.fn((provider: string) => provider === "openai");
-    createProviderAuthCheckerMock.mockReturnValue(authChecker);
     const catalog: ModelCatalogEntry[] = [
       { provider: "anthropic", id: "claude-test", name: "Claude Test" },
       { provider: "openai", id: "gpt-test", name: "GPT Test" },
@@ -29,13 +17,9 @@ describe("resolveVisibleModelCatalog", () => {
       catalog,
       defaultProvider: "openai",
       runtimeAuthDiscovery: false,
+      providerAuthChecker: authChecker,
     });
 
-    expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
-    const checkerOptions = createProviderAuthCheckerMock.mock.calls.at(0)?.[0];
-    expect(checkerOptions?.cfg).toBe(cfg);
-    expect(checkerOptions?.allowPluginSyntheticAuth).toBe(false);
-    expect(checkerOptions?.discoverExternalCliAuth).toBe(false);
     expect(authChecker).toHaveBeenNthCalledWith(1, "anthropic");
     expect(authChecker).toHaveBeenNthCalledWith(2, "openai");
     expect(authChecker).toHaveBeenCalledTimes(2);
@@ -44,7 +28,6 @@ describe("resolveVisibleModelCatalog", () => {
 
   it("limits visible catalog to provider wildcard entries after default discovery", () => {
     const authChecker = vi.fn((provider: string) => provider !== "blocked");
-    createProviderAuthCheckerMock.mockReturnValue(authChecker);
     const catalog: ModelCatalogEntry[] = [
       { provider: "anthropic", id: "claude-test", name: "Claude Test" },
       { provider: "openai-codex", id: "gpt-codex-test", name: "GPT Codex Test" },
@@ -52,28 +35,26 @@ describe("resolveVisibleModelCatalog", () => {
       { provider: "blocked", id: "blocked-test", name: "Blocked Test" },
     ];
 
-    const result = resolveVisibleModelCatalog({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "vllm/*": {},
-              "openai-codex/*": {},
-              "blocked/*": {},
-            },
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/*": {},
+            "openai-codex/*": {},
+            "blocked/*": {},
           },
         },
-      } as OpenClawConfig,
+      },
+    } as OpenClawConfig;
+
+    const result = resolveVisibleModelCatalog({
+      cfg,
       catalog,
       defaultProvider: "anthropic",
       runtimeAuthDiscovery: true,
+      providerAuthChecker: authChecker,
     });
 
-    expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
-    expect(createProviderAuthCheckerMock.mock.calls.at(0)?.[0]).toMatchObject({
-      allowPluginSyntheticAuth: true,
-      discoverExternalCliAuth: true,
-    });
     expect(authChecker).toHaveBeenNthCalledWith(1, "anthropic");
     expect(authChecker).toHaveBeenNthCalledWith(2, "openai-codex");
     expect(authChecker).toHaveBeenNthCalledWith(3, "vllm");
@@ -87,28 +68,25 @@ describe("resolveVisibleModelCatalog", () => {
 
   it("does not broaden visibility when selected providers have no catalog rows", () => {
     const authChecker = vi.fn(() => true);
-    createProviderAuthCheckerMock.mockReturnValue(authChecker);
 
-    const result = resolveVisibleModelCatalog({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "vllm/*": {},
-            },
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/*": {},
           },
         },
-      } as OpenClawConfig,
+      },
+    } as OpenClawConfig;
+
+    const result = resolveVisibleModelCatalog({
+      cfg,
       catalog: [{ provider: "anthropic", id: "claude-test", name: "Claude Test" }],
       defaultProvider: "anthropic",
       runtimeAuthDiscovery: true,
+      providerAuthChecker: authChecker,
     });
 
-    expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
-    expect(createProviderAuthCheckerMock.mock.calls.at(0)?.[0]).toMatchObject({
-      allowPluginSyntheticAuth: true,
-      discoverExternalCliAuth: true,
-    });
     expect(authChecker).toHaveBeenCalledWith("anthropic");
     expect(authChecker).toHaveBeenCalledTimes(1);
     expect(result).toEqual([]);

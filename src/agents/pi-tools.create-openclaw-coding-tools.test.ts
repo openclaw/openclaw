@@ -1,12 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   findUnsupportedSchemaKeywords,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
 } from "../plugin-sdk/provider-tools.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -146,6 +152,10 @@ function expectListIncludes(
 describe("createOpenClawCodingTools", () => {
   const testConfig: OpenClawConfig = {};
 
+  afterEach(() => {
+    resetGlobalHookRunner();
+  });
+
   it("exposes gateway config and restart actions to owner sessions", () => {
     const tools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
     const gateway = requireTool(tools, "gateway");
@@ -176,6 +186,27 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("tool_search")).toBe(false);
     expect(names.has("tool_describe")).toBe(false);
     expect(names.has("tool_call")).toBe(false);
+  });
+
+  it("passes explicit hook channel ids to wrapped tool hooks", async () => {
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-channel-"));
+    await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
+    const tools = createOpenClawCodingTools({
+      workspaceDir: tmpDir,
+      currentChannelId: "telegram:-100123",
+      hookChannelId: "-100123",
+    });
+    const readTool = requireTool(tools, "read");
+    await requireToolExecute(readTool)("tool-hook-channel", { path: "note.txt" });
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ channelId: "-100123" }),
+    );
   });
 
   it("adds PI Tool Search control tools when explicitly requested", () => {
@@ -346,6 +377,40 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes(options.pluginToolAllowlist, ["memory_search", "memory_get"]);
   });
 
+  it("preserves runtime-allowed message through restrictive profiles", () => {
+    const tools = createOpenClawCodingTools({
+      config: { tools: { profile: "minimal" } },
+      runtimeToolAllowlist: ["message"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("message");
+  });
+
+  it("preserves runtime allowlist groups containing message through restrictive profiles", () => {
+    for (const runtimeToolAllowlist of [["group:messaging"], ["group:openclaw"], ["*"]]) {
+      const tools = createOpenClawCodingTools({
+        config: { tools: { profile: "minimal" } },
+        runtimeToolAllowlist,
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      });
+
+      expect(toolNameList(tools)).toContain("message");
+    }
+  });
+
   it("passes source reply delivery mode to OpenClaw tool construction", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
@@ -450,9 +515,59 @@ describe("createOpenClawCodingTools", () => {
 
       expect(createOpenClawToolsMock).not.toHaveBeenCalled();
       expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
-      const pluginToolOptions = resolvePluginToolsSpy.mock.calls.at(0)?.[0].options;
+      const pluginToolOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
       expect(pluginToolOptions?.modelProvider).toBe("openrouter");
       expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
+  it("forwards auth profiles to plugin-only tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([]);
+    const authProfileStore = {
+      version: 1,
+      order: { xai: ["xai-oauth"] },
+      profiles: {
+        "xai-oauth": {
+          type: "oauth",
+          provider: "xai",
+          access: "xai-oauth-access-token", // pragma: allowlist secret
+          refresh: "xai-oauth-refresh-token", // pragma: allowlist secret
+          expires: Date.now() + 60_000,
+        },
+      },
+    } satisfies AuthProfileStore;
+
+    try {
+      createOpenClawCodingTools({
+        config: {
+          auth: {
+            order: {
+              xai: ["xai-oauth"],
+            },
+          },
+        },
+        authProfileStore,
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["x_search"],
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+      expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
+      const pluginToolOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
+      expect(pluginToolOptions?.authProfileStore).toBe(authProfileStore);
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }
@@ -483,6 +598,56 @@ describe("createOpenClawCodingTools", () => {
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolDenylist, ["pdf"]);
+  });
+
+  it("passes inherited allowlist entries to OpenClaw plugin discovery", async () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const agentId = `inherited-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const storeTemplate = path.join(
+      os.tmpdir(),
+      `openclaw-session-store-${agentId}-{agentId}.json`,
+    );
+    await writeSessionStore(storeTemplate, agentId, {
+      [`agent:${agentId}:subagent:limited`]: {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolAllow: ["custom_plugin_tool", "sessions_spawn"],
+      },
+    });
+
+    createOpenClawCodingTools({
+      sessionKey: `agent:${agentId}:subagent:limited`,
+      config: {
+        session: {
+          store: storeTemplate,
+        },
+      },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolAllowlist, [
+      "custom_plugin_tool",
+      "sessions_spawn",
+    ]);
+  });
+
+  it("passes effective allow-list-restricted tool surface to spawned sessions", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { allow: ["read", "sessions_spawn"] } },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
+    expectListIncludes(inheritedAllow, ["read", "sessions_spawn"]);
+    expect(inheritedAllow?.includes("exec")).toBe(false);
+    expect(inheritedAllow?.includes("process")).toBe(false);
   });
 
   it("records core tool-prep stages for hot-path diagnostics", () => {
@@ -878,6 +1043,15 @@ describe("createOpenClawCodingTools", () => {
       forceMessageTool: true,
     });
     expect(toolNameList(cronTools)).toContain("message");
+  });
+
+  it("keeps message available for message-tool-only source replies under the coding profile", () => {
+    const tools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding" } },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(toolNameList(tools)).toContain("message");
   });
 
   it("keeps heartbeat response available for heartbeat runs under the coding profile", () => {

@@ -328,12 +328,10 @@ function mockPrimaryRunLoopRateLimitThenFallbackSuccess(errorMessage: string) {
 
 function expectOpenAiThenGroqAttemptOrder(params?: { expectOpenAiAuthProfileId?: string }) {
   expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-  const firstCall = runEmbeddedAttemptMock.mock.calls.at(0)?.[0] as
+  const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as
     | { provider?: string; authProfileId?: string }
     | undefined;
-  const secondCall = runEmbeddedAttemptMock.mock.calls.at(1)?.[0] as
-    | { provider?: string }
-    | undefined;
+  const secondCall = runEmbeddedAttemptMock.mock.calls[1]?.[0] as { provider?: string } | undefined;
   if (!firstCall || !secondCall) {
     throw new Error("expected primary and fallback embedded run attempts");
   }
@@ -704,7 +702,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
       expect((thrown as Error).message).toBe("Operation aborted");
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
-      const firstCall = runEmbeddedAttemptMock.mock.calls.at(0)?.[0] as
+      const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as
         | { provider?: string }
         | undefined;
       expect(firstCall?.provider).toBe("openai");
@@ -783,7 +781,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
     });
   });
 
-  it("falls back on classified rate limits even when stopReason is not error", async () => {
+  it("ignores stale classified rate-limit text when stopReason is not error", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeMultiProfileAuthStore(agentDir);
 
@@ -800,12 +798,11 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
         },
       });
 
-      expect(result.provider).toBe("groq");
-      expect(result.model).toBe("mock-2");
-      expect(result.attempts[0]?.reason).toBe("rate_limit");
-      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("mock-1");
+      expect(result.attempts).toEqual([]);
 
-      expectProviderAttemptCounts({ openai: 3, groq: 1 });
+      expectProviderAttemptCounts({ openai: 1, groq: 0 });
     });
   });
 

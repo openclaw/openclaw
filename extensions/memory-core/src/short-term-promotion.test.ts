@@ -20,7 +20,7 @@ import {
   resolveShortTermRecallLockPath,
   resolveShortTermPhaseSignalStorePath,
   resolveShortTermRecallStorePath,
-  __testing,
+  testing,
 } from "./short-term-promotion.js";
 
 describe("short-term promotion", () => {
@@ -1088,7 +1088,7 @@ describe("short-term promotion", () => {
 
   it("treats diff-prefixed dreaming snippets as contaminated", () => {
     expect(
-      __testing.isContaminatedDreamingSnippet(
+      testing.isContaminatedDreamingSnippet(
         "@@ -1,1 - Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
       ),
     ).toBe(true);
@@ -1096,7 +1096,7 @@ describe("short-term promotion", () => {
 
   it("treats bracket-prefixed dreaming snippets as contaminated", () => {
     expect(
-      __testing.isContaminatedDreamingSnippet(
+      testing.isContaminatedDreamingSnippet(
         "([ Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
       ),
     ).toBe(true);
@@ -1104,7 +1104,7 @@ describe("short-term promotion", () => {
 
   it("does not treat ordinary candidate notes with daily-memory evidence as contaminated", () => {
     expect(
-      __testing.isContaminatedDreamingSnippet(
+      testing.isContaminatedDreamingSnippet(
         "Candidate: move backups weekly. confidence: 0.76 evidence: memory/2026-04-08.md:1-1",
       ),
     ).toBe(false);
@@ -1112,10 +1112,151 @@ describe("short-term promotion", () => {
 
   it("treats transcript-style dreaming prompt echoes as contaminated", () => {
     expect(
-      __testing.isContaminatedDreamingSnippet(
+      testing.isContaminatedDreamingSnippet(
         "[main/dreaming-narrative-light.jsonl#L1] User: Write a dream diary entry from these memory fragments:",
       ),
     ).toBe(true);
+  });
+
+  it("treats snippets with metadata prefix before the Candidate marker as contaminated", () => {
+    expect(
+      testing.isContaminatedDreamingSnippet(
+        "- - status: staged - Candidate: User: [cron:26fb656d] run thing - confidence: 0.00 - evidence: memory/.dreams/session-corpus/2026-04-12.txt:25-25 - recalls: 0 - status: staged",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats snippets with confidence prefix before the Candidate marker as contaminated", () => {
+    expect(
+      testing.isContaminatedDreamingSnippet(
+        "confidence: 0.58 - Candidate: Assistant: Mason shipped the enforcement pass. - evidence: memory/.dreams/session-corpus/2026-04-11.txt:167-167 - recalls: 0 - status: staged",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat prose that mentions the word Candidate as contaminated", () => {
+    expect(
+      testing.isContaminatedDreamingSnippet(
+        "The Candidate profile for Josh Rhoden shows he runs SEU's network admin team; stack is Cisco plus Meraki.",
+      ),
+    ).toBe(false);
+  });
+
+  describe("lineRangeOverlapsDreamingFence", () => {
+    it("returns true when the range falls inside a Light Sleep fence", () => {
+      const lines = [
+        "# Daily note",
+        "## Notes",
+        "Real durable content.",
+        "## Light Sleep",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Candidate: some staged dream content",
+        "<!-- openclaw:dreaming:light:end -->",
+        "## After",
+        "More real content.",
+      ];
+      // Line 6 (1-indexed) sits between the fence markers.
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(true);
+    });
+
+    it("returns false when the range sits entirely outside any dreaming fence", () => {
+      const lines = [
+        "# Daily note",
+        "Real durable content.",
+        "<!-- openclaw:dreaming:rem:start -->",
+        "staged dream content",
+        "<!-- openclaw:dreaming:rem:end -->",
+        "More real content.",
+      ];
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 2)).toBe(false);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(false);
+    });
+
+    it("returns true when the range straddles a fence boundary", () => {
+      const lines = [
+        "real line 1",
+        "<!-- openclaw:dreaming:diary:start -->",
+        "dream line",
+        "<!-- openclaw:dreaming:diary:end -->",
+        "real line 5",
+      ];
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 2, 4)).toBe(true);
+    });
+
+    it("recovers after a fence end so later real content is not flagged", () => {
+      const lines = [
+        "<!-- openclaw:dreaming:light:start -->",
+        "dream",
+        "<!-- openclaw:dreaming:light:end -->",
+        "real line 4",
+        "<!-- openclaw:dreaming:rem:start -->",
+        "more dream",
+        "<!-- openclaw:dreaming:rem:end -->",
+        "real line 8",
+      ];
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 4, 4)).toBe(false);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 8, 8)).toBe(false);
+      expect(testing.lineRangeOverlapsDreamingFence(lines, 6, 6)).toBe(true);
+    });
+  });
+
+  it("refuses to promote rehydrated candidates that land inside a managed dreaming fence", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const dailyPath = await writeDailyMemoryNote(workspaceDir, "2026-04-18", [
+        "# 2026-04-18",
+        "",
+        "## Notes",
+        "Legitimate durable observation about backups.",
+        "",
+        "## Light Sleep",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Candidate: staged dream scratchwork",
+        "<!-- openclaw:dreaming:light:end -->",
+      ]);
+      expect(dailyPath).toBeTruthy();
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        candidates: [
+          {
+            key: "memory:memory/2026-04-18.md:8:8",
+            path: "memory/2026-04-18.md",
+            startLine: 8,
+            endLine: 8,
+            source: "memory",
+            snippet: "- Candidate: staged dream scratchwork",
+            recallCount: 3,
+            avgScore: 0.9,
+            maxScore: 0.9,
+            uniqueQueries: 2,
+            firstRecalledAt: "2026-04-17T00:00:00.000Z",
+            lastRecalledAt: "2026-04-18T00:00:00.000Z",
+            ageDays: 1,
+            score: 0.9,
+            recallDays: ["2026-04-17", "2026-04-18"],
+            conceptTags: ["dream"],
+            components: {
+              frequency: 1,
+              relevance: 0,
+              diversity: 1,
+              recency: 1,
+              consolidation: 0,
+              conceptual: 0,
+            },
+          },
+        ],
+      });
+
+      expect(applied.applied).toBe(0);
+      const memoryText = await fs
+        .readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")
+        .catch(() => "");
+      expect(memoryText).not.toContain("Promoted From Short-Term Memory");
+      expect(memoryText).not.toContain("staged dream scratchwork");
+    });
   });
 
   it("skips direct candidates that exceed maxAgeDays during apply", async () => {
@@ -1665,7 +1806,7 @@ describe("short-term promotion", () => {
               lastRecalledAt: "2026-04-04T00:00:00.000Z",
               queryHashes: ["a", "b"],
               recallDays: ["2026-04-04"],
-              conceptTags: __testing.deriveConceptTags({
+              conceptTags: testing.deriveConceptTags({
                 path: "memory/2026-04-01.md",
                 snippet,
               }),
@@ -1804,7 +1945,7 @@ describe("short-term promotion", () => {
 
   it("extracts stable concept tags from snippets and paths", () => {
     expect(
-      __testing.deriveConceptTags({
+      testing.deriveConceptTags({
         path: "memory/2026-04-03.md",
         snippet: "Move backups to S3 Glacier and sync QMD router notes.",
       }),
@@ -1813,13 +1954,13 @@ describe("short-term promotion", () => {
 
   it("extracts multilingual concept tags across latin and cjk snippets", () => {
     expect(
-      __testing.deriveConceptTags({
+      testing.deriveConceptTags({
         path: "memory/2026-04-03.md",
         snippet: "Configuración du routeur et sauvegarde Glacier.",
       }),
     ).toStrictEqual(["glacier", "sauvegarde", "routeur", "configuración"]);
     expect(
-      __testing.deriveConceptTags({
+      testing.deriveConceptTags({
         path: "memory/2026-04-03.md",
         snippet: "障害対応ルーター設定とバックアップ確認。路由器备份与网关同步。",
       }),
