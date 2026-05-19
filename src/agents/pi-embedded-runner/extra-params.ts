@@ -50,6 +50,38 @@ const providerRuntimeDeps = {
 let preparedExtraParamsCache = new WeakMap<OpenClawConfig, Map<string, Record<string, unknown>>>();
 const REQUEST_SCOPED_EXTRA_PARAM_KEYS = new Set(["response_format", "responseFormat"]);
 
+function resolveConfiguredModelParams(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelId: string;
+}): Record<string, unknown> | undefined {
+  const configuredModels = params.cfg?.agents?.defaults?.models;
+  if (!configuredModels) {
+    return undefined;
+  }
+
+  const lookupProviders: string[] = [];
+  const provider = params.provider.trim();
+  if (provider === "openai-codex") {
+    lookupProviders.push("openai");
+  }
+  if (provider && !lookupProviders.includes(provider)) {
+    lookupProviders.push(provider);
+  }
+
+  for (const lookupProvider of lookupProviders) {
+    const canonicalKey = modelKey(lookupProvider, params.modelId);
+    const legacyKey = legacyModelKey(lookupProvider, params.modelId);
+    const modelConfig =
+      configuredModels[canonicalKey] ?? (legacyKey ? configuredModels[legacyKey] : undefined);
+    if (modelConfig?.params) {
+      return { ...modelConfig.params };
+    }
+  }
+
+  return undefined;
+}
+
 export const testing = {
   setProviderRuntimeDepsForTest(
     deps: Partial<typeof defaultProviderRuntimeDeps> | undefined,
@@ -85,12 +117,11 @@ export function resolveExtraParams(params: {
   agentId?: string;
 }): Record<string, unknown> | undefined {
   const defaultParams = params.cfg?.agents?.defaults?.params ?? undefined;
-  const canonicalKey = modelKey(params.provider, params.modelId);
-  const legacyKey = legacyModelKey(params.provider, params.modelId);
-  const configuredModels = params.cfg?.agents?.defaults?.models;
-  const modelConfig =
-    configuredModels?.[canonicalKey] ?? (legacyKey ? configuredModels?.[legacyKey] : undefined);
-  const globalParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
+  const globalParams = resolveConfiguredModelParams({
+    cfg: params.cfg,
+    provider: params.provider,
+    modelId: params.modelId,
+  });
   const agentParams =
     params.agentId && params.cfg?.agents?.list
       ? params.cfg.agents.list.find((agent) => agent.id === params.agentId)?.params

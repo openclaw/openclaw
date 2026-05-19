@@ -51,6 +51,56 @@ describe("resolveExtraParams", () => {
     });
   });
 
+  it("prefers canonical openai params over openai-codex runtime defaults", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": {
+                params: {
+                  textVerbosity: "medium",
+                },
+              },
+            },
+          },
+        },
+      },
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+    });
+
+    expect(result).toEqual({
+      parallel_tool_calls: true,
+      text_verbosity: "medium",
+    });
+  });
+
+  it("falls back to openai-codex params when canonical openai params are absent", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.5": {
+                params: {
+                  textVerbosity: "high",
+                },
+              },
+            },
+          },
+        },
+      },
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+    });
+
+    expect(result).toEqual({
+      parallel_tool_calls: true,
+      text_verbosity: "high",
+    });
+  });
+
   it("ignores unrelated model entries", () => {
     const result = resolveExtraParams({
       cfg: {
