@@ -1524,6 +1524,21 @@ async function agentCommandInternal(
     }
 
     const { deliverAgentCommandResult } = await loadDeliveryRuntime();
+    const resolveFreshSessionEntryForDelivery =
+      sessionStore && sessionKey
+        ? async (): Promise<SessionEntry | undefined> => {
+            const { loadSessionStore } = await loadSessionStoreRuntime();
+            const freshStore = loadSessionStore(storePath, {
+              skipCache: true,
+              clone: false,
+            });
+            const freshEntry = freshStore[sessionKey];
+            if (freshEntry) {
+              sessionStore[sessionKey] = freshEntry;
+            }
+            return freshEntry;
+          }
+        : undefined;
     const deliveryResult = await deliverAgentCommandResult({
       cfg,
       deps: resolvedDeps,
@@ -1531,6 +1546,7 @@ async function agentCommandInternal(
       opts,
       outboundSession,
       sessionEntry,
+      resolveFreshSessionEntryForDelivery,
       result,
       payloads,
     });
