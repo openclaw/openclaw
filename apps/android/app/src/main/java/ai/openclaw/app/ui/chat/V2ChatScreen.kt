@@ -35,7 +35,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -210,7 +209,7 @@ private fun V2ChatHeader(
       )
     }
 
-    V2HeaderIcon(icon = Icons.Default.MoreVert, contentDescription = "Chat options", onClick = onMore)
+    V2HeaderIcon(icon = Icons.Default.Refresh, contentDescription = "Refresh chat", onClick = onMore)
   }
 }
 
