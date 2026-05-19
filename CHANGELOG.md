@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 - CLI: retry config snapshot reads after a transient failure so one rejected read no longer poisons later commands in the same process. (#83931) Thanks @honor2030.
 - WhatsApp: clarify inbound group diagnostics so observed but unregistered groups point to `channels.whatsapp.groups` without changing routing or sender authorization. (#83846) Thanks @neeravmakwana.
 - WhatsApp: drain pending outbound deliveries on a 30s periodic timer in addition to the reconnect handler, so messages enqueued while the provider is already connected no longer wait for the next reconnect to send. (#79083) Thanks @Oviemudiaga.
+- CLI/TUI: include gateway plugin slash commands in TUI autocomplete, so connected sessions can suggest plugin-owned commands exposed by the running Gateway. (#83640) Thanks @se7en-agent.
 
 ## 2026.5.19
 
