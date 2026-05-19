@@ -115,7 +115,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
   );
   if (conversationGroupPolicy.allowlistEnabled && !conversationGroupPolicy.allowed) {
     params.logVerbose(
-      `Dropping message from unregistered WhatsApp group ${params.conversationId}. Add the group JID to channels.whatsapp.groups or add "*" to enable routing.`,
+      `Dropping message from unregistered WhatsApp group ${params.conversationId}. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.`,
     );
     return { shouldProcess: false };
   }
