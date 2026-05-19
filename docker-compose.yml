@@ -47,6 +47,8 @@ services:
       - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
       - ./dist:/app/dist
       - openclaw-plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
+      - /usr/lib/node_modules/@zilliz:/usr/lib/node_modules/@zilliz:ro
+      - /usr/bin/claude-context-mcp:/usr/local/bin/claude-context-mcp:ro
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
