@@ -1043,19 +1043,51 @@ When a `message` tool call runs inside a Slack thread and targets the same chann
 
 ## Ack reactions
 
-`ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
+`ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message. `ackReactionScope` decides _when_ that emoji is actually sent.
+
+### Emoji (`ackReaction`)
 
 Resolution order:
 
 - `channels.slack.accounts.<accountId>.ackReaction`
 - `channels.slack.ackReaction`
 - `messages.ackReaction`
-- agent identity emoji fallback (`agents.list[].identity.emoji`, else "👀")
+- agent identity emoji fallback (`agents.list[].identity.emoji`, else `"eyes"` / 👀)
 
 Notes:
 
 - Slack expects shortcodes (for example `"eyes"`).
 - Use `""` to disable the reaction for the Slack account or globally.
+
+### Scope (`ackReactionScope`)
+
+Resolution order:
+
+- `channels.slack.accounts.<accountId>.ackReactionScope`
+- `channels.slack.ackReactionScope`
+- `messages.ackReactionScope`
+- default: `"group-mentions"`
+
+Values:
+
+- `"all"`: react in DMs and groups.
+- `"direct"`: react in DMs only.
+- `"group-all"`: react on every group message (no DMs).
+- `"group-mentions"` (default): react in groups, but only when the bot is mentioned (or in group mentionables that opted in). **DMs are excluded.**
+- `"off"` / `"none"`: never react.
+
+<Note>
+The default scope (`"group-mentions"`) does not fire ack reactions in direct messages. If you want to see the configured `ackReaction` (for example `"eyes"`) on inbound Slack DMs, set scope to `"direct"` or `"all"` at the Slack channel level, account level, or under `messages.ackReactionScope`. `messages.ackReactionScope` is read at Slack provider startup, so a gateway restart is needed for the change to take effect.
+</Note>
+
+```json5
+{
+  messages: {
+    ackReaction: "eyes",
+    ackReactionScope: "all", // react in DMs and groups
+  },
+}
+```
 
 ## Text streaming
 
