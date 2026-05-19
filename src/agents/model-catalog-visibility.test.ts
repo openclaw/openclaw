@@ -98,7 +98,7 @@ describe("resolveVisibleModelCatalog", () => {
     expect(result).toEqual([]);
   });
 
-  it("scopes visibility to agents.list[<agentId>].models when agentId is provided", () => {
+  it("scopes visibility to agents.list[<agentId>].modelAllowlist when agentId is provided", () => {
     createProviderAuthCheckerMock.mockReturnValue(vi.fn(() => true));
     const catalog: ModelCatalogEntry[] = [
       { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
@@ -116,10 +116,10 @@ describe("resolveVisibleModelCatalog", () => {
           },
         },
         list: [
-          { id: "writer", models: { "anthropic/claude-sonnet-4-6": {} } },
+          { id: "writer", modelAllowlist: { "anthropic/claude-sonnet-4-6": {} } },
           {
             id: "coder",
-            models: {
+            modelAllowlist: {
               "openai/gpt-5.4": {},
               "anthropic/claude-opus-4-6": {},
             },
@@ -164,7 +164,7 @@ describe("resolveVisibleModelCatalog", () => {
     ]);
   });
 
-  it("falls back to defaults visibility when an agent has no per-agent models record", () => {
+  it("falls back to defaults visibility when an agent has no per-agent modelAllowlist record", () => {
     createProviderAuthCheckerMock.mockReturnValue(vi.fn(() => true));
     const catalog: ModelCatalogEntry[] = [
       { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },

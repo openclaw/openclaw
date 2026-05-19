@@ -68,18 +68,21 @@ function buildChatModelOptions(
     pushUniqueTrimmedSelectOption(options, seen, value, (trimmed) => label ?? trimmed);
   };
 
+  const scopedValues = new Set<string>();
   for (const entry of catalog) {
     const option = buildChatModelOptionFromLookup(entry, displayLookup);
+    scopedValues.add(option.value);
     addOption(option.value, option.label);
   }
 
-  if (currentOverride) {
+  const hasScopedCatalog = catalog.length > 0;
+  if (currentOverride && (!hasScopedCatalog || scopedValues.has(currentOverride))) {
     addOption(
       currentOverride,
       formatCatalogChatModelDisplayFromLookup(currentOverride, displayLookup),
     );
   }
-  if (defaultModel) {
+  if (defaultModel && (!hasScopedCatalog || scopedValues.has(defaultModel))) {
     addOption(defaultModel, formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup));
   }
   return options;

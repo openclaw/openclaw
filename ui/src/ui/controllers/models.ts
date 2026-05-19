@@ -9,8 +9,8 @@ import type { ModelCatalogEntry } from "../types.ts";
  * caller receives an empty array rather than throwing.
  *
  * When `agentId` is provided, the gateway scopes the visibility allowlist to
- * the per-agent `agents.list[<agentId>].models` map (falling back to
- * `agents.defaults.models` when the agent does not define its own list).
+ * the per-agent `agents.list[<agentId>].modelAllowlist` map (falling back to
+ * `agents.defaults.models` when the agent does not define its own allowlist).
  */
 export async function loadModels(
   client: GatewayBrowserClient,

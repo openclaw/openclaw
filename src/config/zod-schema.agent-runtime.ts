@@ -875,6 +875,19 @@ export const AgentEntrySchema = z
           .strict(),
       )
       .optional(),
+    modelAllowlist: z
+      .record(
+        z.string(),
+        z
+          .object({
+            alias: z.string().optional(),
+            params: z.record(z.string(), z.unknown()).optional(),
+            agentRuntime: AgentRuntimePolicySchema,
+            streaming: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),

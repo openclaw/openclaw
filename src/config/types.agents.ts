@@ -90,6 +90,8 @@ export type AgentConfig = {
   model?: AgentModelConfig;
   /** Per-model metadata overrides for this agent. */
   models?: Record<string, AgentModelEntryConfig>;
+  /** Optional per-agent model visibility allowlist. Falls back to agents.defaults.models when omitted or empty. */
+  modelAllowlist?: Record<string, AgentModelEntryConfig>;
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Optional per-agent default verbosity level. */

@@ -1290,13 +1290,13 @@ describe("model-selection", () => {
           list: [
             {
               id: "writer",
-              models: {
+              modelAllowlist: {
                 "anthropic/claude-sonnet-4-6": {},
               },
             },
             {
               id: "coder",
-              models: {
+              modelAllowlist: {
                 "openai/gpt-5.4": {},
                 "anthropic/claude-opus-4-6": {},
               },
@@ -1305,7 +1305,7 @@ describe("model-selection", () => {
               // Empty per-agent record must fall back to defaults to keep
               // current configs working when an agent has no explicit list.
               id: "empty",
-              models: {},
+              modelAllowlist: {},
             },
           ],
         },
@@ -1356,6 +1356,42 @@ describe("model-selection", () => {
         ]);
       });
 
+      it("does not treat runtime-only agent models metadata as a visibility allowlist", () => {
+        const cfg = {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-sonnet-4-6": {},
+                "anthropic/claude-opus-4-6": {},
+                "openai/gpt-5.4": {},
+              },
+            },
+            list: [
+              {
+                id: "runtime-only",
+                models: {
+                  "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+                },
+              },
+            ],
+          },
+        } as OpenClawConfig;
+
+        const result = buildAllowedModelSet({
+          cfg,
+          catalog: PER_AGENT_CATALOG,
+          defaultProvider: "anthropic",
+          agentId: "runtime-only",
+        });
+
+        expect(result.allowAny).toBe(false);
+        expect([...result.allowedKeys].toSorted()).toEqual([
+          "anthropic/claude-opus-4-6",
+          "anthropic/claude-sonnet-4-6",
+          "openai/gpt-5.4",
+        ]);
+      });
+
       it("falls back to defaults when the agent is unknown", () => {
         const result = buildAllowedModelSet({
           cfg: PER_AGENT_CFG,
@@ -1372,7 +1408,7 @@ describe("model-selection", () => {
         ]);
       });
 
-      it("falls back to defaults when the per-agent models record is empty", () => {
+      it("falls back to defaults when the per-agent modelAllowlist record is empty", () => {
         const result = buildAllowedModelSet({
           cfg: PER_AGENT_CFG,
           catalog: PER_AGENT_CATALOG,
@@ -1388,7 +1424,7 @@ describe("model-selection", () => {
         ]);
       });
 
-      it("falls back to defaults when defaults define an allowlist but the agent has no `models` key", () => {
+      it("falls back to defaults when defaults define an allowlist but the agent has no `modelAllowlist` key", () => {
         const cfg = {
           agents: {
             defaults: {
@@ -1418,7 +1454,7 @@ describe("model-selection", () => {
             list: [
               {
                 id: "openai-only",
-                models: { "openai/*": {} },
+                modelAllowlist: { "openai/*": {} },
               },
             ],
           },

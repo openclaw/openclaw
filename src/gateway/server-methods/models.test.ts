@@ -229,10 +229,10 @@ describe("models.list", () => {
           },
         },
         list: [
-          { id: "writer", models: { "anthropic/claude-sonnet-4-6": {} } },
+          { id: "writer", modelAllowlist: { "anthropic/claude-sonnet-4-6": {} } },
           {
             id: "coder",
-            models: {
+            modelAllowlist: {
               "openai/gpt-5.4": {},
               "anthropic/claude-opus-4-6": {},
             },

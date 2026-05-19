@@ -1010,9 +1010,8 @@ for provider examples and precedence.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Overrides `agents.defaults.reasoningDefault` for this agent when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
-- `models`: optional per-agent model catalog/runtime overrides keyed by full `provider/model` ids. Use `models["provider/model"].agentRuntime` for per-agent runtime exceptions.
-  - When this map is non-empty, it also acts as the agent's **visibility allowlist** for `/model` (and the Control UI model picker scoped to that agent), overriding `agents.defaults.models` for this agent only. Provider wildcards such as `"openai/*": {}` work the same way as in defaults.
-  - When omitted or empty, the agent inherits the global `agents.defaults.models` allowlist (backwards compatible). Aliases and shared params/metadata still resolve from `agents.defaults.models` regardless.
+- `models`: optional per-agent model catalog/runtime overrides keyed by full `provider/model` ids. Use `models["provider/model"].agentRuntime` for per-agent runtime exceptions. This field does **not** restrict visibility by itself, so existing runtime-only overrides keep inheriting the global `agents.defaults.models` catalog.
+- `modelAllowlist`: optional per-agent **visibility allowlist** for `/model` and the Control UI model picker scoped to that agent, keyed by full `provider/model` ids. Provider wildcards such as `"openai/*": {}` work the same way as in defaults. When omitted or empty, the agent inherits the global `agents.defaults.models` allowlist. Aliases and shared params/metadata still resolve from `agents.defaults.models` regardless.
   - Example — a writer agent restricted to two Anthropic models while defaults allow more:
 
     ```json5
@@ -1028,7 +1027,7 @@ for provider examples and precedence.
         list: [
           {
             id: "writer",
-            models: {
+            modelAllowlist: {
               "anthropic/claude-sonnet-4-6": {},
               "anthropic/claude-opus-4-6": {},
             },

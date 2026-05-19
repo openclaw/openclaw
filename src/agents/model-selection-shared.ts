@@ -38,7 +38,7 @@ type ConfiguredModelsRecord = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"]
 >;
 
-function findAgentEntryModels(
+function findAgentEntryModelVisibilityAllowlist(
   cfg: OpenClawConfig | undefined,
   agentId: string | undefined,
 ): ConfiguredModelsRecord | undefined {
@@ -59,14 +59,14 @@ function findAgentEntryModels(
     }
     const id = typeof entry.id === "string" ? entry.id.trim() : "";
     if (id && id === target) {
-      const models = entry.models;
+      const allowlist = (entry as { modelAllowlist?: ConfiguredModelsRecord }).modelAllowlist;
       if (
-        models &&
-        typeof models === "object" &&
-        !Array.isArray(models) &&
-        Object.keys(models).length > 0
+        allowlist &&
+        typeof allowlist === "object" &&
+        !Array.isArray(allowlist) &&
+        Object.keys(allowlist).length > 0
       ) {
-        return models;
+        return allowlist;
       }
       return undefined;
     }
@@ -75,17 +75,16 @@ function findAgentEntryModels(
 }
 
 /**
- * Resolve the models record that drives the visibility allowlist. Falls back to
- * `agents.defaults.models` when the agent does not define its own list. The
- * per-agent record reuses the same shape as defaults; aliases and metadata are
- * still sourced from defaults to stay backwards compatible with existing
- * configs.
+ * Resolve the models record that drives visibility. `agents.defaults.models` is
+ * the global allowlist. Per-agent scoping is opt-in through
+ * `agents.list[].modelAllowlist` so existing `agents.list[].models` runtime
+ * metadata does not become a visibility restriction by accident.
  */
 export function resolveConfiguredAllowlistModelsRecord(params: {
   cfg: OpenClawConfig | undefined;
   agentId?: string;
 }): ConfiguredModelsRecord {
-  const perAgent = findAgentEntryModels(params.cfg, params.agentId);
+  const perAgent = findAgentEntryModelVisibilityAllowlist(params.cfg, params.agentId);
   if (perAgent) {
     return perAgent;
   }
@@ -676,9 +675,9 @@ export function buildAllowedModelSetWithFallbacks(params: {
   defaultModel?: string;
   fallbackModels: readonly string[];
   /**
-   * When provided, the per-agent `agents.list[<agentId>].models` allowlist
-   * takes precedence over `agents.defaults.models`. Falls back to defaults
-   * when the agent does not define its own list (or it is empty).
+   * When provided, the per-agent `agents.list[<agentId>].modelAllowlist`
+   * visibility allowlist takes precedence over `agents.defaults.models`. Falls
+   * back to defaults when the agent does not define its own allowlist.
    */
   agentId?: string;
 }): {
@@ -1010,9 +1009,9 @@ export function normalizeModelSelection(value: unknown): string | undefined {
 export function parseConfiguredModelVisibilityEntries(params: {
   cfg?: OpenClawConfig;
   /**
-   * When provided, prefer `agents.list[<agentId>].models` over
+   * When provided, prefer `agents.list[<agentId>].modelAllowlist` over
    * `agents.defaults.models`. Falls back to defaults when the per-agent
-   * record is missing or empty.
+   * allowlist is missing or empty.
    */
   agentId?: string;
 }): {
