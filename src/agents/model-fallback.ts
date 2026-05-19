@@ -55,11 +55,70 @@ import type { FailoverReason } from "./pi-embedded-helpers/types.js";
 import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
+const MODEL_CIRCUIT_FAILURE_THRESHOLD = 5;
+const MODEL_CIRCUIT_WINDOW_MS = 5 * 60 * 1000;
+const MODEL_CIRCUIT_COOLDOWN_MS = 60 * 1000;
+
+type ModelCircuitState = {
+  failures: number[];
+  openUntil: number;
+};
+
+const modelCircuitStates = new Map<string, ModelCircuitState>();
 
 type FailoverAttribution = {
   sessionId?: string;
   lane?: string;
 };
+
+function modelCircuitKey(provider: string, model: string) {
+  return `${provider}\u0000${model}`;
+}
+
+function pruneModelCircuitFailures(state: ModelCircuitState, now: number) {
+  const cutoff = now - MODEL_CIRCUIT_WINDOW_MS;
+  state.failures = state.failures.filter((ts) => ts >= cutoff);
+}
+
+function resolveOpenModelCircuit(params: {
+  provider: string;
+  model: string;
+  now?: number;
+}): { openUntil: number; remainingMs: number } | null {
+  const now = params.now ?? Date.now();
+  const state = modelCircuitStates.get(modelCircuitKey(params.provider, params.model));
+  if (!state) {
+    return null;
+  }
+  pruneModelCircuitFailures(state, now);
+  if (state.openUntil <= now) {
+    state.openUntil = 0;
+    if (state.failures.length === 0) {
+      modelCircuitStates.delete(modelCircuitKey(params.provider, params.model));
+    }
+    return null;
+  }
+  return {
+    openUntil: state.openUntil,
+    remainingMs: state.openUntil - now,
+  };
+}
+
+function recordModelCircuitSuccess(provider: string, model: string) {
+  modelCircuitStates.delete(modelCircuitKey(provider, model));
+}
+
+function recordModelCircuitFailure(provider: string, model: string, now = Date.now()) {
+  const key = modelCircuitKey(provider, model);
+  const state = modelCircuitStates.get(key) ?? { failures: [], openUntil: 0 };
+  pruneModelCircuitFailures(state, now);
+  state.failures.push(now);
+  if (state.failures.length >= MODEL_CIRCUIT_FAILURE_THRESHOLD) {
+    state.openUntil = now + MODEL_CIRCUIT_COOLDOWN_MS;
+  }
+  modelCircuitStates.set(key, state);
+  return state.openUntil > now ? state.openUntil : null;
+}
 
 /**
  * Structured error thrown when all model fallback candidates have been
@@ -626,6 +685,7 @@ export const __testing = {
   resolveImageFallbackCandidates,
   resolveCooldownDecision,
   resolveSessionSuspensionReason,
+  resetModelCircuitStates: () => modelCircuitStates.clear(),
 } as const;
 
 function resolveFallbackCandidates(
@@ -976,6 +1036,40 @@ export async function runWithModelFallback<T>(
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    const openCircuit = resolveOpenModelCircuit(candidate);
+    if (openCircuit) {
+      const error = `Model circuit open for ${candidate.provider}/${candidate.model}; retry in ${Math.ceil(
+        openCircuit.remainingMs / 1000,
+      )}s`;
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error,
+        reason: "circuit_open",
+        status: 503,
+      });
+      await observeDecision({
+        decision: "skip_candidate",
+        runId: params.runId,
+        sessionId: params.sessionId,
+        lane: params.lane,
+        requestedProvider: params.provider,
+        requestedModel: params.model,
+        candidate,
+        attempt: i + 1,
+        total: candidates.length,
+        reason: "circuit_open",
+        status: 503,
+        error,
+        nextCandidate: candidates[i + 1],
+        isPrimary: i === 0,
+        requestedModelMatched: requestedCandidate
+          ? sameModelCandidate(candidate, requestedCandidate)
+          : false,
+        fallbackConfigured: hasFallbackCandidates,
+      });
+      continue;
+    }
     await assertModelFallbackCandidateHarnessAvailable({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -1169,6 +1263,7 @@ export async function runWithModelFallback<T>(
       attribution: { sessionId: params.sessionId, lane: params.lane },
     });
     if ("success" in attemptRun) {
+      recordModelCircuitSuccess(candidate.provider, candidate.model);
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
         await observeDecision({
           decision: "candidate_succeeded",
@@ -1272,6 +1367,9 @@ export async function runWithModelFallback<T>(
       const isKnownFailover = isFailoverError(normalized);
       if (!isKnownFailover && i === candidates.length - 1) {
         throw err;
+      }
+      if (isKnownFailover) {
+        recordModelCircuitFailure(candidate.provider, candidate.model);
       }
 
       lastError = isKnownFailover ? normalized : err;

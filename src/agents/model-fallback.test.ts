@@ -174,6 +174,7 @@ afterAll(() => {
 });
 
 function resetModelFallbackTestState(): void {
+  __testing.resetModelCircuitStates();
   authRuntimeMock.clear();
   authRuntimeMock.runtime.ensureAuthProfileStore.mockClear();
   authRuntimeMock.runtime.loadAuthProfileStoreForRuntime.mockClear();
@@ -1234,6 +1235,50 @@ describe("runWithModelFallback", () => {
       model: "gpt-4.1-mini",
       firstError: Object.assign(new Error("nope"), { status: 401 }),
     });
+  });
+
+  it("skips a provider/model after repeated failover errors trip its circuit", async () => {
+    const cfg = makeCfg();
+    const run = vi.fn().mockImplementation(async (provider, model) => {
+      if (provider === "openai" && model === "gpt-4.1-mini") {
+        throw Object.assign(new Error("transient provider failure"), { status: 503 });
+      }
+      if (provider === "anthropic" && model === "claude-haiku-3-5") {
+        return "ok";
+      }
+      throw new Error(`unexpected fallback candidate: ${provider}/${model}`);
+    });
+
+    for (let i = 0; i < 5; i += 1) {
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+    }
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.attempts[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      reason: "circuit_open",
+      status: 503,
+    });
+    expect(run).toHaveBeenCalledTimes(11);
+    expect(requireMockCall(run, 10, "fallback after open circuit")).toEqual([
+      "anthropic",
+      "claude-haiku-3-5",
+    ]);
   });
 
   it("puts configured fallbacks before the configured primary when an override model is requested", () => {
