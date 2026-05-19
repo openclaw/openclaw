@@ -1903,6 +1903,31 @@ export async function runReplyAgent(params: {
       });
     }
 
+    // When sourceReplyDeliveryMode is "message_tool_only" the dispatch layer
+    // silently drops payloads that lack deliverDespiteSourceReplySuppression.
+    // If the model produced visible text but never called the message tool (and
+    // no block-streaming or other side-effect delivery occurred), mark the
+    // payloads for fallback delivery so the user still sees the response.
+    if (
+      opts?.sourceReplyDeliveryMode === "message_tool_only" &&
+      guardedReplyPayloads.length > 0 &&
+      !hasSuccessfulSideEffectDelivery({
+        blockReplyPipeline,
+        directlySentBlockKeys,
+        messagingToolSentTexts: runResult.messagingToolSentTexts,
+        messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+        messagingToolSentTargets: runResult.messagingToolSentTargets,
+        successfulCronAdds: runResult.successfulCronAdds,
+        didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
+      })
+    ) {
+      for (let i = 0; i < guardedReplyPayloads.length; i++) {
+        guardedReplyPayloads[i] = markReplyPayloadForSourceSuppressionDelivery(
+          guardedReplyPayloads[i],
+        );
+      }
+    }
+
     // Prepend verbose operational notices. Model fallback notices are prepared
     // earlier so they pass through normal reply threading and stream-dedupe.
     let finalPayloads = guardedReplyPayloads;
