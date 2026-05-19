@@ -151,12 +151,14 @@ function banner(logStream, s) {
 
 function parseArgs(argv) {
   // Supported:
-  //   node scripts/polytropos-release.mjs release --run <run-id> [--repo <owner/repo>] [--artifact <name>] [--log <path>]
+  node scripts/polytropos-release.mjs release --run <run-id> [--repo <owner/repo>] [--artifact <name>] [--log <path>]
+  node scripts/polytropos-release.mjs release --run-url <actions-run-url> [--repo <owner/repo>] [--artifact <name>] [--log <path>]
   const args = argv.slice(2);
   const cmd = args[0] || "";
   let logPath = process.env.POLYTROPOS_RELEASE_LOG || defaultLogPath();
   let repo = null;
   let runId = null;
+  let runUrl = null;
   let artifactName = null;
 
   for (let i = 1; i < args.length; i++) {
@@ -182,6 +184,14 @@ function parseArgs(argv) {
       i++;
       continue;
     }
+    if (a === "--run-url") {
+      const v = args[i + 1];
+      if (!v) fail("--run-url requires a URL");
+      runUrl = v;
+      i++;
+      continue;
+    }
+
     if (a === "--artifact") {
       const v = args[i + 1];
       if (!v) fail("--artifact requires a name");
@@ -190,11 +200,11 @@ function parseArgs(argv) {
       continue;
     }
     if (a === "--help" || a === "-h") {
-      return { cmd: "--help", logPath, repo, runId, artifactName };
+      return { cmd: "--help", logPath, repo, runId, runUrl, artifactName };
     }
     fail(`unknown argument: ${a}`);
   }
-  return { cmd, logPath, repo, runId, artifactName };
+  return { cmd, logPath, repo, runId, runUrl, artifactName };
 }
 
 function usage() {
@@ -212,7 +222,7 @@ Behavior:
 `);
 }
 
-const { cmd, logPath, repo, runId, artifactName } = parseArgs(process.argv);
+const { cmd, logPath, repo, runId, runUrl, artifactName } = parseArgs(process.argv);
 if (!cmd || cmd === "--help") {
   usage();
   process.exit(0);
@@ -226,9 +236,19 @@ fs.mkdirSync(path.dirname(logPath), { recursive: true });
 const logStream = fs.createWriteStream(logPath, { flags: "a" });
 banner(logStream, `Log file: ${logPath}`);
 
-if (!runId) {
+if (!runId && !runUrl) {
   fail("release requires --run <run-id>");
 }
+
+// Allow passing a full Actions run URL; we extract the run id.
+if (!runId && runUrl) {
+  const m = String(runUrl).match(/\/actions\/runs\/(\d+)/);
+  if (!m) {
+    fail(`--run-url is not a valid GitHub Actions run URL: ${runUrl}`);
+  }
+  runId = m[1];
+}
+
 
 const ghRepo = repo || "JoshuaCWebDeveloper/openclaw-polytropos";
 
