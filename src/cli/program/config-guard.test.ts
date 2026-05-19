@@ -214,4 +214,36 @@ describe("ensureConfigReady", () => {
     });
     expect(output).toContain("Doctor warnings");
   });
+
+  it("does not pin a rejected config snapshot promise across calls (#83855)", async () => {
+    // Step outside the VITEST guard (config-guard.ts:30) so the cache path
+    // actually runs. The regression: a rejected `readConfigFileSnapshot()`
+    // was permanently cached, so every subsequent CLI invocation in the
+    // same process replayed the original failure.
+    const priorVitest = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      resetConfigGuardStateForTests();
+      readConfigFileSnapshotMock.mockReset();
+      const firstError = new Error("ENOENT: openclaw.json");
+      readConfigFileSnapshotMock.mockRejectedValueOnce(firstError);
+      readConfigFileSnapshotMock.mockResolvedValueOnce(makeSnapshot());
+
+      await expect(testApi.getConfigSnapshotForTests()).rejects.toBe(firstError);
+      // Microtask drain so the `.catch` cleanup observes the rejection before
+      // the next call samples `configSnapshotPromise`.
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const second = await testApi.getConfigSnapshotForTests();
+      expect(second).toEqual(makeSnapshot());
+      expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(2);
+    } finally {
+      if (priorVitest === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = priorVitest;
+      }
+      resetConfigGuardStateForTests();
+    }
+  });
 });

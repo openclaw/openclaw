@@ -30,7 +30,18 @@ async function getConfigSnapshot() {
   if (process.env.VITEST === "true") {
     return readConfigFileSnapshot();
   }
-  configSnapshotPromise ??= readConfigFileSnapshot();
+  if (!configSnapshotPromise) {
+    // Clear the cached promise on rejection so a transient filesystem error
+    // (e.g. ENOENT during atomic-rename) doesn't pin every subsequent CLI
+    // invocation in this process to the original failure. See #83855.
+    const pending = readConfigFileSnapshot();
+    pending.catch(() => {
+      if (configSnapshotPromise === pending) {
+        configSnapshotPromise = null;
+      }
+    });
+    configSnapshotPromise = pending;
+  }
   return configSnapshotPromise;
 }
 
@@ -139,5 +150,6 @@ export async function ensureConfigReady(params: {
 
 export const testApi = {
   resetConfigGuardStateForTests,
+  getConfigSnapshotForTests: () => getConfigSnapshot(),
 };
 export { testApi as __test__ };
