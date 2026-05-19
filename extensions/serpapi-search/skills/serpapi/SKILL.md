@@ -219,7 +219,7 @@ Get Google Trends data.
 | `geo`       | Region code (e.g. `US`, `UA`). Omit for worldwide.                                  |
 | `date`      | Range: `now 1-d`, `now 7-d`, `today 1-m`, `today 12-m` (default), `today 5-y`       |
 | `region`    | Breakdown level for GEO_MAP: `COUNTRY`, `REGION`, `DMA`, `CITY`                     |
-| `gprop`     | Property: ``(Web, default),`images`, `news`, `froogle`, `youtube`                   |
+| `gprop`     | Property: `web` (default), `images`, `news`, `froogle`, `youtube`                   |
 | `cat`       | Category ID (default: `0` = all)                                                    |
 | `tz`        | Timezone offset in minutes (e.g. `-540` Tokyo, `420` PDT)                           |
 
