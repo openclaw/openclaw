@@ -13,15 +13,24 @@ import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.js";
 import * as videoGenerateBackground from "./video-generate-background.js";
 import {
   createVideoGenerateTool,
   resolveVideoGenerationModelConfigForTool,
 } from "./video-generate-tool.js";
 
-const taskRuntimeInternalMocks = vi.hoisted(() => ({
-  listTasksForOwnerKey: vi.fn(),
-}));
+const taskRuntimeInternalMocks = vi.hoisted(() => {
+  const mocks = {
+    listTasksForOwnerKey: vi.fn(),
+    listFreshTasksForOwnerKey: vi.fn(),
+    reloadTaskRegistryFromStore: vi.fn(),
+  };
+  mocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+    mocks.listTasksForOwnerKey(ownerKey),
+  );
+  return mocks;
+});
 
 const taskExecutorMocks = vi.hoisted(() => ({
   recordTaskRunProgressByRunId: vi.fn(),
@@ -296,6 +305,12 @@ function resetVideoGenerateMocks() {
   vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
+  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+    taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
+  );
+  taskRuntimeInternalMocks.reloadTaskRegistryFromStore.mockReset();
+  resetRecentMediaGenerationDuplicateGuardsForTests();
   taskExecutorMocks.createRunningTaskRun.mockReset();
   taskExecutorMocks.completeTaskRunByRunId.mockReset();
   taskExecutorMocks.failTaskRunByRunId.mockReset();
@@ -864,7 +879,7 @@ describe("createVideoGenerateTool", () => {
     });
     const wakeSpy = vi
       .spyOn(videoGenerateBackground.videoGenerationTaskLifecycle, "wakeTaskCompletion")
-      .mockResolvedValue(undefined);
+      .mockResolvedValue(true);
     const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer");
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
       provider: "vydra",
@@ -882,6 +897,7 @@ describe("createVideoGenerateTool", () => {
     });
 
     let scheduledWork: (() => Promise<void>) | undefined;
+    const onAsyncTaskStarted = vi.fn();
     const tool = createVideoGenerateTool({
       config: asConfig({
         agents: {
@@ -898,6 +914,7 @@ describe("createVideoGenerateTool", () => {
       scheduleBackgroundWork: (work) => {
         scheduledWork = work;
       },
+      onAsyncTaskStarted,
     });
     if (!tool) {
       throw new Error("expected video_generate tool");
@@ -908,10 +925,15 @@ describe("createVideoGenerateTool", () => {
 
     expect(text).toContain("Background task started for video generation (task-123).");
     expect(text).toContain("Do not call video_generate again for this request.");
+    expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
+    expect(onAsyncTaskStarted).toHaveBeenCalledWith(
+      "Video generation started; wait for the generated video completion event.",
+    );
     const details = resultDetails(result);
     expect(details.async).toBe(true);
     expect(details.status).toBe("started");
     expect((details.task as { taskId?: string }).taskId).toBe("task-123");
+    expect((result as { terminate?: boolean }).terminate).toBe(true);
     if (!scheduledWork) {
       throw new Error("expected scheduled video generation work");
     }

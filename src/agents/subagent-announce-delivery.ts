@@ -49,6 +49,7 @@ import {
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
   resolveStorePath,
+  sendMessage,
 } from "./subagent-announce-delivery.runtime.js";
 import {
   runSubagentAnnounceDispatch,
@@ -80,6 +81,7 @@ type SubagentAnnounceDeliveryDeps = {
     text: string,
     options?: EmbeddedPiQueueMessageOptions,
   ) => EmbeddedPiQueueMessageOutcome | Promise<EmbeddedPiQueueMessageOutcome>;
+  sendMessage: typeof sendMessage;
 };
 
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
@@ -95,6 +97,7 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
     };
   },
   queueEmbeddedPiMessageWithOutcome: queueEmbeddedPiMessageWithOutcomeAsync,
+  sendMessage,
 };
 
 let subagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps =
@@ -573,6 +576,96 @@ function isGatewayAgentRunPending(response: unknown): boolean {
   return isNonTerminalAgentRunStatus(status);
 }
 
+function resolveGeneratedMediaCompletionLabel(params: {
+  sourceTool?: string;
+  internalEvents?: readonly AgentInternalEvent[];
+}): string {
+  const sourceTool = params.sourceTool?.trim();
+  if (sourceTool === "image_generate") {
+    return "image";
+  }
+  if (sourceTool === "music_generate") {
+    return "music";
+  }
+  if (sourceTool === "video_generate") {
+    return "video";
+  }
+  const announceType = params.internalEvents
+    ?.find((event) => event.type === "task_completion")
+    ?.announceType?.trim()
+    .toLowerCase();
+  if (announceType?.includes("image")) {
+    return "image";
+  }
+  if (announceType?.includes("music") || announceType?.includes("audio")) {
+    return "music";
+  }
+  if (announceType?.includes("video")) {
+    return "video";
+  }
+  return "media";
+}
+
+async function deliverGeneratedMediaCompletionDirect(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey: string;
+  directIdempotencyKey: string;
+  deliveryTarget: {
+    deliver: boolean;
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string;
+  };
+  expectedMediaUrls: readonly string[];
+  internalEvents?: readonly AgentInternalEvent[];
+  sourceTool?: string;
+}): Promise<SubagentAnnounceDeliveryResult | undefined> {
+  if (
+    !params.deliveryTarget.deliver ||
+    !params.deliveryTarget.channel ||
+    !params.deliveryTarget.to ||
+    params.expectedMediaUrls.length === 0
+  ) {
+    return undefined;
+  }
+  const mediaLabel = resolveGeneratedMediaCompletionLabel({
+    sourceTool: params.sourceTool,
+    internalEvents: params.internalEvents,
+  });
+  const agentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
+  const idempotencyKey = `${params.directIdempotencyKey}:generated-media-direct`;
+  try {
+    await subagentAnnounceDeliveryDeps.sendMessage({
+      cfg: params.cfg,
+      channel: params.deliveryTarget.channel,
+      to: params.deliveryTarget.to,
+      accountId: params.deliveryTarget.accountId,
+      threadId: params.deliveryTarget.threadId,
+      requesterSessionKey: params.requesterSessionKey,
+      agentId,
+      content: `The generated ${mediaLabel} is ready.`,
+      mediaUrls: Array.from(params.expectedMediaUrls),
+      idempotencyKey,
+      mirror: {
+        sessionKey: params.requesterSessionKey,
+        agentId,
+        idempotencyKey,
+      },
+    });
+    return {
+      delivered: true,
+      path: "direct",
+    };
+  } catch (err) {
+    return {
+      delivered: false,
+      path: "direct",
+      error: `generated media direct delivery failed: ${summarizeDeliveryError(err)}`,
+    };
+  }
+}
+
 function stripNonDeliverableChannelForCompletionOrigin(
   context?: DeliveryContext,
 ): DeliveryContext | undefined {
@@ -679,6 +772,16 @@ async function sendSubagentAnnounceDirectly(params: {
           directOrigin: effectiveDirectOrigin,
           requesterSessionOrigin,
         }));
+    const tryGeneratedMediaDirectDelivery = async () =>
+      await deliverGeneratedMediaCompletionDirect({
+        cfg,
+        requesterSessionKey: canonicalRequesterSessionKey,
+        directIdempotencyKey: params.directIdempotencyKey,
+        deliveryTarget,
+        expectedMediaUrls,
+        internalEvents: params.internalEvents,
+        sourceTool: params.sourceTool,
+      });
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
       : undefined;
@@ -686,6 +789,12 @@ async function sendSubagentAnnounceDirectly(params: {
     let completionWakeFailureReason: EmbeddedPiQueueFailureReason | undefined;
     let completionWakeRetriedWithoutTranscriptWait = false;
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
+    if (requesterActivity.isActive && requiresMessageToolDelivery && expectedMediaUrls.length > 0) {
+      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
+      if (generatedMediaDelivery?.delivered) {
+        return generatedMediaDelivery;
+      }
+    }
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
       channel:
@@ -819,6 +928,10 @@ async function sendSubagentAnnounceDirectly(params: {
       requiresMessageToolDelivery &&
       !hasGatewayAgentMessagingToolDelivery(directAnnounceResponse)
     ) {
+      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
+      if (generatedMediaDelivery) {
+        return generatedMediaDelivery;
+      }
       return {
         delivered: false,
         path: "direct",
@@ -830,6 +943,10 @@ async function sendSubagentAnnounceDirectly(params: {
       expectedMediaUrls.length > 0 &&
       !hasGatewayAgentDeliveredExpectedMedia(directAnnounceResponse, expectedMediaUrls)
     ) {
+      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
+      if (generatedMediaDelivery) {
+        return generatedMediaDelivery;
+      }
       return {
         delivered: false,
         path: "direct",

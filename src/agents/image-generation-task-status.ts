@@ -4,12 +4,14 @@ import {
   buildMediaGenerationTaskStatusDetails,
   buildMediaGenerationTaskStatusText,
   findActiveMediaGenerationTaskForSession,
+  findDuplicateGuardMediaGenerationTaskForSession,
   getMediaGenerationTaskProviderId,
   isActiveMediaGenerationTask,
 } from "./media-generation-task-status-shared.js";
 
 export const IMAGE_GENERATION_TASK_KIND = "image_generation";
 const IMAGE_GENERATION_SOURCE_PREFIX = "image_generate";
+const RECENT_IMAGE_GENERATION_DUPLICATE_GUARD_MS = 2 * 60_000;
 
 export function isActiveImageGenerationTask(task: TaskRecord): boolean {
   return isActiveMediaGenerationTask({
@@ -31,6 +33,20 @@ export function findActiveImageGenerationTaskForSession(
     taskKind: IMAGE_GENERATION_TASK_KIND,
     sourcePrefix: IMAGE_GENERATION_SOURCE_PREFIX,
     taskLabel: params?.prompt,
+  });
+}
+
+export function findDuplicateGuardImageGenerationTaskForSession(
+  sessionKey?: string,
+  params?: { prompt?: string; requestKey?: string },
+): TaskRecord | undefined {
+  return findDuplicateGuardMediaGenerationTaskForSession({
+    sessionKey,
+    taskKind: IMAGE_GENERATION_TASK_KIND,
+    sourcePrefix: IMAGE_GENERATION_SOURCE_PREFIX,
+    taskLabel: params?.prompt,
+    requestKey: params?.requestKey,
+    maxAgeMs: RECENT_IMAGE_GENERATION_DUPLICATE_GUARD_MS,
   });
 }
 
