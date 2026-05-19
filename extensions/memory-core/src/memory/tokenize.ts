@@ -79,7 +79,23 @@ export function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number 
 
 /**
  * Compute text similarity between two content strings using Jaccard on tokens.
+ *
+ * When BOTH inputs tokenize to empty sets (e.g. Cyrillic/Arabic/emoji-only or
+ * punctuation-only snippets that contain no ASCII or CJK tokens), the raw
+ * `jaccardSimilarity` returns `1` for two empty sets. To prevent the dreaming
+ * dedupe path (and other callers that compare distinct strings via Jaccard)
+ * from collapsing distinct non-tokenized snippets into one, we fall back to
+ * exact normalized-string equality for that empty/empty case. Non-empty cases
+ * continue to use Jaccard unchanged.
  */
 export function textSimilarity(contentA: string, contentB: string): number {
-  return jaccardSimilarity(tokenize(contentA), tokenize(contentB));
+  const tokensA = tokenize(contentA);
+  const tokensB = tokenize(contentB);
+  if (tokensA.size === 0 && tokensB.size === 0) {
+    return normalizeLowercaseStringOrEmpty(contentA) ===
+      normalizeLowercaseStringOrEmpty(contentB)
+      ? 1
+      : 0;
+  }
+  return jaccardSimilarity(tokensA, tokensB);
 }
