@@ -34,6 +34,9 @@ import {
   resolveBootstrapContextForRun,
   setActiveEmbeddedRun,
   supportsModelTools,
+  hasSandboxBindContainerPathAliases,
+  hasSandboxBindReadonlyHostShadows,
+  resolveWritableSandboxBindHostRoots,
   runAgentCleanupStep,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
@@ -452,11 +455,17 @@ function resolveCodexAppServerSandboxPolicyForOpenClawSandbox(
     return undefined;
   }
   const networkAccess = codexNetworkAccessForOpenClawSandbox(sandbox);
+  const writableRoots = new Set([cwd]);
+  if (sandbox.backendId === "docker") {
+    for (const root of resolveWritableSandboxBindHostRoots(sandbox.docker.binds)) {
+      writableRoots.add(root);
+    }
+  }
   // Codex app-server still runs on the Gateway host, so keep Codex's
   // filesystem sandbox while mirroring the OpenClaw sandbox egress policy.
   return {
     type: "workspaceWrite",
-    writableRoots: [cwd],
+    writableRoots: [...writableRoots],
     networkAccess,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
@@ -891,7 +900,7 @@ export async function runCodexAppServerAttempt(
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
   });
-  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
+  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox);
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
     embeddedAgentLog.warn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
@@ -3300,15 +3309,33 @@ function includeForcedMessageToolAllow(
   return normalized.has("message") ? toolsAllow : [...toolsAllow, "message"];
 }
 
-function shouldEnableCodexAppServerNativeToolSurface(params: EmbeddedRunAttemptParams): boolean {
+function shouldEnableCodexAppServerNativeToolSurface(
+  params: EmbeddedRunAttemptParams,
+  sandbox?: OpenClawSandboxContext,
+): boolean {
   const toolsAllow = includeForcedMessageToolAllow(params.toolsAllow, params);
   if (toolsAllow === undefined) {
-    return true;
+    return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox);
   }
   // Codex native code mode exposes its shell/file surface as one app-server
   // capability, so narrow OpenClaw allowlists must fail closed rather than
   // widening `message` or `web_search` into shell access.
-  return hasWildcardCodexToolsAllow(toolsAllow);
+  return (
+    hasWildcardCodexToolsAllow(toolsAllow) &&
+    canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox)
+  );
+}
+
+function canCodexAppServerNativeToolSurfaceHonorSandbox(
+  sandbox: OpenClawSandboxContext | undefined,
+): boolean {
+  if (!sandbox?.enabled || sandbox.backendId !== "docker") {
+    return true;
+  }
+  return (
+    !hasSandboxBindContainerPathAliases(sandbox.docker.binds) &&
+    !hasSandboxBindReadonlyHostShadows(sandbox.docker.binds)
+  );
 }
 
 function disableCodexPluginThreadConfig(pluginConfig?: unknown): CodexPluginConfig {

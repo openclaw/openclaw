@@ -1199,6 +1199,41 @@ describe("runCodexAppServerAttempt", () => {
     expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 
+  it("disables Codex native tool surfaces when Docker bind targets need container paths", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+
+    expect(
+      testing.shouldEnableCodexAppServerNativeToolSurface(params, {
+        enabled: true,
+        backendId: "docker",
+        docker: { binds: ["/tmp/openclaw-data:/data:rw"] },
+      } as never),
+    ).toBe(false);
+
+    expect(
+      testing.shouldEnableCodexAppServerNativeToolSurface(params, {
+        enabled: true,
+        backendId: "docker",
+        docker: { binds: ["/tmp/openclaw-data:/tmp/openclaw-data:rw"] },
+      } as never),
+    ).toBe(true);
+
+    expect(
+      testing.shouldEnableCodexAppServerNativeToolSurface(params, {
+        enabled: true,
+        backendId: "docker",
+        docker: {
+          binds: [
+            "/tmp/openclaw-data:/tmp/openclaw-data:rw",
+            "/tmp/openclaw-data/secrets:/tmp/openclaw-data/secrets:ro",
+          ],
+        },
+      } as never),
+    ).toBe(false);
+  });
+
   it("forces the message dynamic tool for message-tool-only source replies", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
@@ -8958,13 +8993,19 @@ describe("runCodexAppServerAttempt", () => {
         {
           enabled: true,
           backendId: "docker",
-          docker: { network: "bridge" },
+          docker: {
+            network: "bridge",
+            binds: [
+              "/tmp/openclaw-writable-data:/data:rw",
+              "/tmp/openclaw-readonly-data:/readonly:ro",
+            ],
+          },
         } as never,
         "/tmp/workspace",
       ),
     ).toEqual({
       type: "workspaceWrite",
-      writableRoots: ["/tmp/workspace"],
+      writableRoots: ["/tmp/workspace", path.resolve("/tmp/openclaw-writable-data")],
       networkAccess: true,
       excludeTmpdirEnvVar: false,
       excludeSlashTmp: false,
