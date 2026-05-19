@@ -517,7 +517,7 @@ describe("withReplyDispatcher", () => {
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
 
     await dispatchInboundMessageWithDispatcher({
-      ctx: buildTestCtx({ Surface: "telegram" }),
+      ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:test:session" }),
       cfg: {} as OpenClawConfig,
       dispatcherOptions: {
         deliver: async () => undefined,
@@ -541,10 +541,15 @@ describe("withReplyDispatcher", () => {
         payload: { text: "original [custom]" },
         kind: "final",
         channel: "telegram",
-        sessionKey: expect.any(String),
+        sessionKey: "agent:test:session",
         runId: undefined,
       },
-      expect.anything(),
+      {
+        accountId: "acct-1",
+        channelId: "threads",
+        conversationId: "conv-1",
+        runId: undefined,
+      },
     );
     expect(payload).toEqual({ text: "original [custom] [plugin]" });
   });
