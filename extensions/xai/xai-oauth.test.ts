@@ -1,6 +1,9 @@
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createRuntimeEnv,
+  createTestWizardPrompter,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
-import { createRuntimeEnv, createTestWizardPrompter } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildXaiOAuthAuthorizationCodeTokenBody,
@@ -203,7 +206,8 @@ describe("xAI OAuth", () => {
     vi.stubGlobal("fetch", fetchImpl);
     const note = vi.fn(async () => {});
     const openUrl = vi.fn(async () => {});
-    const runtime = createRuntimeEnv();
+    const log = vi.fn();
+    const runtime = { ...createRuntimeEnv(), log };
     const ctx: ProviderAuthContext = {
       config: {},
       isRemote: true,
@@ -224,7 +228,7 @@ describe("xAI OAuth", () => {
 
     expect(openUrl).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(expect.stringContaining("ABCD-1234"), "xAI device code");
-    const remoteLog = runtime.log.mock.calls[0]?.[0];
+    const remoteLog = log.mock.calls[0]?.[0];
     expect(remoteLog).toContain("https://accounts.x.ai/oauth2/device");
     expect(remoteLog).not.toContain("ABCD-1234");
     const deviceRequest = fetchImpl.mock.calls[1]?.[1];
