@@ -43,7 +43,7 @@ import {
   isTransientHttpError,
 } from "../../agents/pi-embedded-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
-import { isMessagingTool } from "../../agents/pi-embedded-messaging.js";
+import { isMessagingToolSendAction } from "../../agents/pi-embedded-messaging.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
@@ -1525,6 +1525,7 @@ export async function runAgentTurnWithFallback(params: {
           })
         : undefined;
       let messageToolOnlyDeliveryCompleted = false;
+      const messageToolOnlyDeliveryToolCallIds = new Set<string>();
       const sourceRepliesAreToolOnly =
         params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only";
       const shouldSuppressProgressAfterMessageToolDelivery = () =>
@@ -1881,17 +1882,32 @@ export async function runAgentTurnWithFallback(params: {
                   }
                   // Trigger typing when tools start executing.
                   // Must await to ensure typing indicator starts before tool summaries are emitted.
-                  if (evt.stream === "tool" && !shouldSuppressProgressAfterMessageToolDelivery()) {
+                  if (evt.stream === "tool") {
                     const phase = readStringValue(evt.data.phase) ?? "";
                     const name = readStringValue(evt.data.name);
+                    const toolCallId = readStringValue(evt.data.toolCallId) ?? "";
+                    const args =
+                      evt.data.args && typeof evt.data.args === "object"
+                        ? (evt.data.args as Record<string, unknown>)
+                        : undefined;
+                    if (
+                      sourceRepliesAreToolOnly &&
+                      toolCallId &&
+                      name &&
+                      (phase === "start" || phase === "update") &&
+                      args &&
+                      isMessagingToolSendAction(name, args)
+                    ) {
+                      messageToolOnlyDeliveryToolCallIds.add(toolCallId);
+                    }
+                    if (shouldSuppressProgressAfterMessageToolDelivery()) {
+                      return;
+                    }
                     if (phase === "start" || phase === "update") {
                       const toolStartProgressPromise = params.opts?.onToolStart?.({
                         name,
                         phase,
-                        args:
-                          evt.data.args && typeof evt.data.args === "object"
-                            ? (evt.data.args as Record<string, unknown>)
-                            : undefined,
+                        args,
                         detailMode: params.toolProgressDetail,
                       });
                       await Promise.all([
@@ -1907,15 +1923,24 @@ export async function runAgentTurnWithFallback(params: {
                   const itemPhase = evt.stream === "item" ? readStringValue(evt.data.phase) : "";
                   const itemName = evt.stream === "item" ? readStringValue(evt.data.name) : "";
                   const itemStatus = evt.stream === "item" ? readStringValue(evt.data.status) : "";
+                  const itemToolCallId =
+                    evt.stream === "item" ? (readStringValue(evt.data.toolCallId) ?? "") : "";
                   const completedMessageToolDelivery =
                     sourceRepliesAreToolOnly &&
                     itemPhase === "end" &&
                     itemStatus === "completed" &&
-                    isMessagingTool(itemName ?? "");
+                    itemToolCallId.length > 0 &&
+                    messageToolOnlyDeliveryToolCallIds.has(itemToolCallId);
+                  const suppressProgressAfterMessageToolDelivery =
+                    shouldSuppressProgressAfterMessageToolDelivery();
+                  if (completedMessageToolDelivery) {
+                    messageToolOnlyDeliveryToolCallIds.delete(itemToolCallId);
+                    messageToolOnlyDeliveryCompleted = true;
+                  }
                   if (
                     evt.stream === "item" &&
                     !suppressItemChannelProgress &&
-                    !shouldSuppressProgressAfterMessageToolDelivery()
+                    (!suppressProgressAfterMessageToolDelivery || completedMessageToolDelivery)
                   ) {
                     await params.opts?.onItemEvent?.({
                       itemId: readStringValue(evt.data.itemId),
@@ -1930,9 +1955,6 @@ export async function runAgentTurnWithFallback(params: {
                       approvalId: readStringValue(evt.data.approvalId),
                       approvalSlug: readStringValue(evt.data.approvalSlug),
                     });
-                  }
-                  if (completedMessageToolDelivery) {
-                    messageToolOnlyDeliveryCompleted = true;
                   }
                   if (evt.stream === "plan" && !shouldSuppressProgressAfterMessageToolDelivery()) {
                     await params.opts?.onPlanUpdate?.({
