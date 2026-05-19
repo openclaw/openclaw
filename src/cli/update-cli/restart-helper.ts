@@ -395,10 +395,23 @@ export async function runRestartScript(scriptPath: string): Promise<void> {
   const file = isWindows ? "cmd.exe" : "/bin/sh";
   const args = isWindows ? ["/d", "/s", "/c", quoteCmdScriptArg(scriptPath)] : [scriptPath];
 
-  const child = spawn(file, args, {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  child.unref();
+  // `spawn` can throw synchronously (ENOENT if /bin/sh is absent on a
+  // stripped embedded system, EACCES if the prepared script lacks +x), and an
+  // async 'error' event on the ChildProcess becomes an unhandled rejection
+  // without a listener. The gateway is already stopped at this point waiting
+  // to be restarted, so we treat the restart attempt as best-effort: swallow
+  // both failure modes and let the caller continue draining shutdown. See
+  // #83892.
+  try {
+    const child = spawn(file, args, {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.on("error", () => {});
+    child.unref();
+  } catch {
+    // Synchronous spawn failure (missing shell / no exec perms) — caller has
+    // already logged the restart intent; nothing actionable here.
+  }
 }

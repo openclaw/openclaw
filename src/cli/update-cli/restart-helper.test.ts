@@ -532,7 +532,7 @@ exit 0
     it("spawns the script as a detached process on Linux", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
       const scriptPath = "/tmp/fake-script.sh";
-      const mockChild = { unref: vi.fn() };
+      const mockChild = { unref: vi.fn(), on: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
 
       await runRestartScript(scriptPath);
@@ -548,7 +548,7 @@ exit 0
     it("uses cmd.exe on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const scriptPath = "C:\\Temp\\fake-script.bat";
-      const mockChild = { unref: vi.fn() };
+      const mockChild = { unref: vi.fn(), on: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
 
       await runRestartScript(scriptPath);
@@ -564,7 +564,7 @@ exit 0
     it("quotes cmd.exe /c paths with metacharacters on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const scriptPath = "C:\\Temp\\me&(ow)\\fake-script.bat";
-      const mockChild = { unref: vi.fn() };
+      const mockChild = { unref: vi.fn(), on: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
 
       await runRestartScript(scriptPath);
@@ -574,6 +574,32 @@ exit 0
         stdio: "ignore",
         windowsHide: true,
       });
+    });
+
+    // #83892: spawn can throw synchronously (ENOENT if /bin/sh is absent on a
+    // stripped embedded system, EACCES if the script lacks +x). The function
+    // must swallow the throw so the caller can finish draining shutdown.
+    it("does not throw when spawn fails synchronously (#83892)", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      vi.mocked(spawn).mockImplementation(() => {
+        const err = new Error("ENOENT: /bin/sh missing") as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      });
+      await expect(runRestartScript("/tmp/fake-script.sh")).resolves.toBeUndefined();
+    });
+
+    it("attaches an error listener so async spawn 'error' events are not unhandled (#83892)", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      const mockChild = { unref: vi.fn(), on: vi.fn() };
+      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
+      await runRestartScript("/tmp/fake-script.sh");
+      expect(mockChild.on).toHaveBeenCalledWith("error", expect.any(Function));
+      // The listener must not throw — emit a synthetic error event to confirm.
+      const onCall = mockChild.on.mock.calls.find((call: unknown[]) => call[0] === "error");
+      expect(onCall).toBeDefined();
+      const listener = onCall?.[1] as (err: Error) => void;
+      expect(() => listener(new Error("late EACCES"))).not.toThrow();
     });
   });
 });
