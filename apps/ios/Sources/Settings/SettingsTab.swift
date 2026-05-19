@@ -1058,7 +1058,7 @@ struct SettingsTab: View {
 
     private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
         if problem.suggestsOnboardingReset { return "Reset onboarding" }
-        problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
+        return problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
     }
 
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {

@@ -2,6 +2,7 @@ import Foundation
 import OpenClawKit
 
 enum GatewayOnboardingReset {
+    @MainActor
     static func reset(
         appModel: NodeAppModel,
         instanceId: String,
