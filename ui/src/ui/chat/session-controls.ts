@@ -278,7 +278,7 @@ function resolveThinkingTargetModel(state: AppViewState): {
   };
 }
 
-function buildThinkingOptions(
+export function buildThinkingOptions(
   levels: readonly GatewayThinkingLevelOption[],
   currentOverride: string,
 ): ChatThinkingSelectOption[] {
@@ -287,6 +287,12 @@ function buildThinkingOptions(
 
   const addOption = (value: string, label?: string) => {
     const normalizedValue = normalizeThinkingOptionValue(value);
+    // The inherited/default option (value === "") already represents "Off" when
+    // the effective level is off. Emitting a second explicit "off" entry would
+    // produce a duplicate "Off" row in the picker (issue #84069).
+    if (normalizedValue === "off") {
+      return;
+    }
     pushUniqueTrimmedSelectOption(options, seen, normalizedValue, () =>
       formatThinkingOverrideLabel(normalizedValue, label),
     );
@@ -363,11 +369,16 @@ export function renderChatThinkingSelect(state: AppViewState) {
   const { currentOverride, defaultLabel, options } = resolveChatThinkingSelectState(state);
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
-  const disabled = !state.connected || busy || !state.client;
+  // When the active model has no real thinking levels to choose from, leave the
+  // picker visible but inert so users cannot pick between two indistinguishable
+  // "Off" entries (issue #84069).
+  const hasSelectableOptions = options.length > 0;
+  const disabled = !state.connected || busy || !state.client || !hasSelectableOptions;
   const selectedLabel =
     currentOverride === ""
       ? defaultLabel
-      : (options.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
+      : (options.find((entry) => entry.value === currentOverride)?.label ??
+        formatThinkingOverrideLabel(currentOverride));
   const onChange = async (e: Event) => {
     const next = (e.target as HTMLSelectElement).value.trim();
     await switchChatThinkingLevel(state, next);
