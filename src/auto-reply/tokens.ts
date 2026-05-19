@@ -13,7 +13,7 @@ function getSilentExactRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  const regex = new RegExp(`^\\s*${escaped}\\s*$`, "i");
+  const regex = new RegExp(`^\\s*${escaped}(?:\\s+${escaped})*\\s*$`, "i");
   silentExactRegexByToken.set(token, regex);
   return regex;
 }
@@ -36,7 +36,7 @@ export function isSilentReplyText(
   if (!text) {
     return false;
   }
-  // Match only the exact silent token with optional surrounding whitespace.
+  // Match replies that contain only one or more silent tokens with whitespace separators.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
   return getSilentExactRegex(token).test(text);
 }

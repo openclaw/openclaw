@@ -22,6 +22,11 @@ describe("isSilentReplyText", () => {
     expect(isSilentReplyText("  No_RePlY  ")).toBe(true);
   });
 
+  it("returns true for repeated token-only replies", () => {
+    expect(isSilentReplyText("NO_REPLY\n\nNO_REPLY")).toBe(true);
+    expect(isSilentReplyText("  No_RePlY\tNO_REPLY  ")).toBe(true);
+  });
+
   it("returns false for undefined/empty", () => {
     expect(isSilentReplyText(undefined)).toBe(false);
     expect(isSilentReplyText("")).toBe(false);
