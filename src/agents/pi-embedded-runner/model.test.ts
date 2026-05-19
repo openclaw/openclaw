@@ -147,6 +147,7 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
+import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynamic-headers.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
@@ -894,6 +895,40 @@ describe("resolveModel", () => {
       id: "grok-4.1-fast",
       api: "openai-responses",
       baseUrl: "https://api.x.ai/v1",
+    });
+  });
+
+  it("adds GitHub Copilot IDE headers to dynamic resolved model headers for Pi-native compaction", () => {
+    const result = resolveModelForTest("github-copilot", "gpt-5.5", "/tmp/agent");
+    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
+
+    expect(model.headers).toEqual({
+      ...buildCopilotIdeHeaders(),
+      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+      "Openai-Organization": "github-copilot",
+    });
+  });
+
+  it("adds GitHub Copilot IDE headers to configured resolved model headers for Pi-native compaction", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "https://api.githubcopilot.com",
+            api: "openai-responses",
+            models: [makeModel("gpt-5.5")],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("github-copilot", "gpt-5.5", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
+
+    expect(model.headers).toEqual({
+      ...buildCopilotIdeHeaders(),
+      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+      "Openai-Organization": "github-copilot",
     });
   });
 
