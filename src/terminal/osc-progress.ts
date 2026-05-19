@@ -2,6 +2,14 @@ const OSC_PROGRESS_PREFIX = "\u001b]9;4;";
 const OSC_PROGRESS_ST = "\u001b\\";
 const OSC_PROGRESS_BEL = "\u0007";
 const OSC_PROGRESS_C1_ST = "\u009c";
+const OSC_PROGRESS_ESC = String.fromCharCode(0x1b);
+const REGEXP_SPECIAL_CHARS = /[\\^$.*+?()[\]{}|]/g;
+const OSC_PROGRESS_LABEL_FORBIDDEN_REGEX = new RegExp(
+  [OSC_PROGRESS_ST, OSC_PROGRESS_BEL, OSC_PROGRESS_C1_ST, OSC_PROGRESS_ESC, "]"]
+    .map((part) => part.replace(REGEXP_SPECIAL_CHARS, "\\$&"))
+    .join("|"),
+  "g",
+);
 
 export type OscProgressController = {
   setIndeterminate: (label: string) => void;
@@ -20,14 +28,7 @@ export function supportsOscProgress(env: NodeJS.ProcessEnv, isTty: boolean): boo
 }
 
 function sanitizeOscProgressLabel(label: string): string {
-  return label
-    .replaceAll(OSC_PROGRESS_ST, "")
-    .replaceAll(OSC_PROGRESS_BEL, "")
-    .replaceAll(OSC_PROGRESS_C1_ST, "")
-    .split("\u001b")
-    .join("")
-    .replaceAll("]", "")
-    .trim();
+  return label.replace(OSC_PROGRESS_LABEL_FORBIDDEN_REGEX, "").trim();
 }
 
 function formatOscProgress(state: number, percent: number | null, label: string): string {

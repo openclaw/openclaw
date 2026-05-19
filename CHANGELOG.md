@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Terminal/progress: sanitize OSC progress labels with one precompiled regex pass instead of multiple string scans while preserving the existing OSC terminator cleanup behavior.
+
 ### Fixes
 - iMessage: mark authorized slash-command turns as text-sourced commands so `/status`, `/new`, and `/restart` acknowledgements return to the source conversation. (#82642) thanks @homer-byte.
 
