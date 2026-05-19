@@ -311,11 +311,13 @@ jobs:
           while true; do
             blockers="$(
               for workflow in mantis-telegram-desktop-proof.yml mantis-telegram-live.yml; do
-                gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --limit 100 --json databaseId,status,createdAt,url \
-                  | jq -r \
-                    --argjson current_id "$GITHUB_RUN_ID" \
-                    --arg current_created "$current_created" \
-                    '.[] | select(.databaseId != $current_id) | select(.createdAt < $current_created or (.createdAt == $current_created and .databaseId < $current_id)) | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested") | "\(.createdAt)\t#\(.databaseId)\t\(.status)\t\(.url)"'
+                for status in queued in_progress waiting pending requested; do
+                  gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --status "$status" --limit 100 --json databaseId,status,createdAt,url \
+                    | jq -r \
+                      --argjson current_id "$GITHUB_RUN_ID" \
+                      --arg current_created "$current_created" \
+                      '.[] | select(.databaseId != $current_id) | select(.createdAt < $current_created or (.createdAt == $current_created and .databaseId < $current_id)) | "\(.createdAt)\t#\(.databaseId)\t\(.status)\t\(.url)"'
+                done
               done | sort -u
             )"
             if [[ -z "$blockers" ]]; then
