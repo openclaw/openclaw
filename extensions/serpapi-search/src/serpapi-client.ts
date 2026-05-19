@@ -16,11 +16,11 @@ const CACHE_TTL_MS = 55 * 60_000;
 
 function buildCacheKey(params: Record<string, string>): string {
   const excluded = new Set(["api_key", "zero_trace"]);
-  return Object.entries(params)
+  const entries = Object.entries(params)
     .filter(([k]) => !excluded.has(k))
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([k, v]) => `${k}=${v.trim()}`)
-    .join("|");
+    .map(([k, v]) => [k, v.trim()]);
+  return JSON.stringify(entries);
 }
 
 function sweepExpiredCache(): void {
