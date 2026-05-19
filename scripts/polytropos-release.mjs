@@ -390,9 +390,20 @@ const tgzPath = tgzs[0];
 
 const tarPath = path.join(relRoot, `${releaseTag}.tgz`);
 if (fs.existsSync(tarPath)) {
-  fail(`refusing to overwrite existing tarball: ${tarPath}`);
+  banner(logStream, `Tarball already staged: ${tarPath}`);
+  // Validate existing tarball matches expected version
+  const info = tgzInternalVersion(tarPath);
+  const expectedVersion = releaseTag.replace(/^v/, "").replace(/\+poly\.\d+$/, "");
+  if (info.name !== "openclaw") {
+    fail(`unexpected package name in existing tgz: ${info.name}`);
+  }
+  if (info.version !== expectedVersion) {
+    fail(`existing tgz version ${info.version} != expected ${expectedVersion} (from ${releaseTag})`);
+  }
+} else {
+  fs.copyFileSync(tgzPath, tarPath);
+  banner(logStream, `Staged tarball: ${tarPath}`);
 }
-fs.copyFileSync(tgzPath, tarPath);
 
 banner(logStream, `Staged tarball: ${tarPath}`);
 
