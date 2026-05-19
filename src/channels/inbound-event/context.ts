@@ -125,11 +125,26 @@ function resolveAccessFactsCommandAuthorized(access: AccessFacts | undefined): b
     : commands?.authorizers?.some((entry) => entry.allowed);
 }
 
-function sanitizeSupplementalGroupSystemPrompt(value: string | undefined): string | undefined {
+function sanitizeUntrustedSupplementalGroupSystemPrompt(
+  value: string | undefined,
+): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   return sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
+}
+
+function resolveSupplementalGroupSystemPrompt(
+  supplemental: SupplementalContextFacts | undefined,
+): string | undefined {
+  const trustedPrompt = supplemental?.groupSystemPrompt;
+  const untrustedPrompt = sanitizeUntrustedSupplementalGroupSystemPrompt(
+    supplemental?.untrustedGroupSystemPrompt,
+  );
+  const parts = [trustedPrompt, untrustedPrompt].filter(
+    (entry): entry is string => typeof entry === "string" && entry.length > 0,
+  );
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
 }
 
 function resolveChannelCommandContext(params: {
@@ -206,7 +221,7 @@ export function buildChannelInboundEventContext(
     ConversationLabel: params.conversation.label,
     GroupSubject: params.conversation.kind !== "direct" ? params.conversation.label : undefined,
     GroupSpace: params.conversation.spaceId,
-    GroupSystemPrompt: sanitizeSupplementalGroupSystemPrompt(supplemental?.groupSystemPrompt),
+    GroupSystemPrompt: resolveSupplementalGroupSystemPrompt(supplemental),
     UntrustedStructuredContext: supplemental?.untrustedContext,
     SenderName: params.sender.name ?? params.sender.displayLabel,
     SenderId: params.sender.id,
