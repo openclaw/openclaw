@@ -267,12 +267,53 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let fenceActive = false;
   let takeoverDetected = false;
 
-  async function acquireWriteLock(): Promise<{ lock: SessionLock; owned: boolean }> {
+  type InFlightLockEntry = { lock: SessionLock; released: boolean };
+  const inFlightWriteLocks = new Set<InFlightLockEntry>();
+
+  async function releaseInFlightEntry(entry: InFlightLockEntry): Promise<void> {
+    if (entry.released) {
+      return;
+    }
+    entry.released = true;
+    inFlightWriteLocks.delete(entry);
+    await entry.lock.release();
+  }
+
+  // Hung post-run Pi auto-compaction can keep a reacquired write lock held
+  // long past the run's timeout, blocking every later turn on the same
+  // session until the watchdog max-hold timer fires (openclaw#84193). Cleanup
+  // calls this to abandon any reacquired locks whose `run()` body never
+  // settled so the next turn can acquire the session file.
+  function abandonInFlightWriteLocks(): boolean {
+    if (inFlightWriteLocks.size === 0) {
+      return false;
+    }
+    takeoverDetected = true;
+    const drained = Array.from(inFlightWriteLocks);
+    inFlightWriteLocks.clear();
+    for (const entry of drained) {
+      if (entry.released) {
+        continue;
+      }
+      entry.released = true;
+      void entry.lock.release().catch(() => {});
+    }
+    return true;
+  }
+
+  async function acquireWriteLock(): Promise<{
+    lock: SessionLock;
+    owned: boolean;
+    entry?: InFlightLockEntry;
+  }> {
     if (heldLock) {
       return { lock: heldLock, owned: false };
     }
     try {
-      return { lock: await acquireLock(), owned: true };
+      const lock = await acquireLock();
+      const entry: InFlightLockEntry = { lock, released: false };
+      inFlightWriteLocks.add(entry);
+      return { lock, owned: true, entry };
     } catch (err) {
       if (isSessionWriteLockTimeoutError(err)) {
         takeoverDetected = true;
@@ -319,7 +360,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (activeWriteLock.getStore()) {
         return await run();
       }
-      const { lock, owned } = await acquireWriteLock();
+      const { lock, owned, entry } = await acquireWriteLock();
       try {
         await assertSessionFileFence();
         const runWithLock = async () => {
@@ -332,8 +373,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         }
         return await runWithLock();
       } finally {
-        if (owned) {
-          await lock.release();
+        if (owned && entry) {
+          await releaseInFlightEntry(entry);
         }
       }
     },
@@ -341,7 +382,19 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (cleanupParams?.session) {
         await waitForSessionEventQueue(cleanupParams.session);
       }
+      // If a reacquired write lock (e.g. wrapping Pi auto-compaction) never
+      // settled its run() body, the lock is still held by this controller and
+      // would block both this cleanup acquire and the next turn's acquire.
+      // Abandon those before attempting cleanup so the session file unblocks
+      // immediately. The fence already tracks session file mutations, so the
+      // next turn can detect any partial-write divergence on its own acquire.
+      const abandoned = abandonInFlightWriteLocks();
       if (takeoverDetected) {
+        if (abandoned && heldLock) {
+          const orphan = heldLock;
+          heldLock = undefined;
+          await orphan.release().catch(() => {});
+        }
         return noopLock;
       }
       try {
