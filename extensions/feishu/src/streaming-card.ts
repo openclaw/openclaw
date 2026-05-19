@@ -429,14 +429,13 @@ export class FeishuStreamingSession {
     if (!this.state || this.closed) {
       return;
     }
-    const mergedInput = mergeStreamingText(this.pendingText ?? this.state.currentText, text);
-    if (!mergedInput || mergedInput === this.state.currentText) {
+    if (!text || text === this.state.currentText) {
       return;
     }
-    this.pendingText = mergedInput;
+    this.pendingText = text;
     this.clearFlushTimer();
 
-    const shouldForceUpdate = shouldPushStreamingUpdate(this.state.currentText, mergedInput);
+    const shouldForceUpdate = shouldPushStreamingUpdate(this.state.currentText, text);
     const now = Date.now();
     if (!shouldForceUpdate && now - this.lastUpdateTime < this.updateThrottleMs) {
       this.schedulePendingFlush();
@@ -448,7 +447,7 @@ export class FeishuStreamingSession {
       if (!this.state || this.closed) {
         return;
       }
-      const nextText = this.pendingText ?? mergedInput;
+      const nextText = this.pendingText ?? text;
       if (!nextText || nextText === this.state.currentText) {
         return;
       }
