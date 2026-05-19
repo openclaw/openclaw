@@ -364,10 +364,10 @@ test_connection() {
 
 setup_cron() {
     echo ""
-    echo -e "${YELLOW}Setting up cron jobs${NC}"
+    echo -e "${YELLOW}Setting up scheduled jobs${NC}"
 
     if [ -z "${TRIAGE_DIR:-}" ] || [ ! -d "$TRIAGE_DIR" ]; then
-        echo -e "${YELLOW}⚠ Skipping cron setup — triage Outlook skill directory not found.${NC}"
+        echo -e "${YELLOW}⚠ Skipping scheduler setup — triage Outlook skill directory not found.${NC}"
         echo "    TRIAGE_DIR=${TRIAGE_DIR:-<empty>}"
         return
     fi
@@ -382,7 +382,7 @@ setup_cron() {
     done
 
     if [ "${#missing[@]}" -gt 0 ]; then
-        echo -e "${YELLOW}⚠ Skipping cron setup — required scripts unavailable in $TRIAGE_DIR:${NC}"
+        echo -e "${YELLOW}⚠ Skipping scheduler setup — required scripts unavailable in $TRIAGE_DIR:${NC}"
         for s in "${missing[@]}"; do
             echo "    $s"
         done
@@ -391,39 +391,55 @@ setup_cron() {
         return
     fi
 
-    if ! command -v crontab >/dev/null 2>&1; then
-        echo -e "${YELLOW}⚠ Skipping cron setup — crontab not installed.${NC}"
-        return
-    fi
+    local config_dir="${OPENCLAW_HOME:-$HOME/.openclaw}"
+    local crontab_file="$config_dir/crontab"
+
+    mkdir -p "$config_dir"
 
     echo -e "${YELLOW}Seeding seen email store${NC}"
     "$TRIAGE_DIR/outlook-seen.sh" seed || {
         echo -e "${YELLOW}⚠ Seen-store seed failed; continuing, but first triage run may process existing unread emails.${NC}"
     }
 
-    # crontab -l returns non-zero when no crontab exists.
-    # grep also returns non-zero when it filters everything/no input.
-    # Under set -euo pipefail, both are normal but must be guarded.
-    local existing_cron
-    existing_cron="$(crontab -l 2>/dev/null || true)"
+    local existing_cron=""
+    if [ -f "$crontab_file" ]; then
+        existing_cron="$(cat "$crontab_file" || true)"
+    fi
 
     {
         if [ -n "$existing_cron" ]; then
-            printf '%s\n' "$existing_cron" | grep -v -E 'check-and-trigger|outlook-seen.*prune' || true
+            printf '%s\n' "$existing_cron" | grep -v -E 'outlook-hook\.sh|check-and-trigger|outlook-seen.*prune' || true
         fi
 
         echo "* * * * * $TRIAGE_DIR/check-and-trigger.sh"
         echo "0 3 * * * $TRIAGE_DIR/outlook-seen.sh prune"
-    } | crontab -
+    } > "$crontab_file"
 
-    echo -e "${GREEN}✓ Cron jobs registered${NC}"
+    chmod 600 "$crontab_file"
+
+    echo -e "${GREEN}✓ Supercronic jobs registered${NC}"
     echo "  - Email triage: every minute ($TRIAGE_DIR/check-and-trigger.sh)"
     echo "  - Seen store prune: daily at 3am ($TRIAGE_DIR/outlook-seen.sh prune)"
+    echo "  - Crontab file: $crontab_file"
 
     echo ""
-    echo "Current crontab:"
-    crontab -l || true
-}
+    echo "Current Supercronic crontab:"
+    cat "$crontab_file"
+
+        echo -e "${YELLOW}Restarting Supercronic scheduler${NC}"
+
+    if command -v supercronic >/dev/null 2>&1; then
+        pkill -x supercronic 2>/dev/null || true
+
+        nohup supercronic "$crontab_file" \
+            >> "$config_dir/logs/supercronic.log" \
+            2>&1 &
+
+        echo -e "${GREEN}✓ Supercronic restarted${NC}"
+    else
+        echo -e "${YELLOW}⚠ supercronic not installed; jobs will start on next container restart.${NC}"
+    fi
+    }
 
 main() {
     check_prereqs

@@ -1,31 +1,15 @@
 # syntax=docker/dockerfile:1.7
 
-# Opt-in plugin dependencies at build time (space- or comma-separated directory names).
-# Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,matrix" .
-#
-# Multi-stage build produces a minimal runtime image without build tools,
-# source code, or Bun. Works with Docker, Buildx, and Podman.
-# The ext-deps stage extracts only the package.json files we need from the
-# bundled plugin workspace tree, so the main build layer is not invalidated by
-# unrelated plugin source changes.
-#
-# Build stages use full bookworm; the runtime image is always bookworm-slim.
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:22-bookworm"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:22-bookworm-slim"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST=""
-# Keep in sync with .github/actions/setup-node-env/action.yml bun-version.
-# To update: docker buildx imagetools inspect oven/bun:<version> and use the manifest-list digest.
 ARG OPENCLAW_BUN_IMAGE="oven/bun:1.3.13@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e"
-
-# Base images are intentionally unpinned while debugging the Google auth/gaxios issue.
-# Once confirmed working, pin the correct Node 22 digests.
 
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS ext-deps
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
-# Copy package.json for opted-in extensions so pnpm resolves their deps.
 RUN --mount=type=bind,source=${OPENCLAW_BUNDLED_PLUGIN_DIR},target=/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR},readonly \
     mkdir -p /out && \
     for ext in $(printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' '); do \
@@ -35,12 +19,10 @@ RUN --mount=type=bind,source=${OPENCLAW_BUNDLED_PLUGIN_DIR},target=/tmp/${OPENCL
       fi; \
     done
 
-# ── Stage 2: Build ──────────────────────────────────────────────
 FROM ${OPENCLAW_BUN_IMAGE} AS bun-binary
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 
-# Copy pinned Bun binary from the official image instead of fetching via curl.
 COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
 
 RUN corepack enable
@@ -56,14 +38,9 @@ COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
 
 COPY --from=ext-deps /out/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
 
-# Reduce OOM risk on low-memory hosts during dependency installation.
-# Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
     NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
 
-# pnpm v10+ may append peer-resolution hashes to virtual-store folder names; do not hardcode `.pnpm/...`
-# paths. Matrix's native downloader can hit transient release CDN errors while
-# still exiting successfully, so retry the package downloader before failing.
 RUN set -eux; \
     echo "==> Verifying critical native addons..."; \
     for attempt in 1 2 3 4 5; do \
@@ -79,8 +56,6 @@ RUN set -eux; \
 
 COPY . .
 
-# Normalize extension paths now so runtime COPY preserves safe modes
-# without adding a second full extensions layer.
 RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do \
       if [ -d "$dir" ]; then \
         find "$dir" -type d -exec chmod 755 {} +; \
@@ -88,9 +63,6 @@ RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do 
       fi; \
     done
 
-# A2UI bundle may fail under QEMU cross-compilation (e.g. building amd64
-# on Apple Silicon). CI builds natively per-arch so this is a no-op there.
-# Stub it so local cross-arch builds still succeed.
 RUN pnpm canvas:a2ui:bundle || \
     (echo "A2UI bundle: creating stub (non-fatal)" && \
      mkdir -p extensions/canvas/src/host/a2ui && \
@@ -98,21 +70,13 @@ RUN pnpm canvas:a2ui:bundle || \
      echo "stub" > extensions/canvas/src/host/a2ui/.bundle.hash && \
      rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
 RUN NODE_OPTIONS=--max-old-space-size=8192 pnpm build:docker
-# Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
 RUN pnpm qa:lab:build
 
-# Prune dev dependencies and strip build-only metadata before copying
-# runtime assets into the final image.
 FROM build AS runtime-assets
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
-# Keep the install layer frozen, but allow prune to run against the full copied
-# workspace tree subset used during `pnpm install`. The build stage only copied
-# the root, `ui`, and opted-in plugin manifests into the install layer, so
-# prune must not rediscover unrelated workspaces from the later full source
-# copy.
 RUN printf 'packages:\n  - .\n  - ui\n' > /tmp/pnpm-workspace.runtime.yaml && \
     for ext in $(printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' '); do \
       printf '  - %s/%s\n' "$OPENCLAW_BUNDLED_PLUGIN_DIR" "$ext" >> /tmp/pnpm-workspace.runtime.yaml; \
@@ -124,20 +88,14 @@ RUN printf 'packages:\n  - .\n  - ui\n' > /tmp/pnpm-workspace.runtime.yaml && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete && \
     node scripts/check-package-dist-imports.mjs /app
 
-# ── Runtime base image ──────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST
 LABEL org.opencontainers.image.base.name="docker.io/library/node:22-bookworm-slim" \
   org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST}"
 
-# ── Stage 3: Runtime ────────────────────────────────────────────
 FROM base-runtime
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 
-# OCI base-image metadata for downstream image consumers.
-# If you change these annotations, also update:
-# - docs/install/docker.md ("Base image metadata" section)
-# - https://docs.openclaw.ai/install/docker
 LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
   org.opencontainers.image.url="https://openclaw.ai" \
   org.opencontainers.image.documentation="https://docs.openclaw.ai/install/docker" \
@@ -147,19 +105,22 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
 
 WORKDIR /app
 
-# Install runtime system utilities missing from bookworm-slim.
-# `ca-certificates` ships in `bookworm` (full) but not in `bookworm-slim`,
-# so it must be installed explicitly here. Without it `/etc/ssl/certs/`
-# stays empty and every HTTPS outbound dies at TLS handshake with
-# `error setting certificate file`.
-# `jq` is required by the Outlook skill scripts; install the real system jq
-# so scripts do not fall back to broken user/workspace shims.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates procps hostname curl git lsof openssl python3 tini jq && \
     update-ca-certificates
+
+# Install Supercronic: container-friendly cron runner.
+# Runs as the current user, logs to stdout/stderr, and does not need root-owned /var/run pid files.
+ARG SUPERCRONIC_VERSION=v0.2.33
+ARG SUPERCRONIC_ARCH=amd64
+RUN curl -fsSL \
+      "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-linux-${SUPERCRONIC_ARCH}" \
+      -o /usr/local/bin/supercronic \
+    && chmod +x /usr/local/bin/supercronic \
+    && supercronic -version
 
 RUN chown node:node /app
 
@@ -173,9 +134,6 @@ COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 COPY --from=runtime-assets --chown=node:node /app/qa ./qa
 
-# Keep pnpm available in the runtime image for container-local workflows.
-# Use a shared Corepack home so the non-root `node` user does not need a
-# first-run network fetch when invoking pnpm.
 ENV COREPACK_HOME=/usr/local/share/corepack
 RUN install -d -m 0755 "$COREPACK_HOME" && \
     corepack enable && \
@@ -190,8 +148,6 @@ RUN install -d -m 0755 "$COREPACK_HOME" && \
     done && \
     chmod -R a+rX "$COREPACK_HOME"
 
-# Install additional system packages needed by your skills or extensions.
-# Example: docker build --build-arg OPENCLAW_DOCKER_APT_PACKAGES="python3 wget" .
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
@@ -200,10 +156,6 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES; \
     fi
 
-# Optionally install Chromium and Xvfb for browser automation.
-# Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
-# Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
-# Must run after node_modules COPY so playwright-core is available.
 ARG OPENCLAW_INSTALL_BROWSER=""
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
@@ -216,10 +168,6 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       chown -R node:node /home/node/.cache/ms-playwright; \
     fi
 
-# Optionally install Docker CLI for sandbox container management.
-# Build with: docker build --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1 ...
-# Adds ~50MB. Only the CLI is installed — no Docker daemon.
-# Required for agents.defaults.sandbox to function in Docker deployments.
 ARG OPENCLAW_INSTALL_DOCKER_CLI=""
 ARG OPENCLAW_DOCKER_GPG_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
@@ -251,9 +199,6 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
         docker-ce-cli docker-compose-plugin; \
     fi
 
-# Optionally install Azure CLI for Outlook OAuth setup.
-# Build with: docker build --build-arg OPENCLAW_INSTALL_AZURE_CLI=1 ...
-# Adds ~200MB. Only needed if running full Outlook setup inside the container.
 ARG OPENCLAW_INSTALL_AZURE_CLI=""
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
@@ -271,9 +216,6 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends azure-cli; \
     fi
 
-# ──── Custom: Python venv for skill deps ────
-# Pass --build-arg OPENCLAW_DOCKER_APT_PACKAGES="python3 python3-pip python3-venv build-essential python3-dev gettext-base"
-# at build time so python3 + venv tooling is available before this RUN executes.
 RUN python3 -m venv /opt/skills-venv \
     && /opt/skills-venv/bin/pip install --no-cache-dir \
         websockets \
@@ -281,33 +223,22 @@ RUN python3 -m venv /opt/skills-venv \
 
 ENV PATH="/opt/skills-venv/bin:$PATH"
 
-# ──── Custom: Bake agent workspace ────
-# Each agent contains its own SOUL.md, AGENT.md, skills, etc. — fully self-contained.
 COPY --chown=node:node ./openclaw-team-workspace /app/agent-workspace
 
-# ──── Custom: Templates for first-run config seeding ────
 COPY ./templates/openclaw.template.json /opt/templates/openclaw.template.json
 COPY ./templates/auth-profiles.template.json /opt/templates/auth-profiles.template.json
 COPY ./templates/USER.template.md /opt/templates/USER.template.md
 
-# ──── Custom: Entrypoint script ────
-# Handles first-run seeding: substitutes env vars into config + USER.md, copies
-# the baked agent workspace into the user's mounted workspace volume on first start.
 COPY ./scripts/openclaw-entrypoint.sh /usr/local/bin/openclaw-entrypoint.sh
 RUN chmod +x /usr/local/bin/openclaw-entrypoint.sh
 
-# Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
-# Pre-create the default state dirs so first-run Docker named volumes mounted
-# here inherit node ownership instead of root-owned state.
 RUN install -d -m 0700 -o node -g node /home/node/.openclaw /home/node/.outlook-mcp && \
     stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700' && \
     stat -c '%U:%G %a' /home/node/.outlook-mcp | grep -qx 'node:node 700'
 
-# Workaround for gaxios 7.x crashing while resolving its fetch adapter in Node.
-# This forces gaxios/google-auth-library to use Node's native global fetch.
 RUN printf '%s\n' \
       'if (typeof globalThis.fetch === "function" && typeof globalThis.window === "undefined") {' \
       '  globalThis.window = { fetch: globalThis.fetch };' \
@@ -319,32 +250,12 @@ RUN printf '%s\n' \
 ENV NODE_ENV=production
 ENV HOME=/home/node
 ENV NODE_OPTIONS="--require /home/node/.openclaw/gaxios-fix.cjs"
-# Prefer system binaries like /usr/bin/jq over any workspace/user shims.
 ENV PATH="/usr/bin:/usr/local/bin:/opt/skills-venv/bin:$PATH"
 
-# Security hardening: Run as non-root user.
-# The node:22-bookworm image includes a 'node' user (uid 1000).
-# This reduces the attack surface by preventing container escape via root privileges.
 USER node
 
-# Start gateway server with default config.
-# Binds to loopback (127.0.0.1) by default for security.
-#
-# IMPORTANT: With Docker bridge networking (-p 18789:18789), loopback bind
-# makes the gateway unreachable from the host. Either:
-#   - Use --network host, OR
-#   - Override --bind to "lan" (0.0.0.0) and set auth credentials
-#
-# Built-in probe endpoints for container health checks:
-#   - GET /healthz (liveness) and GET /readyz (readiness)
-#   - aliases: /health and /ready
-# For external access from host/ingress, override bind to "lan" and set auth.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-# ──── Custom: Wrap CMD with our entrypoint ────
-# The entrypoint script seeds first-run config from templates + env vars,
-# then exec's into whatever CMD specifies (the OpenClaw gateway start command below).
-# Use tini as the container's init process so signals are forwarded correctly to the app and zombie child processes are cleaned up.
 ENTRYPOINT ["tini", "-s", "--", "/usr/local/bin/openclaw-entrypoint.sh"]
 CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]

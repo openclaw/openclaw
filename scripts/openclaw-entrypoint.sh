@@ -39,11 +39,9 @@ echo "[entrypoint] === END STARTUP DIAGNOSTICS ==="
 : "${MICROSOFT_TEAMS_AUTH_CONFIG_ID:?MICROSOFT_TEAMS_AUTH_CONFIG_ID is required}"
 : "${USER_ID:?USER_ID is required}"
 
-export TZ="$$USER_TIMEZONE"
+export TZ="$USER_TIMEZONE"
 
 # Write Google ADC credentials from base64 env var if provided.
-# This is useful when containers are started on remote servers via SSH and
-# mounting a local credential file is impractical.
 if [ -n "$GOOGLE_CREDENTIALS_JSON_B64" ]; then
   echo "[entrypoint] Writing Google ADC credentials from GOOGLE_CREDENTIALS_JSON_B64"
   mkdir -p "$(dirname "$GOOGLE_APPLICATION_CREDENTIALS")"
@@ -74,8 +72,8 @@ TOKENS_FILE="$CONFIG_DIR/.tokens"
 if [ ! -f "$TOKENS_FILE" ]; then
   echo "[entrypoint] Generating internal tokens"
   mkdir -p "$CONFIG_DIR"
-  GATEWAY_AUTH_TOKEN=$(openssl rand -hex 24)
-  HOOKS_TOKEN=$(openssl rand -hex 32)
+  GATEWAY_AUTH_TOKEN="$OPENCLAW_GATEWAY_TOKEN"
+  HOOKS_TOKEN="$(openssl rand -hex 32)"
   printf 'GATEWAY_AUTH_TOKEN=%s\nHOOKS_TOKEN=%s\n' "$GATEWAY_AUTH_TOKEN" "$HOOKS_TOKEN" > "$TOKENS_FILE"
   chmod 600 "$TOKENS_FILE"
 fi
@@ -132,16 +130,21 @@ if [ -z "$(ls -A "$WORKSPACE_DIR" 2>/dev/null)" ]; then
   echo "[entrypoint] === END USER.MD SUBSTITUTION DIAGNOSTICS ==="
 fi
 
-# Start cron daemon if installed
-if command -v cron >/dev/null 2>&1; then
-  if pgrep -x cron >/dev/null 2>&1; then
-    echo "[entrypoint] cron already running"
-  else
-    echo "[entrypoint] Starting cron daemon"
-    cron || echo "[entrypoint] WARNING: cron failed to start"
-  fi
+# Start Supercronic scheduler if installed.
+# Supercronic runs as the current user, so the container can stay as node.
+CRONTAB_FILE="$CONFIG_DIR/crontab"
+
+if [ ! -f "$CRONTAB_FILE" ]; then
+  echo "[entrypoint] Creating empty supercronic crontab"
+  : > "$CRONTAB_FILE"
+  chmod 600 "$CRONTAB_FILE"
+fi
+
+if command -v supercronic >/dev/null 2>&1; then
+  echo "[entrypoint] Starting supercronic with $CRONTAB_FILE"
+  supercronic "$CRONTAB_FILE" &
 else
-  echo "[entrypoint] cron not installed; skipping cron daemon start"
+  echo "[entrypoint] supercronic not installed; skipping scheduler"
 fi
 
 exec "$@"
