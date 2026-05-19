@@ -103,7 +103,7 @@ internal fun ClawPrimaryButton(
   Button(
     onClick = onClick,
     enabled = enabled,
-    modifier = modifier.heightIn(min = 52.dp),
+    modifier = modifier.heightIn(min = 46.dp),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     colors =
       ButtonDefaults.buttonColors(
@@ -112,12 +112,12 @@ internal fun ClawPrimaryButton(
         disabledContainerColor = ClawTheme.colors.surfacePressed,
         disabledContentColor = ClawTheme.colors.textSubtle,
       ),
-    contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
+    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
     elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp, pressedElevation = 0.dp),
   ) {
     if (icon != null) {
-      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp))
-      Spacer(modifier = Modifier.width(8.dp))
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(17.dp))
+      Spacer(modifier = Modifier.width(7.dp))
     }
     Text(text = text, style = ClawTheme.type.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
   }
@@ -134,20 +134,20 @@ internal fun ClawSecondaryButton(
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = modifier.heightIn(min = 48.dp),
+    modifier = modifier.heightIn(min = 44.dp),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = if (enabled) ClawTheme.colors.surfaceRaised else ClawTheme.colors.surface,
     contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
     border = BorderStroke(1.dp, if (enabled) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+      modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.Center,
     ) {
       if (icon != null) {
-        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(8.dp))
+        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(17.dp))
+        Spacer(modifier = Modifier.width(7.dp))
       }
       Text(text = text, style = ClawTheme.type.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -165,14 +165,14 @@ internal fun ClawIconButton(
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = modifier.size(48.dp),
+    modifier = modifier.size(40.dp),
     shape = CircleShape,
     color = if (enabled) ClawTheme.colors.surfaceRaised else ClawTheme.colors.surface,
     contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(20.dp))
+      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
     }
   }
 }
@@ -199,14 +199,14 @@ internal fun ClawStatusPill(
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+      modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
       Box(
         modifier =
           Modifier
-            .size(7.dp)
+            .size(6.dp)
             .clip(CircleShape)
             .background(dotColor),
       )
@@ -238,7 +238,7 @@ internal fun ClawPill(
   ) {
     Text(
       text = text,
-      modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
       style = ClawTheme.type.caption,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
@@ -268,12 +268,12 @@ internal fun ClawListItem(
       rowModifier
         .fillMaxWidth()
         .clip(RoundedCornerShape(ClawTheme.radii.row))
-        .padding(vertical = 10.dp),
+        .padding(vertical = 7.dp),
     verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(12.dp),
+    horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
     leading?.invoke()
-    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
       Text(
         text = title,
         style = ClawTheme.type.body,
@@ -310,8 +310,8 @@ internal fun ClawSegmentedControl(
       modifier
         .clip(RoundedCornerShape(ClawTheme.radii.pill))
         .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.pill))
-        .padding(3.dp),
-    horizontalArrangement = Arrangement.spacedBy(3.dp),
+        .padding(2.dp),
+    horizontalArrangement = Arrangement.spacedBy(2.dp),
   ) {
     options.forEach { option ->
       val active = option == selected
@@ -322,7 +322,7 @@ internal fun ClawSegmentedControl(
             .clip(RoundedCornerShape(ClawTheme.radii.pill))
             .background(if (active) ClawTheme.colors.primary else Color.Transparent)
             .clickable { onSelect(option) }
-            .padding(horizontal = 10.dp, vertical = 9.dp),
+            .padding(horizontal = 9.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center,
       ) {
         Text(
@@ -354,7 +354,7 @@ internal fun ClawTextField(
         .clip(RoundedCornerShape(ClawTheme.radii.control))
         .background(ClawTheme.colors.surfaceRaised)
         .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.control))
-        .padding(horizontal = 16.dp, vertical = 14.dp),
+        .padding(horizontal = 14.dp, vertical = 12.dp),
     textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
     cursorBrush = SolidColor(ClawTheme.colors.primary),
     minLines = minLines,

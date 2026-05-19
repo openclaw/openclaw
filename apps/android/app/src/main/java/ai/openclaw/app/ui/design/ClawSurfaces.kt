@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun ClawPanel(
   modifier: Modifier = Modifier,
-  contentPadding: PaddingValues = PaddingValues(16.dp),
+  contentPadding: PaddingValues = PaddingValues(12.dp),
   content: @Composable () -> Unit,
 ) {
   Surface(
@@ -37,7 +37,7 @@ internal fun ClawPanel(
 @Composable
 internal fun ClawSheetSurface(
   modifier: Modifier = Modifier,
-  contentPadding: PaddingValues = PaddingValues(24.dp),
+  contentPadding: PaddingValues = PaddingValues(20.dp),
   content: @Composable () -> Unit,
 ) {
   Surface(
@@ -62,9 +62,9 @@ internal fun ClawEmptyState(
 ) {
   ClawPanel(modifier = modifier) {
     Column(
-      modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+      modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(10.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(text = body, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
@@ -80,9 +80,9 @@ internal fun ClawLoadingState(
 ) {
   ClawPanel(modifier = modifier) {
     Column(
-      modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp),
+      modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(12.dp),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       CircularProgressIndicator(color = ClawTheme.colors.primary, strokeWidth = 2.dp)
       Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
@@ -98,7 +98,7 @@ internal fun ClawErrorState(
   action: (@Composable () -> Unit)? = null,
 ) {
   ClawPanel(modifier = modifier) {
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawStatusPill(text = "Needs attention", status = ClawStatus.Danger)
       Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(text = body, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)

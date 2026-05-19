@@ -16,5 +16,5 @@ fun RootScreen(viewModel: MainViewModel) {
     return
   }
 
-  PostOnboardingTabs(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+  V2ShellScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
 }
