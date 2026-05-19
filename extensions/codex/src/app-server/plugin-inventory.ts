@@ -182,6 +182,7 @@ export async function readCodexPluginInventory(
     }
 
     const apps = resolveOwnedApps({
+      pluginPolicy,
       detail,
       appInventory,
     });
@@ -312,6 +313,7 @@ function resolveAppOwnership(params: {
 }
 
 function resolveOwnedApps(params: {
+  pluginPolicy: ResolvedCodexPluginPolicy;
   detail?: v2.PluginDetail;
   appInventory?: CodexAppInventoryCacheRead;
 }): CodexPluginOwnedApp[] {
@@ -320,6 +322,11 @@ function resolveOwnedApps(params: {
     return [];
   }
   if (params.appInventory?.state === "missing") {
+    embeddedAgentLog.warn("codex plugin inventory missing app inventory for detail apps", {
+      configKey: params.pluginPolicy.configKey,
+      pluginName: params.pluginPolicy.pluginName,
+      appIds: detailApps.map((app) => app.id).toSorted(),
+    });
     return [];
   }
   const appInfoById = new Map(
