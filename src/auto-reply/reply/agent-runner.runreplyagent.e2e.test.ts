@@ -1323,7 +1323,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const res = await run();
     const payload = Array.isArray(res) ? res[0] : res;
 
-    expect(payload?.text).toBe("fallback narration that would duplicate the message tool");
+    if (!payload) {
+      throw new Error("Expected automatic heartbeat reply payload");
+    }
+
+    expect(payload.text).toBe("fallback narration that would duplicate the message tool");
     expect(getReplyPayloadMetadata(payload)?.messageToolDelivered).toBe(true);
   });
 
