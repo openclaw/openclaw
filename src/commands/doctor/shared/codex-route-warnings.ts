@@ -1313,7 +1313,7 @@ function rewriteModelsMap(params: {
     const canonicalRecord = asMutableRecord(canonicalEntry);
     params.models[canonicalModel] =
       legacyRecord && canonicalRecord
-        ? { ...legacyRecord, ...canonicalRecord }
+        ? { ...canonicalRecord, ...legacyRecord }
         : (canonicalEntry ?? legacyEntry);
     delete params.models[legacyRef];
   }
