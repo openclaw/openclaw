@@ -4720,6 +4720,33 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
+  it("uses the runtime token budget for legacy mirrored-history projection", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const longContext = `legacy mirrored context start ${"x".repeat(30_000)} LEGACY_CONTEXT_END`;
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(userMessage("previous request", Date.now()));
+    sessionManager.appendMessage(assistantMessage(longContext, Date.now() + 1));
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextTokenBudget = 80_000;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+
+    expect(inputText.length).toBeGreaterThan(30_000);
+    expect(inputText).toContain("LEGACY_CONTEXT_END");
+    expect(inputText).not.toContain("[truncated ");
+  });
+
   it("passes stable workspace files as Codex developer instructions and keeps MEMORY.md as turn context", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
