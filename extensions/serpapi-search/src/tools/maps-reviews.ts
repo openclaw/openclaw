@@ -1,10 +1,22 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
-import { readNumberParam, readStringParam, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  readNumberParam,
+  readStringParam,
+  wrapWebContent,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
 import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
-  "data_id", "place_id", "hl", "sort_by", "topic_id", "query", "num", "next_page_token", "zero_trace",
+  "data_id",
+  "place_id",
+  "hl",
+  "sort_by",
+  "topic_id",
+  "query",
+  "num",
+  "next_page_token",
+  "zero_trace",
 ] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
@@ -48,8 +60,7 @@ export function createSerpApiMapsReviewsTool(api: OpenClawPluginApi, ctx?: SerpA
         },
         place_id: {
           type: "string",
-          description:
-            "Google Maps place ID. Either place_id or data_id is required.",
+          description: "Google Maps place ID. Either place_id or data_id is required.",
         },
         hl: {
           type: "string",
@@ -79,7 +90,8 @@ export function createSerpApiMapsReviewsTool(api: OpenClawPluginApi, ctx?: SerpA
         },
         next_page_token: {
           type: "string",
-          description: "Pagination token from serpapi_pagination.next_page_token to fetch the next page.",
+          description:
+            "Pagination token from serpapi_pagination.next_page_token to fetch the next page.",
         },
       },
       required: [],
@@ -87,13 +99,21 @@ export function createSerpApiMapsReviewsTool(api: OpenClawPluginApi, ctx?: SerpA
     },
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
+      const dataId = readStringParam(args, "data_id");
+      const placeId = readStringParam(args, "place_id");
+      if (!dataId && !placeId) {
+        throw new Error("serpapi_maps_reviews: either data_id or place_id is required");
+      }
+      if (dataId && placeId) {
+        throw new Error("serpapi_maps_reviews: provide either data_id or place_id, not both");
+      }
       const raw = await callSerpApi({
         cfg,
         engine: "google_maps_reviews",
         allowedParams: ALLOWED_PARAMS,
         params: {
-          data_id: readStringParam(args, "data_id") ?? undefined,
-          place_id: readStringParam(args, "place_id") ?? undefined,
+          data_id: dataId ?? undefined,
+          place_id: placeId ?? undefined,
           hl: readStringParam(args, "hl") ?? undefined,
           sort_by: readStringParam(args, "sort_by") ?? undefined,
           topic_id: readStringParam(args, "topic_id") ?? undefined,
