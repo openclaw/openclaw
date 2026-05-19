@@ -8,6 +8,9 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.ui.design.ClawDetailRow
+import ai.openclaw.app.ui.design.ClawIconBadge
+import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
@@ -15,6 +18,7 @@ import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawSegmentedControl
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
+import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
@@ -565,106 +569,55 @@ internal data class V2SettingsMetric(
 
 @Composable
 private fun V2ApprovalsPanel(toolCalls: List<ChatPendingToolCall>) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-    Column {
-      toolCalls.forEachIndexed { index, toolCall ->
-        V2ApprovalListRow(toolCall = toolCall)
-        if (index != toolCalls.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        }
-      }
-    }
+  ClawListPanel(items = toolCalls) { toolCall ->
+    V2ApprovalListRow(toolCall = toolCall)
   }
 }
 
 @Composable
 private fun V2ApprovalListRow(toolCall: ChatPendingToolCall) {
   val hasIssue = toolCall.isError == true
-  Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(9.dp),
-  ) {
-    Surface(modifier = Modifier.size(30.dp), shape = CircleShape, color = ClawTheme.colors.surfacePressed, border = BorderStroke(1.dp, ClawTheme.colors.border)) {
-      Box(contentAlignment = Alignment.Center) {
-        Icon(imageVector = Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
-      }
-    }
-    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-      Text(text = approvalActionName(toolCall.name), style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Text(text = approvalSubtitle(toolCall, hasIssue), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-    ClawStatusPill(text = if (hasIssue) "Issue" else "Review", status = if (hasIssue) ClawStatus.Warning else ClawStatus.Success)
-  }
+  ClawDetailRow(
+    title = approvalActionName(toolCall.name),
+    subtitle = approvalSubtitle(toolCall, hasIssue),
+    leading = { ClawIconBadge(icon = Icons.Default.Lock) },
+    trailing = { ClawStatusPill(text = if (hasIssue) "Issue" else "Review", status = if (hasIssue) ClawStatus.Warning else ClawStatus.Success) },
+  )
 }
 
 @Composable
 private fun V2CronJobsPanel(jobs: List<GatewayCronJobSummary>) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-    Column {
-      jobs.forEachIndexed { index, job ->
-        V2CronJobListRow(job = job)
-        if (index != jobs.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        }
-      }
-    }
+  ClawListPanel(items = jobs) { job ->
+    V2CronJobListRow(job = job)
   }
 }
 
 @Composable
 private fun V2UsageProvidersPanel(providers: List<GatewayUsageProviderSummary>) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-    Column {
-      providers.forEachIndexed { index, provider ->
-        V2UsageProviderListRow(provider = provider)
-        if (index != providers.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        }
-      }
-    }
+  ClawListPanel(items = providers) { provider ->
+    V2UsageProviderListRow(provider = provider)
   }
 }
 
 @Composable
 private fun V2UsageProviderListRow(provider: GatewayUsageProviderSummary) {
   val hasIssue = provider.error != null
-  Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(9.dp),
-  ) {
-    Surface(modifier = Modifier.size(30.dp), shape = CircleShape, color = ClawTheme.colors.surfacePressed, border = BorderStroke(1.dp, ClawTheme.colors.border)) {
-      Box(contentAlignment = Alignment.Center) {
-        Text(text = provider.displayName.firstOrNull()?.uppercase() ?: "U", style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1)
-      }
-    }
-    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-      Text(text = provider.displayName, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Text(text = usageProviderSubtitle(provider), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-    ClawStatusPill(text = if (hasIssue) "Issue" else "OK", status = if (hasIssue) ClawStatus.Warning else ClawStatus.Success)
-  }
+  ClawDetailRow(
+    title = provider.displayName,
+    subtitle = usageProviderSubtitle(provider),
+    leading = { ClawTextBadge(text = provider.displayName.firstOrNull()?.uppercase() ?: "U") },
+    trailing = { ClawStatusPill(text = if (hasIssue) "Issue" else "OK", status = if (hasIssue) ClawStatus.Warning else ClawStatus.Success) },
+  )
 }
 
 @Composable
 private fun V2CronJobListRow(job: GatewayCronJobSummary) {
-  Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(9.dp),
-  ) {
-    Surface(modifier = Modifier.size(30.dp), shape = CircleShape, color = ClawTheme.colors.surfacePressed, border = BorderStroke(1.dp, ClawTheme.colors.border)) {
-      Box(contentAlignment = Alignment.Center) {
-        Icon(imageVector = Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
-      }
-    }
-    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-      Text(text = job.name, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Text(text = cronJobSubtitle(job), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-    ClawStatusPill(text = cronJobStatusText(job), status = cronJobStatus(job))
-  }
+  ClawDetailRow(
+    title = job.name,
+    subtitle = cronJobSubtitle(job),
+    leading = { ClawIconBadge(icon = Icons.Default.Bolt) },
+    trailing = { ClawStatusPill(text = cronJobStatusText(job), status = cronJobStatus(job)) },
+  )
 }
 
 @Composable
@@ -672,15 +625,8 @@ private fun V2AgentsPanel(
   agents: List<GatewayAgentSummary>,
   defaultAgentId: String?,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-    Column {
-      agents.forEachIndexed { index, agent ->
-        V2AgentListRow(agent = agent, isDefault = agent.id == defaultAgentId)
-        if (index != agents.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        }
-      }
-    }
+  ClawListPanel(items = agents) { agent ->
+    V2AgentListRow(agent = agent, isDefault = agent.id == defaultAgentId)
   }
 }
 
@@ -689,22 +635,12 @@ private fun V2AgentListRow(
   agent: GatewayAgentSummary,
   isDefault: Boolean,
 ) {
-  Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(9.dp),
-  ) {
-    Surface(modifier = Modifier.size(30.dp), shape = CircleShape, color = ClawTheme.colors.surfacePressed, border = BorderStroke(1.dp, ClawTheme.colors.border)) {
-      Box(contentAlignment = Alignment.Center) {
-        Text(text = agentBadge(agent), style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1)
-      }
-    }
-    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-      Text(text = agent.name?.takeIf { it.isNotBlank() } ?: agent.id, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Text(text = if (isDefault) "Default assistant" else "Ready", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
-    }
-    ClawStatusPill(text = if (isDefault) "Default" else "Ready", status = ClawStatus.Success)
-  }
+  ClawDetailRow(
+    title = agent.name?.takeIf { it.isNotBlank() } ?: agent.id,
+    subtitle = if (isDefault) "Default assistant" else "Ready",
+    leading = { ClawTextBadge(text = agentBadge(agent)) },
+    trailing = { ClawStatusPill(text = if (isDefault) "Default" else "Ready", status = ClawStatus.Success) },
+  )
 }
 
 private fun defaultAgentName(

@@ -3,33 +3,26 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.ui.design.ClawDetailRow
+import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
+import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTheme
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -101,41 +94,19 @@ internal fun V2ChannelsSettingsScreen(
 
 @Composable
 private fun V2ChannelsPanel(channels: List<GatewayChannelSummary>) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-    Column {
-      channels.forEachIndexed { index, channel ->
-        V2ChannelRow(channel = channel)
-        if (index != channels.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        }
-      }
-    }
+  ClawListPanel(items = channels) { channel ->
+    V2ChannelRow(channel = channel)
   }
 }
 
 @Composable
 private fun V2ChannelRow(channel: GatewayChannelSummary) {
-  Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(9.dp),
-  ) {
-    Surface(
-      modifier = Modifier.size(30.dp),
-      shape = CircleShape,
-      color = ClawTheme.colors.surfacePressed,
-      border = BorderStroke(1.dp, ClawTheme.colors.border),
-    ) {
-      Box(contentAlignment = Alignment.Center) {
-        Text(text = channelBadge(channel.label), style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1)
-      }
-    }
-    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-      Text(text = channel.label, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      Text(text = channelSubtitle(channel), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-    ClawStatusPill(text = channelStatusText(channel), status = channelStatus(channel))
-  }
+  ClawDetailRow(
+    title = channel.label,
+    subtitle = channelSubtitle(channel),
+    leading = { ClawTextBadge(text = channelBadge(channel.label)) },
+    trailing = { ClawStatusPill(text = channelStatusText(channel), status = channelStatus(channel)) },
+  )
 }
 
 private fun channelSubtitle(channel: GatewayChannelSummary): String {
