@@ -288,6 +288,7 @@ private fun V2CronJobEditorPanel(
   saving: Boolean,
   onSave: () -> Unit,
 ) {
+  val canSave = !saving && name.isNotBlank() && message.isNotBlank() && scheduleValue.isNotBlank()
   ClawPanel {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       Text(text = "New Job", style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -300,7 +301,7 @@ private fun V2CronJobEditorPanel(
         modifier = Modifier.fillMaxWidth(),
       )
       ClawTextField(value = scheduleValue, onValueChange = onScheduleValueChange, placeholder = cronSchedulePlaceholder(scheduleKind))
-      ClawPrimaryButton(text = if (saving) "Saving" else "Save Job", onClick = onSave, enabled = !saving, modifier = Modifier.fillMaxWidth())
+      ClawPrimaryButton(text = if (saving) "Saving" else "Save Job", onClick = onSave, enabled = canSave, modifier = Modifier.fillMaxWidth())
     }
   }
 }
