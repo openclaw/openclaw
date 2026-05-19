@@ -365,14 +365,20 @@ describe("tui command handlers", () => {
     expect(state.pendingOptimisticUserMessage).toBe(1);
   });
 
-  it("counts every burst-sent message in pendingOptimisticUserMessage (#3145)", async () => {
-    const { handleCommand, state } = createHarness();
+  it("keeps burst-sent messages blocked while the first send is pending (#3145)", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, state } = createHarness();
 
     await handleCommand("first");
     await handleCommand("second");
     await handleCommand("third");
 
-    expect(state.pendingOptimisticUserMessage).toBe(3);
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expect(addUser).toHaveBeenCalledTimes(1);
+    expect(addSystem).toHaveBeenCalledTimes(2);
+    expect(addSystem).toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+    expect(state.pendingOptimisticUserMessage).toBe(1);
   });
 
   it("tracks the in-flight runId so escape can abort during the wait", async () => {
