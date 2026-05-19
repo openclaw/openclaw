@@ -1877,13 +1877,13 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.changes).toStrictEqual([
       [
         "Repaired Codex model routes:",
+        "- agents.defaults.models.openai-codex/gpt-5.5: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
         "- agents.defaults.model.primary: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
         "- agents.defaults.model.fallbacks.0: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
         "- agents.defaults.heartbeat.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
         "- agents.defaults.subagents.model.primary: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
         "- agents.defaults.subagents.model.fallbacks.0: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
         "- agents.defaults.compaction.memoryFlush.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
-        "- agents.defaults.models.openai-codex/gpt-5.5: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
         "- agents.list.worker.model: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
         "- channels.modelByChannel.telegram.default: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
         "- hooks.mappings.0.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
@@ -3367,5 +3367,32 @@ describe("collectCodexRouteWarnings", () => {
 
     expect(result.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
     expect(result.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
+  });
+
+  it("preserves intentional PI runtime when migrating openai-codex models map entries", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.4",
+            models: {
+              "openai-codex/gpt-5.4": {
+                agentRuntime: { id: "pi" },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.cfg.agents?.defaults?.model).toBe("openai/gpt-5.4");
+    expect(result.cfg.agents?.defaults?.models?.["openai/gpt-5.4"]?.agentRuntime).toEqual({
+      id: "pi",
+    });
+    expect(result.cfg.agents?.defaults?.models?.["openai-codex/gpt-5.4"]).toBeUndefined();
+    expect(result.changes).not.toContainEqual(
+      expect.stringContaining('agentRuntime.id to "codex"'),
+    );
   });
 });

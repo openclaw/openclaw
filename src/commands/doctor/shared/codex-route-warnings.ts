@@ -1552,6 +1552,15 @@ function rewriteAgentModelRefs(params: {
       });
     }
   };
+  if (params.rewriteModelsMap) {
+    const start = params.hits.length;
+    rewriteModelsMap({
+      hits: params.hits,
+      models: asMutableRecord(agent.models),
+      path: `${params.path}.models`,
+    });
+    preserveCodexRuntimePolicyForNewHits(start);
+  }
   for (const key of AGENT_MODEL_CONFIG_KEYS) {
     const start = params.hits.length;
     if (key === "model") {
@@ -1683,15 +1692,6 @@ function rewriteAgentModelRefs(params: {
     key: "model",
     path: `${params.path}.compaction.memoryFlush.model`,
   });
-  if (params.rewriteModelsMap) {
-    const start = params.hits.length;
-    rewriteModelsMap({
-      hits: params.hits,
-      models: asMutableRecord(agent.models),
-      path: `${params.path}.models`,
-    });
-    preserveCodexRuntimePolicyForNewHits(start);
-  }
 }
 
 function removeUnsupportedCodexCompactionOverrides(params: {
@@ -2158,9 +2158,13 @@ function clearLegacyAgentRuntimePolicy(
     delete container.embeddedHarness;
     changes.push(`Removed ${pathLabel}.embeddedHarness; runtime is now provider/model scoped.`);
   }
-  if (asMutableRecord(container.agentRuntime)) {
-    delete container.agentRuntime;
-    changes.push(`Removed ${pathLabel}.agentRuntime; runtime is now provider/model scoped.`);
+  const runtimeRecord = asMutableRecord(container.agentRuntime);
+  if (runtimeRecord) {
+    const runtimeId = normalizeString(runtimeRecord.id);
+    if (!runtimeId || runtimeId === "codex" || runtimeId === "auto" || runtimeId === "default") {
+      delete container.agentRuntime;
+      changes.push(`Removed ${pathLabel}.agentRuntime; runtime is now provider/model scoped.`);
+    }
   }
 }
 
