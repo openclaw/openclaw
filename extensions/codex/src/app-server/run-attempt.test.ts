@@ -8129,6 +8129,79 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("resumes Codex threads when source reply mode toggles message-tool-only", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("web_search"),
+    ]);
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/resume") {
+        return threadStartResult();
+      }
+      return undefined;
+    });
+    const createRunParams = (sourceReplyDeliveryMode?: "automatic" | "message_tool_only") => {
+      const params = createParams(sessionFile, workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      if (sourceReplyDeliveryMode) {
+        params.sourceReplyDeliveryMode = sourceReplyDeliveryMode;
+      }
+      return params;
+    };
+    const completeTurnNumber = async (run: Promise<unknown>, turnStartCount: number) => {
+      await vi.waitFor(
+        () => {
+          expect(
+            harness.requests.filter((request) => request.method === "turn/start"),
+          ).toHaveLength(turnStartCount);
+        },
+        { interval: 1, timeout: 120_000 },
+      );
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+    };
+
+    await completeTurnNumber(
+      runCodexAppServerAttempt(createRunParams("automatic"), {
+        pluginConfig: { appServer: { mode: "yolo" } },
+      }),
+      1,
+    );
+    const firstFingerprint = (await readCodexAppServerBinding(sessionFile))
+      ?.dynamicToolsFingerprint;
+    await completeTurnNumber(
+      runCodexAppServerAttempt(createRunParams("message_tool_only"), {
+        pluginConfig: { appServer: { mode: "yolo" } },
+      }),
+      2,
+    );
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startDynamicTools =
+      (startRequest?.params as { dynamicTools?: Array<Record<string, unknown>> } | undefined)
+        ?.dynamicTools ?? [];
+    const resumeRequest = harness.requests.find((request) => request.method === "thread/resume");
+    const resumeDeveloperInstructions =
+      (resumeRequest?.params as { developerInstructions?: string } | undefined)
+        ?.developerInstructions ?? "";
+    expect(
+      harness.requests
+        .map((request) => request.method)
+        .filter((method) => method === "thread/start" || method === "thread/resume"),
+    ).toEqual(["thread/start", "thread/resume"]);
+    expect(binding?.threadId).toBe("thread-1");
+    expect(binding?.dynamicToolsFingerprint).toBe(firstFingerprint);
+    const message = startDynamicTools.find((tool) => tool.name === "message");
+    expect(message).toBeTruthy();
+    expect(message).not.toHaveProperty("namespace");
+    expect(message).not.toHaveProperty("deferLoading");
+    expect(resumeDeveloperInstructions).toContain("Visible channel replies: use `message`");
+  });
+
   it("keeps plugin app bindings across transient native-tool-disabled turns", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

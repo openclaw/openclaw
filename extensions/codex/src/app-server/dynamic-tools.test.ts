@@ -184,11 +184,8 @@ describe("createCodexDynamicToolBridge", () => {
       namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
       deferLoading: true,
     });
-    expectDynamicSpec(message, {
-      name: "message",
-      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-      deferLoading: true,
-    });
+    expectDynamicSpec(message, { name: "message" });
+    expectNoNamespace(message);
     expectDynamicSpec(heartbeat, {
       name: HEARTBEAT_RESPONSE_TOOL_NAME,
       namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
