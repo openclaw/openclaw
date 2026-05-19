@@ -1,0 +1,82 @@
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resetStaleDailySessions } from "./session-daily-reset-scheduler.js";
+
+const tmpDirs: string[] = [];
+
+async function makeStore(entries: Record<string, unknown>) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-reset-"));
+  tmpDirs.push(dir);
+  const storePath = path.join(dir, "sessions.json");
+  await fs.writeFile(storePath, JSON.stringify(entries), "utf8");
+  const cfg = {
+    session: {
+      store: storePath,
+      reset: {
+        mode: "daily",
+        atHour: 4,
+      },
+    },
+    agents: {
+      list: [{ id: "main" }],
+    },
+  } as OpenClawConfig;
+  return { cfg, storePath };
+}
+
+describe("daily session reset scheduler", () => {
+  afterEach(async () => {
+    vi.useRealTimers();
+    for (const dir of tmpDirs.splice(0)) {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resets stale daily sessions without waiting for an inbound message", async () => {
+    const beforeReset = new Date(2026, 4, 18, 23, 0, 0, 0).getTime();
+    const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
+    const sessionKey = "agent:main:telegram:direct:user-1";
+    const { cfg } = await makeStore({
+      [sessionKey]: {
+        sessionId: "old-session",
+        updatedAt: beforeReset,
+        sessionStartedAt: beforeReset,
+      },
+    });
+    const performReset = vi.fn(async () => ({ ok: true }));
+
+    const result = await resetStaleDailySessions({
+      cfg,
+      nowMs: afterReset,
+      performReset,
+    });
+
+    expect(result).toEqual({ checked: 1, reset: 1, errors: 0 });
+    expect(performReset).toHaveBeenCalledWith(sessionKey);
+  });
+
+  it("does not reset fresh daily sessions before the next reset boundary", async () => {
+    const afterReset = new Date(2026, 4, 19, 8, 0, 0, 0).getTime();
+    const sessionKey = "agent:main:telegram:direct:user-1";
+    const { cfg } = await makeStore({
+      [sessionKey]: {
+        sessionId: "fresh-session",
+        updatedAt: afterReset,
+        sessionStartedAt: afterReset,
+      },
+    });
+    const performReset = vi.fn(async () => ({ ok: true }));
+
+    const result = await resetStaleDailySessions({
+      cfg,
+      nowMs: afterReset,
+      performReset,
+    });
+
+    expect(result).toEqual({ checked: 1, reset: 0, errors: 0 });
+    expect(performReset).not.toHaveBeenCalled();
+  });
+});

@@ -645,7 +645,7 @@ export async function emitGatewayBeforeResetPluginHook(params: {
 
 export async function performGatewaySessionReset(params: {
   key: string;
-  reason: "new" | "reset";
+  reason: "new" | "reset" | "daily";
   commandSource: string;
 }): Promise<
   | { ok: true; key: string; entry: SessionEntry }
@@ -662,7 +662,7 @@ export async function performGatewaySessionReset(params: {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const hookEvent = createInternalHookEvent(
     "command",
-    params.reason,
+    params.reason === "new" ? "new" : "reset",
     target.canonicalKey ?? params.key,
     {
       sessionEntry: entry,
@@ -808,7 +808,7 @@ export async function performGatewaySessionReset(params: {
     target,
     storePath,
     entry: resetSourceEntry,
-    reason: params.reason,
+    reason: params.reason === "new" ? "new" : "reset",
   });
 
   const archivedTranscripts = archiveSessionTranscriptsForSessionDetailed({

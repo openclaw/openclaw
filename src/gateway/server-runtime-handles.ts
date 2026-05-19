@@ -13,6 +13,7 @@ export type GatewayServerMutableState = {
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
+  dailySessionReset: ReturnType<typeof setInterval> | null;
   heartbeatRunner: HeartbeatRunner;
   stopGatewayUpdateCheck: () => void;
   tailscaleCleanup: (() => Promise<void>) | null;
@@ -42,6 +43,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     healthInterval: noopInterval(),
     dedupeCleanup: noopInterval(),
     mediaCleanup: null as ReturnType<typeof setInterval> | null,
+    dailySessionReset: null as ReturnType<typeof setInterval> | null,
     heartbeatRunner: {
       stop: () => {},
       updateConfig: (_cfg: OpenClawConfig) => {},
