@@ -26,6 +26,9 @@ data:
           {
             "id": "default",
             "name": "OpenClaw Assistant",
+            "identity": {
+              "name": "OpenClaw Assistant"
+            },
             "workspace": "~/.openclaw/workspace"
           }
         ]
