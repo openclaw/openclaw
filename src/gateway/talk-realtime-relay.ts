@@ -482,7 +482,6 @@ export function createTalkRealtimeRelaySession(
       if (role === "user" && final && text.trim()) {
         const question = text.trim();
         scheduleForcedAgentConsult(relay, question);
-        bridgeSession?.sendUserMessage(question);
       }
     },
     onToolCall: (toolCall) => {
