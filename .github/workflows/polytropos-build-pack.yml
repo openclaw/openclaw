@@ -1,9 +1,8 @@
 name: Polytropos Build + Pack
 
-on:  workflow_dispatch:
+on:
+  workflow_dispatch:
   push:
-    branches:
-      - main
     tags:
       - "v*+poly.*"
 permissions:
