@@ -2158,13 +2158,9 @@ function clearLegacyAgentRuntimePolicy(
     delete container.embeddedHarness;
     changes.push(`Removed ${pathLabel}.embeddedHarness; runtime is now provider/model scoped.`);
   }
-  const runtimeRecord = asMutableRecord(container.agentRuntime);
-  if (runtimeRecord) {
-    const runtimeId = normalizeString(runtimeRecord.id);
-    if (!runtimeId || runtimeId === "codex" || runtimeId === "auto" || runtimeId === "default") {
-      delete container.agentRuntime;
-      changes.push(`Removed ${pathLabel}.agentRuntime; runtime is now provider/model scoped.`);
-    }
+  if (asMutableRecord(container.agentRuntime)) {
+    delete container.agentRuntime;
+    changes.push(`Removed ${pathLabel}.agentRuntime; runtime is now provider/model scoped.`);
   }
 }
 
