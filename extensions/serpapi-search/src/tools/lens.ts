@@ -1,10 +1,17 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
-import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
+import { type SerpApiToolCtx, readBooleanArg, resolveToolConfig } from "../utils.js";
 
 const ALLOWED_PARAMS = [
-  "url", "hl", "country", "type", "q", "safe", "auto_crop", "zero_trace",
+  "url",
+  "hl",
+  "country",
+  "type",
+  "q",
+  "safe",
+  "auto_crop",
+  "zero_trace",
 ] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
@@ -79,8 +86,7 @@ export function createSerpApiLensTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
           hl: readStringParam(args, "hl") ?? undefined,
           country: readStringParam(args, "country") ?? undefined,
           safe: readStringParam(args, "safe") ?? undefined,
-          auto_crop:
-            args.auto_crop === true || args.auto_crop === "true" ? "true" : undefined,
+          auto_crop: readBooleanArg(args, "auto_crop") === true ? "true" : undefined,
         },
         signal,
       });

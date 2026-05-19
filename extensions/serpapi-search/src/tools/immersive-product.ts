@@ -1,11 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { callSerpApi } from "../serpapi-client.js";
-import { type SerpApiToolCtx, resolveToolConfig } from "../utils.js";
+import { type SerpApiToolCtx, readBooleanArg, resolveToolConfig } from "../utils.js";
 
-const ALLOWED_PARAMS = [
-  "page_token", "more_stores", "next_page_token", "zero_trace",
-] as const;
+const ALLOWED_PARAMS = ["page_token", "more_stores", "next_page_token", "zero_trace"] as const;
 
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
   const p = raw.product_results as Record<string, unknown> | undefined;
@@ -65,7 +63,7 @@ export function createSerpApiImmersiveProductTool(api: OpenClawPluginApi, ctx?: 
     },
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
-      const moreStores = args.more_stores === true || args.more_stores === "true" ? "true" : undefined;
+      const moreStores = readBooleanArg(args, "more_stores") === true ? "true" : undefined;
       const raw = await callSerpApi({
         cfg,
         engine: "google_immersive_product",
