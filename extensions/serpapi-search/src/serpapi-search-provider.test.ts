@@ -91,9 +91,11 @@ describe("serpapi web search provider", () => {
     expect(result.engine).toBe("google_light");
     const results = result.results as Record<string, unknown>[];
     expect(results).toHaveLength(3);
-    expect(results[0].title).toBe("Result 0");
+    expect(typeof results[0].title).toBe("string");
+    expect(results[0].title as string).toContain("Result 0");
     expect(results[0].url).toBe("https://example.com/0");
     expect(typeof results[0].snippet).toBe("string");
+    expect(results[0].snippet as string).toContain("Snippet 0");
     expect(result.related_searches).toEqual([{ query: "related" }]);
   });
 
