@@ -634,9 +634,9 @@ export const dispatchTelegramMessage = async ({
     }
     activeAnswerDraftIsToolProgressOnly = true;
   }
-  const renderProgressDraft = async (options?: { flush?: boolean }) => {
+  const renderProgressDraft = async (options?: { flush?: boolean }): Promise<boolean> => {
     if (!answerLane.stream || streamMode !== "progress") {
-      return;
+      return false;
     }
     const streamText = formatChannelProgressDraftText({
       entry: telegramCfg,
@@ -645,7 +645,7 @@ export const dispatchTelegramMessage = async ({
       formatLine: formatProgressAsMarkdownCode,
     });
     if (!streamText || streamText === answerLane.lastPartialText) {
-      return;
+      return false;
     }
     await prepareAnswerLaneForToolProgress();
     answerLane.lastPartialText = streamText;
@@ -655,9 +655,12 @@ export const dispatchTelegramMessage = async ({
     if (options?.flush) {
       await answerLane.stream.flush();
     }
+    return true;
   };
   const progressDraftGate = createChannelProgressDraftGate({
-    onStart: () => renderProgressDraft({ flush: true }),
+    onStart: async () => {
+      await renderProgressDraft({ flush: true });
+    },
   });
   const pushStreamToolProgress = async (
     line?: string | ChannelProgressDraftLine,
@@ -1733,8 +1736,8 @@ export const dispatchTelegramMessage = async ({
       dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
-      await draftLaneEventQueue;
       progressDraftGate.cancel();
+      await draftLaneEventQueue;
       nativeToolProgressDraft?.stop();
       const lanesToCleanup: Array<{ laneName: LaneName; lane: DraftLaneState }> = [
         { laneName: "answer", lane: answerLane },
