@@ -589,7 +589,10 @@ describe("discordOutbound", () => {
         blocks: [
           {
             type: "buttons",
-            buttons: [{ label: "Already handled", value: "done", disabled: true }],
+            buttons: [
+              { label: "Already handled", value: "done", disabled: true },
+              { label: "Open docs", url: "https://example.com/docs", disabled: true },
+            ],
           },
         ],
       },
@@ -611,14 +614,20 @@ describe("discordOutbound", () => {
     const discordData = payload.channelData?.discord as
       | { presentationComponents?: { blocks?: Array<{ type?: string; buttons?: unknown[] }> } }
       | undefined;
-    const button = discordData?.presentationComponents?.blocks?.find(
+    const buttons = discordData?.presentationComponents?.blocks?.find(
       (block) => block.type === "actions",
-    )?.buttons?.[0];
+    )?.buttons;
 
-    expect(button).toEqual({
+    expect(buttons?.[0]).toEqual({
       label: "Already handled",
       style: "secondary",
       callbackData: "done",
+      disabled: true,
+    });
+    expect(buttons?.[1]).toEqual({
+      label: "Open docs",
+      style: "link",
+      url: "https://example.com/docs",
       disabled: true,
     });
   });
