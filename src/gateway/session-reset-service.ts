@@ -48,12 +48,12 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
-import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
