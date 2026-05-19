@@ -3394,4 +3394,37 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
     expect(result.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
   });
+
+  it("preserves an explicit non-default agentRuntime pin on the legacy model entry during migration (#84038)", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai-codex/gpt-5.4" },
+            models: {
+              "openai-codex/gpt-5.4": {
+                agentRuntime: { id: "pi" },
+              },
+            },
+          },
+        },
+        auth: {
+          order: {
+            "openai-codex": ["openai-codex:user@example.com"],
+          },
+        },
+        plugins: {
+          entries: { codex: { enabled: false } },
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    const migrated = result.cfg.agents?.defaults?.models?.["openai/gpt-5.4"] as
+      | { agentRuntime?: { id?: string } }
+      | undefined;
+    expect(migrated).toBeDefined();
+    expect(migrated?.agentRuntime).toEqual({ id: "pi" });
+    expect(result.cfg.agents?.defaults?.models?.["openai-codex/gpt-5.4"]).toBeUndefined();
+  });
 });
