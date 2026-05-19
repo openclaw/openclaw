@@ -20,7 +20,7 @@ if (provider === "codex-cli") {
       2,
     ),
   );
-  process.exit(0);
+  process.exitCode = 0;
 }
 
 async function loadFallbackBackend(id: string) {
