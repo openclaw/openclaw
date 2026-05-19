@@ -2,6 +2,7 @@ import process from "node:process";
 import { CommanderError } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../logging/state.js";
+import type { RootHelpRenderOptions } from "./program/root-help.js";
 import { runCli, shouldStartProxyForCli } from "./run-main.js";
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
@@ -19,7 +20,7 @@ const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const outputPrecomputedBrowserHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const loadRootHelpRenderOptionsForConfigSensitivePluginsMock = vi.hoisted(() =>
-  vi.fn(async () => null),
+  vi.fn<() => Promise<RootHelpRenderOptions | null>>(async () => null),
 );
 const buildProgramMock = vi.hoisted(() => vi.fn());
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
@@ -436,7 +437,7 @@ describe("runCli exit behavior", () => {
   });
 
   it("renders config-sensitive root help live instead of precomputed metadata", async () => {
-    const liveOptions = {
+    const liveOptions: RootHelpRenderOptions = {
       config: {
         plugins: {
           slots: {
