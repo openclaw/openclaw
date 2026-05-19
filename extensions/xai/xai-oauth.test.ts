@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildXaiOAuthAuthorizationCodeTokenBody,
   buildXaiOAuthAuthorizeUrl,
   fetchXaiOAuthDiscovery,
   isTrustedXaiOAuthEndpoint,
+  loginXaiDeviceCode,
   refreshXaiOAuthCredential,
   XAI_OAUTH_CALLBACK_CORS_ORIGIN_ALLOWLIST,
   XAI_OAUTH_CALLBACK_PORT,
@@ -20,7 +21,26 @@ function jsonResponse(value: unknown, init?: ResponseInit): Response {
   });
 }
 
+function createJwt(payload: Record<string, unknown>): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${header}.${body}.signature`;
+}
+
+function requireStringBody(init: RequestInit | undefined): string {
+  if (typeof init?.body !== "string") {
+    throw new Error("expected request body to be a string");
+  }
+  return init.body;
+}
+
 describe("xAI OAuth", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
+
   it("accepts only trusted xAI OAuth endpoints", () => {
     expect(isTrustedXaiOAuthEndpoint("https://auth.x.ai/oauth2/token")).toBe(true);
     expect(isTrustedXaiOAuthEndpoint("https://accounts.x.ai/oauth2/token")).toBe(true);
@@ -80,12 +100,14 @@ describe("xAI OAuth", () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({
         authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
+        device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
         token_endpoint: "https://auth.x.ai/oauth2/token",
       }),
     ) as unknown as typeof fetch;
 
     await expect(fetchXaiOAuthDiscovery({ fetchImpl })).resolves.toEqual({
       authorizationEndpoint: "https://auth.x.ai/oauth2/authorize",
+      deviceAuthorizationEndpoint: "https://auth.x.ai/oauth2/device/code",
       tokenEndpoint: "https://auth.x.ai/oauth2/token",
     });
 
@@ -99,6 +121,7 @@ describe("xAI OAuth", () => {
     const poisonedFetch = vi.fn(async () =>
       jsonResponse({
         authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
+        device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
         token_endpoint: "https://evil.test/oauth2/token",
       }),
     ) as unknown as typeof fetch;
@@ -142,5 +165,99 @@ describe("xAI OAuth", () => {
     expect(refreshed.refresh).toBe("refresh-1");
     expect(refreshed.expires).toBe(121_000);
     vi.unstubAllEnvs();
+  });
+
+  it("logs in with xAI device code without a localhost callback", async () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
+    const progress = {
+      update: vi.fn(),
+      stop: vi.fn(),
+    };
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
+          device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
+          token_endpoint: "https://auth.x.ai/oauth2/token",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          device_code: "device-code-1",
+          user_code: "ABCD-1234",
+          verification_uri: "https://accounts.x.ai/oauth2/device",
+          verification_uri_complete: "https://accounts.x.ai/oauth2/device?user_code=ABCD-1234",
+          expires_in: 900,
+          interval: 5,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          access_token: createJwt({ exp: 4, sub: "acct-1" }),
+          refresh_token: "refresh-1",
+          id_token: createJwt({
+            sub: "acct-1",
+            email: "dev@example.com",
+            name: "Dev User",
+          }),
+          expires_in: 120,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchImpl);
+    const ctx = {
+      config: {},
+      isRemote: true,
+      openUrl: vi.fn(async () => {}),
+      prompter: {
+        progress: vi.fn(() => progress),
+        note: vi.fn(async () => {}),
+      },
+      runtime: {
+        log: vi.fn(),
+      },
+      oauth: {},
+    };
+
+    const result = await loginXaiDeviceCode(ctx as never);
+
+    expect(ctx.openUrl).not.toHaveBeenCalled();
+    expect(ctx.prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("ABCD-1234"),
+      "xAI device code",
+    );
+    const remoteLog = ctx.runtime.log.mock.calls[0]?.[0];
+    expect(remoteLog).toContain("https://accounts.x.ai/oauth2/device");
+    expect(remoteLog).not.toContain("ABCD-1234");
+    const deviceRequest = fetchImpl.mock.calls[1]?.[1];
+    expect(deviceRequest?.method).toBe("POST");
+    const deviceBody = requireStringBody(deviceRequest);
+    expect(deviceBody).toContain(`client_id=${encodeURIComponent(XAI_OAUTH_CLIENT_ID)}`);
+    expect(deviceBody).toContain(`scope=${encodeURIComponent(XAI_OAUTH_SCOPE)}`);
+
+    const tokenRequest = fetchImpl.mock.calls[2]?.[1];
+    expect(tokenRequest?.method).toBe("POST");
+    const tokenBody = requireStringBody(tokenRequest);
+    expect(tokenBody).toContain(
+      "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code",
+    );
+    expect(tokenBody).toContain("device_code=device-code-1");
+
+    const credential = result.profiles[0]?.credential as Record<string, unknown> | undefined;
+    expect(credential).toMatchObject({
+      type: "oauth",
+      provider: "xai",
+      refresh: "refresh-1",
+      email: "dev@example.com",
+      displayName: "Dev User",
+      tokenEndpoint: "https://auth.x.ai/oauth2/token",
+      deviceAuthorizationEndpoint: "https://auth.x.ai/oauth2/device/code",
+      issuer: "https://auth.x.ai",
+      authFlow: "device-code",
+      accountId: "acct-1",
+    });
+    expect(credential?.access).toEqual(expect.any(String));
+    expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
+    expect(progress.stop).toHaveBeenCalledWith("xAI device code complete");
   });
 });
