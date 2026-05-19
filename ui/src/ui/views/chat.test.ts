@@ -1355,14 +1355,13 @@ describe("chat session controls", () => {
 
     expect([...(thinkingSelect?.options ?? [])].map((option) => option.value)).toEqual([
       "",
-      "off",
       "adaptive",
       "xhigh",
       "max",
     ]);
     expect(
       [...(thinkingSelect?.options ?? [])].map((option) => option.textContent?.trim()),
-    ).toEqual(["Off", "Off", "Adaptive", "Extra high", "Maximum"]);
+    ).toEqual(["Off", "Adaptive", "Extra high", "Maximum"]);
   });
 
   it("labels chat thinking default from the active session row", () => {
@@ -1413,7 +1412,6 @@ describe("chat session controls", () => {
     expect(thinkingSelect?.title).toBe("Inherited: High");
     expect([...thinkingSelect!.options].map((option) => option.textContent?.trim())).toEqual([
       "Inherited: High",
-      "Off",
       "Low",
       "Medium",
       "High",

@@ -293,6 +293,12 @@ function buildThinkingOptions(
   };
 
   for (const level of levels) {
+    // When using inherited default (currentOverride === ""), skip adding "off"
+    // from thinking levels since the default option (value="") already represents
+    // the inherited/off state. This prevents duplicate "Off" options in the dropdown.
+    if (currentOverride === "" && normalizeThinkingOptionValue(level.id) === "off") {
+      continue;
+    }
     addOption(level.id, level.label);
   }
   if (currentOverride) {
