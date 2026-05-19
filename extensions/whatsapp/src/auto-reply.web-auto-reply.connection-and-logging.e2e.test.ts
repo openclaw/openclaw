@@ -6,7 +6,7 @@ import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/chann
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getActiveWebListener } from "./active-listener.js";
 import { WhatsAppAuthUnstableError, resolveWebCredsPath } from "./auth-store.js";
 import { resolveOAuthDir } from "./auth-store.runtime.js";
@@ -42,9 +42,37 @@ const deliveryQueueMocks = vi.hoisted(() => ({
   drainPendingDeliveries: vi.fn(async (_opts: unknown) => undefined),
 }));
 
+const internalHookMocks = vi.hoisted(() => ({
+  createInternalHookEvent: vi.fn(
+    (type: string, action: string, sessionKey: string, context: Record<string, unknown> = {}) => ({
+      type,
+      action,
+      sessionKey,
+      context,
+      timestamp: new Date(),
+      messages: [],
+    }),
+  ),
+  triggerInternalHook: vi.fn(async (_event: unknown) => undefined),
+}));
+
 vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
   drainPendingDeliveries: deliveryQueueMocks.drainPendingDeliveries,
 }));
+
+vi.mock("openclaw/plugin-sdk/hook-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/hook-runtime")>(
+    "openclaw/plugin-sdk/hook-runtime",
+  );
+  return {
+    ...actual,
+    createInternalHookEvent: internalHookMocks.createInternalHookEvent,
+    triggerInternalHook: internalHookMocks.triggerInternalHook,
+    fireAndForgetBoundedHook: (task: () => unknown) => {
+      void task();
+    },
+  };
+});
 
 installWebAutoReplyTestHomeHooks();
 
@@ -121,6 +149,21 @@ function mockCallArg(mocked: unknown, callIndex: number, argIndex: number): unkn
   return call[argIndex];
 }
 
+function expectWhatsAppHealthHook(action: string): Record<string, unknown> {
+  const events = internalHookMocks.triggerInternalHook.mock.calls.map((call) => call[0]) as Array<{
+    type?: string;
+    action?: string;
+    context?: Record<string, unknown>;
+  }>;
+  const event = events.find(
+    (candidate) => candidate.type === "whatsapp" && candidate.action === action,
+  );
+  if (!event) {
+    throw new Error(`Expected WhatsApp health hook ${action}`);
+  }
+  return event.context ?? {};
+}
+
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
     await fs.stat(targetPath);
@@ -137,6 +180,11 @@ describe("web auto-reply connection", () => {
   let monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
   beforeAll(async () => {
     ({ monitorWebChannel } = await import("./auto-reply/monitor.js"));
+  });
+
+  beforeEach(() => {
+    internalHookMocks.createInternalHookEvent.mockClear();
+    internalHookMocks.triggerInternalHook.mockClear();
   });
 
   it("handles helper envelope timestamps with trimmed timezones (regression)", () => {
@@ -462,6 +510,12 @@ describe("web auto-reply connection", () => {
       expect(finalStatus?.running).toBe(false);
       expect(finalStatus?.connected).toBe(false);
       expect(finalStatus?.healthState).toBe(healthState);
+      expect(expectWhatsAppHealthHook("terminal-disconnect")).toMatchObject({
+        accountId,
+        statusCode: status,
+        healthState,
+        loggedOut: isLoggedOut,
+      });
     },
   );
 
@@ -546,6 +600,18 @@ describe("web auto-reply connection", () => {
         "WhatsApp Web watchdog is recovering a stale connection",
       );
       expect(mockStringMessages(runtime.error).join("\n")).not.toContain("status 499");
+      expect(expectWhatsAppHealthHook("watchdog-timeout")).toMatchObject({
+        accountId: "default",
+        reason: "app-silent",
+        messagesHandled: 1,
+      });
+      expect(expectWhatsAppHealthHook("reconnect-scheduled")).toMatchObject({
+        accountId: "default",
+        statusCode: 499,
+        reconnectAttempts: 1,
+        healthState: "reconnecting",
+        watchdogRecovery: true,
+      });
       expect(
         statuses.filter(
           (status) =>

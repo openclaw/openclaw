@@ -3,6 +3,11 @@ import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-de
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
+import {
+  createInternalHookEvent,
+  fireAndForgetBoundedHook,
+  triggerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -54,6 +59,25 @@ function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
   // Baileys 428 = DisconnectReason.connectionClosed, a generic WebSocket close
   // that is often transient and must stay on the reconnect path.
   return statusCode === 440;
+}
+
+const WHATSAPP_HEALTH_HOOK_LIMITS = {
+  maxConcurrency: 4,
+  maxQueue: 64,
+  timeoutMs: 2_000,
+};
+
+function emitWhatsAppHealthHook(
+  action: "watchdog-timeout" | "reconnect-scheduled" | "terminal-disconnect",
+  sessionKey: string,
+  context: Record<string, unknown>,
+): void {
+  fireAndForgetBoundedHook(
+    () => triggerInternalHook(createInternalHookEvent("whatsapp", action, sessionKey, context)),
+    `whatsapp: ${action} internal hook failed`,
+    undefined,
+    WHATSAPP_HEALTH_HOOK_LIMITS,
+  );
 }
 
 type ReplyResolver = typeof import("./reply-resolver.runtime.js").getReplyFromConfig;
@@ -387,6 +411,17 @@ export async function monitorWebChannel(
             const watchdogReason =
               transportSilentMs > transportTimeoutMs ? "transport-inactive" : "app-silent";
             statusController.noteWatchdogStale();
+            emitWhatsAppHealthHook("watchdog-timeout", connectRoute.sessionKey, {
+              accountId: account.accountId,
+              connectionId: snapshot.connectionId,
+              reason: watchdogReason,
+              transportSilentMs,
+              minutesSinceTransportActivity,
+              minutesSinceAppActivity,
+              lastInboundAt: snapshot.lastInboundAt,
+              lastTransportActivityAt: snapshot.lastTransportActivityAt,
+              messagesHandled: snapshot.handledMessages,
+            });
             heartbeatLogger.warn(
               {
                 connectionId: snapshot.connectionId,
@@ -628,6 +663,17 @@ export async function monitorWebChannel(
           reconnectAttempts: decision.reconnectAttempts,
           healthState: decision.healthState,
         });
+        emitWhatsAppHealthHook("terminal-disconnect", connectRoute.sessionKey, {
+          accountId: account.accountId,
+          connectionId: connection.connectionId,
+          status: decision.normalized.statusLabel,
+          statusCode: decision.normalized.statusCode,
+          loggedOut: decision.normalized.isLoggedOut,
+          error: decision.normalized.errorText,
+          reconnectAttempts: decision.reconnectAttempts,
+          maxAttempts: reconnectPolicy.maxAttempts,
+          healthState: decision.healthState,
+        });
 
         if (decision.healthState === "logged-out") {
           await clearTerminalWebAuthState({
@@ -684,6 +730,18 @@ export async function monitorWebChannel(
         statusCode: decision.normalized.statusCode,
         error: decision.normalized.errorText,
         reconnectAttempts: decision.reconnectAttempts,
+        healthState: decision.healthState,
+        watchdogRecovery: isWatchdogRecoveryReconnect,
+      });
+      emitWhatsAppHealthHook("reconnect-scheduled", connectRoute.sessionKey, {
+        accountId: account.accountId,
+        connectionId: connection.connectionId,
+        status: decision.normalized.statusLabel,
+        statusCode: decision.normalized.statusCode,
+        error: decision.normalized.errorText,
+        reconnectAttempts: decision.reconnectAttempts,
+        maxAttempts: reconnectPolicy.maxAttempts,
+        delayMs: decision.delayMs,
         healthState: decision.healthState,
         watchdogRecovery: isWatchdogRecoveryReconnect,
       });
