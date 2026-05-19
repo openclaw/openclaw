@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents/code mode: sharpen the `exec` tool description so models do not waste turns rediscovering that Node modules are unavailable, that `language` rejects values other than `"javascript"`/`"typescript"`, and that the `tools.search`/`describe`/`call` bridge is the path for shell, file, network, and other I/O. Thanks @Kaspre.
 - Agents/config: allow `agents.list[].experimental.localModelLean` so lean local-model mode can be enabled for one configured agent instead of globally.
 - Providers/xAI: add device-code OAuth login so remote and headless setups can authorize xAI without a localhost browser callback. (#84005) Thanks @fuller-stack-dev.
 
