@@ -172,3 +172,4 @@ extensions/**/.openclaw-runtime-deps-stamp.json
 /.crabbox-artifacts
 .comux*
 scripts/generated/
+extensions/

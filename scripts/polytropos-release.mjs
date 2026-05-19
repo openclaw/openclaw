@@ -327,8 +327,12 @@ try {
 banner(logStream, `Pushing tag: ${releaseTag}`);
 await shTee(logStream, "git", ["push", "origin", releaseTag]);
 
-// Locate workflow run for tag push (eventual consistency: retry)
-banner(logStream, "Locating workflow run for tag...");
+// Dispatch workflow explicitly for this tag (avoids tag-push trigger flakes)
+banner(logStream, "Dispatching workflow...");
+await shTee(logStream, "gh", ["workflow", "run", wf, "--repo", ghRepo, "--ref", releaseTag]);
+
+// Locate the workflow run (eventual consistency: retry)
+banner(logStream, "Locating workflow run...");
 const runId = await findRunIdForTag({ logStream, ghRepo, wf, releaseTag });
 
 banner(logStream, `Watching run: ${runId}`);
