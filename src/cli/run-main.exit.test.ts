@@ -18,6 +18,9 @@ const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const outputPrecomputedBrowserHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const loadRootHelpRenderOptionsForConfigSensitivePluginsMock = vi.hoisted(() =>
+  vi.fn(async () => null),
+);
 const buildProgramMock = vi.hoisted(() => vi.fn());
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
@@ -168,6 +171,11 @@ vi.mock("./root-help-metadata.js", () => ({
   outputPrecomputedRootHelpText: outputPrecomputedRootHelpTextMock,
 }));
 
+vi.mock("./root-help-live-config.js", () => ({
+  loadRootHelpRenderOptionsForConfigSensitivePlugins:
+    loadRootHelpRenderOptionsForConfigSensitivePluginsMock,
+}));
+
 vi.mock("./program.js", () => ({
   buildProgram: buildProgramMock,
 }));
@@ -242,6 +250,7 @@ describe("runCli exit behavior", () => {
     listAgentHarnessIdsMock.mockReturnValue([]);
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
+    loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockResolvedValue(null);
     hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(false);
     loadConfigMock.mockReturnValue({});
     startProxyMock.mockResolvedValue(null);
@@ -401,6 +410,7 @@ describe("runCli exit behavior", () => {
 
     await runCli(["node", "openclaw", "--help"]);
 
+    expect(loadRootHelpRenderOptionsForConfigSensitivePluginsMock).toHaveBeenCalledTimes(1);
     expect(outputPrecomputedRootHelpTextMock).toHaveBeenCalledTimes(1);
     expect(hasEnvHttpProxyAgentConfiguredMock).not.toHaveBeenCalled();
     expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
@@ -416,12 +426,35 @@ describe("runCli exit behavior", () => {
 
     expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "openclaw", "--help"]);
     expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(loadRootHelpRenderOptionsForConfigSensitivePluginsMock).toHaveBeenCalledTimes(1);
     expect(outputPrecomputedRootHelpTextMock).toHaveBeenCalledTimes(1);
     expect(outputRootHelpMock).toHaveBeenCalledTimes(1);
     expect(buildProgramMock).not.toHaveBeenCalled();
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it("renders config-sensitive root help live instead of precomputed metadata", async () => {
+    const liveOptions = {
+      config: {
+        plugins: {
+          slots: {
+            memory: "memory-lancedb",
+          },
+        },
+      },
+      env: process.env,
+    };
+    loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockResolvedValueOnce(liveOptions);
+    outputPrecomputedRootHelpTextMock.mockReturnValueOnce(true);
+
+    await runCli(["node", "openclaw", "--help"]);
+
+    expect(loadRootHelpRenderOptionsForConfigSensitivePluginsMock).toHaveBeenCalledTimes(1);
+    expect(outputPrecomputedRootHelpTextMock).not.toHaveBeenCalled();
+    expect(outputRootHelpMock).toHaveBeenCalledWith(liveOptions);
+    expect(buildProgramMock).not.toHaveBeenCalled();
   });
 
   it("does not start the managed proxy for local gateway client commands", async () => {
