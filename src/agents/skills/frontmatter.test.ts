@@ -65,3 +65,65 @@ describe("resolveOpenClawMetadata install validation", () => {
     expect(install).toBeUndefined();
   });
 });
+
+describe("resolveOpenClawMetadata setup parsing", () => {
+  function resolveSetup(frontmatter: Record<string, string>) {
+    return resolveOpenClawMetadata(frontmatter)?.setup;
+  }
+
+  it("parses setup.script from metadata", () => {
+    const setup = resolveSetup({
+      metadata: '{"openclaw":{"setup":{"script":"scripts/install.sh"}}}',
+    });
+    expect(setup).toEqual({ script: "scripts/install.sh" });
+  });
+
+  it("parses setup.script with timeoutMs", () => {
+    const setup = resolveSetup({
+      metadata: '{"openclaw":{"setup":{"script":"scripts/install.sh","timeoutMs":90000}}}',
+    });
+    expect(setup).toEqual({ script: "scripts/install.sh", timeoutMs: 90000 });
+  });
+
+  it("returns undefined when setup is absent", () => {
+    const setup = resolveSetup({
+      metadata: '{"openclaw":{"install":[{"kind":"brew","formula":"python@3.12"}]}}',
+    });
+    expect(setup).toBeUndefined();
+  });
+
+  it("returns undefined when setup.script is missing", () => {
+    const setup = resolveSetup({
+      metadata: '{"openclaw":{"setup":{"timeoutMs":5000}}}',
+    });
+    expect(setup).toBeUndefined();
+  });
+
+  it("rejects setup.script with .. path traversal", () => {
+    const setup = resolveSetup({
+      metadata: '{"openclaw":{"setup":{"script":"../outside.sh"}}}',
+    });
+    expect(setup).toBeUndefined();
+  });
+
+  it("rejects setup.script with absolute path", () => {
+    const setup = resolveSetup({
+      metadata: '{"openclaw":{"setup":{"script":"/etc/passwd"}}}',
+    });
+    expect(setup).toBeUndefined();
+  });
+
+  it("rejects empty setup.script", () => {
+    const setup = resolveSetup({
+      metadata: '{"openclaw":{"setup":{"script":""}}}',
+    });
+    expect(setup).toBeUndefined();
+  });
+
+  it("ignores non-numeric timeoutMs", () => {
+    const setup = resolveSetup({
+      metadata: '{"openclaw":{"setup":{"script":"run.sh","timeoutMs":"fast"}}}',
+    });
+    expect(setup).toEqual({ script: "run.sh" });
+  });
+});

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { validateRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { parseFrontmatterBlock } from "../../markdown/frontmatter.js";
 import {
@@ -19,6 +20,7 @@ import type {
   SkillEntry,
   SkillInstallSpec,
   SkillInvocationPolicy,
+  SkillSetupSpec,
 } from "./types.js";
 
 export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
@@ -184,6 +186,26 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   return spec;
 }
 
+function resolveSetupSpec(raw: unknown): SkillSetupSpec | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const obj = raw as Record<string, unknown>;
+  const script = readStringValue(obj.script);
+  if (!script) {
+    return undefined;
+  }
+  const normalized = script.trim();
+  if (!normalized || normalized.includes("..") || path.isAbsolute(normalized)) {
+    return undefined;
+  }
+  const spec: SkillSetupSpec = { script: normalized };
+  if (typeof obj.timeoutMs === "number" && obj.timeoutMs > 0) {
+    spec.timeoutMs = obj.timeoutMs;
+  }
+  return spec;
+}
+
 export function resolveOpenClawMetadata(
   frontmatter: ParsedSkillFrontmatter,
 ): OpenClawSkillMetadata | undefined {
@@ -194,6 +216,7 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
+  const setup = resolveSetupSpec(metadataObj.setup);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: readStringValue(metadataObj.emoji),
@@ -203,6 +226,7 @@ export function resolveOpenClawMetadata(
     os: osRaw.length > 0 ? osRaw : undefined,
     requires: requires,
     install: install.length > 0 ? install : undefined,
+    setup,
   };
 }
 
