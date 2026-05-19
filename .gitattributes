@@ -1,3 +1,35 @@
 * text=auto eol=lf
+
+# Lock files — treat as binary to avoid merge conflicts
+pnpm-lock.yaml binary
+bun.lock binary
+bun.lockb binary
+
+# Binary files — never diff
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg binary
+*.webp binary
+*.mp3 binary
+*.mp4 binary
+*.wav binary
+*.mov binary
+*.pdf binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.zip binary
+
+getext=auto eol=lf
+
+# Windows-specific — keep CRLF for native tools
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=lf
+
+# Keep CLAUDE.md as-is (no line-ending conversion)
 CLAUDE.md -text
 src/gateway/server-methods/CLAUDE.md -text
