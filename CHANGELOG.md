@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Control UI: treat terminal session status as authoritative over stale active-run flags so completed terminal runs stop showing abort/live UI. (#84057)
 - CLI: preserve embedded equals signs in inline root option values instead of truncating after the second separator. (#83995) Thanks @ThiagoCAltoe.
 - Providers/Ollama: default unknown-capabilities models to tool-capable so discovered native Ollama models can use tools when `/api/show` omits capabilities. (#84055) Thanks @dutifulbob.
 - Installer/Windows: launch `install.ps1` onboarding as an attached child process so fresh native Windows installs do not freeze visibly at `Starting setup...` or corrupt the wizard's terminal rendering.

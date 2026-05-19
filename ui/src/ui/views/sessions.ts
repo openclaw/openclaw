@@ -248,8 +248,11 @@ function filterRows(
     const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
     const runtime = normalizeLowercaseStringOrEmpty(resolveAgentRuntimeLabel(row.agentRuntime));
     const status = normalizeLowercaseStringOrEmpty(row.status);
-    const liveState =
-      row.hasActiveRun === true ? "live running" : row.hasActiveRun === false ? "idle" : "";
+    const liveState = isSessionRunActive(row)
+      ? "live running"
+      : row.hasActiveRun === false
+        ? "idle"
+        : "";
     if (
       key.includes(q) ||
       label.includes(q) ||

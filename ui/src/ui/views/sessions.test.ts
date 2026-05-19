@@ -548,6 +548,41 @@ describe("sessions view", () => {
     );
   });
 
+  it("does not filter terminal sessions as live when active-run flags are stale", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:done",
+              kind: "direct",
+              updatedAt: 20,
+              hasActiveRun: true,
+              status: "done",
+            },
+            {
+              key: "agent:main:running",
+              kind: "direct",
+              updatedAt: 10,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ]),
+        ),
+        searchQuery: "live",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const rows = container.querySelectorAll("tbody tr.session-data-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
+      "agent:main:running",
+    );
+  });
+
   it("keeps raw keys for inherited identity object properties", async () => {
     const container = document.createElement("div");
     render(
