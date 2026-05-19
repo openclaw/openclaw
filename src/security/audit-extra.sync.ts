@@ -518,26 +518,26 @@ export function collectHooksHardeningFindings(
     tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
     env,
   });
-  const openclawGatewayToken =
-    typeof env.OPENCLAW_GATEWAY_TOKEN === "string" && env.OPENCLAW_GATEWAY_TOKEN.trim()
-      ? env.OPENCLAW_GATEWAY_TOKEN.trim()
-      : null;
-  const gatewayToken =
-    gatewayAuth.mode === "token" &&
-    typeof gatewayAuth.token === "string" &&
-    gatewayAuth.token.trim()
-      ? gatewayAuth.token.trim()
-      : openclawGatewayToken
-        ? openclawGatewayToken
-        : null;
-  if (token && gatewayToken && token === gatewayToken) {
+  const gatewaySharedSecret =
+    gatewayAuth.mode === "token"
+      ? (normalizeOptionalString(gatewayAuth.token) ?? "")
+      : gatewayAuth.mode === "password"
+        ? (normalizeOptionalString(gatewayAuth.password) ?? "")
+        : "";
+  if (token && gatewaySharedSecret && token === gatewaySharedSecret) {
+    const reusedGatewayAuthLabel =
+      gatewayAuth.mode === "password" ? "Gateway password" : "Gateway token";
+    const reusedGatewayAuthDetail =
+      gatewayAuth.mode === "password"
+        ? "hooks.token matches gateway.auth password; compromise of hooks expands blast radius to password-mode Gateway operator auth."
+        : "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.";
     findings.push({
       checkId: "hooks.token_reuse_gateway_token",
       severity: "critical",
-      title: "Hooks token reuses the Gateway token",
-      detail:
-        "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.",
-      remediation: "Use a separate hooks.token dedicated to hook ingress.",
+      title: `Hooks token reuses the ${reusedGatewayAuthLabel}`,
+      detail: reusedGatewayAuthDetail,
+      remediation:
+        "Use a separate hooks.token dedicated to hook ingress and keep it distinct from Gateway token/password shared-secret auth.",
     });
   }
 
