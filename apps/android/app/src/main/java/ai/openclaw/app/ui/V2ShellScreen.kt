@@ -885,9 +885,9 @@ private fun V2PlainIconButton(
   contentDescription: String,
   onClick: () -> Unit,
 ) {
-  Surface(onClick = onClick, modifier = Modifier.size(34.dp), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+  Surface(onClick = onClick, modifier = Modifier.size(30.dp), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(22.dp))
+      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
     }
   }
 }
@@ -921,14 +921,14 @@ private fun V2OutlineIconButton(
 ) {
   Surface(
     onClick = onClick,
-    modifier = Modifier.size(width = 44.dp, height = 34.dp),
-    shape = RoundedCornerShape(ClawTheme.radii.control),
+    modifier = Modifier.size(width = 34.dp, height = 26.dp),
+    shape = RoundedCornerShape(7.dp),
     color = Color.Transparent,
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(19.dp))
+      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(14.dp))
     }
   }
 }
@@ -966,23 +966,23 @@ private fun V2FilterPill(
   dropdown: Boolean = false,
 ) {
   Surface(
-    shape = RoundedCornerShape(ClawTheme.radii.control),
+    shape = RoundedCornerShape(7.dp),
     color = if (active) ClawTheme.colors.surfaceRaised else Color.Transparent,
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, if (active) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+      modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-      icon?.let { Icon(imageVector = it, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.text) }
-      Text(text = text, style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1)
+      icon?.let { Icon(imageVector = it, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.text) }
+      Text(text = text, style = ClawTheme.type.label.copy(fontSize = 8.7.sp, lineHeight = 11.sp), color = ClawTheme.colors.text, maxLines = 1)
       if (live) {
-        Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(ClawTheme.colors.success))
+        Box(modifier = Modifier.size(4.dp).clip(CircleShape).background(ClawTheme.colors.success))
       }
       if (dropdown) {
-        Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.textMuted)
+        Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(11.dp), tint = ClawTheme.colors.textMuted)
       }
     }
   }
@@ -999,12 +999,12 @@ private fun V2SessionRow(
   Surface(onClick = onClick, color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
     Column {
       Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
       ) {
         Surface(
-          modifier = Modifier.size(28.dp),
+          modifier = Modifier.size(21.dp),
           shape = CircleShape,
           color = Color.Transparent,
           border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
@@ -1013,36 +1013,36 @@ private fun V2SessionRow(
             Icon(
               imageVector = if (active) Icons.Default.StarBorder else Icons.Outlined.ChatBubbleOutline,
               contentDescription = null,
-              modifier = Modifier.size(14.dp),
+              modifier = Modifier.size(10.dp),
               tint = ClawTheme.colors.text,
             )
           }
         }
 
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.5.dp)) {
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
               text = title,
-              style = ClawTheme.type.body,
+              style = ClawTheme.type.body.copy(fontSize = 8.8.sp, lineHeight = 11.2.sp),
               color = ClawTheme.colors.text,
               modifier = Modifier.weight(1f),
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
             )
             if (active) {
-              Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(ClawTheme.colors.success))
+              Box(modifier = Modifier.size(3.5.dp).clip(CircleShape).background(ClawTheme.colors.success))
             }
           }
-          Text(text = subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
-          Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+          Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 7.7.sp, lineHeight = 9.8.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+          Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             V2MiniTag(text = "Workspace")
             V2MiniTag(text = if (active) "Active" else "OpenClaw")
           }
         }
 
-        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Session options", modifier = Modifier.size(18.dp), tint = ClawTheme.colors.textMuted)
-          Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+          Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Session options", modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
+          Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 7.7.sp, lineHeight = 9.8.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
         }
       }
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
@@ -1058,7 +1058,7 @@ private fun V2MiniTag(text: String) {
     border = BorderStroke(1.dp, ClawTheme.colors.border),
     contentColor = ClawTheme.colors.textMuted,
   ) {
-    Text(text = text, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), style = ClawTheme.type.caption, maxLines = 1)
+    Text(text = text, modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.5.dp), style = ClawTheme.type.caption.copy(fontSize = 7.1.sp, lineHeight = 9.sp), maxLines = 1)
   }
 }
 
@@ -1077,22 +1077,22 @@ private fun V2SessionsScreen(
     }
   }
 
-  ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 18.dp, end = 20.dp, bottom = 24.dp)) {
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+  ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 20.dp)) {
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
       item {
         Row(
           modifier = Modifier.fillMaxWidth(),
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(12.dp),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          Text(text = "Sessions", style = ClawTheme.type.display, color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
+          Text(text = "Sessions", style = ClawTheme.type.display.copy(fontSize = 17.4.sp, lineHeight = 21.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
           V2PlainIconButton(icon = Icons.Default.Search, contentDescription = "Search sessions", onClick = {})
           V2PlainIconButton(icon = Icons.Default.MoreVert, contentDescription = "Session options", onClick = {})
         }
       }
 
       item {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
           V2FilterPill(text = "Recent", icon = Icons.Outlined.AccessTime, active = true)
           V2FilterPill(text = "Live", icon = Icons.Outlined.MicNone, active = false, live = true)
           V2FilterPill(text = "Pinned", icon = Icons.Default.StarBorder, active = false)
@@ -1101,7 +1101,7 @@ private fun V2SessionsScreen(
 
       item {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-          Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+          Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             V2FilterPill(text = "Channel", dropdown = true)
             V2FilterPill(text = "Agent", dropdown = true)
           }
@@ -1111,8 +1111,8 @@ private fun V2SessionsScreen(
 
       item {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-          Text(text = "Sort: Recent", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-          Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.textMuted)
+          Text(text = "Sort: Recent", style = ClawTheme.type.body.copy(fontSize = 8.6.sp, lineHeight = 11.sp), color = ClawTheme.colors.textMuted)
+          Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(11.dp), tint = ClawTheme.colors.textMuted)
         }
       }
 
