@@ -713,6 +713,14 @@ that any custom `appServer.command`, `url`, `authToken`, or headers are valid.
 `plugins.entries.codex.config.discovery.timeoutMs` or disable discovery. See
 [Codex harness reference](/plugins/codex-harness-reference#model-discovery).
 
+**Long Codex tasks time out after tools or while synthesizing:** check for
+`codex app-server turn idle timed out waiting for completion` in
+`~/.openclaw/logs/gateway.err.log`. Tune
+`plugins.entries.codex.config.appServer.turnCompletionIdleTimeoutMs`, keep
+`appServer.requestTimeoutMs` for control-plane calls, and run multi-hour work as
+isolated tasks with checkpoints. See
+[Codex long-task reliability](/plugins/codex-harness-long-tasks).
+
 **WebSocket transport fails immediately:** check `appServer.url`, `authToken`,
 headers, and that the remote app-server speaks the same Codex app-server
 protocol version.

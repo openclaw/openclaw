@@ -1204,6 +1204,7 @@
                 "group": "Bundled plugin guides",
                 "pages": [
                   "plugins/codex-harness",
+                  "plugins/codex-harness-long-tasks",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
                   "plugins/webhooks",
