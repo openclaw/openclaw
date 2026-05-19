@@ -2124,7 +2124,10 @@ export async function runReplyAgent(params: {
     if (isHookBlockedRun) {
       finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);
     }
-    if (opts?.sourceReplyDeliveryMode === "message_tool_only" && successfulMessagingToolDelivery) {
+    if (
+      successfulMessagingToolDelivery &&
+      (opts?.sourceReplyDeliveryMode === "message_tool_only" || isHeartbeat)
+    ) {
       finalPayloads = finalPayloads.map((payload) =>
         markReplyPayloadForMessageToolDelivery(payload),
       );

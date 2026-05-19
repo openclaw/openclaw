@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -1296,6 +1297,34 @@ describe("runReplyAgent typing (heartbeat)", () => {
     } finally {
       fallbackSpy.mockRestore();
     }
+  });
+
+  it("marks automatic heartbeat replies after generic message-tool delivery", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback narration that would duplicate the message tool" }],
+      messagingToolSentTexts: ["message tool delivered"],
+      messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "-100123" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      runOverrides: {
+        messageProvider: "telegram",
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "-100123",
+        AccountId: "primary",
+      },
+    });
+
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.text).toBe("fallback narration that would duplicate the message tool");
+    expect(getReplyPayloadMetadata(payload)?.messageToolDelivered).toBe(true);
   });
 
   it("does not treat whitespace-only messaging evidence as fallback delivery", async () => {

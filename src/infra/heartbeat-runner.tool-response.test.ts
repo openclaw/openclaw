@@ -262,6 +262,37 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   });
 
+  it("suppresses automatic heartbeat fallback text after message-tool delivery evidence", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue(
+        markReplyPayloadForMessageToolDelivery({
+          text: "Automatic fallback narration that should not be sent.",
+        }),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replyOptions(replySpy).sourceReplyDeliveryMode).toBeUndefined();
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "sent",
+        preview: "Automatic fallback narration that should not be sent.",
+        channel: "telegram",
+      });
+    });
+  });
+
   it("uses the heartbeat response tool prompt for Codex harness sessions by default", async () => {
     const result = await runPromptScenario({
       session: { agentHarnessId: "codex" },

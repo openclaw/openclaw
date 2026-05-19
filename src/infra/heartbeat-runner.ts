@@ -1744,8 +1744,7 @@ export async function runHeartbeatOnce(opts: {
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
-    const messageToolDelivered =
-      usesHeartbeatResponseTool && hasHeartbeatMessageToolDeliveryEvidence(replyResult);
+    const messageToolDelivered = hasHeartbeatMessageToolDeliveryEvidence(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
       ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
