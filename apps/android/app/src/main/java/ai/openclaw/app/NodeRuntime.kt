@@ -309,6 +309,14 @@ class NodeRuntime(
   val gatewayDefaultAgentId: StateFlow<String?> = _gatewayDefaultAgentId.asStateFlow()
   private val _gatewayAgents = MutableStateFlow<List<GatewayAgentSummary>>(emptyList())
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = _gatewayAgents.asStateFlow()
+  private val _cronStatus = MutableStateFlow(GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null))
+  val cronStatus: StateFlow<GatewayCronStatus> = _cronStatus.asStateFlow()
+  private val _cronJobs = MutableStateFlow<List<GatewayCronJobSummary>>(emptyList())
+  val cronJobs: StateFlow<List<GatewayCronJobSummary>> = _cronJobs.asStateFlow()
+  private val _cronRefreshing = MutableStateFlow(false)
+  val cronRefreshing: StateFlow<Boolean> = _cronRefreshing.asStateFlow()
+  private val _cronErrorText = MutableStateFlow<String?>(null)
+  val cronErrorText: StateFlow<String?> = _cronErrorText.asStateFlow()
 
   private val _isForeground = MutableStateFlow(true)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
@@ -350,6 +358,8 @@ class NodeRuntime(
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         _modelCatalog.value = emptyList()
         _modelAuthProviders.value = emptyList()
+        _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
+        _cronJobs.value = emptyList()
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
         updateStatus()
@@ -616,6 +626,7 @@ class NodeRuntime(
       refreshBrandingFromGateway()
       refreshAgentsFromGateway()
       refreshModelCatalogFromGateway()
+      refreshCronFromGateway()
     }
   }
 
@@ -628,6 +639,12 @@ class NodeRuntime(
   fun refreshAgents() {
     scope.launch {
       refreshAgentsFromGateway()
+    }
+  }
+
+  fun refreshCronJobs() {
+    scope.launch {
+      refreshCronFromGateway()
     }
   }
 
@@ -1574,6 +1591,35 @@ class NodeRuntime(
     }
   }
 
+  private suspend fun refreshCronFromGateway() {
+    _cronRefreshing.value = true
+    _cronErrorText.value = null
+    if (!operatorConnected) {
+      _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
+      _cronJobs.value = emptyList()
+      _cronRefreshing.value = false
+      return
+    }
+    try {
+      val statusRes = operatorSession.request("cron.status", "{}")
+      val statusRoot = json.parseToJsonElement(statusRes).asObjectOrNull()
+      _cronStatus.value =
+        GatewayCronStatus(
+          enabled = statusRoot.boolean("enabled"),
+          jobs = statusRoot.long("jobs")?.toInt() ?: 0,
+          nextWakeAtMs = statusRoot.long("nextWakeAtMs"),
+        )
+
+      val listRes = operatorSession.request("cron.list", """{"includeDisabled":true,"limit":20,"sortBy":"nextRunAtMs","sortDir":"asc"}""")
+      val listRoot = json.parseToJsonElement(listRes).asObjectOrNull()
+      _cronJobs.value = parseCronJobs(listRoot?.get("jobs") as? JsonArray)
+    } catch (_: Throwable) {
+      _cronErrorText.value = "Could not load cron jobs."
+    } finally {
+      _cronRefreshing.value = false
+    }
+  }
+
   private fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
     models
       ?.mapNotNull { item ->
@@ -1607,6 +1653,67 @@ class NodeRuntime(
           profileCount = ((obj["profiles"] as? JsonArray)?.size ?: 0),
         )
       }.orEmpty()
+
+  private fun parseCronJobs(jobs: JsonArray?): List<GatewayCronJobSummary> =
+    jobs
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val id = obj["id"].asStringOrNull()?.trim().orEmpty()
+        val name = obj["name"].asStringOrNull()?.trim().orEmpty()
+        if (id.isEmpty() || name.isEmpty()) return@mapNotNull null
+        val schedule = obj["schedule"].asObjectOrNull()
+        val state = obj["state"].asObjectOrNull()
+        val payload = obj["payload"].asObjectOrNull()
+        GatewayCronJobSummary(
+          id = id,
+          name = name,
+          enabled = obj.boolean("enabled"),
+          scheduleLabel = cronScheduleLabel(schedule),
+          promptPreview = cronPayloadPreview(payload),
+          nextRunAtMs = state.long("nextRunAtMs"),
+          lastRunStatus =
+            state
+              ?.get("lastRunStatus")
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf { it.isNotEmpty() },
+        )
+      }.orEmpty()
+
+  private fun cronScheduleLabel(schedule: JsonObject?): String =
+    when (schedule?.get("kind").asStringOrNull()) {
+      "at" -> "One time"
+      "every" -> schedule.long("everyMs")?.let(::formatEverySchedule) ?: "Repeating"
+      "cron" ->
+        schedule
+          ?.get("expr")
+          .asStringOrNull()
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() } ?: "Cron"
+      else -> "Scheduled"
+    }
+
+  private fun cronPayloadPreview(payload: JsonObject?): String {
+    val text =
+      when (payload?.get("kind").asStringOrNull()) {
+        "systemEvent" -> payload?.get("text").asStringOrNull()
+        "agentTurn" -> payload?.get("message").asStringOrNull()
+        else -> null
+      }
+    return text?.trim()?.replace(Regex("\\s+"), " ")?.takeIf { it.isNotEmpty() } ?: "No prompt"
+  }
+
+  private fun formatEverySchedule(everyMs: Long): String {
+    val minutes = everyMs / 60_000L
+    val hours = minutes / 60L
+    val days = hours / 24L
+    return when {
+      days >= 1 && hours % 24L == 0L -> "Every ${days}d"
+      hours >= 1 && minutes % 60L == 0L -> "Every ${hours}h"
+      minutes >= 1 -> "Every ${minutes}m"
+      else -> "Repeating"
+    }
+  }
 
   private fun updateHomeCanvasState() {
     val payload =
@@ -1847,6 +1954,26 @@ data class GatewayModelProviderSummary(
   val status: String,
   val profileCount: Int,
 )
+
+data class GatewayCronStatus(
+  val enabled: Boolean,
+  val jobs: Int,
+  val nextWakeAtMs: Long?,
+)
+
+data class GatewayCronJobSummary(
+  val id: String,
+  val name: String,
+  val enabled: Boolean,
+  val scheduleLabel: String,
+  val promptPreview: String,
+  val nextRunAtMs: Long?,
+  val lastRunStatus: String?,
+)
+
+private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()
+
+private fun JsonObject?.boolean(key: String): Boolean = (this?.get(key) as? JsonPrimitive)?.content?.trim() == "true"
 
 fun providerDisplayName(provider: String): String =
   when (provider.trim().lowercase()) {

@@ -87,6 +87,10 @@ class MainViewModel(
   val modelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.modelCatalogErrorText }
   val gatewayDefaultAgentId: StateFlow<String?> = runtimeState(initial = null) { it.gatewayDefaultAgentId }
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = runtimeState(initial = emptyList()) { it.gatewayAgents }
+  val cronStatus: StateFlow<GatewayCronStatus> = runtimeState(initial = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)) { it.cronStatus }
+  val cronJobs: StateFlow<List<GatewayCronJobSummary>> = runtimeState(initial = emptyList()) { it.cronJobs }
+  val cronRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.cronRefreshing }
+  val cronErrorText: StateFlow<String?> = runtimeState(initial = null) { it.cronErrorText }
   val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
   val seamColorArgb: StateFlow<Long> = runtimeState(initial = 0xFF0EA5E9) { it.seamColorArgb }
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
@@ -367,6 +371,10 @@ class MainViewModel(
 
   fun refreshAgents() {
     ensureRuntime().refreshAgents()
+  }
+
+  fun refreshCronJobs() {
+    ensureRuntime().refreshCronJobs()
   }
 
   fun loadChat(sessionKey: String) {

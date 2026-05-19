@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
+import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
@@ -70,6 +71,7 @@ internal enum class V2SettingsRoute {
   Voice,
   Agents,
   Approvals,
+  CronJobs,
   Notifications,
   PhoneCapabilities,
   Gateway,
@@ -90,12 +92,64 @@ internal fun V2SettingsDetailScreen(
     V2SettingsRoute.Voice -> V2VoiceSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Agents -> V2AgentsSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Approvals -> V2ApprovalsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    V2SettingsRoute.CronJobs -> V2CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Notifications -> V2NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.PhoneCapabilities -> V2PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Gateway -> V2GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Appearance -> V2AppearanceSettingsScreen(onBack = onBack)
     V2SettingsRoute.Health -> V2HealthSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.About -> V2AboutSettingsScreen(onBack = onBack)
+  }
+}
+
+@Composable
+private fun V2CronJobsSettingsScreen(
+  viewModel: MainViewModel,
+  onBack: () -> Unit,
+) {
+  val cronStatus by viewModel.cronStatus.collectAsState()
+  val cronJobs by viewModel.cronJobs.collectAsState()
+  val cronRefreshing by viewModel.cronRefreshing.collectAsState()
+  val cronErrorText by viewModel.cronErrorText.collectAsState()
+  val isConnected by viewModel.isConnected.collectAsState()
+
+  LaunchedEffect(isConnected) {
+    if (isConnected) {
+      viewModel.refreshCronJobs()
+    }
+  }
+
+  V2SettingsDetailFrame(title = "Cron Jobs", subtitle = "Scheduled OpenClaw work from your gateway.", icon = Icons.Default.Bolt, onBack = onBack) {
+    V2SettingsMetricPanel(
+      rows =
+        listOf(
+          V2SettingsMetric("Status", if (cronStatus.enabled) "Enabled" else "Off"),
+          V2SettingsMetric("Jobs", cronStatus.jobs.toString()),
+          V2SettingsMetric("Next Wake", formatCronWake(cronStatus.nextWakeAtMs)),
+        ),
+    )
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      ClawSecondaryButton(text = if (cronRefreshing) "Refreshing" else "Refresh", onClick = viewModel::refreshCronJobs, enabled = isConnected && !cronRefreshing, modifier = Modifier.weight(1f))
+    }
+    cronErrorText?.let { errorText ->
+      ClawPanel {
+        Text(text = errorText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+      }
+    }
+    when {
+      !isConnected ->
+        ClawPanel {
+          Text(text = "Connect the gateway to load cron jobs.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+      cronJobs.isEmpty() ->
+        ClawPanel {
+          Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(text = "No scheduled jobs.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+            Text(text = "Create jobs from the WebUI or CLI and they will appear here.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          }
+        }
+      else -> V2CronJobsPanel(jobs = cronJobs)
+    }
   }
 }
 
@@ -455,6 +509,40 @@ private fun V2ApprovalListRow(toolCall: ChatPendingToolCall) {
 }
 
 @Composable
+private fun V2CronJobsPanel(jobs: List<GatewayCronJobSummary>) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+    Column {
+      jobs.forEachIndexed { index, job ->
+        V2CronJobListRow(job = job)
+        if (index != jobs.lastIndex) {
+          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun V2CronJobListRow(job: GatewayCronJobSummary) {
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
+  ) {
+    Surface(modifier = Modifier.size(30.dp), shape = CircleShape, color = ClawTheme.colors.surfacePressed, border = BorderStroke(1.dp, ClawTheme.colors.border)) {
+      Box(contentAlignment = Alignment.Center) {
+        Icon(imageVector = Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
+      }
+    }
+    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+      Text(text = job.name, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Text(text = cronJobSubtitle(job), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+    ClawStatusPill(text = cronJobStatusText(job), status = cronJobStatus(job))
+  }
+}
+
+@Composable
 private fun V2AgentsPanel(
   agents: List<GatewayAgentSummary>,
   defaultAgentId: String?,
@@ -540,6 +628,42 @@ private fun approvalSubtitle(
   val ageMs = (System.currentTimeMillis() - toolCall.startedAtMs).coerceAtLeast(0L)
   val minutes = ageMs / 60_000L
   return if (minutes < 1) "Waiting for review" else "Waiting ${minutes}m"
+}
+
+private fun cronJobSubtitle(job: GatewayCronJobSummary): String = "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}"
+
+private fun cronJobStatusText(job: GatewayCronJobSummary): String {
+  if (!job.enabled) return "Off"
+  return when (job.lastRunStatus?.lowercase()) {
+    "error" -> "Issue"
+    "ok" -> "OK"
+    "skipped" -> "Skipped"
+    else -> "Ready"
+  }
+}
+
+private fun cronJobStatus(job: GatewayCronJobSummary): ClawStatus {
+  if (!job.enabled) return ClawStatus.Neutral
+  return when (job.lastRunStatus?.lowercase()) {
+    "error" -> ClawStatus.Danger
+    "skipped" -> ClawStatus.Warning
+    else -> ClawStatus.Success
+  }
+}
+
+private fun formatCronWake(timeMs: Long?): String {
+  val target = timeMs ?: return "None"
+  val deltaMs = target - System.currentTimeMillis()
+  if (deltaMs <= 0) return "Due"
+  val minutes = deltaMs / 60_000L
+  val hours = minutes / 60L
+  val days = hours / 24L
+  return when {
+    days > 0 -> "${days}d"
+    hours > 0 -> "${hours}h"
+    minutes > 0 -> "${minutes}m"
+    else -> "Soon"
+  }
 }
 
 @Composable

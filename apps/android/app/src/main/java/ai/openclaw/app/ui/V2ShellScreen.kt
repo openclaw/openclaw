@@ -521,11 +521,13 @@ private fun V2SettingsShellScreen(
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
   val agents by viewModel.gatewayAgents.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
+  val cronStatus by viewModel.cronStatus.collectAsState()
   var route by rememberSaveable { mutableStateOf(V2SettingsRoute.Home) }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
       viewModel.refreshAgents()
+      viewModel.refreshCronJobs()
     }
   }
 
@@ -563,6 +565,7 @@ private fun V2SettingsShellScreen(
               V2SettingsRow("Voice", if (speakerEnabled) "Speaker on" else "Speaker muted", Icons.Default.Mic, route = V2SettingsRoute.Voice),
               V2SettingsRow("Agents", if (agents.isEmpty()) "Load from gateway" else "${agents.size} available", Icons.Default.Person, status = agents.isNotEmpty(), route = V2SettingsRoute.Agents),
               V2SettingsRow("Approvals", approvalsSummary(pendingToolCalls.size), Icons.Default.Lock, status = approvalsStatus(pendingToolCalls.size), route = V2SettingsRoute.Approvals),
+              V2SettingsRow("Cron Jobs", cronJobsSummary(cronStatus.jobs), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = V2SettingsRoute.CronJobs),
               V2SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = V2SettingsRoute.Notifications),
               V2SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = V2SettingsRoute.PhoneCapabilities),
               V2SettingsRow("Gateway", gatewaySummary(statusText, isConnected), Icons.Default.Cloud, status = isConnected, route = V2SettingsRoute.Gateway),
@@ -611,6 +614,13 @@ private fun approvalsSummary(count: Int): String =
   }
 
 private fun approvalsStatus(count: Int): Boolean? = if (count > 0) true else null
+
+private fun cronJobsSummary(count: Int): String =
+  when (count) {
+    0 -> "No scheduled jobs"
+    1 -> "1 scheduled"
+    else -> "$count scheduled"
+  }
 
 private data class V2SettingsRow(
   val title: String,
