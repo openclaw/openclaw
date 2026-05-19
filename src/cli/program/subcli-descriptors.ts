@@ -179,7 +179,13 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
 ] as const satisfies ReadonlyArray<SubCliDescriptor>);
 
-export const SUB_CLI_DESCRIPTORS = subCliCommandCatalog.descriptors;
+// Unfiltered catalog — internal-only. External callers must use
+// `getSubCliEntries()` so the `qa` command stays gated behind
+// `isPrivateQaCliEnabled()`. See #83927: callers that read the raw catalog
+// (e.g. argv's `KNOWN_ROOT_COMMANDS` / `ROOT_COMMANDS_WITH_SUBCOMMANDS`) used to
+// see `qa` regardless of the feature flag, leaking the surface to argv parsing.
+const UNFILTERED_SUB_CLI_DESCRIPTORS: ReadonlyArray<SubCliDescriptor> =
+  subCliCommandCatalog.descriptors;
 
 export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
   const descriptors = subCliCommandCatalog.getDescriptors();
@@ -187,6 +193,16 @@ export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
     return descriptors;
   }
   return descriptors.filter((descriptor) => descriptor.name !== "qa");
+}
+
+// Back-compat shim for callers that historically imported the raw constant
+// (e.g. argv parsing). Apply the same gate as `getSubCliEntries`. Prefer
+// `getSubCliEntries()` for new code.
+export function getSubCliDescriptors(): ReadonlyArray<SubCliDescriptor> {
+  if (isPrivateQaCliEnabled()) {
+    return UNFILTERED_SUB_CLI_DESCRIPTORS;
+  }
+  return UNFILTERED_SUB_CLI_DESCRIPTORS.filter((descriptor) => descriptor.name !== "qa");
 }
 
 export function getSubCliCommandsWithSubcommands(): string[] {

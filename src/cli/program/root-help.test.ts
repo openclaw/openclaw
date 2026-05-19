@@ -30,7 +30,7 @@ vi.mock("./core-command-descriptors.js", () => ({
 }));
 
 vi.mock("./subcli-descriptors.js", () => ({
-  SUB_CLI_DESCRIPTORS: [
+  getSubCliDescriptors: () => [
     {
       name: "config",
       description: "Manage config",

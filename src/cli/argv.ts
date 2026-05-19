@@ -5,20 +5,29 @@ import {
   isValueToken,
 } from "../infra/cli-root-options.js";
 import { CORE_CLI_COMMAND_DESCRIPTORS } from "./program/core-command-descriptors.js";
-import { SUB_CLI_DESCRIPTORS } from "./program/subcli-descriptors.js";
+import { getSubCliDescriptors } from "./program/subcli-descriptors.js";
 
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const ROOT_VERSION_ALIAS_FLAG = "-v";
-const ROOT_COMMAND_DESCRIPTORS = [...CORE_CLI_COMMAND_DESCRIPTORS, ...SUB_CLI_DESCRIPTORS];
-const KNOWN_ROOT_COMMANDS: ReadonlySet<string> = new Set(
-  ROOT_COMMAND_DESCRIPTORS.map((descriptor) => descriptor.name),
-);
-const ROOT_COMMANDS_WITH_SUBCOMMANDS: ReadonlySet<string> = new Set(
-  ROOT_COMMAND_DESCRIPTORS.filter((descriptor) => descriptor.hasSubcommands).map(
-    (descriptor) => descriptor.name,
-  ),
-);
+
+// Lazy: `getSubCliDescriptors()` calls `isPrivateQaCliEnabled()` which reads
+// `process.env`. Evaluating these at module-load time would freeze the gate
+// against the env value at the moment subcli-descriptors was first imported,
+// which loses the gate entirely if the env flag is set after import. See #83927.
+function getRootCommandDescriptors(): ReadonlyArray<{ name: string; hasSubcommands?: boolean }> {
+  return [...CORE_CLI_COMMAND_DESCRIPTORS, ...getSubCliDescriptors()];
+}
+function getKnownRootCommands(): ReadonlySet<string> {
+  return new Set(getRootCommandDescriptors().map((descriptor) => descriptor.name));
+}
+function getRootCommandsWithSubcommands(): ReadonlySet<string> {
+  return new Set(
+    getRootCommandDescriptors()
+      .filter((descriptor) => descriptor.hasSubcommands)
+      .map((descriptor) => descriptor.name),
+  );
+}
 
 export function hasHelpOrVersion(argv: string[]): boolean {
   return (
@@ -64,10 +73,10 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
     const [primary] = positionals;
     // Positional `help` may be a command argument for known leaf commands.
     // Unknown roots are treated as plugin command namespaces.
-    if (!primary || !KNOWN_ROOT_COMMANDS.has(primary)) {
+    if (!primary || !getKnownRootCommands().has(primary)) {
       return true;
     }
-    if (positionals.length === 2 && ROOT_COMMANDS_WITH_SUBCOMMANDS.has(primary)) {
+    if (positionals.length === 2 && getRootCommandsWithSubcommands().has(primary)) {
       return true;
     }
     return false;
