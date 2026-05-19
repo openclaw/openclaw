@@ -2,20 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { ModelRow } from "./list.types.js";
 
 const mocks = vi.hoisted(() => ({
+  normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
   shouldSuppressBuiltInModel: vi.fn(() => {
     throw new Error("runtime model suppression should be skipped");
   }),
   shouldSuppressBuiltInModelFromManifest: vi.fn(() => false),
-  loadProviderCatalogModelsForList: vi.fn().mockResolvedValue([
-    {
-      id: "gpt-5.5",
-      name: "gpt-5.5",
-      provider: "codex",
-      api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-      input: ["text"],
-    },
-  ]),
 }));
 
 vi.mock("../../agents/model-suppression.js", () => ({
@@ -23,8 +14,8 @@ vi.mock("../../agents/model-suppression.js", () => ({
   shouldSuppressBuiltInModelFromManifest: mocks.shouldSuppressBuiltInModelFromManifest,
 }));
 
-vi.mock("./list.provider-catalog.js", () => ({
-  loadProviderCatalogModelsForList: mocks.loadProviderCatalogModelsForList,
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  normalizeProviderResolvedModelWithPlugin: mocks.normalizeProviderResolvedModelWithPlugin,
 }));
 
 import { appendProviderCatalogRows } from "./list.rows.js";
@@ -50,6 +41,16 @@ describe("appendProviderCatalogRows", () => {
     await appendProviderCatalogRows({
       rows,
       seenKeys: new Set(),
+      catalogModels: [
+        {
+          id: "gpt-5.5",
+          name: "gpt-5.5",
+          provider: "codex",
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api",
+          input: ["text"],
+        },
+      ],
       context: {
         cfg: {
           agents: { defaults: { model: { primary: "codex/gpt-5.5" } } },
@@ -80,22 +81,22 @@ describe("appendProviderCatalogRows", () => {
   });
 
   it("applies manifest suppression when runtime model-suppression hooks are skipped", async () => {
-    mocks.loadProviderCatalogModelsForList.mockResolvedValueOnce([
-      {
-        id: "gpt-5.3-codex-spark",
-        name: "GPT-5.3 Codex Spark",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        input: ["text", "image"],
-      },
-    ]);
     mocks.shouldSuppressBuiltInModelFromManifest.mockReturnValueOnce(true);
     const rows: ModelRow[] = [];
 
     await appendProviderCatalogRows({
       rows,
       seenKeys: new Set(),
+      catalogModels: [
+        {
+          id: "gpt-5.3-codex-spark",
+          name: "GPT-5.3 Codex Spark",
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          input: ["text", "image"],
+        },
+      ],
       context: {
         cfg: {
           agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
@@ -126,21 +127,21 @@ describe("appendProviderCatalogRows", () => {
   });
 
   it("uses Codex auth availability for configured canonical OpenAI rows", async () => {
-    mocks.loadProviderCatalogModelsForList.mockResolvedValueOnce([
-      {
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        input: ["text", "image"],
-      },
-    ]);
     const rows: ModelRow[] = [];
 
     await appendProviderCatalogRows({
       rows,
       seenKeys: new Set(),
+      catalogModels: [
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          input: ["text", "image"],
+        },
+      ],
       context: {
         cfg: {
           agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },

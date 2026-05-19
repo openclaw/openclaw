@@ -483,16 +483,21 @@ export async function appendProviderCatalogRows(params: {
   context: RowBuilderContext;
   seenKeys: Set<string>;
   staticOnly?: boolean;
+  catalogModels?: readonly Model<Api>[];
 }): Promise<number> {
   let appended = 0;
-  const { loadProviderCatalogModelsForList } = await loadProviderCatalogModule();
-  for (const model of await loadProviderCatalogModelsForList({
-    cfg: params.context.cfg,
-    agentDir: params.context.agentDir,
-    providerFilter: params.context.filter.provider,
-    staticOnly: params.staticOnly,
-    metadataSnapshot: params.context.metadataSnapshot,
-  })) {
+  let catalogModels = params.catalogModels;
+  if (catalogModels == null) {
+    const { loadProviderCatalogModelsForList } = await loadProviderCatalogModule();
+    catalogModels = await loadProviderCatalogModelsForList({
+      cfg: params.context.cfg,
+      agentDir: params.context.agentDir,
+      providerFilter: params.context.filter.provider,
+      staticOnly: params.staticOnly,
+      metadataSnapshot: params.context.metadataSnapshot,
+    });
+  }
+  for (const model of catalogModels) {
     const key = modelKey(model.provider, model.id);
     if (
       await appendVisibleRow({
