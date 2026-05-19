@@ -290,6 +290,51 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
 - Telegram is owned by the gateway process.
 - Routing is deterministic: Telegram inbound replies back to Telegram (the model does not pick channels).
+
+### Show which agent answered
+
+For multi-agent Telegram groups, set the Telegram response prefix to `auto` and give each routed
+agent an identity name. Outbound Telegram replies are prefixed by the gateway, so the model does not
+need to remember to write its own label.
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "codex",
+        identity: { name: "Codex" },
+      },
+      {
+        id: "claude",
+        identity: { name: "Claude" },
+      },
+      {
+        id: "gemini",
+        identity: { name: "Gemini" },
+      },
+    ],
+  },
+  channels: {
+    telegram: {
+      responsePrefix: "auto",
+      groups: {
+        "-1001234567890": {
+          topics: {
+            "21": { agentId: "codex" },
+            "1938": { agentId: "claude" },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+With that config, replies appear as `[Codex] ...`, `[Claude] ...`, etc. Use
+`channels.telegram.responsePrefix: ""` to disable a global prefix for Telegram, or set a literal
+string such as `"[OpenClaw]"` when all agents should share one visible label.
+
 - Inbound messages normalize into the shared channel envelope with reply metadata, media placeholders, and persisted reply-chain context for Telegram replies the gateway has observed.
 - Group sessions are isolated by group ID. Forum topics append `:topic:<threadId>` to keep topics isolated.
 - DM messages can carry `message_thread_id`; OpenClaw preserves the thread ID for replies but keeps DMs on the flat session by default. Configure `channels.telegram.dm.threadReplies: "inbound"`, `channels.telegram.direct.<chatId>.threadReplies: "inbound"`, `requireTopic: true`, or a matching topic config when you intentionally want DM topic session isolation.
