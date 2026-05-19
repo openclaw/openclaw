@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./config.js", () => ({
   resolveVoiceCallSessionKey: (params: {
-    config: Pick<VoiceCallConfig, "sessionScope">;
+    config: Pick<VoiceCallConfig, "agentId" | "sessionScope">;
     callId: string;
     phone?: string;
     explicitSessionKey?: string;
@@ -37,11 +37,13 @@ vi.mock("./config.js", () => ({
     if (explicit) {
       return explicit;
     }
+    const agentId = params.config.agentId?.trim().toLowerCase() || "main";
+    const prefix = `agent:${agentId}:voice`;
     if (params.config.sessionScope === "per-call") {
-      return `voice:call:${params.callId}`;
+      return `${prefix}:call:${params.callId}`;
     }
     const normalizedPhone = params.phone?.replace(/\D/g, "");
-    return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
+    return normalizedPhone ? `${prefix}:${normalizedPhone}` : `${prefix}:${params.callId}`;
   },
   resolveVoiceCallEffectiveConfig: (config: VoiceCallConfig) => ({ config }),
   resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
@@ -413,7 +415,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       firstCallParam(runEmbeddedPiAgent.mock.calls as unknown[][], "embedded PI consult"),
       "embedded PI consult params",
     );
-    expect(consultParams.sessionKey).toBe("voice:15550009999");
+    expect(consultParams.sessionKey).toBe("agent:main:voice:15550009999");
     expect(consultParams.spawnedBy).toBe("agent:main:discord:channel:general");
     expect(consultParams.messageProvider).toBe("voice");
     expect(consultParams.lane).toBe("voice");
@@ -558,7 +560,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
         error: console.error,
         debug: console.debug,
       },
-      sessionKey: "voice:15550001234",
+      sessionKey: "agent:main:voice:15550001234",
     });
     expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
   });

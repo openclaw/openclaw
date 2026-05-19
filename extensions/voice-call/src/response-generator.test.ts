@@ -206,7 +206,7 @@ describe("generateVoiceResponse", () => {
     });
 
     expect(result.text).toBe("Pinned model works.");
-    const pinnedSessionEntry = sessionStore["voice:15550001111"];
+    const pinnedSessionEntry = sessionStore["agent:main:voice:15550001111"];
     expect(pinnedSessionEntry?.providerOverride).toBe("openai");
     expect(pinnedSessionEntry?.modelOverride).toBe("gpt-4.1-nano");
     expect(pinnedSessionEntry?.modelOverrideSource).toBe("auto");
@@ -219,7 +219,7 @@ describe("generateVoiceResponse", () => {
     const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
     expect(args.provider).toBe("openai");
     expect(args.model).toBe("gpt-4.1-nano");
-    expect(args.sessionKey).toBe("voice:15550001111");
+    expect(args.sessionKey).toBe("agent:main:voice:15550001111");
   });
 
   it("uses the persisted per-call session key for classic responses", async () => {
@@ -246,7 +246,7 @@ describe("generateVoiceResponse", () => {
     const perCallSessionEntry = sessionStore["voice:call:call-123"];
     expect(perCallSessionEntry?.sessionId).toBeTypeOf("string");
     expect(perCallSessionEntry?.sessionId).not.toBe("");
-    expect(sessionStore["voice:15550001111"]).toBeUndefined();
+    expect(sessionStore["agent:main:voice:15550001111"]).toBeUndefined();
     const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
     expect(args.sessionKey).toBe("voice:call:call-123");
     expect(args.sandboxSessionKey).toBe("agent:main:voice:call:call-123");
@@ -279,7 +279,7 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "main");
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "main");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "main");
-    const defaultSessionEntry = sessionStore["voice:15550001111"];
+    const defaultSessionEntry = sessionStore["agent:main:voice:15550001111"];
     if (!defaultSessionEntry) {
       throw new Error("Expected default voice session entry");
     }
@@ -329,7 +329,7 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "voice");
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "voice");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "voice");
-    const voiceSessionEntry = sessionStore["voice:15550001111"];
+    const voiceSessionEntry = sessionStore["agent:voice:voice:15550001111"];
     if (!voiceSessionEntry) {
       throw new Error("Expected routed voice session entry");
     }

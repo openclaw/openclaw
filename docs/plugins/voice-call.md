@@ -211,6 +211,11 @@ each carrier call should start with fresh context, for example reception,
 booking, IVR, or Google Meet bridge flows where the same phone number may
 represent different meetings.
 
+Generated session keys are scoped under the configured voice agent, for example
+`agent:main:voice:15550001234` for per-phone sessions or
+`agent:main:voice:call:<call-id>` for per-call sessions. Explicit session keys
+provided by an inbound route or outbound call request are preserved as-is.
+
 ## Realtime voice conversations
 
 `realtime` selects a full-duplex realtime voice provider for live call
@@ -233,7 +238,7 @@ Current runtime behaviour:
 - `realtime.agentContext.enabled` is default-off. When enabled, Voice Call injects a bounded agent identity, system prompt override, and selected workspace-file capsule into the realtime provider instructions at session setup.
 - `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns those snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
-- Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
+- Consult session keys reuse the stored call session when available, then fall back to the agent-scoped configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
 
 ### Tool policy
 

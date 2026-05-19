@@ -295,7 +295,23 @@ describe("resolveVoiceCallConfig session routing", () => {
         callId: "call-123",
         phone: "+1 (555) 000-1111",
       }),
-    ).toBe("voice:15550001111");
+    ).toBe("agent:main:voice:15550001111");
+  });
+
+  it("scopes voice sessions by configured agent id", () => {
+    const config = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      agentId: "Cards",
+    });
+
+    expect(
+      resolveVoiceCallSessionKey({
+        config,
+        callId: "call-123",
+        phone: "+1 (555) 000-1111",
+      }),
+    ).toBe("agent:cards:voice:15550001111");
   });
 
   it("can scope voice sessions to each call", () => {
@@ -312,7 +328,7 @@ describe("resolveVoiceCallConfig session routing", () => {
         callId: "call-123",
         phone: "+1 (555) 000-1111",
       }),
-    ).toBe("voice:call:call-123");
+    ).toBe("agent:main:voice:call:call-123");
   });
 
   it("preserves explicit voice session keys", () => {
