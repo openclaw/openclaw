@@ -1665,7 +1665,8 @@ tasks:
     const cases: Array<{
       name: string;
       fileState: HeartbeatFileState;
-      reason?: "interval" | "wake";
+      reason?: "interval" | "wake" | `notification-wake:${string}`;
+      source?: "interval" | "hook" | "notifications-event";
       queueCronEvent?: boolean;
       expectedStatus: "ran" | "skipped";
       expectedSkipReason?: "empty-heartbeat-file";
