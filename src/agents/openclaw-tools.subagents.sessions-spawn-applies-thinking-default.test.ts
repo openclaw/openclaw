@@ -8,6 +8,7 @@ function expectResolvedThinkingPlan(input: {
   expected: ThinkingLevel;
   thinkingOverrideRaw?: string;
   callerThinkingRaw?: string;
+  requesterAgentConfig?: unknown;
   targetAgentConfig?: unknown;
   cfg?: OpenClawConfig;
 }) {
@@ -20,6 +21,7 @@ function expectResolvedThinkingPlan(input: {
 
   const plan = resolveSubagentThinkingOverride({
     cfg,
+    requesterAgentConfig: input.requesterAgentConfig,
     targetAgentConfig: input.targetAgentConfig,
     thinkingOverrideRaw: input.thinkingOverrideRaw,
     callerThinkingRaw: input.callerThinkingRaw,
@@ -50,6 +52,15 @@ describe("sessions_spawn thinking defaults", () => {
     expectResolvedThinkingPlan({
       targetAgentConfig: { subagents: { thinking: "medium" } },
       expected: "medium",
+    });
+  });
+
+  it("prefers requester-agent subagent thinking over target-agent subagent thinking", () => {
+    expectResolvedThinkingPlan({
+      requesterAgentConfig: { subagents: { thinking: "low" } },
+      targetAgentConfig: { subagents: { thinking: "medium" } },
+      callerThinkingRaw: "high",
+      expected: "low",
     });
   });
 

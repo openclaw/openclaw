@@ -1208,6 +1208,7 @@ export async function spawnSubagentDirect(
     maxSpawnDepth,
   });
   const targetAgentDir = resolveAgentDir(cfg, targetAgentId);
+  const requesterAgentConfig = resolveAgentConfig(cfg, requesterAgentId);
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
   const callerThinkingRaw = readRequesterThinkingLevel({
     cfg,
@@ -1216,6 +1217,7 @@ export async function spawnSubagentDirect(
   const plan = resolveSubagentModelAndThinkingPlan({
     cfg,
     targetAgentId,
+    requesterAgentConfig,
     targetAgentConfig,
     modelOverride,
     thinkingOverrideRaw,

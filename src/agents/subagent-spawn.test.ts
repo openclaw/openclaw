@@ -288,6 +288,47 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(persistedStore?.[childSessionKey]?.thinkingLevel).toBe("high");
   });
 
+  it("applies requester-agent subagent thinking before caller session thinking", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+        },
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/workspace-main",
+            subagents: {
+              thinking: "medium",
+            },
+          },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:main:main": { thinkingLevel: "high" },
+    });
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "requester policy thinking",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const childSessionKey = result.childSessionKey as string;
+    expect(persistedStore?.[childSessionKey]?.thinkingLevel).toBe("medium");
+  });
+
   it("keeps controller ownership separate from completion ownership", async () => {
     await spawnSubagentDirect(
       {
