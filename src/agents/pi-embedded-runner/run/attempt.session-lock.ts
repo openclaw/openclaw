@@ -148,12 +148,18 @@ type OwnedSessionFileWrite = {
   fingerprint: SessionFileFingerprint;
 };
 
+type TrustedSessionFileState = {
+  generation: number;
+  fingerprint: SessionFileFingerprint;
+};
+
 // Controllers in the same OpenClaw process can legitimately take turns writing
 // the same session file while another attempt is released for model I/O. Track
 // only fingerprints that changed while OpenClaw held the write lock so the
 // takeover fence can distinguish those locked in-process writes from unowned
 // external file changes.
 const ownedSessionFileWrites = new Map<string, OwnedSessionFileWrite>();
+const trustedSessionFileStates = new Map<string, TrustedSessionFileState>();
 let ownedSessionFileWriteGeneration = 0;
 
 function resolveSessionFileFenceKey(sessionFile: string): string {
@@ -165,11 +171,39 @@ function recordOwnedSessionFileWrite(
   fingerprint: SessionFileFingerprint,
 ): number {
   ownedSessionFileWriteGeneration += 1;
-  ownedSessionFileWrites.set(sessionFileKey, {
+  const state = {
+    generation: ownedSessionFileWriteGeneration,
+    fingerprint,
+  };
+  ownedSessionFileWrites.set(sessionFileKey, state);
+  trustedSessionFileStates.set(sessionFileKey, state);
+  return ownedSessionFileWriteGeneration;
+}
+
+function trustSessionFileState(
+  sessionFileKey: string,
+  fingerprint: SessionFileFingerprint,
+): number | undefined {
+  const trusted = trustedSessionFileStates.get(sessionFileKey);
+  if (trusted) {
+    return sameSessionFileFingerprint(trusted.fingerprint, fingerprint)
+      ? trusted.generation
+      : undefined;
+  }
+  ownedSessionFileWriteGeneration += 1;
+  trustedSessionFileStates.set(sessionFileKey, {
     generation: ownedSessionFileWriteGeneration,
     fingerprint,
   });
   return ownedSessionFileWriteGeneration;
+}
+
+function isTrustedSessionFileState(
+  sessionFileKey: string,
+  fingerprint: SessionFileFingerprint,
+): boolean {
+  const trusted = trustedSessionFileStates.get(sessionFileKey);
+  return !!trusted && sameSessionFileFingerprint(trusted.fingerprint, fingerprint);
 }
 
 async function readSessionFileFingerprint(sessionFile: string): Promise<SessionFileFingerprint> {
@@ -417,6 +451,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     if (sameSessionFileFingerprint(beforeWrite, fingerprint)) {
       return null;
     }
+    if (!isTrustedSessionFileState(sessionFileFenceKey, beforeWrite)) {
+      return null;
+    }
     const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, fingerprint);
     return { fingerprint, generation };
   }
@@ -460,11 +497,12 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       heldLock = undefined;
       const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
       const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
+      const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
       fenceFingerprint = fingerprint;
       fenceGeneration =
         ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
           ? ownedWrite.generation
-          : fenceGeneration;
+          : (trustedGeneration ?? fenceGeneration);
       fenceActive = true;
       await lock.release();
     },
