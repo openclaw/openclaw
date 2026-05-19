@@ -813,8 +813,14 @@ function convertResponsesMessages(
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push({
+      type: "message",
       role: model.reasoning && options?.supportsDeveloperRole !== false ? "developer" : "system",
-      content: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
+      content: [
+        {
+          type: "input_text",
+          text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
+        },
+      ],
     });
   }
   let msgIndex = 0;
@@ -822,6 +828,7 @@ function convertResponsesMessages(
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         messages.push({
+          type: "message",
           role: "user",
           content: [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
         });
@@ -838,7 +845,7 @@ function convertResponsesMessages(
           ) as ResponseInputMessageContentList
         ).filter((item) => model.input.includes("image") || item.type !== "input_image");
         if (content.length > 0) {
-          messages.push({ role: "user", content });
+          messages.push({ type: "message", role: "user", content });
         }
       }
     } else if (msg.role === "assistant") {
@@ -1667,6 +1674,7 @@ function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Conte
     );
   }
   messages.push({
+    type: "message",
     role: "user",
     content: [{ type: "input_text", text: OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT }],
   });
