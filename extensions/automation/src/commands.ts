@@ -9,23 +9,12 @@ import { buildDevOpsPanel } from "./telegram-ui/devops-panel.js";
 import { getGatewayRPC } from "./gateway-rpc.js";
 import type { InteractiveReply } from "./telegram-ui/types.js";
 
+/**
+ * 將面板轉換為 PluginCommandResult (ReplyPayload) 格式。
+ * 使用 `interactive` 欄位讓 Telegram channel renderer 正確渲染按鈕和 HTML。
+ */
 function toReply(panel: InteractiveReply) {
-  const text = panel.blocks
-    .filter((b): b is { type: "text"; text: string } => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
-  const buttonBlocks = panel.blocks.filter(
-    (b): b is { type: "buttons"; buttons: any[] } => b.type === "buttons",
-  );
-  const buttons = buttonBlocks.length
-    ? buttonBlocks.map((b) =>
-        b.buttons.map((btn: any) => ({
-          text: btn.label,
-          callback_data: btn.value,
-        })),
-      )
-    : undefined;
-  return { text, buttons, parseMode: "HTML" as const };
+  return { interactive: panel };
 }
 
 export function registerCommands(api: OpenClawPluginApi) {
@@ -135,7 +124,11 @@ export function registerCommands(api: OpenClawPluginApi) {
         `今日 Token: ${usage.tokensToday.toLocaleString()}\n` +
         `今日費用: $${usage.costToday.toFixed(2)}\n` +
         `排程: ${snapshot.cronJobsEnabled} 個啟用`;
-      return { text, parseMode: "HTML" as const };
+      return {
+        interactive: {
+          blocks: [{ type: "text" as const, text }],
+        },
+      };
     },
   });
 
@@ -146,7 +139,11 @@ export function registerCommands(api: OpenClawPluginApi) {
     requireAuth: true,
     handler: async () => {
       await rpc.resetSession();
-      return { text: "✅ 對話已重置", parseMode: "HTML" as const };
+      return {
+        interactive: {
+          blocks: [{ type: "text" as const, text: "✅ 對話已重置" }],
+        },
+      };
     },
   });
 }
