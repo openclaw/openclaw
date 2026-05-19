@@ -51,7 +51,7 @@ describe("createNativeTelegramToolProgressDraft", () => {
     );
   });
 
-  it("stops after a Telegram rejection so callers can fall back silently", async () => {
+  it("stops after a Telegram rejection so later updates can fall back silently", async () => {
     const sendMessageDraft = createSendMessageDraftMock(async () => {
       throw new Error("Bad Request: method is unavailable");
     });
@@ -63,11 +63,11 @@ describe("createNativeTelegramToolProgressDraft", () => {
     } as never);
 
     expect(draft).toBeDefined();
-    await expect(draft?.update("Running command")).resolves.toBe(false);
+    await expect(draft?.update("Running command")).resolves.toBe(true);
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith(expect.stringContaining("disabled")));
     await expect(draft?.update("Still running")).resolves.toBe(false);
 
     expect(sendMessageDraft).toHaveBeenCalledTimes(1);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("disabled"));
   });
 
   it("coalesces rapid progress updates into the latest pending native draft", async () => {
@@ -119,7 +119,7 @@ describe("createNativeTelegramToolProgressDraft", () => {
     } as never);
 
     expect(draft).toBeDefined();
-    const firstUpdate = draft?.update("Starting");
+    await expect(draft?.update("Starting")).resolves.toBe(true);
     await expect(draft?.update("Running tests")).resolves.toBe(true);
 
     expect(sendMessageDraft).toHaveBeenCalledTimes(1);
@@ -127,7 +127,6 @@ describe("createNativeTelegramToolProgressDraft", () => {
     expect(sendMessageDraft).toHaveBeenCalledTimes(1);
 
     resolveFirstSend?.(undefined);
-    await firstUpdate;
     await vi.waitFor(() => expect(sendMessageDraft).toHaveBeenCalledTimes(2));
     const draftId = sendMessageDraft.mock.calls[0]?.[1];
     expect(sendMessageDraft).toHaveBeenLastCalledWith(
@@ -186,11 +185,31 @@ describe("createNativeTelegramToolProgressDraft", () => {
     } as never);
 
     expect(draft).toBeDefined();
-    const update = draft?.update("Starting");
+    await expect(draft?.update("Starting")).resolves.toBe(true);
     draft?.stop();
 
-    await expect(update).resolves.toBe(false);
+    await vi.waitFor(() => expect(inFlightSignal?.aborted).toBe(true));
     expect(inFlightSignal?.aborted).toBe(true);
     expect(log).not.toHaveBeenCalled();
+  });
+
+  it("does not make callers wait for slow native draft network sends", async () => {
+    let resolveSend: ((value: unknown) => void) | undefined;
+    const sendMessageDraft = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveSend = resolve;
+        }),
+    );
+    const draft = createNativeTelegramToolProgressDraft({
+      api: { sendMessageDraft },
+      chatId: 123,
+    } as never);
+
+    expect(draft).toBeDefined();
+    await expect(draft?.update("Starting")).resolves.toBe(true);
+    expect(sendMessageDraft).toHaveBeenCalledTimes(1);
+
+    resolveSend?.(undefined);
   });
 });

@@ -89,48 +89,48 @@ export function createNativeTelegramToolProgressDraft(params: {
     }
   };
 
-  const sendNow = async (text: string): Promise<boolean> => {
+  const sendNow = (text: string): void => {
     const abortController = new AbortController();
-    try {
-      if (stopped) {
-        return false;
-      }
-      inFlightText = text;
-      inFlightAbortController = abortController;
-      lastSendStartedAt = Date.now();
-      inFlight = sendMessageDraft(
-        params.chatId,
-        draftId,
-        text,
-        Object.keys(threadParams).length > 0 ? threadParams : undefined,
-        abortController.signal,
-      ).then(() => true);
-      const sent = await inFlight;
-      if (stopped) {
-        return false;
-      }
-      lastSentText = text;
-      return sent;
-    } catch (err) {
-      if (stopped && abortController.signal.aborted) {
-        return false;
-      }
-      stopped = true;
-      queuedText = undefined;
-      clearQueuedTimer();
-      params.log?.(`telegram native tool-progress draft disabled: ${formatErrorMessage(err)}`);
-      return false;
-    } finally {
-      if (inFlightAbortController === abortController) {
-        inFlightAbortController = undefined;
-      }
-      inFlight = undefined;
-      inFlightText = undefined;
-      scheduleQueuedSend();
+    if (stopped) {
+      return;
     }
+    inFlightText = text;
+    inFlightAbortController = abortController;
+    lastSendStartedAt = Date.now();
+    inFlight = sendMessageDraft(
+      params.chatId,
+      draftId,
+      text,
+      Object.keys(threadParams).length > 0 ? threadParams : undefined,
+      abortController.signal,
+    )
+      .then(() => {
+        if (!stopped) {
+          lastSentText = text;
+        }
+        return true;
+      })
+      .catch((err) => {
+        if (stopped && abortController.signal.aborted) {
+          return false;
+        }
+        stopped = true;
+        queuedText = undefined;
+        clearQueuedTimer();
+        params.log?.(`telegram native tool-progress draft disabled: ${formatErrorMessage(err)}`);
+        return false;
+      })
+      .finally(() => {
+        if (inFlightAbortController === abortController) {
+          inFlightAbortController = undefined;
+        }
+        inFlight = undefined;
+        inFlightText = undefined;
+        scheduleQueuedSend();
+      });
   };
 
-  const flushQueuedSend = async (): Promise<boolean> => {
+  const flushQueuedSend = (): boolean => {
     clearQueuedTimer();
     if (stopped || inFlight || !queuedText) {
       return false;
@@ -140,7 +140,8 @@ export function createNativeTelegramToolProgressDraft(params: {
     if (nextText === lastSentText) {
       return true;
     }
-    return await sendNow(nextText);
+    sendNow(nextText);
+    return true;
   };
 
   function scheduleQueuedSend() {
@@ -151,7 +152,7 @@ export function createNativeTelegramToolProgressDraft(params: {
     const delayMs = Math.max(0, minUpdateIntervalMs - elapsedMs);
     queuedTimer = setTimeout(() => {
       queuedTimer = undefined;
-      void flushQueuedSend();
+      flushQueuedSend();
     }, delayMs);
   }
 
@@ -171,7 +172,8 @@ export function createNativeTelegramToolProgressDraft(params: {
         return true;
       }
       if (!lastSentText && !inFlight) {
-        return await sendNow(normalizedText);
+        sendNow(normalizedText);
+        return true;
       }
       queuedText = normalizedText;
       scheduleQueuedSend();

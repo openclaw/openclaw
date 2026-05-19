@@ -7,6 +7,7 @@ import {
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
 import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
+import { createNativeTelegramToolProgressDraft as createNativeTelegramToolProgressDraftActual } from "./native-tool-progress-draft.js";
 
 type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -1632,6 +1633,70 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createNativeTelegramToolProgressDraft).toHaveBeenCalled();
     expect(nativeDraft.update).toHaveBeenCalledWith("Working\n🛠️ Exec");
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Working\n`🛠️ Exec`");
+    expectDeliveredReply(0, { text: "Done." });
+  });
+
+  it("delivers the final answer when native tool-progress draft sends are slow", async () => {
+    let draftSignal: AbortSignal | undefined;
+    const sendMessageDraft = vi.fn(
+      async (
+        _chatId: number | string,
+        _draftId: number,
+        _text: string,
+        _params?: Record<string, unknown>,
+        signal?: AbortSignal,
+      ) => {
+        draftSignal = signal;
+        return await new Promise((resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              const err = new Error("aborted");
+              err.name = "AbortError";
+              reject(err);
+            },
+            { once: true },
+          );
+        });
+      },
+    );
+    const bot = createBot();
+    (bot.api as Bot["api"] & { sendMessageDraft: typeof sendMessageDraft }).sendMessageDraft =
+      sendMessageDraft;
+    setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      bot,
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          preview: { nativeToolProgress: true, nativeToolProgressAllowFrom: ["123"] },
+          progress: { label: "Working" },
+        },
+      },
+      telegramDeps: {
+        ...telegramDepsForTest,
+        createNativeTelegramToolProgressDraft: createNativeTelegramToolProgressDraftActual,
+      },
+    });
+
+    expect(sendMessageDraft).toHaveBeenCalledWith(
+      123,
+      expect.any(Number),
+      "Working\n🛠️ Exec",
+      { message_thread_id: 777 },
+      expect.any(AbortSignal),
+    );
+    expect(draftSignal?.aborted).toBe(true);
     expectDeliveredReply(0, { text: "Done." });
   });
 
