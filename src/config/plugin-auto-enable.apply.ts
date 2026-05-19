@@ -40,7 +40,10 @@ export function materializePluginAutoEnableCandidates(params: {
   });
 }
 
-const autoEnableCache = new WeakMap<object, WeakMap<object, PluginAutoEnableResult>>();
+const autoEnableCache = new WeakMap<
+  object,
+  WeakMap<object, Map<PluginManifestRegistry | undefined, PluginAutoEnableResult>>
+>();
 
 export function applyPluginAutoEnable(params: {
   config?: OpenClawConfig;
@@ -50,19 +53,28 @@ export function applyPluginAutoEnable(params: {
   const config = params.config;
   const env = params.env;
   if (config && env) {
-    let inner = autoEnableCache.get(config);
-    if (inner) {
-      const hit = inner.get(env);
-      if (hit) {
-        return hit;
+    const registryKey = params.manifestRegistry;
+    let envMap = autoEnableCache.get(config);
+    if (envMap) {
+      const registryMap = envMap.get(env);
+      if (registryMap) {
+        const hit = registryMap.get(registryKey);
+        if (hit) {
+          return hit;
+        }
       }
     }
     const result = computeAutoEnable(params);
-    if (!inner) {
-      inner = new WeakMap();
-      autoEnableCache.set(config, inner);
+    if (!envMap) {
+      envMap = new WeakMap();
+      autoEnableCache.set(config, envMap);
     }
-    inner.set(env, result);
+    let registryMap = envMap.get(env);
+    if (!registryMap) {
+      registryMap = new Map();
+      envMap.set(env, registryMap);
+    }
+    registryMap.set(registryKey, result);
     return result;
   }
   return computeAutoEnable(params);

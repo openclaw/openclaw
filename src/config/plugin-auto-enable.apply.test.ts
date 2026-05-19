@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
-import { makeIsolatedEnv, resetPluginAutoEnableTestState } from "./plugin-auto-enable.test-helpers.js";
-import type { OpenClawConfig } from "./types.openclaw.js";
 import { afterEach } from "vitest";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+import {
+  makeIsolatedEnv,
+  resetPluginAutoEnableTestState,
+} from "./plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 vi.mock("../channels/plugins/configured-state.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../channels/plugins/configured-state.js")>();
@@ -50,6 +54,31 @@ describe("applyPluginAutoEnable caching", () => {
     expect(result1).toEqual(result2);
     // Without config/env, no caching — different object references
     expect(result1).not.toBe(result2);
+  });
+
+  it("recomputes when manifestRegistry reference changes", () => {
+    const config: OpenClawConfig = {};
+    const env = makeIsolatedEnv();
+    const registry1: PluginManifestRegistry = { plugins: [], diagnostics: [] };
+    const registry2: PluginManifestRegistry = { plugins: [], diagnostics: [] };
+    const result1 = applyPluginAutoEnable({ config, env, manifestRegistry: registry1 });
+    const result2 = applyPluginAutoEnable({ config, env, manifestRegistry: registry2 });
+    // Different registry references should produce separate cache entries
+    expect(result1).not.toBe(result2);
+    expect(result1).toEqual(result2);
+  });
+
+  it("caches separately for calls with and without manifestRegistry", () => {
+    const config: OpenClawConfig = {};
+    const env = makeIsolatedEnv();
+    const registry: PluginManifestRegistry = { plugins: [], diagnostics: [] };
+    const withoutRegistry = applyPluginAutoEnable({ config, env });
+    const withRegistry = applyPluginAutoEnable({ config, env, manifestRegistry: registry });
+    // Should be separate cache entries
+    expect(withoutRegistry).not.toBe(withRegistry);
+    // But same config/env/registry should hit cache
+    const withRegistryAgain = applyPluginAutoEnable({ config, env, manifestRegistry: registry });
+    expect(withRegistry).toBe(withRegistryAgain);
   });
 
   it("cached calls are faster than uncached calls", () => {
