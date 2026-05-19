@@ -475,6 +475,13 @@ describe("sessions view", () => {
               updatedAt: 10,
               status: "failed",
             },
+            {
+              key: "agent:main:done",
+              kind: "direct",
+              updatedAt: 5,
+              hasActiveRun: true,
+              status: "done",
+            },
           ]),
         ),
       ),
@@ -484,16 +491,23 @@ describe("sessions view", () => {
 
     expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
     const badges = Array.from(container.querySelectorAll(".session-status-badge"));
-    expect(badges.map((badge) => badge.textContent?.trim())).toEqual(["Live", "Idle", "Failed"]);
+    expect(badges.map((badge) => badge.textContent?.trim())).toEqual([
+      "Live",
+      "Idle",
+      "Failed",
+      "Done",
+    ]);
     expect(badges.map((badge) => [...badge.classList])).toEqual([
       ["session-status-badge", "session-status-badge--live"],
       ["session-status-badge", "session-status-badge--idle"],
       ["session-status-badge", "session-status-badge--failed"],
+      ["session-status-badge", "session-status-badge--done"],
     ]);
     expect(badges.map((badge) => badge.getAttribute("aria-label"))).toEqual([
       "Status: Live",
       "Status: Idle",
       "Status: Failed",
+      "Status: Done",
     ]);
   });
 
