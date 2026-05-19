@@ -132,11 +132,10 @@ export const loadBundledPluginPublicSurfaceSync: BundledPluginPublicSurfaceLoade
   });
 };
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test loaders use caller-supplied module surface types.
-export function loadBundledPluginPublicSurfaceSourceSync<T extends object>(params: {
+export function loadBundledPluginPublicSurfaceSourceSync(params: {
   pluginId: string;
   artifactBasename: string;
-}): T {
+}): object {
   const modulePath = resolveVitestSourceModulePath(
     resolveBundledPluginPublicModulePath({
       pluginId: params.pluginId,
@@ -150,7 +149,7 @@ export function loadBundledPluginPublicSurfaceSourceSync<T extends object>(param
     loaderFilename: import.meta.url,
     pluginSdkResolution: "src",
   });
-  return loader(modulePath) as T;
+  return loader(modulePath) as object;
 }
 
 export const loadBundledPluginPublicSurface: AsyncBundledPluginPublicSurfaceLoader = (params) => {
