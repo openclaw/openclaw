@@ -21,6 +21,7 @@ import type { SkillEntry, SkillInstallSpec, SkillsInstallPreferences } from "../
 import { installDownloadSpec } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult } from "./install-types.js";
+import { runSkillSetupHook } from "./setup.js";
 
 export type SkillInstallRequest = {
   workspaceDir: string;
@@ -530,6 +531,24 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
   if (spec.kind === "download") {
     const downloadResult = await installDownloadSpec({ entry, spec, timeoutMs });
+    if (downloadResult.ok) {
+      const setupResult = await runSkillSetupHook({
+        targetDir: path.resolve(entry.skill.baseDir),
+        mode: "install",
+      });
+      if (!setupResult.ok) {
+        return withWarnings(
+          {
+            ok: false,
+            message: `Setup hook failed: ${setupResult.error}`,
+            stdout: downloadResult.stdout,
+            stderr: downloadResult.stderr,
+            code: null,
+          },
+          warnings,
+        );
+      }
+    }
     return withWarnings(downloadResult, warnings);
   }
 
@@ -563,7 +582,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     return withWarnings(goInstallFailure, warnings);
   }
 
-  const argv = command.argv ? [...command.argv] : null;
+  const argv = command.argv ? command.argv.slice() : null;
   if (spec.kind === "brew" && brewExe && argv?.[0] === "brew") {
     argv[0] = brewExe;
   }
@@ -580,7 +599,26 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
   const env = Object.keys(envOverrides).length > 0 ? envOverrides : undefined;
 
-  return withWarnings(await executeInstallCommand({ argv, timeoutMs, env }), warnings);
+  const installResult = await executeInstallCommand({ argv, timeoutMs, env });
+  if (installResult.ok) {
+    const setupResult = await runSkillSetupHook({
+      targetDir: path.resolve(entry.skill.baseDir),
+      mode: "install",
+    });
+    if (!setupResult.ok) {
+      return withWarnings(
+        {
+          ok: false,
+          message: `Setup hook failed: ${setupResult.error}`,
+          stdout: installResult.stdout,
+          stderr: installResult.stderr,
+          code: null,
+        },
+        warnings,
+      );
+    }
+  }
+  return withWarnings(installResult, warnings);
 }
 
 export const testing = {

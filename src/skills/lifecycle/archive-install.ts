@@ -11,6 +11,7 @@ import {
   type InstallSecurityScanResult,
 } from "../../plugins/install-security-scan.js";
 import type { InstallPolicyOrigin, InstallPolicySource } from "../../security/install-policy.js";
+import { runSkillSetupHook } from "./setup.js";
 
 const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 const DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS = ["SKILL.md"] as const;
@@ -190,6 +191,17 @@ export async function installExtractedSkillRoot(params: {
       copyErrorPrefix: "failed to install skill",
       hasDeps: false,
       depsLogMessage: "",
+      afterInstall: async (installedDir) => {
+        const setupResult = await runSkillSetupHook({
+          targetDir: installedDir,
+          mode: params.mode,
+          logger: params.logger,
+        });
+        if (!setupResult.ok) {
+          return { ok: false, error: `Setup hook failed: ${setupResult.error}` };
+        }
+        return { ok: true };
+      },
     });
     if (!install.ok) {
       return installFailure(install.error, "unavailable");
