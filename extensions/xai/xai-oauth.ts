@@ -38,6 +38,10 @@ const XAI_DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code
 
 type XaiOAuthDiscovery = {
   authorizationEndpoint: string;
+  tokenEndpoint: string;
+};
+
+type XaiDeviceCodeDiscovery = {
   deviceAuthorizationEndpoint: string;
   tokenEndpoint: string;
 };
@@ -119,9 +123,9 @@ async function readJsonResponse(response: Response, context: string): Promise<un
   return body;
 }
 
-export async function fetchXaiOAuthDiscovery(
+async function fetchXaiOAuthDiscoveryDocument(
   options: XaiOAuthFetchOptions = {},
-): Promise<XaiOAuthDiscovery> {
+): Promise<Record<string, unknown>> {
   const response = await getFetchImpl(options.fetchImpl)(XAI_OAUTH_DISCOVERY_URL, {
     headers: {
       Accept: "application/json",
@@ -129,15 +133,16 @@ export async function fetchXaiOAuthDiscovery(
     },
     signal: AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS),
   });
-  const json = readStringRecord(await readJsonResponse(response, "xAI OAuth discovery"));
+  return readStringRecord(await readJsonResponse(response, "xAI OAuth discovery"));
+}
+
+export async function fetchXaiOAuthDiscovery(
+  options: XaiOAuthFetchOptions = {},
+): Promise<XaiOAuthDiscovery> {
+  const json = await fetchXaiOAuthDiscoveryDocument(options);
   const authorizationEndpoint = json.authorization_endpoint;
-  const deviceAuthorizationEndpoint = json.device_authorization_endpoint;
   const tokenEndpoint = json.token_endpoint;
-  if (
-    typeof authorizationEndpoint !== "string" ||
-    typeof deviceAuthorizationEndpoint !== "string" ||
-    typeof tokenEndpoint !== "string"
-  ) {
+  if (typeof authorizationEndpoint !== "string" || typeof tokenEndpoint !== "string") {
     throw new Error("xAI OAuth discovery response is missing endpoints");
   }
   return {
@@ -145,6 +150,20 @@ export async function fetchXaiOAuthDiscovery(
       authorizationEndpoint,
       "authorization endpoint",
     ),
+    tokenEndpoint: requireTrustedXaiOAuthEndpoint(tokenEndpoint, "token endpoint"),
+  };
+}
+
+async function fetchXaiDeviceCodeDiscovery(
+  options: XaiOAuthFetchOptions = {},
+): Promise<XaiDeviceCodeDiscovery> {
+  const json = await fetchXaiOAuthDiscoveryDocument(options);
+  const deviceAuthorizationEndpoint = json.device_authorization_endpoint;
+  const tokenEndpoint = json.token_endpoint;
+  if (typeof deviceAuthorizationEndpoint !== "string" || typeof tokenEndpoint !== "string") {
+    throw new Error("xAI OAuth discovery response is missing device code endpoints");
+  }
+  return {
     deviceAuthorizationEndpoint: requireTrustedXaiOAuthEndpoint(
       deviceAuthorizationEndpoint,
       "device authorization endpoint",
@@ -483,8 +502,11 @@ function resolveXaiOAuthIdentity(tokens: XaiOAuthTokenResponse): XaiOAuthIdentit
   };
 }
 
-function readCredentialString(credential: OAuthCredential, key: string): string | undefined {
-  const value = (credential as unknown as Record<string, unknown>)[key];
+function readCredentialString<TKey extends string>(
+  credential: OAuthCredential & Partial<Record<TKey, unknown>>,
+  key: TKey,
+): string | undefined {
+  const value = credential[key];
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
@@ -591,7 +613,7 @@ async function noteXaiDeviceCode(
 export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const progress = ctx.prompter.progress("Starting xAI device code flow...");
   try {
-    const discovery = await fetchXaiOAuthDiscovery();
+    const discovery = await fetchXaiDeviceCodeDiscovery();
     progress.update("Requesting xAI device code...");
     const deviceCode = await requestXaiDeviceCode({
       deviceAuthorizationEndpoint: discovery.deviceAuthorizationEndpoint,
