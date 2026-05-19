@@ -177,8 +177,14 @@ private fun V2CronJobsSettingsScreen(
   val cronStatus by viewModel.cronStatus.collectAsState()
   val cronJobs by viewModel.cronJobs.collectAsState()
   val cronRefreshing by viewModel.cronRefreshing.collectAsState()
+  val cronSaving by viewModel.cronSaving.collectAsState()
   val cronErrorText by viewModel.cronErrorText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
+  var showEditor by remember { mutableStateOf(false) }
+  var jobName by remember { mutableStateOf("") }
+  var jobMessage by remember { mutableStateOf("") }
+  var scheduleKind by remember { mutableStateOf("Every") }
+  var scheduleValue by remember { mutableStateOf("1h") }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -197,6 +203,36 @@ private fun V2CronJobsSettingsScreen(
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawSecondaryButton(text = if (cronRefreshing) "Refreshing" else "Refresh", onClick = viewModel::refreshCronJobs, enabled = isConnected && !cronRefreshing, modifier = Modifier.weight(1f))
+      ClawPrimaryButton(text = if (showEditor) "Close" else "New Job", onClick = { showEditor = !showEditor }, enabled = isConnected, modifier = Modifier.weight(1f))
+    }
+    if (showEditor) {
+      V2CronJobEditorPanel(
+        name = jobName,
+        onNameChange = { jobName = it },
+        message = jobMessage,
+        onMessageChange = { jobMessage = it },
+        scheduleKind = scheduleKind,
+        onScheduleKindChange = {
+          scheduleKind = it
+          scheduleValue =
+            when (it) {
+              "Once" -> "+30m"
+              "Cron" -> "0 9 * * *"
+              else -> "1h"
+            }
+        },
+        scheduleValue = scheduleValue,
+        onScheduleValueChange = { scheduleValue = it },
+        saving = cronSaving,
+        onSave = {
+          viewModel.createCronJob(
+            name = jobName,
+            message = jobMessage,
+            scheduleKind = scheduleKind,
+            scheduleValue = scheduleValue,
+          )
+        },
+      )
     }
     cronErrorText?.let { errorText ->
       ClawPanel {
@@ -212,13 +248,50 @@ private fun V2CronJobsSettingsScreen(
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(text = "No scheduled jobs.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-            Text(text = "Create jobs from the WebUI or CLI and they will appear here.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+            Text(text = "Create recurring OpenClaw work here or from the WebUI.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
       else -> V2CronJobsPanel(jobs = cronJobs)
     }
   }
 }
+
+@Composable
+private fun V2CronJobEditorPanel(
+  name: String,
+  onNameChange: (String) -> Unit,
+  message: String,
+  onMessageChange: (String) -> Unit,
+  scheduleKind: String,
+  onScheduleKindChange: (String) -> Unit,
+  scheduleValue: String,
+  onScheduleValueChange: (String) -> Unit,
+  saving: Boolean,
+  onSave: () -> Unit,
+) {
+  ClawPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Text(text = "New Job", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      ClawTextField(value = name, onValueChange = onNameChange, placeholder = "Name")
+      ClawTextField(value = message, onValueChange = onMessageChange, placeholder = "Message OpenClaw should run", minLines = 3)
+      ClawSegmentedControl(
+        options = listOf("Every", "Once", "Cron"),
+        selected = scheduleKind,
+        onSelect = onScheduleKindChange,
+        modifier = Modifier.fillMaxWidth(),
+      )
+      ClawTextField(value = scheduleValue, onValueChange = onScheduleValueChange, placeholder = cronSchedulePlaceholder(scheduleKind))
+      ClawPrimaryButton(text = if (saving) "Saving" else "Save Job", onClick = onSave, enabled = !saving, modifier = Modifier.fillMaxWidth())
+    }
+  }
+}
+
+private fun cronSchedulePlaceholder(scheduleKind: String): String =
+  when (scheduleKind) {
+    "Once" -> "+30m or 2026-05-19T18:00:00Z"
+    "Cron" -> "0 9 * * *"
+    else -> "15m, 1h, or 1d"
+  }
 
 @Composable
 private fun V2AgentsSettingsScreen(

@@ -93,6 +93,7 @@ class MainViewModel(
   val cronStatus: StateFlow<GatewayCronStatus> = runtimeState(initial = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)) { it.cronStatus }
   val cronJobs: StateFlow<List<GatewayCronJobSummary>> = runtimeState(initial = emptyList()) { it.cronJobs }
   val cronRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.cronRefreshing }
+  val cronSaving: StateFlow<Boolean> = runtimeState(initial = false) { it.cronSaving }
   val cronErrorText: StateFlow<String?> = runtimeState(initial = null) { it.cronErrorText }
   val usageSummary: StateFlow<GatewayUsageSummary> = runtimeState(initial = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())) { it.usageSummary }
   val usageRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.usageRefreshing }
@@ -400,6 +401,20 @@ class MainViewModel(
 
   fun refreshCronJobs() {
     ensureRuntime().refreshCronJobs()
+  }
+
+  fun createCronJob(
+    name: String,
+    message: String,
+    scheduleKind: String,
+    scheduleValue: String,
+  ) {
+    ensureRuntime().createCronJob(
+      name = name,
+      message = message,
+      scheduleKind = scheduleKind,
+      scheduleValue = scheduleValue,
+    )
   }
 
   fun refreshUsage() {
