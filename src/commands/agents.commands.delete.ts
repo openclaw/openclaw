@@ -1,3 +1,4 @@
+import path from "node:path";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -161,7 +162,12 @@ export async function agentsDeleteCommand(
   } else {
     await moveToTrash(workspaceDir, quietRuntime);
   }
-  await moveToTrash(agentDir, quietRuntime);
+  // If agentDir is the standard "agents/{id}/agent", we want to delete "agents/{id}"
+  let agentBaseDir = agentDir;
+  if (agentBaseDir.endsWith(path.join(path.sep, "agent"))) {
+    agentBaseDir = path.dirname(agentBaseDir);
+  }
+  await moveToTrash(agentBaseDir, quietRuntime);
   await moveToTrash(sessionsDir, quietRuntime);
 
   if (opts.json) {

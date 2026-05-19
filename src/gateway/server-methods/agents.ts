@@ -28,6 +28,7 @@ import {
 import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
@@ -313,9 +314,15 @@ async function moveToTrashBestEffort(pathname: string): Promise<void> {
     return;
   }
   try {
-    await movePathToTrash(pathname);
+    // Try trash binary first (supports cross-device move via .Trash-1000)
+    await runCommandWithTimeout(["trash", pathname], { timeoutMs: 5000 });
   } catch {
-    // Best-effort: path may already be gone or trash unavailable.
+    try {
+      // Fallback to JS library
+      await movePathToTrash(pathname);
+    } catch {
+      // Best-effort: path may already be gone or trash unavailable.
+    }
   }
 }
 
@@ -728,9 +735,17 @@ export const agentsHandlers: GatewayRequestHandlers = {
         deleteResult.workspaceDir,
       );
       const deleteWorkspace = workspaceSharedWith.length === 0;
+
+      // If agentDir is the standard "agents/{id}/agent", we want to delete "agents/{id}"
+      // to avoid leaving an empty parent directory behind.
+      let agentBaseDir = deleteResult.agentDir;
+      if (agentBaseDir.endsWith(path.join(path.sep, "agent"))) {
+        agentBaseDir = path.dirname(agentBaseDir);
+      }
+
       await Promise.all([
         ...(deleteWorkspace ? [moveToTrashBestEffort(deleteResult.workspaceDir)] : []),
-        moveToTrashBestEffort(deleteResult.agentDir),
+        moveToTrashBestEffort(agentBaseDir),
         moveToTrashBestEffort(deleteResult.sessionsDir),
       ]);
     }
