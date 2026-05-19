@@ -1,17 +1,6 @@
 name: Polytropos Build + Pack
 
-on:
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: Branch, tag, or SHA to build
-        required: true
-        default: upgrade/upstream-v2026.5.12
-        type: string
-      releaseTag:
-        description: Release tag to name artifacts (v<ver>+poly.<N>)
-        required: false
-        type: string
+on:  workflow_dispatch:
   push:
     branches:
       - main
@@ -35,7 +24,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
       - name: Setup Node + pnpm
