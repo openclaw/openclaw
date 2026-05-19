@@ -225,8 +225,14 @@ export function registerSecretsCli(program: Command): void {
           }
         }
         if (shouldApply) {
-          const needsIrreversiblePrompt = Boolean(opts.apply);
-          if (needsIrreversiblePrompt && !opts.yes && !opts.json) {
+          // Show the one-way-migration warning whenever the user has chosen
+          // to apply — regardless of whether `--apply` was passed up front or
+          // they answered "yes" to the interactive "Apply this plan now?"
+          // prompt above. Previously this gated on `opts.apply`, so the
+          // interactive path silently skipped the irreversibility prompt.
+          // See #83883.
+          const needsIrreversiblePrompt = shouldApply && !opts.yes && !opts.json;
+          if (needsIrreversiblePrompt) {
             const { confirm } = await import("@clack/prompts");
             const confirmed = await confirm({
               message:
