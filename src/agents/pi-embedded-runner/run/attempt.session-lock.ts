@@ -13,6 +13,12 @@ type LockOptions = {
   maxHoldMs: number;
 };
 
+type AbandonDiagnosticLogger = (message: string) => void;
+
+function defaultAbandonDiagnosticLogger(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
 type SessionEventProcessor = {
   _processAgentEvent?: (event: unknown) => Promise<void>;
   _extensionRunner?: {
@@ -252,7 +258,9 @@ export type EmbeddedAttemptSessionLockController = {
 export async function createEmbeddedAttemptSessionLockController(params: {
   acquireSessionWriteLock: AcquireSessionWriteLock;
   lockOptions: LockOptions;
+  logAbandonDiagnostic?: AbandonDiagnosticLogger;
 }): Promise<EmbeddedAttemptSessionLockController> {
+  const logAbandon = params.logAbandonDiagnostic ?? defaultAbandonDiagnosticLogger;
   const acquireLock = async (): Promise<SessionLock> =>
     await params.acquireSessionWriteLock({
       sessionFile: params.lockOptions.sessionFile,
@@ -284,20 +292,33 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   // session until the watchdog max-hold timer fires (openclaw#84193). Cleanup
   // calls this to abandon any reacquired locks whose `run()` body never
   // settled so the next turn can acquire the session file.
-  function abandonInFlightWriteLocks(): boolean {
+  async function abandonInFlightWriteLocks(): Promise<boolean> {
     if (inFlightWriteLocks.size === 0) {
       return false;
     }
     takeoverDetected = true;
     const drained = Array.from(inFlightWriteLocks);
     inFlightWriteLocks.clear();
+    const pendingReleases: Array<Promise<void>> = [];
     for (const entry of drained) {
       if (entry.released) {
         continue;
       }
       entry.released = true;
-      void entry.lock.release().catch(() => {});
+      pendingReleases.push(entry.lock.release().catch(() => undefined));
     }
+    if (pendingReleases.length > 0) {
+      logAbandon(
+        `[session-write-lock] abandoned ${pendingReleases.length} in-flight lock(s) on attempt cleanup: ` +
+          `sessionFile=${params.lockOptions.sessionFile} owner=pid=${process.pid} ` +
+          `reason=stuck-compaction-or-hook`,
+      );
+    }
+    // Await every release before returning so the next acquire in this cleanup
+    // path (and any concurrent same-process acquire) sees the .jsonl.lock file
+    // gone — otherwise the watchdog still sees it and the next acquire bounces
+    // on "file lock stale" until the orphan-self detection fires.
+    await Promise.all(pendingReleases);
     return true;
   }
 
@@ -388,7 +409,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       // Abandon those before attempting cleanup so the session file unblocks
       // immediately. The fence already tracks session file mutations, so the
       // next turn can detect any partial-write divergence on its own acquire.
-      const abandoned = abandonInFlightWriteLocks();
+      const abandoned = await abandonInFlightWriteLocks();
       if (takeoverDetected) {
         if (abandoned && heldLock) {
           const orphan = heldLock;
