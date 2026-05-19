@@ -120,15 +120,50 @@ function makeInboundCfg(messagePrefix = "") {
 
 describe("WhatsApp listener diagnostics", () => {
   it("describes WhatsApp inbound listener scope without implying DM-only routing", () => {
-    expect(formatWhatsAppInboundListeningLog({})).toBe(
+    expect(
+      formatWhatsAppInboundListeningLog({
+        groupPolicy: "open",
+        hasGroupAllowFrom: false,
+      }),
+    ).toBe(
       "Listening for WhatsApp inbound messages (DM + all groups; no group allowlist configured).",
     );
-    expect(formatWhatsAppInboundListeningLog({ groups: { "123@g.us": {}, "*": {} } })).toBe(
-      "Listening for WhatsApp inbound messages (DM + all groups; wildcard configured).",
+    expect(
+      formatWhatsAppInboundListeningLog({
+        groupPolicy: "disabled",
+        hasGroupAllowFrom: true,
+      }),
+    ).toBe("Listening for WhatsApp inbound messages (DM + groups disabled by groupPolicy).");
+    expect(
+      formatWhatsAppInboundListeningLog({
+        groupPolicy: "allowlist",
+        hasGroupAllowFrom: false,
+      }),
+    ).toBe(
+      "Listening for WhatsApp inbound messages (DM + group inbound blocked by empty groupPolicy allowlist).",
     );
-    expect(formatWhatsAppInboundListeningLog({ groups: { "123@g.us": {}, "456@g.us": {} } })).toBe(
-      "Listening for WhatsApp inbound messages (DM + 2 configured groups).",
+    expect(
+      formatWhatsAppInboundListeningLog({
+        groupPolicy: "allowlist",
+        hasGroupAllowFrom: true,
+      }),
+    ).toBe(
+      "Listening for WhatsApp inbound messages (DM + all groups; sender allowlist configured).",
     );
+    expect(
+      formatWhatsAppInboundListeningLog({
+        groups: { "123@g.us": {}, "*": {} },
+        groupPolicy: "allowlist",
+        hasGroupAllowFrom: true,
+      }),
+    ).toBe("Listening for WhatsApp inbound messages (DM + all groups; wildcard configured).");
+    expect(
+      formatWhatsAppInboundListeningLog({
+        groups: { "123@g.us": {}, "456@g.us": {} },
+        groupPolicy: "allowlist",
+        hasGroupAllowFrom: true,
+      }),
+    ).toBe("Listening for WhatsApp inbound messages (DM + 2 configured groups).");
   });
 });
 
