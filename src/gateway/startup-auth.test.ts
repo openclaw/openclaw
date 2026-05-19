@@ -414,6 +414,26 @@ describe("ensureGatewayStartupAuth", () => {
     ).rejects.toThrow(/hooks\.token must not match gateway auth token/i);
   });
 
+  it("throws when hooks token reuses gateway password auth", async () => {
+    await expect(
+      ensureGatewayStartupAuth({
+        cfg: {
+          hooks: {
+            enabled: true,
+            token: "shared-gateway-password-1234567890",
+          },
+          gateway: {
+            auth: {
+              mode: "password",
+              password: "shared-gateway-password-1234567890", // pragma: allowlist secret
+            },
+          },
+        },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).rejects.toThrow(/hooks\.token must not match gateway auth password/i);
+  });
+
   it.each(KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS)(
     "rejects the published placeholder token %s supplied via environment",
     async (token) => {
@@ -580,19 +600,38 @@ describe("assertHooksTokenSeparateFromGatewayAuth", () => {
     ).toThrow(/hooks\.token must not match gateway auth token/i);
   });
 
-  it("allows hooks token when gateway auth is not token mode", () => {
-    expect(
+  it("throws when hooks token reuses gateway password auth", () => {
+    expect(() =>
       assertHooksTokenSeparateFromGatewayAuth({
         cfg: {
           hooks: {
             enabled: true,
-            token: "shared-gateway-token-1234567890",
+            token: "shared-gateway-password-1234567890",
           },
         },
         auth: {
           mode: "password",
           modeSource: "config",
-          password: "pw", // pragma: allowlist secret
+          password: "shared-gateway-password-1234567890", // pragma: allowlist secret
+          allowTailscale: false,
+        },
+      }),
+    ).toThrow(/hooks\.token must not match gateway auth password/i);
+  });
+
+  it("allows distinct hooks token when gateway auth is password mode", () => {
+    expect(
+      assertHooksTokenSeparateFromGatewayAuth({
+        cfg: {
+          hooks: {
+            enabled: true,
+            token: "hook-token-1234567890",
+          },
+        },
+        auth: {
+          mode: "password",
+          modeSource: "config",
+          password: "gateway-password-1234567890", // pragma: allowlist secret
           allowTailscale: false,
         },
       }),

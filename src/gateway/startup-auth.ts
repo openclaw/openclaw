@@ -232,15 +232,21 @@ export function assertHooksTokenSeparateFromGatewayAuth(params: {
   if (!hooksToken) {
     return;
   }
-  const gatewayToken =
-    params.auth.mode === "token" ? (normalizeOptionalString(params.auth.token) ?? "") : "";
-  if (!gatewayToken) {
+  const gatewaySharedSecret =
+    params.auth.mode === "token"
+      ? (normalizeOptionalString(params.auth.token) ?? "")
+      : params.auth.mode === "password"
+        ? (normalizeOptionalString(params.auth.password) ?? "")
+        : "";
+  if (!gatewaySharedSecret) {
     return;
   }
-  if (hooksToken !== gatewayToken) {
+  if (hooksToken !== gatewaySharedSecret) {
     return;
   }
+  const gatewaySecretLabel =
+    params.auth.mode === "password" ? "gateway auth password" : "gateway auth token";
   throw new Error(
-    "Invalid config: hooks.token must not match gateway auth token. Set a distinct hooks.token for hook ingress.",
+    `Invalid config: hooks.token must not match ${gatewaySecretLabel}. Set a distinct hooks.token for hook ingress.`,
   );
 }
