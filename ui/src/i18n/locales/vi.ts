@@ -350,8 +350,8 @@ export const vi: TranslationMap = {
   },
   quickSettings: {
     security: {
-      browserEnabled: "Browser enabled",
-      toolProfile: "Tool profile",
+      browserEnabled: "Đã bật trình duyệt",
+      toolProfile: "Hồ sơ công cụ",
     },
   },
   execApproval: {
@@ -1067,7 +1067,7 @@ export const vi: TranslationMap = {
       },
     },
     runControls: {
-      newSession: "New session",
+      newSession: "Phiên mới",
       export: "Xuất",
       exportChat: "Export chat",
       queue: "Queue",
@@ -1171,7 +1171,7 @@ export const vi: TranslationMap = {
       whenHint: "Chọn lịch. Bạn có thể tinh chỉnh sau.",
       howHeading: "Nó nên hoạt động như thế nào?",
       howHint: "Chọn cách gửi kết quả.",
-      title: "Tự động hóa mới",
+      title: "Tác vụ cron mới",
     },
     summary: {
       enabled: "Đã bật",
@@ -1200,9 +1200,9 @@ export const vi: TranslationMap = {
       ascending: "Tăng dần",
       descending: "Giảm dần",
       reset: "Đặt lại",
-      emptyTitle: "No scheduled jobs yet.",
-      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
-      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
+      emptyTitle: "Chưa có tác vụ đã lên lịch.",
+      emptyHint: "Tạo một tác vụ từ lời nhắc ngôn ngữ tự nhiên; các trường nâng cao có thể để sau.",
+      emptyFilteredHint: "Xóa hoặc đổi bộ lọc để xem tác vụ đã lên lịch.",
       noMatching: "Không có tác vụ khớp.",
       loading: "Đang tải...",
       loadMore: "Tải thêm tác vụ",
@@ -1238,7 +1238,7 @@ export const vi: TranslationMap = {
     form: {
       editJob: "Chỉnh sửa tác vụ",
       newJob: "Tác vụ mới",
-      advancedJob: "Advanced job",
+      advancedJob: "Tác vụ nâng cao",
       updateSubtitle: "Cập nhật tác vụ đã lên lịch được chọn.",
       createSubtitle: "Tạo một lần đánh thức hoặc chạy agent theo lịch.",
       required: "Bắt buộc",
