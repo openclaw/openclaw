@@ -65,6 +65,36 @@ describe("transport stream shared helpers", () => {
     expect(end).toHaveBeenCalledTimes(1);
   });
 
+  it("throws with the original error message when stream failed", () => {
+    const output: { stopReason: string; errorMessage?: string } = {
+      stopReason: "error",
+      errorMessage: "provider request timed out",
+    };
+
+    expect(() =>
+      finalizeTransportStream({ stream: { push: vi.fn(), end: vi.fn() }, output }),
+    ).toThrow("provider request timed out");
+  });
+
+  it("throws with the abort error message when stream was aborted", () => {
+    const output: { stopReason: string; errorMessage?: string } = {
+      stopReason: "aborted",
+      errorMessage: "network connection reset",
+    };
+
+    expect(() =>
+      finalizeTransportStream({ stream: { push: vi.fn(), end: vi.fn() }, output }),
+    ).toThrow("network connection reset");
+  });
+
+  it("falls back to generic message when errorMessage is absent", () => {
+    const output: { stopReason: string; errorMessage?: string } = { stopReason: "error" };
+
+    expect(() =>
+      finalizeTransportStream({ stream: { push: vi.fn(), end: vi.fn() }, output }),
+    ).toThrow("An unknown error occurred");
+  });
+
   it("marks transport stream failures and runs cleanup", () => {
     const push = vi.fn();
     const end = vi.fn();
