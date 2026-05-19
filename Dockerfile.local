@@ -1,4 +1,4 @@
-FROM ghcr.io/openclaw/openclaw:2026.4.12-slim
+FROM ghcr.io/openclaw/openclaw:slim
 
 USER root
 RUN apt-get update -qq && \

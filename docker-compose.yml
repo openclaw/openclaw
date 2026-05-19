@@ -43,7 +43,7 @@ services:
       start_period: 20s
 
   openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:2026.4.12-slim}
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:slim}
     container_name: openclaw-cli
     network_mode: "service:openclaw-gateway"
     cap_drop:
