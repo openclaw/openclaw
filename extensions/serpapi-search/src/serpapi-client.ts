@@ -54,7 +54,7 @@ export async function callSerpApi(opts: SerpApiCallParams): Promise<Record<strin
     Object.entries(rawParams).filter(([k]) => k === "engine" || k === "hl" || allowed.has(k)),
   );
 
-  const isZeroTrace = rawParams.zero_trace === "true";
+  const isZeroTrace = filtered.zero_trace === "true";
 
   const cacheKey = buildSearchCacheKey([
     "serpapi",
