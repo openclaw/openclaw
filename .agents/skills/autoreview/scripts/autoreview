@@ -32,8 +32,8 @@ Options:
   -h, --help                 Show help.
 
 Environment:
-  Nested Codex review uses shell_environment_policy.inherit=all when nested
-                              Codex config overrides are supplied, so local gateway launchers carry env.
+  Nested Codex review keeps Codex's default shell environment filtering unless
+                              AUTOREVIEW_SHELL_ENV_INHERIT=all or --shell-env-inherit all is set.
   AUTOREVIEW_SHELL_ENV_INHERIT
                               Set to all or default to force the nested Codex shell env policy.
   CODEX_REVIEW_SHELL_ENV_INHERIT
@@ -176,11 +176,7 @@ fi
 
 case "$shell_env_inherit" in
   auto)
-    if (( ${#codex_config_overrides[@]} > 0 || ${#codex_cli_config_overrides[@]} > 0 )); then
-      shell_env_inherit=all
-    else
-      shell_env_inherit=default
-    fi
+    shell_env_inherit=default
     ;;
   all|default) ;;
   *)
