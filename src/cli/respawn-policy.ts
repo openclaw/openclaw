@@ -26,7 +26,12 @@ const GATEWAY_RUN_VALUE_FLAGS = [
   "--ws-log",
 ] as const;
 
-const INTERACTIVE_TTY_COMMANDS = new Set(["tui", "terminal", "chat"]);
+// Interactive setup commands use clack prompts that need exclusive raw-mode
+// TTY access. Including them in the respawn skip list prevents the
+// warning-suppression child process from sharing the TTY fd, which can cause
+// stdin busy-wait at high CPU on Linux (Debian 6.12.63 + Node 22.22.1).
+// See: https://github.com/openclaw/openclaw/issues/83560
+const INTERACTIVE_TTY_COMMANDS = new Set(["tui", "terminal", "chat", "configure", "onboard"]);
 
 function isForegroundGatewayRunArgv(argv: string[]): boolean {
   const positionals = getCommandPositionalsWithRootOptions(argv, {

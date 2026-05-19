@@ -35,6 +35,11 @@ describe("shouldSkipRespawnForArgv", () => {
     { argv: ["node", "openclaw", "tui"] },
     { argv: ["node", "openclaw", "terminal"] },
     { argv: ["node", "openclaw", "chat"] },
+    { argv: ["node", "openclaw", "configure"] },
+    { argv: ["node", "openclaw", "onboard"] },
+    // Root options before the subcommand must also be handled correctly.
+    { argv: ["node", "openclaw", "--profile", "server", "configure"] },
+    { argv: ["node", "openclaw", "--profile", "default", "onboard"] },
     { argv: ["node", "openclaw", "gateway"] },
     { argv: ["node", "openclaw", "gateway", "--port", "14720", "--bind", "loopback"] },
     { argv: ["node", "openclaw", "gateway", "run", "--port=14720", "--bind", "loopback"] },
@@ -51,6 +56,19 @@ describe("shouldSkipRespawnForArgv", () => {
     { argv: ["node", "openclaw", "gateway", "call", "health"] },
   ] as const)("keeps respawn path for argv %j", ({ argv }) => {
     expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
+  });
+});
+
+describe("shouldSkipStartupEnvironmentRespawnForArgv for interactive commands", () => {
+  it.each([
+    { argv: ["node", "openclaw", "configure"] },
+    { argv: ["node", "openclaw", "onboard"] },
+    { argv: ["node", "openclaw", "--profile", "server", "configure"] },
+  ] as const)("allows CA-certs startup-env respawn for interactive argv %j", ({ argv }) => {
+    // configure/onboard skip the warning-suppression respawn but still allow
+    // the CA-certs startup-environment respawn (it is safe for interactive
+    // commands because it only changes an env var, not stdin/stdout).
+    expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
   });
 });
 
