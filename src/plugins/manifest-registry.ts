@@ -10,11 +10,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfigWithResolver } from "./config-policy.js";
-import {
-  discoverOpenClawPlugins,
-  type PluginCandidate,
-  type PluginDiscoveryResult,
-} from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
@@ -920,13 +916,6 @@ export function loadPluginManifestRegistry(
     diagnostics?: PluginDiagnostic[];
     installRecords?: Record<string, PluginInstallRecord>;
     bundledChannelConfigCollector?: BundledChannelConfigCollector;
-    /**
-     * Pre-computed discovery result. When supplied (and `candidates` is not),
-     * the internal `discoverOpenClawPlugins` call is skipped. Callers sharing
-     * a discovery snapshot across multiple registry helpers in the same flow
-     * should supply this to avoid redundant filesystem walks.
-     */
-    discovery?: PluginDiscoveryResult;
   } = {},
 ): PluginManifestRegistry {
   const config = params.config ?? {};
@@ -947,13 +936,12 @@ export function loadPluginManifestRegistry(
         candidates: params.candidates,
         diagnostics: params.diagnostics ?? [],
       }
-    : (params.discovery ??
-      discoverOpenClawPlugins({
+    : discoverOpenClawPlugins({
         workspaceDir: params.workspaceDir,
         extraPaths: normalized.loadPaths,
         env,
         installRecords: getInstallRecords(),
-      }));
+      });
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
   const candidates: PluginCandidate[] = discovery.candidates;
   const records: PluginManifestRecord[] = [];
