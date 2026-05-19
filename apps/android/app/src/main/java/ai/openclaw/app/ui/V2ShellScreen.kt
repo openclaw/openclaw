@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.ui.chat.V2ChatScreen
@@ -523,6 +524,7 @@ private fun V2SettingsShellScreen(
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val cronStatus by viewModel.cronStatus.collectAsState()
   val usageSummary by viewModel.usageSummary.collectAsState()
+  val skillsSummary by viewModel.skillsSummary.collectAsState()
   var route by rememberSaveable { mutableStateOf(V2SettingsRoute.Home) }
 
   LaunchedEffect(isConnected) {
@@ -530,6 +532,7 @@ private fun V2SettingsShellScreen(
       viewModel.refreshAgents()
       viewModel.refreshCronJobs()
       viewModel.refreshUsage()
+      viewModel.refreshSkills()
     }
   }
 
@@ -569,6 +572,7 @@ private fun V2SettingsShellScreen(
               V2SettingsRow("Approvals", approvalsSummary(pendingToolCalls.size), Icons.Default.Lock, status = approvalsStatus(pendingToolCalls.size), route = V2SettingsRoute.Approvals),
               V2SettingsRow("Cron Jobs", cronJobsSummary(cronStatus.jobs), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = V2SettingsRoute.CronJobs),
               V2SettingsRow("Usage", usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = V2SettingsRoute.Usage),
+              V2SettingsRow("Skills", skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = V2SettingsRoute.Skills),
               V2SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = V2SettingsRoute.Notifications),
               V2SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = V2SettingsRoute.PhoneCapabilities),
               V2SettingsRow("Gateway", gatewaySummary(statusText, isConnected), Icons.Default.Cloud, status = isConnected, route = V2SettingsRoute.Gateway),
@@ -630,6 +634,18 @@ private fun usageSummaryText(count: Int): String =
     0 -> "No provider usage"
     1 -> "1 provider"
     else -> "$count providers"
+  }
+
+private fun skillsSummaryText(skills: List<GatewaySkillSummary>): String {
+  val ready = skills.count { !it.disabled && it.eligible && it.missingCount == 0 }
+  return if (skills.isEmpty()) "No skills" else "$ready/${skills.size} ready"
+}
+
+private fun skillsStatus(skills: List<GatewaySkillSummary>): Boolean? =
+  when {
+    skills.isEmpty() -> null
+    skills.any { it.blockedByAllowlist || (!it.disabled && (!it.eligible || it.missingCount > 0)) } -> false
+    else -> true
   }
 
 private data class V2SettingsRow(

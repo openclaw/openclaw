@@ -323,6 +323,12 @@ class NodeRuntime(
   val usageRefreshing: StateFlow<Boolean> = _usageRefreshing.asStateFlow()
   private val _usageErrorText = MutableStateFlow<String?>(null)
   val usageErrorText: StateFlow<String?> = _usageErrorText.asStateFlow()
+  private val _skillsSummary = MutableStateFlow(GatewaySkillsSummary(skills = emptyList()))
+  val skillsSummary: StateFlow<GatewaySkillsSummary> = _skillsSummary.asStateFlow()
+  private val _skillsRefreshing = MutableStateFlow(false)
+  val skillsRefreshing: StateFlow<Boolean> = _skillsRefreshing.asStateFlow()
+  private val _skillsErrorText = MutableStateFlow<String?>(null)
+  val skillsErrorText: StateFlow<String?> = _skillsErrorText.asStateFlow()
 
   private val _isForeground = MutableStateFlow(true)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
@@ -367,6 +373,7 @@ class NodeRuntime(
         _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
         _cronJobs.value = emptyList()
         _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
+        _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
         updateStatus()
@@ -635,6 +642,7 @@ class NodeRuntime(
       refreshModelCatalogFromGateway()
       refreshCronFromGateway()
       refreshUsageFromGateway()
+      refreshSkillsFromGateway()
     }
   }
 
@@ -659,6 +667,12 @@ class NodeRuntime(
   fun refreshUsage() {
     scope.launch {
       refreshUsageFromGateway()
+    }
+  }
+
+  fun refreshSkills() {
+    scope.launch {
+      refreshSkillsFromGateway()
     }
   }
 
@@ -1657,6 +1671,34 @@ class NodeRuntime(
     }
   }
 
+  private suspend fun refreshSkillsFromGateway() {
+    _skillsRefreshing.value = true
+    _skillsErrorText.value = null
+    if (!operatorConnected) {
+      _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
+      _skillsRefreshing.value = false
+      return
+    }
+    try {
+      val res = operatorSession.request("skills.status", "{}")
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      _skillsSummary.value =
+        GatewaySkillsSummary(
+          managedSkillsDirAvailable =
+            root
+              ?.get("managedSkillsDir")
+              .asStringOrNull()
+              ?.trim()
+              ?.isNotEmpty() == true,
+          skills = parseSkillSummaries(root?.get("skills") as? JsonArray),
+        )
+    } catch (_: Throwable) {
+      _skillsErrorText.value = "Could not load skills."
+    } finally {
+      _skillsRefreshing.value = false
+    }
+  }
+
   private fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
     models
       ?.mapNotNull { item ->
@@ -1743,6 +1785,29 @@ class NodeRuntime(
           resetAtMs = obj.long("resetAt"),
         )
       }.orEmpty()
+
+  private fun parseSkillSummaries(skills: JsonArray?): List<GatewaySkillSummary> =
+    skills
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val name = obj["name"].asStringOrNull()?.trim().orEmpty()
+        if (name.isEmpty()) return@mapNotNull null
+        val missing = obj["missing"].asObjectOrNull()
+        GatewaySkillSummary(
+          name = name,
+          description = obj["description"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          source = obj["source"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "unknown",
+          emoji = obj["emoji"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          disabled = obj.boolean("disabled"),
+          eligible = obj.boolean("eligible"),
+          blockedByAllowlist = obj.boolean("blockedByAllowlist"),
+          bundled = obj.boolean("bundled"),
+          missingCount = skillMissingCount(missing),
+          installCount = (obj["install"] as? JsonArray)?.size ?: 0,
+        )
+      }.orEmpty()
+
+  private fun skillMissingCount(missing: JsonObject?): Int = listOf("bins", "env", "config", "os").sumOf { key -> (missing?.get(key) as? JsonArray)?.size ?: 0 }
 
   private fun cronScheduleLabel(schedule: JsonObject?): String =
     when (schedule?.get("kind").asStringOrNull()) {
@@ -2051,6 +2116,24 @@ data class GatewayUsageWindowSummary(
   val label: String,
   val usedPercent: Double,
   val resetAtMs: Long?,
+)
+
+data class GatewaySkillsSummary(
+  val managedSkillsDirAvailable: Boolean = false,
+  val skills: List<GatewaySkillSummary>,
+)
+
+data class GatewaySkillSummary(
+  val name: String,
+  val description: String?,
+  val source: String,
+  val emoji: String?,
+  val disabled: Boolean,
+  val eligible: Boolean,
+  val blockedByAllowlist: Boolean,
+  val bundled: Boolean,
+  val missingCount: Int,
+  val installCount: Int,
 )
 
 private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()
