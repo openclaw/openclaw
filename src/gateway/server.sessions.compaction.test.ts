@@ -443,6 +443,151 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   ws.close();
 });
 
+test("sessions.compact synchronizes raw external aliases after manual compaction", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+  const canonicalKey = `agent:main:${rawKey}`;
+  const sessionFile = path.join(dir, "sess-raw-manual.jsonl");
+  await fs.writeFile(
+    sessionFile,
+    `${JSON.stringify({ role: "user", content: "hello" })}\n`,
+    "utf-8",
+  );
+  const entry = sessionStoreEntry("sess-raw-manual", {
+    sessionFile,
+    inputTokens: 7,
+    outputTokens: 11,
+    totalTokens: 120,
+    totalTokensFresh: false,
+  });
+  await writeSessionStore({
+    entries: {
+      [canonicalKey]: entry,
+      [rawKey]: { ...entry },
+    },
+  });
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{
+    ok: true;
+    key: string;
+    compacted: boolean;
+    result?: { tokensAfter?: number };
+  }>(ws, "sessions.compact", {
+    key: rawKey,
+  });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.key).toBe(canonicalKey);
+  expect(compacted.payload?.compacted).toBe(true);
+  expect(embeddedRunMock.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      compactionCount?: number;
+      inputTokens?: number;
+      outputTokens?: number;
+      sessionId?: string;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }
+  >;
+  expect(store[canonicalKey]?.sessionId).toBe("sess-raw-manual");
+  expect(store[rawKey]).toEqual(store[canonicalKey]);
+  expect(store[canonicalKey]?.compactionCount).toBe(1);
+  expect(store[rawKey]?.compactionCount).toBe(1);
+  expect(store[canonicalKey]?.totalTokens).toBe(80);
+  expect(store[rawKey]?.totalTokens).toBe(80);
+  expect(store[canonicalKey]?.totalTokensFresh).toBe(true);
+  expect(store[rawKey]?.totalTokensFresh).toBe(true);
+  expect("inputTokens" in store[canonicalKey]).toBe(false);
+  expect("outputTokens" in store[rawKey]).toBe(false);
+
+  const listedSessions = await rpcReq<{ sessions: Array<{ key: string }> }>(ws, "sessions.list");
+  expect(listedSessions.ok).toBe(true);
+  expect(
+    listedSessions.payload?.sessions
+      .map((session) => session.key)
+      .filter((key) => key === canonicalKey || key === rawKey),
+  ).toEqual([canonicalKey]);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines synchronizes raw external aliases", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+  const canonicalKey = `agent:main:${rawKey}`;
+  const sessionFile = path.join(dir, "sess-raw-lines.jsonl");
+  await fs.writeFile(
+    sessionFile,
+    [
+      JSON.stringify({ role: "user", content: "one" }),
+      JSON.stringify({ role: "assistant", content: "two" }),
+      JSON.stringify({ role: "user", content: "three" }),
+    ].join("\n") + "\n",
+    "utf-8",
+  );
+  const entry = sessionStoreEntry("sess-raw-lines", {
+    sessionFile,
+    inputTokens: 7,
+    outputTokens: 11,
+    totalTokens: 120,
+    totalTokensFresh: true,
+  });
+  await writeSessionStore({
+    entries: {
+      [canonicalKey]: entry,
+      [rawKey]: { ...entry },
+    },
+  });
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{
+    ok: true;
+    key: string;
+    compacted: boolean;
+    kept?: number;
+  }>(ws, "sessions.compact", {
+    key: rawKey,
+    maxLines: 2,
+  });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.key).toBe(canonicalKey);
+  expect(compacted.payload?.compacted).toBe(true);
+  expect(compacted.payload?.kept).toBe(2);
+  expect(embeddedRunMock.compactEmbeddedPiSession).not.toHaveBeenCalled();
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      inputTokens?: number;
+      outputTokens?: number;
+      sessionId?: string;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }
+  >;
+  expect(store[canonicalKey]?.sessionId).toBe("sess-raw-lines");
+  expect(store[rawKey]).toEqual(store[canonicalKey]);
+  expect("inputTokens" in store[canonicalKey]).toBe(false);
+  expect("outputTokens" in store[rawKey]).toBe(false);
+  expect("totalTokens" in store[canonicalKey]).toBe(false);
+  expect("totalTokensFresh" in store[rawKey]).toBe(false);
+
+  const listedSessions = await rpcReq<{ sessions: Array<{ key: string }> }>(ws, "sessions.list");
+  expect(listedSessions.ok).toBe(true);
+  expect(
+    listedSessions.payload?.sessions
+      .map((session) => session.key)
+      .filter((key) => key === canonicalKey || key === rawKey),
+  ).toEqual([canonicalKey]);
+
+  ws.close();
+});
+
 test("sessions.patch preserves nested model ids under provider overrides", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-sessions-nested-"));
   const storePath = path.join(dir, "sessions.json");

@@ -2251,8 +2251,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     );
     // Lock + read in a short critical section; transcript work happens outside.
     const compactTarget = await updateSessionStore(storePath, (store) => {
-      const { entry, primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
-      return { entry, primaryKey };
+      const { entry, preservedAliasKeys, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store,
+      });
+      return { entry, preservedAliasKeys, primaryKey };
     });
     const entry = compactTarget.entry;
     const sessionId = entry?.sessionId;
@@ -2384,6 +2388,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             delete entryToUpdate.totalTokens;
             delete entryToUpdate.totalTokensFresh;
           }
+          writeGatewaySessionStoreEntry({
+            store,
+            primaryKey: entryKey,
+            aliasKeys: compactTarget.preservedAliasKeys,
+            entry: entryToUpdate,
+          });
         });
       }
 
@@ -2445,6 +2455,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       delete entryToUpdate.totalTokens;
       delete entryToUpdate.totalTokensFresh;
       entryToUpdate.updatedAt = Date.now();
+      writeGatewaySessionStoreEntry({
+        store,
+        primaryKey: entryKey,
+        aliasKeys: compactTarget.preservedAliasKeys,
+        entry: entryToUpdate,
+      });
     });
 
     respond(
