@@ -2092,6 +2092,37 @@ export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   return listTasksFromIndex(taskIdsByOwnerKey, key);
 }
 
+export function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const key = normalizeOptionalString(ownerKey);
+  if (!key) {
+    return [];
+  }
+  const merged = new Map<string, TaskRecord>();
+  try {
+    for (const task of getTaskRegistryStore().loadSnapshot().tasks.values()) {
+      if (normalizeOptionalString(task.ownerKey) === key) {
+        merged.set(task.taskId, cloneTaskRecord(normalizeTaskTimestamps(task)));
+      }
+    }
+    return [...merged.values()]
+      .map((task, insertionIndex) => Object.assign({}, task, { insertionIndex }))
+      .toSorted(compareTasksNewestFirst)
+      .map(({ insertionIndex: _, ...task }) => task);
+  } catch (error) {
+    log.warn("Failed to read fresh task registry snapshot", {
+      ownerKey: key,
+      error,
+    });
+  }
+  return [...tasks.values()]
+    .filter((task) => normalizeOptionalString(task.ownerKey) === key)
+    .map((task) => cloneTaskRecord(task))
+    .map((task, insertionIndex) => Object.assign({}, task, { insertionIndex }))
+    .toSorted(compareTasksNewestFirst)
+    .map(({ insertionIndex: _, ...task }) => task);
+}
+
 export function listTasksForFlowId(flowId: string): TaskRecord[] {
   ensureTaskRegistryReady();
   const key = flowId.trim();

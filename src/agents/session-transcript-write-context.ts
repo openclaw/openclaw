@@ -10,6 +10,13 @@ type SessionTranscriptWriteContext = {
 
 const activeSessionTranscriptWriteContext = new AsyncLocalStorage<SessionTranscriptWriteContext>();
 
+function resolveActiveSessionTranscriptWriteContext(
+  sessionFile: string,
+): SessionTranscriptWriteContext | undefined {
+  const context = activeSessionTranscriptWriteContext.getStore();
+  return context && path.resolve(sessionFile) === context.sessionFile ? context : undefined;
+}
+
 export function runWithSessionTranscriptWriteContext<T>(
   params: {
     sessionFile: string;
@@ -30,9 +37,15 @@ export async function withActiveSessionTranscriptWriteLock<T>(
   sessionFile: string,
   run: () => Promise<T> | T,
 ): Promise<T> {
-  const context = activeSessionTranscriptWriteContext.getStore();
-  if (!context || path.resolve(sessionFile) !== context.sessionFile) {
+  const context = resolveActiveSessionTranscriptWriteContext(sessionFile);
+  if (!context) {
     return await run();
   }
   return await context.withSessionWriteLock(run);
+}
+
+export function resolveActiveSessionTranscriptWriteLockRunner(
+  sessionFile: string,
+): SessionWriteLockRunner | undefined {
+  return resolveActiveSessionTranscriptWriteContext(sessionFile)?.withSessionWriteLock;
 }

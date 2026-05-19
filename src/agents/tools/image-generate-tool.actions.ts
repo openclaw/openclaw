@@ -6,6 +6,7 @@ import {
   buildImageGenerationTaskStatusDetails,
   buildImageGenerationTaskStatusText,
   findActiveImageGenerationTaskForSession,
+  findDuplicateGuardImageGenerationTaskForSession,
 } from "../image-generation-task-status.js";
 import {
   createMediaGenerateProviderListActionResult,
@@ -92,25 +93,26 @@ export function createImageGenerateStatusActionResult(
 
 export function createImageGenerateDuplicateGuardResult(
   sessionKey?: string,
-  params?: { prompt?: string },
+  params?: { prompt?: string; requestKey?: string },
 ): ImageGenerateActionResult | undefined {
-  const activeTask = findActiveImageGenerationTaskForSession(sessionKey, {
+  const blockingTask = findDuplicateGuardImageGenerationTaskForSession(sessionKey, {
     prompt: params?.prompt,
+    requestKey: params?.requestKey,
   });
-  if (!activeTask) {
+  if (!blockingTask) {
     return undefined;
   }
   return {
     content: [
       {
         type: "text",
-        text: buildImageGenerationTaskStatusText(activeTask, { duplicateGuard: true }),
+        text: buildImageGenerationTaskStatusText(blockingTask, { duplicateGuard: true }),
       },
     ],
     details: {
       action: "status",
       duplicateGuard: true,
-      ...buildImageGenerationTaskStatusDetails(activeTask),
+      ...buildImageGenerationTaskStatusDetails(blockingTask),
     },
   };
 }

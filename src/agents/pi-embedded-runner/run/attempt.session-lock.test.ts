@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appendSessionTranscriptMessage } from "../../../config/sessions/transcript-append.js";
+import { runWithSessionTranscriptWriteContext } from "../../session-transcript-write-context.js";
 import { SessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
 import {
   acquireSessionWriteLock,
@@ -343,6 +344,68 @@ describe("embedded attempt session lock lifecycle", () => {
     await expect(fs.readFile(sessionFile, "utf8")).resolves.toContain(
       "mirrored message-tool delivery",
     );
+  });
+
+  it("keeps prompt-stream transcript appends from blocking session-locked hook writes", async () => {
+    const sessionFile = await createTempSessionFile();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: {
+        ...lockOptions,
+        sessionFile,
+        timeoutMs: 250,
+      },
+    });
+    await controller.releaseForPrompt();
+
+    let releaseHookAppend!: () => void;
+    const hookCanAppend = new Promise<void>((resolve) => {
+      releaseHookAppend = resolve;
+    });
+    let markHookHasLock!: () => void;
+    const hookHasLock = new Promise<void>((resolve) => {
+      markHookHasLock = resolve;
+    });
+
+    const hookAppend = controller.withSessionWriteLock(async () => {
+      markHookHasLock();
+      await hookCanAppend;
+      await appendSessionTranscriptMessage({
+        transcriptPath: sessionFile,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "session-locked hook write" }],
+        },
+      });
+    });
+    await hookHasLock;
+
+    const promptAppend = runWithSessionTranscriptWriteContext(
+      {
+        sessionFile,
+        withSessionWriteLock: (run) => controller.withSessionWriteLock(run),
+      },
+      () =>
+        appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "prompt-stream write" }],
+          },
+        }),
+    );
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    releaseHookAppend();
+    await Promise.all([hookAppend, promptAppend]);
+
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+
+    const transcript = await fs.readFile(sessionFile, "utf8");
+    expect(transcript).toContain("session-locked hook write");
+    expect(transcript).toContain("prompt-stream write");
+    expect(controller.hasSessionTakeover()).toBe(false);
   });
 
   it("locks agent events that can reach transcript writers or registered extension hooks", async () => {
