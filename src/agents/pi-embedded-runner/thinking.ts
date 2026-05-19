@@ -1,12 +1,21 @@
 import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isOpenAIResponsesReasoningReplayInvalidErrorMessage } from "../pi-embedded-helpers/errors.js";
+import {
+  downgradeOpenAIFunctionCallReasoningPairs,
+  downgradeOpenAIReasoningBlocks,
+} from "../pi-embedded-helpers/openai.js";
 import { log } from "./logger.js";
 
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type RecoveryAssessment = "valid" | "incomplete-thinking" | "incomplete-text";
-type RecoverySessionMeta = { id: string; recoveredAnthropicThinking?: boolean };
+type RecoverySessionMeta = {
+  id: string;
+  recoveredAnthropicThinking?: boolean;
+  recoveredOpenAIResponsesReasoning?: boolean;
+};
 
 const THINKING_BLOCK_ERROR_PATTERN = /thinking or redacted_thinking blocks?.* cannot be modified/i;
 export const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
@@ -465,6 +474,123 @@ export function wrapAnthropicStreamWithRecovery(
         outer.end();
       },
     );
+    outer.result = () => finalResultPromise;
+    return outer as unknown as ReturnType<StreamFn>;
+  };
+}
+
+function dropOpenAIResponsesReplayableReasoning(messages: AgentMessage[]): AgentMessage[] {
+  const reasoningSanitized = downgradeOpenAIReasoningBlocks(messages, {
+    dropReplayableReasoning: true,
+  });
+  return downgradeOpenAIFunctionCallReasoningPairs(reasoningSanitized);
+}
+
+function shouldRecoverOpenAIResponsesReasoningReplayError(
+  error: unknown,
+  sessionMeta: RecoverySessionMeta,
+): boolean {
+  const message = formatErrorMessage(error);
+  if (!isOpenAIResponsesReasoningReplayInvalidErrorMessage(message)) {
+    return false;
+  }
+  if (sessionMeta.recoveredOpenAIResponsesReasoning) {
+    log.warn(
+      `[session-recovery] OpenAI Responses reasoning replay recovery already attempted: sessionId=${sessionMeta.id}`,
+    );
+    return false;
+  }
+  return true;
+}
+
+async function pumpOpenAIResponsesStreamWithReplayRecovery(
+  outer: ReturnType<typeof createAssistantMessageEventStream>,
+  stream: ReturnType<StreamFn>,
+  sessionMeta: RecoverySessionMeta,
+  retry: () => ReturnType<StreamFn>,
+): Promise<AssistantMessage> {
+  let yieldedChunk = false;
+  try {
+    const resolved = stream instanceof Promise ? await stream : stream;
+    for await (const chunk of resolved as AsyncIterable<unknown>) {
+      yieldedChunk = true;
+      outer.push(chunk as Parameters<typeof outer.push>[0]);
+    }
+    const result = await (resolved as { result?: () => Promise<AssistantMessage> }).result?.();
+    return result as AssistantMessage;
+  } catch (error: unknown) {
+    if (!shouldRecoverOpenAIResponsesReasoningReplayError(error, sessionMeta)) {
+      throw error;
+    }
+    if (yieldedChunk) {
+      log.warn(
+        `[session-recovery] OpenAI Responses reasoning replay error occurred after streaming began; skipping retry to avoid duplicate chunks: sessionId=${sessionMeta.id}`,
+      );
+      throw error;
+    }
+    sessionMeta.recoveredOpenAIResponsesReasoning = true;
+    log.warn(
+      `[session-recovery] OpenAI Responses reasoning replay rejected; retrying once without replayable reasoning: sessionId=${sessionMeta.id}`,
+    );
+    const retryStream = retry();
+    const resolvedRetry = retryStream instanceof Promise ? await retryStream : retryStream;
+    for await (const chunk of resolvedRetry as AsyncIterable<unknown>) {
+      outer.push(chunk as Parameters<typeof outer.push>[0]);
+    }
+    const result = await (resolvedRetry as { result?: () => Promise<AssistantMessage> }).result?.();
+    return result as AssistantMessage;
+  }
+}
+
+export function wrapOpenAIResponsesStreamWithReplayRecovery(
+  innerStreamFn: StreamFn,
+  sessionMeta: RecoverySessionMeta,
+): StreamFn {
+  let dropReplayableReasoning = false;
+  return (model, context, options) => {
+    const contextRecord = context as unknown as { messages?: unknown };
+    const originalMessages = Array.isArray(contextRecord.messages)
+      ? (contextRecord.messages as AgentMessage[])
+      : [];
+    const buildContext = (dropReasoning: boolean) => {
+      const cleanedMessages = dropReasoning
+        ? dropOpenAIResponsesReplayableReasoning(originalMessages)
+        : originalMessages;
+      if (cleanedMessages === originalMessages) {
+        return context;
+      }
+      return {
+        ...(context as unknown as Record<string, unknown>),
+        messages: cleanedMessages,
+      } as typeof context;
+    };
+    const retry = () => {
+      dropReplayableReasoning = true;
+      return innerStreamFn(model, buildContext(true), options);
+    };
+
+    const stream = innerStreamFn(model, buildContext(dropReplayableReasoning), options);
+    if (stream instanceof Promise) {
+      return stream.catch((error: unknown) => {
+        if (!shouldRecoverOpenAIResponsesReasoningReplayError(error, sessionMeta)) {
+          throw error;
+        }
+        sessionMeta.recoveredOpenAIResponsesReasoning = true;
+        log.warn(
+          `[session-recovery] OpenAI Responses reasoning replay request rejected; retrying once without replayable reasoning: sessionId=${sessionMeta.id}`,
+        );
+        return retry();
+      }) as ReturnType<StreamFn>;
+    }
+    const outer = createAssistantMessageEventStream();
+    const finalResultPromise = pumpOpenAIResponsesStreamWithReplayRecovery(
+      outer,
+      stream,
+      sessionMeta,
+      retry,
+    ).finally(() => {
+      outer.end();
+    });
     outer.result = () => finalResultPromise;
     return outer as unknown as ReturnType<StreamFn>;
   };

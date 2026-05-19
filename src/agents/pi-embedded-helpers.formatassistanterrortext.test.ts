@@ -100,6 +100,15 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Session history or replay state is invalid");
     expect(result).toContain("/new");
   });
+  it("returns a recovery hint for invalid OpenAI Responses encrypted reasoning replay", () => {
+    const msg = makeAssistantError(
+      '400 {"error":{"code":"thinking_signature_invalid","message":"The encrypted content for item rs_test could not be verified. Reason: Encrypted content could not be decrypted or parsed.","type":"invalid_request_error"}}',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Session history or replay state is invalid");
+    expect(result).toContain("/new");
+    expect(result).not.toContain("provider rejected the request schema");
+  });
   it("handles JSON-wrapped role errors", () => {
     const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
     const result = formatAssistantErrorText(msg);

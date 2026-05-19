@@ -254,7 +254,11 @@ import {
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
 import { applySystemPromptOverrideToSession } from "../system-prompt.js";
-import { dropReasoningFromHistory, dropThinkingBlocks } from "../thinking.js";
+import {
+  dropReasoningFromHistory,
+  dropThinkingBlocks,
+  wrapOpenAIResponsesStreamWithReplayRecovery,
+} from "../thinking.js";
 import {
   collectAllowedToolNames,
   collectCoreBuiltinToolNames,
@@ -2834,6 +2838,10 @@ export async function runEmbeddedAttempt(
           } as unknown;
           return inner(model, nextContext as typeof context, options);
         };
+        activeSession.agent.streamFn = wrapOpenAIResponsesStreamWithReplayRecovery(
+          activeSession.agent.streamFn,
+          { id: params.sessionId },
+        );
       }
 
       const innerStreamFn = activeSession.agent.streamFn;
