@@ -1303,10 +1303,36 @@ function rewriteModelsMap(params: {
     const canonicalRecord = asMutableRecord(canonicalEntry);
     params.models[canonicalModel] =
       legacyRecord && canonicalRecord
-        ? { ...legacyRecord, ...canonicalRecord }
+        ? mergeCanonicalModelMapRecord({ legacyRecord, canonicalRecord })
         : (canonicalEntry ?? legacyEntry);
     delete params.models[legacyRef];
   }
+}
+
+function runtimePolicyHasExplicitNonDefaultPin(value: unknown): boolean {
+  const id = normalizeString(asMutableRecord(value)?.id);
+  return Boolean(id && id !== "auto" && id !== "default");
+}
+
+function mergeCanonicalModelMapRecord(params: {
+  legacyRecord: MutableRecord;
+  canonicalRecord: MutableRecord;
+}): MutableRecord {
+  const merged = { ...params.legacyRecord, ...params.canonicalRecord };
+  const legacyRuntime = asMutableRecord(params.legacyRecord.agentRuntime);
+  const canonicalRuntime = asMutableRecord(params.canonicalRecord.agentRuntime);
+  if (
+    legacyRuntime &&
+    runtimePolicyHasExplicitNonDefaultPin(legacyRuntime) &&
+    !runtimePolicyHasExplicitNonDefaultPin(canonicalRuntime)
+  ) {
+    merged.agentRuntime = {
+      ...legacyRuntime,
+      ...canonicalRuntime,
+      id: legacyRuntime.id,
+    };
+  }
+  return merged;
 }
 
 function modelConfigContainsRef(value: unknown, modelRef: string): boolean {
