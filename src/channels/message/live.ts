@@ -33,6 +33,7 @@ export type FinalizableLivePreviewAdapter<TPayload, TId, TEdit> = {
   ) => Promise<void> | void;
   buildSupplementalPayload?: (payload: TPayload) => TPayload | undefined;
   deliverSupplemental?: (payload: TPayload) => Promise<boolean | void>;
+  retainDraftOnNormalDelivery?: (payload: TPayload) => boolean;
   handlePreviewEditError?: (params: {
     error: unknown;
     id: TId;
@@ -118,6 +119,7 @@ export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params
   ) => Promise<void> | void;
   buildSupplementalPayload?: (payload: TPayload) => TPayload | undefined;
   deliverSupplemental?: (payload: TPayload) => Promise<boolean | void>;
+  retainDraftOnNormalDelivery?: (payload: TPayload) => boolean;
   handlePreviewEditError?: (params: {
     error: unknown;
     id: TId;
@@ -191,8 +193,11 @@ export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params
     }
   }
 
+  const retainDraftOnNormalDelivery = params.retainDraftOnNormalDelivery?.(params.payload) === true;
   if (params.draft.discardPending) {
     await params.draft.discardPending();
+  } else if (retainDraftOnNormalDelivery) {
+    await params.draft.seal?.();
   } else {
     await params.draft.clear();
   }
@@ -206,7 +211,7 @@ export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params
       await params.onNormalDelivered?.();
     }
   } finally {
-    if (delivered) {
+    if (delivered && !retainDraftOnNormalDelivery) {
       await params.draft.clear();
     }
   }
@@ -254,6 +259,9 @@ export async function deliverWithFinalizableLivePreviewAdapter<TPayload, TId, TE
       : {}),
     ...(params.adapter.deliverSupplemental
       ? { deliverSupplemental: params.adapter.deliverSupplemental }
+      : {}),
+    ...(params.adapter.retainDraftOnNormalDelivery
+      ? { retainDraftOnNormalDelivery: params.adapter.retainDraftOnNormalDelivery }
       : {}),
     ...(params.adapter.handlePreviewEditError
       ? { handlePreviewEditError: params.adapter.handlePreviewEditError }

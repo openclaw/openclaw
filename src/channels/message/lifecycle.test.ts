@@ -174,6 +174,32 @@ describe("message lifecycle primitives", () => {
     expect(liveState.canFinalizeInPlace).toBe(false);
   });
 
+  it("can retain live previews after fallback delivery", async () => {
+    const discardPending = vi.fn(async () => undefined);
+    const clear = vi.fn(async () => undefined);
+    const deliverNormally = vi.fn(async () => true);
+
+    const result = await deliverFinalizableLivePreview({
+      kind: "final",
+      payload: { text: "failed", isError: true },
+      draft: {
+        flush: vi.fn(async () => undefined),
+        id: () => "preview-2",
+        discardPending,
+        clear,
+      },
+      buildFinalEdit: () => undefined,
+      editFinal: vi.fn(async () => undefined),
+      deliverNormally,
+      retainDraftOnNormalDelivery: (payload) => payload.isError === true,
+    });
+
+    expect(result.kind).toBe("normal-delivered");
+    expect(discardPending).toHaveBeenCalledTimes(1);
+    expect(deliverNormally).toHaveBeenCalledWith({ text: "failed", isError: true });
+    expect(clear).not.toHaveBeenCalled();
+  });
+
   it("does not complete live preview fallback state when normal delivery throws", async () => {
     const discardPending = vi.fn(async () => undefined);
     const clear = vi.fn(async () => undefined);

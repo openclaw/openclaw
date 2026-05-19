@@ -2038,9 +2038,10 @@ describe("processDiscordMessage draft streaming", () => {
     });
   });
 
-  it("does not flush draft previews for error finals before normal delivery", async () => {
+  it("retains already-visible draft previews for error finals before normal delivery", async () => {
     const draftStream = createMockDraftStreamForTest();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({ text: "partial answer..." });
       await params?.dispatcher.sendFinalReply({
         text: "Something failed",
         isError: true,
@@ -2054,9 +2055,10 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
+    expect(draftStream.update).toHaveBeenCalledWith("partial answer...");
     expect(draftStream.flush).not.toHaveBeenCalled();
     expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });

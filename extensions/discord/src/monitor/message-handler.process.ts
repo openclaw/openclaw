@@ -644,6 +644,7 @@ export async function processDiscordMessage(
                 });
                 return true;
               },
+              retainDraftOnNormalDelivery: (normalPayload) => normalPayload.isError === true,
               logPreviewEditFailure: (err) => {
                 logVerbose(
                   `discord: preview final edit failed; falling back to standard send (${String(err)})`,
