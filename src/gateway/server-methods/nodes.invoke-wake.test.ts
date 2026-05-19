@@ -395,13 +395,21 @@ describe("node.pair.request", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(mocks.requestNodePairing).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nodeId: "ios-node-1",
-        commands: ["canvas.snapshot"],
-        permissions: { camera: true },
-      }),
-    );
+    expect(mocks.requestNodePairing).toHaveBeenCalledWith({
+      nodeId: "ios-node-1",
+      displayName: undefined,
+      platform: undefined,
+      version: undefined,
+      coreVersion: undefined,
+      uiVersion: undefined,
+      deviceFamily: undefined,
+      modelIdentifier: undefined,
+      caps: undefined,
+      commands: ["canvas.snapshot"],
+      permissions: { camera: true },
+      remoteIp: undefined,
+      silent: undefined,
+    });
     expect(mockArg(broadcast, 0, 0)).toBe("node.pair.resolved");
     expect(mockArg(broadcast, 0, 1)).toEqual({
       requestId: "req-old",
@@ -410,13 +418,13 @@ describe("node.pair.request", () => {
       ts: expect.any(Number),
     });
     expect(mockArg(broadcast, 1, 0)).toBe("node.pair.requested");
-    expect(mockArg(broadcast, 1, 1)).toEqual(
-      expect.objectContaining({
-        requestId: "req-new",
-        nodeId: "ios-node-1",
-        permissions: { camera: true },
-      }),
-    );
+    expect(mockArg(broadcast, 1, 1)).toEqual({
+      requestId: "req-new",
+      nodeId: "ios-node-1",
+      commands: ["canvas.snapshot"],
+      permissions: { camera: true },
+      ts: 1,
+    });
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
 });

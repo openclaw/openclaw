@@ -5,6 +5,18 @@ function readComponentsCss(): string {
   return readStyleSheet("ui/src/styles/components.css");
 }
 
+describe("code block highlight styles", () => {
+  it("targets the markdown renderer's generated code block wrapper", () => {
+    const css = readComponentsCss();
+
+    expect(css).toContain(":is(.code-block .hljs, .code-block-wrapper pre code.hljs)");
+    expect(css).toContain(":is(.code-block, .code-block-wrapper pre code.hljs) .hljs-keyword");
+    expect(css).toContain(
+      ':root[data-theme-mode="light"] :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-string',
+    );
+  });
+});
+
 describe("agent fallback chip styles", () => {
   it("styles the chip remove control inside the agent model input", () => {
     const css = readComponentsCss();
@@ -16,6 +28,14 @@ describe("agent fallback chip styles", () => {
     expect(css).toContain("outline: 2px solid var(--accent);");
     expect(css).toContain("outline-offset: 2px;");
     expect(css).toContain(".agent-chip-input .chip-remove:disabled");
+  });
+
+  it("keeps touch-primary field controls large enough to avoid iOS focus zoom", () => {
+    const css = readComponentsCss();
+
+    expect(css).toMatch(
+      /@media \(hover: none\) and \(pointer: coarse\) \{[\s\S]*\.field input,[\s\S]*\.field textarea,[\s\S]*\.field select \{[\s\S]*font-size: 16px;/,
+    );
   });
 });
 

@@ -81,6 +81,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
   },
+  "streaming.progress.maxLineChars": {
+    label: "Discord Progress Max Line Chars",
+    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
+  },
   "streaming.progress.toolProgress": {
     label: "Discord Progress Tool Lines",
     help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
@@ -108,6 +112,10 @@ export const discordChannelConfigUiHints = {
   maxLinesPerMessage: {
     label: "Discord Max Lines Per Message",
     help: "Soft max line count per Discord message (default: 17).",
+  },
+  suppressEmbeds: {
+    label: "Discord Suppress Link Embeds",
+    help: "Suppress Discord-generated link embeds on outbound messages by default. Explicit embeds still send normally. Default: true.",
   },
   "thread.inheritParent": {
     label: "Discord Thread Parent Inheritance",
@@ -309,6 +317,26 @@ export const discordChannelConfigUiHints = {
   allowBots: {
     label: "Discord Allow Bot Messages",
     help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
+  },
+  botLoopProtection: {
+    label: "Discord Bot Loop Protection",
+    help: "Sliding-window guard for bot-to-bot Discord loops. Default is enabled whenever allowBots lets bot-authored messages reach dispatch.",
+  },
+  "botLoopProtection.enabled": {
+    label: "Discord Bot Loop Protection Enabled",
+    help: 'Enable the bot-pair loop guard. Defaults to true when allowBots is true or "mentions", and false when bot messages are ignored.',
+  },
+  "botLoopProtection.maxEventsPerWindow": {
+    label: "Discord Bot Pair Events Per Window",
+    help: "Maximum messages a single Discord bot pair may exchange in the configured window before suppression starts. Default: 20.",
+  },
+  "botLoopProtection.windowSeconds": {
+    label: "Discord Bot Loop Window Seconds",
+    help: "Sliding window length in seconds for Discord bot-pair loop budgets. Default: 60.",
+  },
+  "botLoopProtection.cooldownSeconds": {
+    label: "Discord Bot Loop Cooldown Seconds",
+    help: "Seconds to suppress a Discord bot pair after it exceeds the loop budget. Default: 60.",
   },
   mentionAliases: {
     label: "Discord Mention Aliases",

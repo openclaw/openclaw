@@ -5,13 +5,63 @@ import { buildPluginsCommandParams } from "./commands.test-harness.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
-const replaceConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
+const replaceConfigFileMock = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
 const buildPluginRegistrySnapshotReportMock = vi.hoisted(() => vi.fn());
 const buildPluginDiagnosticsReportMock = vi.hoisted(() => vi.fn());
 const buildPluginInspectReportMock = vi.hoisted(() => vi.fn());
 const buildAllPluginInspectReportsMock = vi.hoisted(() => vi.fn());
 const formatPluginCompatibilityNoticeMock = vi.hoisted(() => vi.fn(() => "ok"));
 const refreshPluginRegistryAfterConfigMutationMock = vi.hoisted(() => vi.fn(async () => undefined));
+
+type ConfigSnapshotMock = {
+  path?: string;
+  hash?: string | null;
+  parsed?: OpenClawConfig | null;
+  sourceConfig?: OpenClawConfig;
+  resolved?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig;
+};
+
+type TransformConfigFileWithRetryMockParams<T = unknown> = {
+  afterWrite?: unknown;
+  transform: (
+    currentConfig: OpenClawConfig,
+    context: { snapshot: ConfigSnapshotMock; previousHash: string | null; attempt: number },
+  ) =>
+    | Promise<{ nextConfig: OpenClawConfig; result?: T }>
+    | { nextConfig: OpenClawConfig; result?: T };
+};
+
+function configFromSnapshot(snapshot: ConfigSnapshotMock): OpenClawConfig {
+  return structuredClone(
+    snapshot.sourceConfig ?? snapshot.resolved ?? snapshot.runtimeConfig ?? snapshot.parsed ?? {},
+  );
+}
+
+async function transformConfigFileWithRetryMock<T = unknown>(
+  params: TransformConfigFileWithRetryMockParams<T>,
+) {
+  const snapshot = (await readConfigFileSnapshotMock()) as ConfigSnapshotMock;
+  const previousHash = snapshot.hash ?? null;
+  const transformed = await params.transform(configFromSnapshot(snapshot), {
+    snapshot,
+    previousHash,
+    attempt: 0,
+  });
+  const afterWrite = params.afterWrite ?? { mode: "auto" };
+  await replaceConfigFileMock({ nextConfig: transformed.nextConfig, afterWrite });
+  return {
+    path: snapshot.path ?? "/tmp/openclaw.json",
+    previousHash,
+    persistedHash: "persisted-hash",
+    snapshot,
+    nextConfig: transformed.nextConfig,
+    result: transformed.result,
+    attempts: 1,
+    afterWrite,
+    followUp: { action: "none" },
+  };
+}
 
 vi.mock("../../cli/npm-resolution.js", () => ({
   buildNpmInstallRecordFields: vi.fn(),
@@ -34,6 +84,7 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
   replaceConfigFile: replaceConfigFileMock,
+  transformConfigFileWithRetry: transformConfigFileWithRetryMock,
 }));
 
 vi.mock("../../infra/archive.js", () => ({
@@ -133,22 +184,22 @@ function expectPluginEnabledInConfig(config: unknown, enabled: boolean) {
 }
 
 function expectLastReplaceConfig(enabled: boolean) {
-  expect(replaceConfigFileMock).toHaveBeenLastCalledWith(
-    expect.objectContaining({ afterWrite: { mode: "auto" } }),
-  );
   const calls = (replaceConfigFileMock as unknown as MockCalls).mock.calls;
   const [payload] = calls.at(-1) ?? [];
   const payloadRecord = requireRecord(payload, "replace config payload");
+  expect(Object.keys(payloadRecord).toSorted()).toEqual(["afterWrite", "nextConfig"]);
+  expect(payloadRecord.afterWrite).toEqual({ mode: "auto" });
   expectPluginEnabledInConfig(payloadRecord.nextConfig, enabled);
 }
 
 function expectLastRegistryRefresh(enabled: boolean) {
-  expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(
-    expect.objectContaining({ reason: "policy-changed" }),
-  );
   const calls = (refreshPluginRegistryAfterConfigMutationMock as unknown as MockCalls).mock.calls;
   const [payload] = calls.at(-1) ?? [];
   const payloadRecord = requireRecord(payload, "registry refresh payload");
+  expect(Object.keys(payloadRecord).toSorted()).toEqual(["config", "logger", "reason"]);
+  expect(payloadRecord.reason).toBe("policy-changed");
+  const logger = getNestedRecord(payloadRecord, "logger", "registry refresh logger");
+  expect(logger.warn).toEqual(expect.any(Function));
   expectPluginEnabledInConfig(payloadRecord.config, enabled);
 }
 

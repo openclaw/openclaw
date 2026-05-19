@@ -9,6 +9,7 @@ import {
 
 const readConfigFileSnapshotForWriteMock = vi.fn();
 const writeConfigFileMock = vi.fn();
+const persistedConfigResultMock = vi.fn((config: OpenClawConfig) => config);
 const validateConfigObjectWithPluginsMock = vi.fn();
 const prepareSecretsRuntimeSnapshotMock = vi.fn();
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({
@@ -31,8 +32,19 @@ vi.mock("../../config/config.js", async () => {
     readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
     validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
     writeConfigFile: writeConfigFileMock,
-    replaceConfigFile: async (params: { nextConfig: unknown; writeOptions?: unknown }) =>
-      await writeConfigFileMock(params.nextConfig, params.writeOptions),
+    replaceConfigFile: async (params: { nextConfig: OpenClawConfig; writeOptions?: unknown }) => {
+      await writeConfigFileMock(params.nextConfig, params.writeOptions);
+      const persistedConfig = persistedConfigResultMock(params.nextConfig);
+      return {
+        path: "/tmp/openclaw.json",
+        previousHash: "base-hash",
+        snapshot: createConfigWriteSnapshot(params.nextConfig),
+        nextConfig: persistedConfig,
+        persistedHash: "next-hash",
+        afterWrite: { mode: "auto" },
+        followUp: { mode: "auto", requiresRestart: false },
+      };
+    },
   };
 });
 
@@ -41,8 +53,11 @@ vi.mock("../../config/runtime-schema.js", () => ({
 }));
 
 vi.mock("../../secrets/runtime.js", () => ({
-  getActiveSecretsRuntimeSnapshot: () => null,
   prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotMock,
+}));
+
+vi.mock("../../secrets/runtime-state.js", () => ({
+  getActiveSecretsRuntimeSnapshot: () => null,
 }));
 
 vi.mock("../../infra/restart.js", () => ({
@@ -61,6 +76,12 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
 
 const { configHandlers } = await import("./config.js");
 
+const GATEWAY_CONFIG_WRITE_OPTIONS = {
+  runtimeRefresh: {
+    includeAuthStoreRefs: false,
+  },
+};
+
 afterEach(() => {
   vi.clearAllMocks();
 });
@@ -76,9 +97,55 @@ beforeEach(() => {
     }),
   );
   restartSentinelMocks.writeRestartSentinel.mockClear();
+  persistedConfigResultMock.mockImplementation((config: OpenClawConfig) => config);
 });
 
 describe("config shared auth disconnects", () => {
+  it("returns the persisted config from config.set write results", async () => {
+    const prevConfig: OpenClawConfig = {
+      gateway: {
+        port: 19000,
+      },
+    };
+    const submittedConfig: OpenClawConfig = {
+      gateway: {
+        port: 19001,
+      },
+    };
+    const persistedConfig: OpenClawConfig = {
+      gateway: {
+        port: 19001,
+      },
+      meta: {
+        lastTouchedVersion: "test",
+      },
+    };
+    persistedConfigResultMock.mockReturnValueOnce(persistedConfig);
+    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
+
+    const { options, respond } = createConfigHandlerHarness({
+      method: "config.set",
+      params: {
+        raw: JSON.stringify(submittedConfig, null, 2),
+        baseHash: "base-hash",
+      },
+    });
+
+    await configHandlers["config.set"](options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(writeConfigFileMock).toHaveBeenCalledWith(submittedConfig, GATEWAY_CONFIG_WRITE_OPTIONS);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: true,
+        path: "/tmp/openclaw.json",
+        config: persistedConfig,
+      },
+      undefined,
+    );
+  });
+
   it("does not disconnect shared-auth clients for config.set auth writes without restart", async () => {
     const prevConfig: OpenClawConfig = {
       gateway: {
@@ -109,7 +176,7 @@ describe("config shared auth disconnects", () => {
     await configHandlers["config.set"](options);
     await flushConfigHandlerMicrotasks();
 
-    expect(writeConfigFileMock).toHaveBeenCalledWith(nextConfig, {});
+    expect(writeConfigFileMock).toHaveBeenCalledWith(nextConfig, GATEWAY_CONFIG_WRITE_OPTIONS);
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
   });

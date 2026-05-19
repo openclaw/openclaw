@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../gateway/call.js";
-import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
+import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "./subagent-lifecycle-events.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -114,8 +119,16 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
   }
 }
 
+function firstCall(mock: ReturnType<typeof vi.fn>): ReadonlyArray<unknown> {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected first mock call");
+  }
+  return call;
+}
+
 function firstCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const [arg] = mock.mock.calls.at(0) ?? [];
+  const [arg] = firstCall(mock);
   if (!arg || typeof arg !== "object") {
     throw new Error("expected first call argument object");
   }
@@ -206,8 +219,9 @@ describe("subagent registry lifecycle hardening", () => {
     ).resolves.toBeUndefined();
 
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls.at(0)?.[0]).toBe("failed to finalize subagent background task state");
-    expectFields(warn.mock.calls.at(0)?.[1], {
+    const [warning, warningFields] = firstCall(warn);
+    expect(warning).toBe("failed to finalize subagent background task state");
+    expectFields(warningFields, {
       error: { name: "Error", message: "task store boom" },
       runId: "***",
       childSessionKey: "agent:main:…",
@@ -250,10 +264,9 @@ describe("subagent registry lifecycle hardening", () => {
     ).resolves.toBeUndefined();
 
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls.at(0)?.[0]).toBe(
-      "failed to update subagent background task delivery state",
-    );
-    expectFields(warn.mock.calls.at(0)?.[1], {
+    const [warning, warningFields] = firstCall(warn);
+    expect(warning).toBe("failed to update subagent background task delivery state");
+    expectFields(warningFields, {
       error: { name: "Error", message: "delivery state boom" },
       runId: "***",
       childSessionKey: "agent:main:…",
@@ -289,6 +302,46 @@ describe("subagent registry lifecycle hardening", () => {
     expect(browserCleanupArg.onWarn).toBeTypeOf("function");
     expectFields(firstCallArg(runSubagentAnnounceFlow), {
       childSessionKey: entry.childSessionKey,
+    });
+  });
+
+  it("records completion announcement timestamps from transcript delivery", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
+    const delivery: SubagentAnnounceDeliveryResult = {
+      delivered: true,
+      path: "steered",
+      enqueuedAt: 4_100,
+      deliveredAt: 12_300,
+    };
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.(delivery);
+        return true;
+      },
+    );
+
+    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() => expect(entry.completionAnnouncedAt).toBe(12_300));
+    expect(entry.completionEnqueuedAt).toBe(4_100);
+    expect(entry.completionDeliveredAt).toBe(12_300);
+    expect(entry.lastAnnounceDropReason).toBeUndefined();
+    expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+      runId: entry.runId,
+      deliveryStatus: "delivered",
     });
   });
 
@@ -645,6 +698,102 @@ describe("subagent registry lifecycle hardening", () => {
     expect(Number.isNaN(entry.cleanupCompletedAt)).toBe(false);
   });
 
+  it("suspends successful keep-mode final delivery instead of completing cleanup on retry exhaustion", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectsCompletionMessage: true,
+      frozenResultText: "final answer",
+      lastAnnounceDeliveryError: "gateway request timeout for agent",
+      outcome: { status: "ok" },
+      retainAttachmentsOnKeep: true,
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "retry-limit",
+    });
+
+    expect(entry.pendingFinalDelivery).toBe(true);
+    expect(entry.pendingFinalDeliveryPayload).toMatchObject({
+      requesterSessionKey: entry.requesterSessionKey,
+      childSessionKey: entry.childSessionKey,
+      childRunId: entry.runId,
+      frozenResultText: "final answer",
+    });
+    expect(entry.deliverySuspendedAt).toBeTypeOf("number");
+    expect(entry.deliverySuspendedReason).toBe("retry-limit");
+    expect(entry.cleanupHandled).toBe(false);
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(helperMocks.safeRemoveAttachmentsDir).not.toHaveBeenCalled();
+    expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      deliveryStatus: "failed",
+      error: "gateway request timeout for agent",
+    });
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "timeout",
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      outcome: { status: "timeout" as const },
+    },
+    {
+      name: "error",
+      endedReason: SUBAGENT_ENDED_REASON_ERROR,
+      outcome: { status: "error" as const, error: "child failed" },
+    },
+    {
+      name: "killed",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: undefined,
+    },
+  ])(
+    "keeps $name completion cleanup terminal on retry exhaustion",
+    async ({ endedReason, outcome }) => {
+      const persist = vi.fn();
+      const entry = createRunEntry({
+        endedAt: 4_000,
+        endedReason,
+        expectsCompletionMessage: true,
+        lastAnnounceDeliveryError: "gateway request timeout for agent",
+        outcome,
+        retainAttachmentsOnKeep: true,
+      });
+
+      const controller = createLifecycleController({
+        entry,
+        persist,
+        captureSubagentCompletionReply: vi.fn(async () => undefined),
+      });
+
+      await controller.finalizeResumedAnnounceGiveUp({
+        runId: entry.runId,
+        entry,
+        reason: "retry-limit",
+      });
+
+      expect(entry.pendingFinalDelivery).toBeUndefined();
+      expect(entry.pendingFinalDeliveryPayload).toBeUndefined();
+      expect(entry.deliverySuspendedAt).toBeUndefined();
+      expect(entry.deliverySuspendedReason).toBeUndefined();
+      expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+      expect(persist).toHaveBeenCalled();
+    },
+  );
+
   it("continues cleanup when delivery-status persistence throws after announce delivery", async () => {
     const persist = vi.fn();
     const warn = vi.fn();
@@ -677,10 +826,9 @@ describe("subagent registry lifecycle hardening", () => {
     ).resolves.toBeUndefined();
 
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls.at(0)?.[0]).toBe(
-      "failed to update subagent background task delivery state",
-    );
-    expectFields(warn.mock.calls.at(0)?.[1], {
+    const [warning, warningFields] = firstCall(warn);
+    expect(warning).toBe("failed to update subagent background task delivery state");
+    expectFields(warningFields, {
       error: { name: "Error", message: "delivery status boom" },
       deliveryStatus: "delivered",
     });
@@ -704,7 +852,7 @@ describe("subagent registry lifecycle hardening", () => {
           path: "direct";
           error: string;
           phases: Array<{
-            phase: "direct-primary" | "queue-fallback";
+            phase: "direct-primary" | "steer-fallback";
             delivered: boolean;
             path: "direct" | "none";
             error?: string;
@@ -723,7 +871,7 @@ describe("subagent registry lifecycle hardening", () => {
               error: "UNAVAILABLE: requester wake failed",
             },
             {
-              phase: "queue-fallback",
+              phase: "steer-fallback",
               delivered: false,
               path: "none",
             },
@@ -760,7 +908,15 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.lastAnnounceDeliveryError).toBe(
       "UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed",
     );
-    expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+    expect(entry.pendingFinalDelivery).toBe(true);
+    expect(entry.pendingFinalDeliveryPayload).toMatchObject({
+      requesterSessionKey: entry.requesterSessionKey,
+      childSessionKey: entry.childSessionKey,
+      childRunId: entry.runId,
+    });
+    expect(entry.deliverySuspendedAt).toBeTypeOf("number");
+    expect(entry.deliverySuspendedReason).toBe("retry-limit");
+    expect(entry.cleanupCompletedAt).toBeUndefined();
     expect(persist).toHaveBeenCalled();
   });
 

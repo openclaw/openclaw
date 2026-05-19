@@ -2,9 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
-const staleOpenAICodexReason =
-  "is no longer supported for ChatGPT/Codex OAuth accounts. Use openai/gpt-5.5 through the Codex runtime.";
-
 function createModelSuppressionRegistry(): PluginManifestRegistry {
   return {
     diagnostics: [],
@@ -28,16 +25,6 @@ function createModelSuppressionRegistry(): PluginManifestRegistry {
               model: "gpt-5.3-codex-spark",
               reason:
                 "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
-            },
-            {
-              provider: "openai-codex",
-              model: "gpt-5.2-codex",
-              reason: `gpt-5.2-codex ${staleOpenAICodexReason}`,
-            },
-            {
-              provider: "openai-codex",
-              model: "gpt-5.3-codex",
-              reason: `gpt-5.3-codex ${staleOpenAICodexReason}`,
             },
           ],
         },
@@ -69,11 +56,13 @@ describe("config model reference validation", () => {
     if (res.ok) {
       return;
     }
-    expect(res.issues).toContainEqual({
-      path: "agents.defaults.model.primary",
-      message:
-        "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
-    });
+    expect(res.issues).toEqual([
+      {
+        path: "agents.defaults.model.primary",
+        message:
+          "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      },
+    ]);
   });
 
   it("accepts supported openai-codex provider/model pairs", () => {
@@ -97,7 +86,7 @@ describe("config model reference validation", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("rejects stale openai-codex fallback model pairs", () => {
+  it("accepts available openai-codex fallback model pairs", () => {
     const res = validateConfigObjectWithPlugins(
       {
         agents: {
@@ -116,19 +105,6 @@ describe("config model reference validation", () => {
       },
     );
 
-    expect(res.ok).toBe(false);
-    if (res.ok) {
-      return;
-    }
-    expect(res.issues).toContainEqual({
-      path: "agents.defaults.model.fallbacks.0",
-      message:
-        "Unknown model: openai-codex/gpt-5.2-codex. gpt-5.2-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai/gpt-5.5 through the Codex runtime.",
-    });
-    expect(res.issues).toContainEqual({
-      path: "agents.defaults.model.fallbacks.1",
-      message:
-        "Unknown model: openai-codex/gpt-5.3-codex. gpt-5.3-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai/gpt-5.5 through the Codex runtime.",
-    });
+    expect(res.ok).toBe(true);
   });
 });

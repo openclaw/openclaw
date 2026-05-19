@@ -14,7 +14,7 @@ import {
   waitForSessionsSpawnEvent,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import {
-  __testing as bundleMcpRuntimeTesting,
+  testing as bundleMcpRuntimeTesting,
   getOrCreateSessionMcpRuntime,
 } from "./pi-bundle-mcp-tools.js";
 import {
@@ -481,11 +481,12 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(deletedKey?.startsWith("agent:main:subagent:")).toBe(true);
   });
 
-  it("sessions_spawn records timeout when agent.wait returns timeout", async () => {
+  it("sessions_spawn records timeout when agent.wait returns timeout and child session is terminal", async () => {
     const ctx = setupSessionsSpawnGatewayMock({
       includeChatHistory: true,
       chatHistoryText: "still working",
       agentWaitResult: { status: "timeout", startedAt: 6000, endedAt: 7000 },
+      subagentSessionEntryPatch: { status: "timeout", endedAt: 7000 },
     });
 
     const tool = await getDiscordGroupSpawnTool();
