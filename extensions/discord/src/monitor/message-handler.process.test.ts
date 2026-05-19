@@ -230,14 +230,14 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
     onReplyStart?: () => Promise<void> | void;
   }) => {
     const pendingDeliveries: Promise<void>[] = [];
-    const queueDelivery = (payload: unknown, info: { kind: "block" | "final" }) => {
+    const queueDelivery = (payload: unknown, info: { kind: "tool" | "block" | "final" }) => {
       const delivery = Promise.resolve(opts.deliver(payload, info)).catch(() => undefined);
       pendingDeliveries.push(delivery);
       return true;
     };
     return {
       dispatcher: {
-        sendToolResult: vi.fn(() => true),
+        sendToolResult: vi.fn((payload: unknown) => queueDelivery(payload, { kind: "tool" })),
         sendBlockReply: vi.fn((payload: unknown) => queueDelivery(payload, { kind: "block" })),
         sendFinalReply: vi.fn((payload: unknown) => queueDelivery(payload, { kind: "final" })),
         waitForIdle: vi.fn(async () => {
@@ -2061,6 +2061,44 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains already-visible draft previews when a tool error was delivered before the final", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({
+        text: "I don't think the error will show differently if we try again.",
+      });
+      await params?.dispatcher.sendToolResult({
+        text: "Canvas failed",
+        isError: true,
+      } as never);
+      await params?.dispatcher.sendFinalReply({
+        text: 'There - same result. Consistent repro: {"status":"error","tool":"canvas","error":"node required"}',
+      });
+      return { queuedFinal: true, counts: { final: 1, tool: 1, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "I don't think the error will show differently if we try again.",
+    );
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(2);
+    const toolDelivery = requireRecord(
+      firstMockCall(deliverDiscordReply, "tool delivery")[0],
+      "tool delivery",
+    );
+    const finalDelivery = requireRecord(deliverDiscordReply.mock.calls[1]?.[0], "final delivery");
+    expect(toolDelivery.kind).toBe("tool");
+    expect(finalDelivery.kind).toBe("final");
   });
 
   it("suppresses reasoning payload delivery to Discord", async () => {

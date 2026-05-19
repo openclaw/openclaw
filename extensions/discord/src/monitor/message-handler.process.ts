@@ -580,6 +580,7 @@ export async function processDiscordMessage(
               buildFinalEdit: () => {
                 if (
                   draftPreview.finalizedViaPreviewMessage ||
+                  replyReference.hasReplied() ||
                   (hasMedia && !ttsSupplement) ||
                   typeof previewFinalText !== "string" ||
                   hasExplicitReplyDirective ||
@@ -644,7 +645,8 @@ export async function processDiscordMessage(
                 });
                 return true;
               },
-              retainDraftOnNormalDelivery: (normalPayload) => normalPayload.isError === true,
+              retainDraftOnNormalDelivery: (normalPayload) =>
+                normalPayload.isError === true || replyReference.hasReplied(),
               logPreviewEditFailure: (err) => {
                 logVerbose(
                   `discord: preview final edit failed; falling back to standard send (${String(err)})`,

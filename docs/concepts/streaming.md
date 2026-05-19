@@ -172,7 +172,7 @@ Discord:
 - `block` mode uses draft chunking (`draftChunk`).
 - Preview streaming is skipped when Discord block streaming is explicitly enabled.
 - Final media and explicit-reply payloads cancel pending previews without flushing a new draft, then use normal delivery.
-- Error finals discard pending preview edits but keep any already-visible preview message, then send the error separately.
+- Error finals and finals after an already-delivered same-turn reply discard pending preview edits but keep any already-visible preview message, then use normal delivery.
 
 Slack:
 
