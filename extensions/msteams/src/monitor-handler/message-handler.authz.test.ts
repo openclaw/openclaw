@@ -296,6 +296,19 @@ describe("msteams monitor handler authz", () => {
     return recordFromMockCall(dispatched) as { ctxPayload?: unknown };
   }
 
+  function systemEventMetaForTextPrefix(
+    mock: ReturnType<typeof vi.fn>,
+    textPrefix: string,
+  ): Record<string, unknown> {
+    const call = mock.mock.calls.find(
+      (entry: unknown[]) => typeof entry[0] === "string" && entry[0].startsWith(textPrefix),
+    );
+    if (!call) {
+      throw new Error(`Expected system event starting with ${textPrefix}`);
+    }
+    return recordFromMockCall(call[1]);
+  }
+
   function logMeta(logFn: unknown, message: string): Record<string, unknown> {
     const calls = (logFn as { mock?: { calls?: Array<[unknown, unknown?]> } }).mock?.calls ?? [];
     const call = calls.find(([loggedMessage]) => loggedMessage === message);
@@ -634,6 +647,31 @@ describe("msteams monitor handler authz", () => {
     expect(conversationStore.upsert).toHaveBeenCalled();
     const dispatched = firstSettledDispatch();
     expect(recordFromMockCall(dispatched?.ctxPayload).CommandAuthorized).toBe(true);
+  });
+
+  it("downgrades skipped Teams message preview events", async () => {
+    resetThreadMocks();
+    const { deps, enqueueSystemEvent } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          requireMention: true,
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(createAttackerGroupActivity({ text: "ambient channel message" }));
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+    expect(
+      systemEventMetaForTextPrefix(enqueueSystemEvent, "Teams message in groupChat from Attacker:")
+        .forceSenderIsOwnerFalse,
+    ).toBe(true);
+    expect(
+      systemEventMetaForTextPrefix(enqueueSystemEvent, "Teams message in groupChat from Attacker:")
+        .trusted,
+    ).toBe(false);
   });
 
   it("filters non-allowlisted thread messages out of BodyForAgent", async () => {

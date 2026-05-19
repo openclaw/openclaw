@@ -3205,6 +3205,10 @@ describe("createTelegramBot", () => {
       `Telegram reaction added: ${THUMBS_UP_EMOJI} by Ada (@ada_bot) on msg 42`,
     );
     expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:1234:42:9");
+    expect(systemEventOptions()).toMatchObject({
+      forceSenderIsOwnerFalse: true,
+      trusted: false,
+    });
   });
 
   it.each([

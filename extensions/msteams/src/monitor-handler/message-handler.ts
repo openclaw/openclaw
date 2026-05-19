@@ -493,16 +493,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       replyToId: activity.replyToId,
     });
 
-    const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
-    const inboundLabel = isDirectMessage
-      ? `Teams DM from ${senderName}`
-      : `Teams message in ${conversationType} from ${senderName}`;
-
-    core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
-      sessionKey: route.sessionKey,
-      contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
-    });
-
     const channelId = conversationId;
     const { teamConfig, channelConfig } = channelGate;
     const { requireMention, replyStyle } = resolveMSTeamsReplyPolicy({
@@ -525,6 +515,17 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         hasControlCommand: false,
         commandAuthorized: false,
       },
+    });
+    const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
+    const inboundLabel = isDirectMessage
+      ? `Teams DM from ${senderName}`
+      : `Teams message in ${conversationType} from ${senderName}`;
+    const skippedAmbientMessage = !isDirectMessage && requireMention && mentionDecision.shouldSkip;
+
+    core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+      sessionKey: route.sessionKey,
+      contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
+      ...(skippedAmbientMessage ? { forceSenderIsOwnerFalse: true, trusted: false } : {}),
     });
 
     if (!isDirectMessage) {

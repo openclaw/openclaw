@@ -634,6 +634,7 @@ export function createMattermostInteractionHandler(params: {
       core.system.enqueueSystemEvent(eventLabel, {
         sessionKey,
         contextKey: `mattermost:interaction:${payload.post_id}:${actionId}`,
+        ...(params.dispatchButtonClick ? {} : { forceSenderIsOwnerFalse: true, trusted: false }),
       });
     } catch (err) {
       log?.(`mattermost interaction: system event dispatch failed: ${String(err)}`);

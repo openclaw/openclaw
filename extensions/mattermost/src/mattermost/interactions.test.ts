@@ -899,6 +899,34 @@ describe("createMattermostInteractionHandler", () => {
     });
   });
 
+  it("downgrades standalone button click system events", async () => {
+    const enqueueSystemEvent = vi.fn();
+    setInteractionRuntime(enqueueSystemEvent);
+    const { context, token } = createActionContext();
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async (_path: string, init?: { method?: string }) =>
+        init?.method === "PUT" ? { id: "post-1" } : createActionPost(),
+      ),
+      botUserId: "bot",
+      accountId: "acct",
+    });
+
+    const res = await runHandler(handler, {
+      body: createInteractionBody({ context, token, userName: "alice" }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      'Mattermost button click: action="approve" by alice in channel chan-1',
+      {
+        sessionKey: "agent:main:mattermost:acct:chan-1",
+        contextKey: "mattermost:interaction:post-1:approve",
+        forceSenderIsOwnerFalse: true,
+        trusted: false,
+      },
+    );
+  });
+
   it("lets a custom interaction handler short-circuit generic completion updates", async () => {
     const { context, token } = createActionContext("mdlprov");
     const requestLog: Array<{ path: string; method?: string }> = [];

@@ -173,6 +173,8 @@ describe("matrix approval reactions", () => {
       {
         sessionKey: "agent:main:matrix:channel:!ops:example.org",
         contextKey: "matrix:reaction:add:!ops:example.org:$msg-1:@owner:example.org:👍",
+        forceSenderIsOwnerFalse: true,
+        trusted: false,
       },
     );
   });

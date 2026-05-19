@@ -376,6 +376,10 @@ describe("registerSlackMessageEvents", () => {
 
     expect(handleSlackMessage).not.toHaveBeenCalled();
     expect(messageQueueMock).toHaveBeenCalledTimes(1);
+    expect(messageQueueMock.mock.calls[0]?.[1]).toMatchObject({
+      forceSenderIsOwnerFalse: true,
+      trusted: false,
+    });
   });
 
   it("skips app_mention events for DM channel ids even with contradictory channel_type", async () => {
