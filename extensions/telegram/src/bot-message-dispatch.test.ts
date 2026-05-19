@@ -1702,6 +1702,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expectDeliveredReply(0, { text: "Branch is up to date" });
   });
 
+  it("does not restart progress drafts for command output while final answer delivery is pending", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        const finalDelivery = dispatcherOptions.deliver(
+          { text: "Branch is up to date" },
+          { kind: "final" },
+        );
+        await replyOptions?.onCommandOutput?.({
+          phase: "end",
+          title: "Exec",
+          name: "exec",
+          status: "failed",
+          exitCode: 1,
+        });
+        await finalDelivery;
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Shelling\n\n`🛠️ Exec`");
+    expectDeliveredReply(0, { text: "Branch is up to date" });
+  });
+
   it("uses the transcript final when progress-mode final text is truncated", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
     const fullAnswer =

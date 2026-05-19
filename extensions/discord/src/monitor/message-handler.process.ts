@@ -518,6 +518,7 @@ export async function processDiscordMessage(
       return;
     }
     finalReplyStartNotified = true;
+    draftPreview.markFinalReplyStarted();
     observer?.onFinalReplyStart?.();
   };
 
@@ -533,6 +534,9 @@ export async function processDiscordMessage(
         if (payload.isReasoning) {
           // Reasoning/thinking payloads should not be delivered to Discord.
           return;
+        }
+        if (isFinal) {
+          draftPreview.markFinalReplyStarted();
         }
         const finalText =
           isFinal && typeof payload.text === "string"
