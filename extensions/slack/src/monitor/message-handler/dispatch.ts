@@ -604,6 +604,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     kind: ReplyDispatchKind;
     forcedThreadTs?: string;
   }): Promise<void> => {
+    if (params.payload.isReasoning === true) {
+      return;
+    }
     const replyThreadTs = resolveDeliveryThreadTs(params);
     if (
       deliveryTracker.hasDelivered({
@@ -834,6 +837,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     deliver: async (payload, info) => {
       if (useStreaming) {
         await deliverWithStreaming({ payload, kind: info.kind });
+        return;
+      }
+
+      if (payload.isReasoning === true) {
         return;
       }
 
