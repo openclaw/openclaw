@@ -97,6 +97,19 @@ Welcome to the lobster tank! 🦞
 4. **Test/CI-only PRs for known `main` failures** → Don't open a PR. The Maintainer team is already tracking those failures, and PRs that only tweak tests or CI to chase them will be closed unless they are required to validate a new fix.
 5. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
 
+## When Opening Issues
+
+If you already know whether you plan to work on a fix, please mention that in the issue. This is only a coordination signal, not an assignment or commitment.
+
+Examples:
+
+- I plan to open a PR
+- I may open a PR, but would like maintainer guidance first
+- I can help test or provide details, but probably will not submit a fix
+- I am reporting this for someone else to pick up
+
+Maintainers may still retitle, close, reprioritize, or accept another PR if needed.
+
 ## PR Limits
 
 We cap at **20 open PRs per author**. If you exceed this, the `r: too-many-prs` label is added and your PR is auto-closed. This is a hard limit.
