@@ -76,6 +76,7 @@ internal enum class V2SettingsRoute {
   CronJobs,
   Usage,
   Skills,
+  NodesDevices,
   Notifications,
   PhoneCapabilities,
   Gateway,
@@ -99,6 +100,7 @@ internal fun V2SettingsDetailScreen(
     V2SettingsRoute.CronJobs -> V2CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Usage -> V2UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Skills -> V2SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    V2SettingsRoute.NodesDevices -> V2NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Notifications -> V2NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.PhoneCapabilities -> V2PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     V2SettingsRoute.Gateway -> V2GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
