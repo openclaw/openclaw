@@ -134,7 +134,15 @@ export function isGatewayRunFastPathArgv(argv: string[]): boolean {
 }
 
 function hasJsonOutputFlag(argv: string[]): boolean {
-  return argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
+  for (const arg of argv) {
+    if (arg === "--") {
+      return false;
+    }
+    if (arg === "--json" || arg.startsWith("--json=")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function tryRunGatewayRunFastPath(
@@ -154,7 +162,7 @@ async function tryRunGatewayRunFastPath(
   ] = await startupTrace.measure("gateway-run-imports", () =>
     Promise.all([
       import("commander"),
-      import("./gateway-cli/run.js"),
+      import("./gateway-cli/run-command.js"),
       import("../version.js"),
       import("./banner.js"),
       import("./command-startup-policy.js"),
@@ -526,11 +534,19 @@ export async function runCli(argv: string[] = process.argv) {
 
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
-      const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
-      if (!outputPrecomputedRootHelpText()) {
-        const { outputRootHelp } = await import("./program/root-help.js");
-        await outputRootHelp();
+      const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
+        await import("./root-help-live-config.js");
+      const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(
+        process.env,
+      );
+      if (!liveRootHelpOptions) {
+        const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
+        if (outputPrecomputedRootHelpText()) {
+          return;
+        }
       }
+      const { outputRootHelp } = await import("./program/root-help.js");
+      await outputRootHelp(liveRootHelpOptions ?? undefined);
       return;
     }
 
@@ -625,7 +641,6 @@ export async function runCli(argv: string[] = process.argv) {
       label: "Loading OpenClaw CLI…",
       indeterminate: true,
       delayMs: 0,
-      fallback: "none",
     });
     let startupProgressStopped = false;
     const stopStartupProgress = () => {
@@ -725,10 +740,33 @@ export async function runCli(argv: string[] = process.argv) {
         const config = await startupTrace.measure("register-plugin-commands", async () => {
           const { registerPluginCliCommandsFromValidatedConfig } =
             await import("../plugins/cli.js");
-          return await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
-            mode: "lazy",
-            primary,
-          });
+          if (!hasJsonOutputFlag(parseArgv)) {
+            return await registerPluginCliCommandsFromValidatedConfig(
+              program,
+              undefined,
+              undefined,
+              {
+                mode: "lazy",
+                primary,
+              },
+            );
+          }
+          const { loggingState } = await import("../logging/state.js");
+          const previousForceStderr = loggingState.forceConsoleToStderr;
+          loggingState.forceConsoleToStderr = true;
+          try {
+            return await registerPluginCliCommandsFromValidatedConfig(
+              program,
+              undefined,
+              undefined,
+              {
+                mode: "lazy",
+                primary,
+              },
+            );
+          } finally {
+            loggingState.forceConsoleToStderr = previousForceStderr;
+          }
         });
         if (config) {
           if (

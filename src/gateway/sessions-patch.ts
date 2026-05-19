@@ -125,11 +125,15 @@ export async function applySessionsPatchToStore(params: {
         updatedAt: Math.max(existing.updatedAt ?? 0, now),
       }
     : {
-        ...(existing ?? {}),
+        ...existing,
         sessionId: randomUUID(),
         sessionFile: undefined,
         updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       };
+  if (existing && !existing.sessionId) {
+    delete next.label;
+    delete next.displayName;
+  }
 
   if ("spawnedBy" in patch) {
     const raw = patch.spawnedBy;

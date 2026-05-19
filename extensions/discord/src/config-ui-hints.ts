@@ -81,6 +81,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
   },
+  "streaming.progress.maxLineChars": {
+    label: "Discord Progress Max Line Chars",
+    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
+  },
   "streaming.progress.toolProgress": {
     label: "Discord Progress Tool Lines",
     help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
@@ -108,6 +112,10 @@ export const discordChannelConfigUiHints = {
   maxLinesPerMessage: {
     label: "Discord Max Lines Per Message",
     help: "Soft max line count per Discord message (default: 17).",
+  },
+  suppressEmbeds: {
+    label: "Discord Suppress Link Embeds",
+    help: "Suppress Discord-generated link embeds on outbound messages by default. Explicit embeds still send normally. Default: true.",
   },
   "thread.inheritParent": {
     label: "Discord Thread Parent Inheritance",

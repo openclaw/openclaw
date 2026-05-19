@@ -18,7 +18,7 @@ NC='\033[0m' # No Color
 DEFAULT_TAGLINE="All your chats, one OpenClaw."
 NODE_DEFAULT_MAJOR=24
 NODE_MIN_MAJOR=22
-NODE_MIN_MINOR=14
+NODE_MIN_MINOR=19
 NODE_MIN_VERSION="${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}"
 
 ORIGINAL_PATH="${PATH:-}"
@@ -713,12 +713,23 @@ run_npm_global_install() {
     local spec="$1"
     local log="$2"
 
+    local freshness_flag="--min-release-age=0"
+    local min_release_age=""
+    min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before npm config get min-release-age 2>/dev/null || true)"
+    if [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
+        local before_value=""
+        before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age npm config get before 2>/dev/null || true)"
+        if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
+            freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+        fi
+    fi
+
     local -a cmd
-    cmd=(env "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" npm --loglevel "$NPM_LOGLEVEL")
+    cmd=(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" npm --loglevel "$NPM_LOGLEVEL")
     if [[ -n "$NPM_SILENT_FLAG" ]]; then
         cmd+=("$NPM_SILENT_FLAG")
     fi
-    cmd+=(--no-fund --no-audit install -g "$spec")
+    cmd+=(--no-fund --no-audit "$freshness_flag" install -g "$spec")
     local cmd_display=""
     printf -v cmd_display '%q ' "${cmd[@]}"
     LAST_NPM_INSTALL_CMD="${cmd_display% }"
@@ -1960,26 +1971,28 @@ checkout_git_openclaw_ref() {
         return 0
     fi
 
-    run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --tags origin
-
     if [[ "$ref" == "main" ]]; then
+        run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin main
         run_quiet_step "Checking out main" git -C "$repo_dir" checkout main
         if [[ "$GIT_UPDATE" == "1" ]]; then
-            run_quiet_step "Updating repository" git -C "$repo_dir" pull --rebase || true
+            run_quiet_step "Updating repository" git -C "$repo_dir" pull --rebase --no-tags || true
         fi
-        return 0
-    fi
-
-    if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
-        run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
         return 0
     fi
 
     if git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
+        run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
         run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
         if [[ "$GIT_UPDATE" == "1" ]]; then
-            run_quiet_step "Updating repository" git -C "$repo_dir" pull --rebase || true
+            run_quiet_step "Updating repository" git -C "$repo_dir" pull --rebase --no-tags || true
         fi
+        return 0
+    fi
+
+    run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --tags origin
+
+    if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
+        run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
         return 0
     fi
 
@@ -1990,6 +2003,18 @@ checkout_git_openclaw_ref() {
 
     ui_error "Requested git version not found: ${ref}"
     return 1
+}
+
+git_install_lockfile_flag() {
+    local repo_dir="$1"
+    local ref="$2"
+
+    if [[ "$ref" == "main" ]] || git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
+        echo "--no-frozen-lockfile"
+        return 0
+    fi
+
+    echo "--frozen-lockfile"
 }
 
 repo_pnpm_spec() {
@@ -2368,7 +2393,9 @@ install_openclaw_from_git() {
     cleanup_legacy_submodules "$repo_dir"
     activate_repo_pnpm_version "$repo_dir"
 
-    SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install --frozen-lockfile
+    local install_lockfile_flag
+    install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
+    CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
 
     if ! run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build; then
         ui_warn "UI build failed; continuing (CLI may still work)"

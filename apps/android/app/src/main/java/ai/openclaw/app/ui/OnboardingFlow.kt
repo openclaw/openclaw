@@ -252,6 +252,7 @@ fun OnboardingFlow(
         context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
     }
   val callLogAvailable = remember { SensitiveFeatureConfig.callLogEnabled }
+  val photosAvailable = remember { SensitiveFeatureConfig.photosEnabled }
   val motionAvailable =
     remember(context) {
       hasMotionCapabilities(context)
@@ -325,7 +326,7 @@ fun OnboardingFlow(
       PermissionToggle.Notifications -> enableNotifications = enabled
       PermissionToggle.Microphone -> enableMicrophone = enabled
       PermissionToggle.Camera -> enableCamera = enabled
-      PermissionToggle.Photos -> enablePhotos = enabled
+      PermissionToggle.Photos -> enablePhotos = enabled && photosAvailable
       PermissionToggle.Contacts -> enableContacts = enabled
       PermissionToggle.Calendar -> enableCalendar = enabled
       PermissionToggle.Motion -> enableMotion = enabled && motionAvailable
@@ -345,7 +346,7 @@ fun OnboardingFlow(
           isPermissionGranted(context, Manifest.permission.POST_NOTIFICATIONS)
       PermissionToggle.Microphone -> isPermissionGranted(context, Manifest.permission.RECORD_AUDIO)
       PermissionToggle.Camera -> isPermissionGranted(context, Manifest.permission.CAMERA)
-      PermissionToggle.Photos -> isPermissionGranted(context, photosPermission)
+      PermissionToggle.Photos -> !photosAvailable || isPermissionGranted(context, photosPermission)
       PermissionToggle.Contacts ->
         isPermissionGranted(context, Manifest.permission.READ_CONTACTS) &&
           isPermissionGranted(context, Manifest.permission.WRITE_CONTACTS)
@@ -391,6 +392,7 @@ fun OnboardingFlow(
       enableCallLog,
       smsAvailable,
       callLogAvailable,
+      photosAvailable,
       motionAvailable,
     ) {
       val enabled = mutableListOf<String>()
@@ -400,7 +402,7 @@ fun OnboardingFlow(
       if (enableNotificationListener) enabled += "Notification listener"
       if (enableMicrophone) enabled += "Microphone"
       if (enableCamera) enabled += "Camera"
-      if (enablePhotos) enabled += "Photos"
+      if (photosAvailable && enablePhotos) enabled += "Photos"
       if (enableContacts) enabled += "Contacts"
       if (enableCalendar) enabled += "Calendar"
       if (enableMotion && motionAvailable) enabled += "Motion"
@@ -497,8 +499,14 @@ fun OnboardingFlow(
       containerColor = onboardingSurface,
       title = { Text("Trust this gateway?", style = onboardingHeadlineStyle, color = onboardingText) },
       text = {
+        val message =
+          if (prompt.previousFingerprintSha256.isNullOrBlank()) {
+            "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}"
+          } else {
+            "The gateway TLS certificate changed. Only continue if you expected this.\n\nOld SHA-256 fingerprint:\n${prompt.previousFingerprintSha256}\n\nNew SHA-256 fingerprint:\n${prompt.fingerprintSha256}"
+          }
         Text(
-          "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}",
+          message,
           style = onboardingCalloutStyle,
           color = onboardingText,
         )
@@ -631,6 +639,7 @@ fun OnboardingFlow(
               enableMicrophone = enableMicrophone,
               enableCamera = enableCamera,
               enablePhotos = enablePhotos,
+              photosAvailable = photosAvailable,
               enableContacts = enableContacts,
               enableCalendar = enableCalendar,
               enableMotion = enableMotion,
@@ -687,11 +696,15 @@ fun OnboardingFlow(
                 )
               },
               onPhotosChange = { checked ->
-                requestPermissionToggle(
-                  PermissionToggle.Photos,
-                  checked,
-                  listOf(photosPermission),
-                )
+                if (!photosAvailable) {
+                  setPermissionToggleEnabled(PermissionToggle.Photos, false)
+                } else {
+                  requestPermissionToggle(
+                    PermissionToggle.Photos,
+                    checked,
+                    listOf(photosPermission),
+                  )
+                }
               },
               onContactsChange = { checked ->
                 requestPermissionToggle(
@@ -1395,6 +1408,7 @@ private fun PermissionsStep(
   enableMicrophone: Boolean,
   enableCamera: Boolean,
   enablePhotos: Boolean,
+  photosAvailable: Boolean,
   enableContacts: Boolean,
   enableCalendar: Boolean,
   enableMotion: Boolean,
@@ -1510,13 +1524,15 @@ private fun PermissionsStep(
       onCheckedChange = onCameraChange,
     )
     InlineDivider()
-    PermissionToggleRow(
-      title = "Photos",
-      subtitle = "Access your recent photos",
-      checked = enablePhotos,
-      granted = isPermissionGranted(context, photosPermission),
-      onCheckedChange = onPhotosChange,
-    )
+    if (photosAvailable) {
+      PermissionToggleRow(
+        title = "Photos",
+        subtitle = "Access your recent photos",
+        checked = enablePhotos,
+        granted = isPermissionGranted(context, photosPermission),
+        onCheckedChange = onPhotosChange,
+      )
+    }
 
     PermissionSectionHeader("Personal Data")
     PermissionToggleRow(

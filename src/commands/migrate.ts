@@ -1,4 +1,4 @@
-import { cancel, isCancel } from "@clack/prompts";
+import { cancel, isCancel, log } from "@clack/prompts";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { promptYesNo } from "../cli/prompt.js";
@@ -13,7 +13,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { runMigrationApply } from "./migrate/apply.js";
-import { formatMigrationPlan } from "./migrate/output.js";
+import { formatMigrationPreview } from "./migrate/output.js";
 import { createMigrationPlan, resolveMigrationProvider } from "./migrate/providers.js";
 import {
   applyMigrationPluginSelection,
@@ -45,45 +45,10 @@ import type {
 
 export type { MigrateApplyOptions, MigrateCommonOptions, MigrateDefaultOptions };
 
-const CODEX_UNVERIFIED_APP_BACKED_PLUGIN_WARNING =
-  "Codex app-backed plugins were planned without source app accessibility verification.";
-
-function isPlannedUnverifiedCodexAppPlugin(item: MigrationPlan["items"][number]): boolean {
-  return (
-    item.kind === "plugin" &&
-    item.action === "install" &&
-    item.status === "planned" &&
-    item.details?.sourceAppVerification === "not_run"
-  );
-}
-
-function filterSelectionScopedWarnings(
-  plan: MigrationPlan,
-  opts: MigrateCommonOptions,
-): MigrationPlan {
-  if (
-    opts.plugins === undefined ||
-    plan.providerId !== "codex" ||
-    !plan.warnings?.some((warning) =>
-      warning.includes(CODEX_UNVERIFIED_APP_BACKED_PLUGIN_WARNING),
-    ) ||
-    plan.items.some(isPlannedUnverifiedCodexAppPlugin)
-  ) {
-    return plan;
-  }
-  const warnings = plan.warnings.filter(
-    (warning) => !warning.includes(CODEX_UNVERIFIED_APP_BACKED_PLUGIN_WARNING),
-  );
-  return {
-    ...plan,
-    ...(warnings.length > 0 ? { warnings } : { warnings: undefined }),
-  };
-}
-
 function selectMigrationItems(plan: MigrationPlan, opts: MigrateCommonOptions): MigrationPlan {
-  return filterSelectionScopedWarnings(
-    applyMigrationPluginSelection(applyMigrationSkillSelection(plan, opts.skills), opts.plugins),
-    opts,
+  return applyMigrationPluginSelection(
+    applyMigrationSkillSelection(plan, opts.skills),
+    opts.plugins,
   );
 }
 
@@ -331,7 +296,7 @@ export async function migratePlanCommand(
   if (opts.json) {
     writeRuntimeJson(runtime, redactMigrationPlan(plan));
   } else if (opts.suppressPlanLog !== true) {
-    runtime.log(formatMigrationPlan(plan).join("\n"));
+    log.message(formatMigrationPreview(plan).join("\n"));
   }
   return plan;
 }
@@ -363,7 +328,7 @@ export async function migrateApplyCommand(
       `openclaw migrate apply requires --yes in non-interactive mode. Preview first with ${formatCliCommand("openclaw migrate plan --provider <provider>")}.`,
     );
   }
-  const provider = resolveMigrationProvider(providerId);
+  const provider = resolveMigrationProvider(providerId, opts.configOverride);
   if (!opts.yes) {
     const plan = await migratePlanCommand(runtime, {
       ...opts,

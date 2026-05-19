@@ -8,7 +8,7 @@ import {
   parseTransportChunkUsage,
   resolveAzureOpenAIApiVersion,
   sanitizeTransportPayloadText,
-  __testing,
+  testing,
 } from "./openai-transport-stream.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 import {
@@ -21,8 +21,8 @@ import {
 } from "./provider-transport-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
-type OpenAICompletionsOutput = Parameters<typeof __testing.processOpenAICompletionsStream>[1];
-type OpenAIResponsesOutput = Parameters<typeof __testing.processResponsesStream>[1];
+type OpenAICompletionsOutput = Parameters<typeof testing.processOpenAICompletionsStream>[1];
+type OpenAIResponsesOutput = Parameters<typeof testing.processResponsesStream>[1];
 
 type CapturedStreamEvent = { type?: string; delta?: string };
 
@@ -130,7 +130,7 @@ describe("openai transport stream", () => {
   it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
     const model = createAzureResponsesModel();
     await expect(
-      __testing.processResponsesStream(
+      testing.processResponsesStream(
         neverYieldsStream(),
         createResponsesAssistantOutput(model),
         { push: vi.fn() },
@@ -140,12 +140,182 @@ describe("openai transport stream", () => {
     ).rejects.toThrow(/did not deliver a first event within 1ms after HTTP streaming headers/);
   });
 
+  it("observes detail-less Responses failures without leaking request ids", async () => {
+    const model = createAzureResponsesModel();
+    const event = {
+      type: "response.failed",
+      response: {
+        id: "resp_failed_123",
+        status: "failed",
+        model: "gpt-5.4-pro",
+        metadata: {
+          litellm_request_id: "litellm_req_plaintext_123",
+          api_key: "sk-observation-secret",
+        },
+        provider_request_id: "provider_req_plaintext_456",
+        status_details: {
+          provider_request_id: "provider_req_nested_789",
+        },
+        provider_error: {
+          request_id: "provider_error_req_nested_012",
+          headers: {
+            "x-request-id": ["header_req_plaintext_345", "header_req_plaintext_678"],
+          },
+        },
+      },
+    };
+
+    const observation = testing.buildResponsesFailedNoDetailsObservation(event, model);
+    const summary = testing.summarizeResponsesFailedNoDetailsObservation(observation);
+
+    expect(observation.providerRuntimeFailureKind).toBe("no_error_details");
+    expect(observation.responseId).toBe("resp_failed_123");
+    expect(observation.responseStatus).toBe("failed");
+    expect(observation.responseModel).toBe("gpt-5.4-pro");
+    expect(observation.metadataKeys).toEqual(["api_key", "litellm_request_id"]);
+    expect(observation.requestIdHashes).toHaveLength(6);
+    expect(observation.requestIdHashes.join(",")).toContain("sha256:");
+    expect(summary).toContain("responseId=resp_failed_123");
+    expect(summary).toContain("requestIds=");
+    expect(JSON.stringify(observation)).not.toContain("litellm_req_plaintext_123");
+    expect(JSON.stringify(observation)).not.toContain("provider_req_plaintext_456");
+    expect(JSON.stringify(observation)).not.toContain("provider_req_nested_789");
+    expect(JSON.stringify(observation)).not.toContain("provider_error_req_nested_012");
+    expect(JSON.stringify(observation)).not.toContain("header_req_plaintext_345");
+    expect(JSON.stringify(observation)).not.toContain("header_req_plaintext_678");
+    expect(JSON.stringify(observation)).not.toContain("sk-observation-secret");
+  });
+
+  it("normalizes Responses failed events before transport errors are thrown", () => {
+    const model = createAzureResponsesModel();
+
+    expect(
+      testing.normalizeResponsesFailedEvent(
+        {
+          type: "response.failed",
+          response: {
+            id: "resp_failed_rate_limit",
+            error: {
+              code: "rate_limit_exceeded",
+              message: "Too many requests",
+            },
+          },
+        },
+        model,
+      ),
+    ).toMatchObject({
+      message: "rate_limit_exceeded: Too many requests",
+      responseId: "resp_failed_rate_limit",
+    });
+
+    expect(
+      testing.normalizeResponsesFailedEvent(
+        {
+          type: "response.failed",
+          response: {
+            id: "resp_failed_incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+          },
+        },
+        model,
+      ),
+    ).toMatchObject({
+      message: "incomplete: max_output_tokens",
+      responseId: "resp_failed_incomplete",
+    });
+  });
+
+  it("preserves the failed response id before throwing detail-less Responses failures", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await expect(
+      testing.processResponsesStream(
+        streamChunks([
+          {
+            type: "response.failed",
+            response: {
+              id: "resp_failed_runtime",
+              status: "failed",
+              model: "gpt-5.4-pro",
+            },
+          },
+        ]),
+        output,
+        { push: vi.fn() },
+        model,
+      ),
+    ).rejects.toThrow("Unknown error (no error details in response)");
+
+    expect(output.responseId).toBe("resp_failed_runtime");
+  });
+
+  it("treats empty Responses error objects as detail-less failures", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await expect(
+      testing.processResponsesStream(
+        streamChunks([
+          {
+            type: "response.failed",
+            response: {
+              id: "resp_failed_empty_error",
+              status: "failed",
+              model: "gpt-5.4-pro",
+              error: { code: null, message: null },
+              provider_request_id: "provider_req_empty_error",
+            },
+          },
+        ]),
+        output,
+        { push: vi.fn() },
+        model,
+      ),
+    ).rejects.toThrow("Unknown error (no error details in response)");
+
+    expect(output.responseId).toBe("resp_failed_empty_error");
+  });
+
+  it("clamps Responses cached prompt usage at zero", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp-cache-overflow",
+            status: "completed",
+            usage: {
+              input_tokens: 2,
+              output_tokens: 5,
+              total_tokens: 7,
+              input_tokens_details: { cached_tokens: 4 },
+            },
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expectRecordFields(output.usage, {
+      input: 0,
+      output: 5,
+      cacheRead: 4,
+      totalTokens: 9,
+    });
+  });
+
   it("summarizes model payload tools with full names when requested", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "tools";
     try {
       expect(
-        __testing.summarizeResponsesTools([
+        testing.summarizeResponsesTools([
           { type: "function", name: "exec" },
           { type: "function", function: { name: "wait" } },
         ]),
@@ -163,7 +333,7 @@ describe("openai transport stream", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
     try {
-      const summary = __testing.summarizeResponsesPayload({
+      const summary = testing.summarizeResponsesPayload({
         model: "gpt-5.5",
         stream: true,
         input: [],
@@ -191,14 +361,14 @@ describe("openai transport stream", () => {
       ],
     };
 
-    __testing.enforceCodeModeResponsesToolSurface(payload);
-    __testing.assertCodeModeResponsesToolSurface(payload);
+    testing.enforceCodeModeResponsesToolSurface(payload);
+    testing.assertCodeModeResponsesToolSurface(payload);
     expect(payload.tools).toHaveLength(2);
   });
 
   it("fails closed when the code mode final payload tool surface is not exec/wait", () => {
     expect(() =>
-      __testing.assertCodeModeResponsesToolSurface({
+      testing.assertCodeModeResponsesToolSurface({
         tools: [{ type: "function", name: "exec" }, { type: "web_search_preview" }],
       }),
     ).toThrow(/Code mode payload tool surface violation/);
@@ -206,7 +376,7 @@ describe("openai transport stream", () => {
 
   it("adds OpenClaw attribution to native OpenAI transport headers and protects it from pi", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    const headers = __testing.buildOpenAIClientHeaders(
+    const headers = testing.buildOpenAIClientHeaders(
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
@@ -243,7 +413,7 @@ describe("openai transport stream", () => {
 
   it("adds OpenClaw attribution to native OpenAI Codex transport headers", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    const headers = __testing.buildOpenAIClientHeaders(
+    const headers = testing.buildOpenAIClientHeaders(
       {
         id: "gpt-5.4-codex",
         name: "GPT-5.4 Codex",
@@ -271,7 +441,7 @@ describe("openai transport stream", () => {
   });
 
   it("moves Azure OpenAI completions api-version headers into default query params", () => {
-    const config = __testing.buildOpenAICompletionsClientConfig(
+    const config = testing.buildOpenAICompletionsClientConfig(
       {
         id: "gpt-4o-mini",
         name: "GPT-4o Mini",
@@ -306,7 +476,7 @@ describe("openai transport stream", () => {
   });
 
   it("preserves configured base URL query params without moving non-Azure headers", () => {
-    const config = __testing.buildOpenAICompletionsClientConfig(
+    const config = testing.buildOpenAICompletionsClientConfig(
       {
         id: "proxy-model",
         name: "Proxy Model",
@@ -604,7 +774,7 @@ describe("openai transport stream", () => {
   });
 
   it("uses a valid Azure API version default when the environment is unset", () => {
-    expect(resolveAzureOpenAIApiVersion({})).toBe("2024-12-01-preview");
+    expect(resolveAzureOpenAIApiVersion({})).toBe("preview");
     expect(resolveAzureOpenAIApiVersion({ AZURE_OPENAI_API_VERSION: "2025-01-01-preview" })).toBe(
       "2025-01-01-preview",
     );
@@ -638,9 +808,9 @@ describe("openai transport stream", () => {
       reasoning: false,
     } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
 
-    expect(__testing.buildOpenAISdkClientOptions(responsesModel).timeout).toBe(requestTimeoutMs);
-    expect(__testing.buildOpenAISdkClientOptions(azureModel).timeout).toBe(requestTimeoutMs);
-    expect(__testing.buildOpenAISdkClientOptions(completionsModel).timeout).toBe(requestTimeoutMs);
+    expect(testing.buildOpenAISdkClientOptions(responsesModel).timeout).toBe(requestTimeoutMs);
+    expect(testing.buildOpenAISdkClientOptions(azureModel).timeout).toBe(requestTimeoutMs);
+    expect(testing.buildOpenAISdkClientOptions(completionsModel).timeout).toBe(requestTimeoutMs);
   });
 
   it("passes provider request timeouts to OpenAI SDK per-request options", () => {
@@ -659,12 +829,12 @@ describe("openai transport stream", () => {
       requestTimeoutMs: 900_000.7,
     } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
 
-    expect(__testing.buildOpenAISdkRequestOptions(model, signal)).toEqual({
+    expect(testing.buildOpenAISdkRequestOptions(model, signal)).toEqual({
       signal,
       timeout: 900_000,
     });
     expect(
-      __testing.buildOpenAISdkRequestOptions(
+      testing.buildOpenAISdkRequestOptions(
         { ...model, requestTimeoutMs: -1 } as Model<"openai-completions">,
         undefined,
       ),
@@ -991,7 +1161,7 @@ describe("openai transport stream", () => {
       };
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expectRecordFields(output.usage, {
       input: 8,
@@ -999,6 +1169,85 @@ describe("openai transport stream", () => {
       cacheRead: 0,
       totalTokens: 18,
     });
+  });
+
+  it("yields to aborts during bursty OpenAI-compatible streams", async () => {
+    const model = {
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      api: "openai-completions",
+      provider: "opencode-go",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = createAssistantOutput(model);
+    const abort = new AbortController();
+    const stream = { push: vi.fn() };
+    let yieldedToTimer = false;
+
+    async function* mockStream() {
+      for (let index = 0; index < 512; index += 1) {
+        yield {
+          id: "chatcmpl-bursty",
+          object: "chat.completion.chunk" as const,
+          created: 1775425651,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant" as const, content: "x" },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        };
+      }
+    }
+
+    setTimeout(() => {
+      yieldedToTimer = true;
+      abort.abort();
+    }, 0);
+
+    await expect(
+      testing.processOpenAICompletionsStream(mockStream(), output, model, stream, {
+        signal: abort.signal,
+      }),
+    ).rejects.toThrow("Request was aborted");
+    expect(yieldedToTimer).toBe(true);
+    expect(stream.push.mock.calls.length).toBeLessThan(512);
+  });
+
+  it("yields to aborts during bursty Responses streams", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const abort = new AbortController();
+    const stream = { push: vi.fn() };
+    let yieldedToTimer = false;
+
+    async function* mockStream() {
+      yield { type: "response.output_item.added", item: { type: "message" } };
+      for (let index = 0; index < 512; index += 1) {
+        yield { type: "response.output_text.delta", delta: "x" };
+      }
+    }
+
+    setTimeout(() => {
+      yieldedToTimer = true;
+      abort.abort();
+    }, 0);
+
+    await expect(
+      testing.processResponsesStream(mockStream(), output, stream, model, {
+        signal: abort.signal,
+      }),
+    ).rejects.toThrow("Request was aborted");
+    expect(yieldedToTimer).toBe(true);
+    expect(stream.push.mock.calls.length).toBeLessThan(512);
   });
 
   it("skips null and non-object OpenAI-compatible stream chunks", async () => {
@@ -1052,7 +1301,7 @@ describe("openai transport stream", () => {
       };
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toStrictEqual([{ type: "text", text: "ok" }]);
     expect(output.stopReason).toBe("stop");
@@ -1063,7 +1312,7 @@ describe("openai transport stream", () => {
     const output = createAssistantOutput(model);
     const events: CapturedStreamEvent[] = [];
 
-    await __testing.processOpenAICompletionsStream(
+    await testing.processOpenAICompletionsStream(
       streamChunks([
         {
           id: "chatcmpl-deepseek-dsml",
@@ -1128,7 +1377,7 @@ describe("openai transport stream", () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
 
-    await __testing.processOpenAICompletionsStream(
+    await testing.processOpenAICompletionsStream(
       streamChunks([
         {
           id: "chatcmpl-deepseek-native-tool",
@@ -1177,7 +1426,7 @@ describe("openai transport stream", () => {
     const output = createAssistantOutput(model);
     const events: CapturedStreamEvent[] = [];
 
-    await __testing.processOpenAICompletionsStream(
+    await testing.processOpenAICompletionsStream(
       streamChunks([
         {
           id: "chatcmpl-deepseek-post-tool-dsml",
@@ -1242,7 +1491,7 @@ describe("openai transport stream", () => {
     const output = createAssistantOutput(model);
     const events: CapturedStreamEvent[] = [];
 
-    await __testing.processOpenAICompletionsStream(
+    await testing.processOpenAICompletionsStream(
       streamChunks([
         {
           id: "chatcmpl-deepseek-split-dsml",
@@ -1403,6 +1652,46 @@ describe("openai transport stream", () => {
     expect(params.top_p).toBe(0.9);
   });
 
+  it("forwards response_format to chat completions request params", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      tools: [],
+    } as never;
+
+    {
+      const params = buildOpenAICompletionsParams(model, context, {
+        responseFormat: { type: "json_object" },
+      });
+      expect(params.response_format).toEqual({ type: "json_object" });
+    }
+
+    {
+      const params = buildOpenAICompletionsParams(model, context, {
+        responseFormat: { type: "json_schema", json_schema: {} },
+      });
+      expect(params.response_format).toEqual({ type: "json_schema", json_schema: {} });
+    }
+
+    {
+      const params = buildOpenAICompletionsParams(model, context, {});
+      expect(params).not.toHaveProperty("response_format");
+    }
+  });
+
   it("does not build OpenRouter reasoning params for Hunter Alpha when reasoning is disabled", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -1454,6 +1743,97 @@ describe("openai transport stream", () => {
     ) as { input?: Array<{ role?: string }> };
 
     expect(params.input?.[0]?.role).toBe("system");
+  });
+
+  it("omits Responses reasoning params when model compat disables reasoning effort", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "grok-4.20-beta-latest-reasoning",
+        name: "Grok 4.20 Beta Latest (Reasoning)",
+        api: "openai-responses",
+        provider: "xai",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 2_000_000,
+        maxTokens: 30_000,
+        compat: { supportsReasoningEffort: false },
+      } as unknown as Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "high",
+      } as never,
+    ) as { reasoning?: unknown; include?: string[] };
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("include");
+  });
+
+  it("preserves xAI Grok 4.3 default reasoning by omitting default none", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "grok-4.3",
+        name: "Grok 4.3",
+        api: "openai-responses",
+        provider: "xai",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+        },
+      } as unknown as Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { reasoning?: unknown; include?: string[] };
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("include");
+  });
+
+  it("passes explicit xAI Grok 4.3 reasoning effort through", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "grok-4.3",
+        name: "Grok 4.3",
+        api: "openai-responses",
+        provider: "xai",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+        },
+      } as unknown as Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "high",
+      } as never,
+    ) as { reasoning?: unknown; include?: string[] };
+
+    expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
+    expect(params.include).toEqual(["reasoning.encrypted_content"]);
   });
 
   it("keeps developer role for native OpenAI reasoning responses models", () => {
@@ -1569,10 +1949,11 @@ describe("openai transport stream", () => {
       prompt_cache_retention: "24h",
       service_tier: "auto",
       temperature: 0.2,
+      text: { format: { type: "json_object" }, verbosity: "low" },
       top_p: 0.85,
     };
 
-    const sanitized = __testing.sanitizeOpenAICodexResponsesParams(
+    const sanitized = testing.sanitizeOpenAICodexResponsesParams(
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
@@ -1594,6 +1975,7 @@ describe("openai transport stream", () => {
     expect(sanitized).not.toHaveProperty("prompt_cache_retention");
     expect(sanitized).not.toHaveProperty("service_tier");
     expect(sanitized).not.toHaveProperty("temperature");
+    expect(sanitized.text).toEqual({ verbosity: "low" });
     expect(sanitized).not.toHaveProperty("top_p");
   });
 
@@ -1640,6 +2022,51 @@ describe("openai transport stream", () => {
     expect(params.top_p).toBe(0.85);
   });
 
+  it("forwards response_format to responses text format request params", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 65_536,
+    } satisfies Model<"openai-responses">;
+
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      tools: [],
+    } as never;
+
+    {
+      const params = buildOpenAIResponsesParams(model, context, {
+        responseFormat: { type: "json_object" },
+      }) as Record<string, unknown>;
+      expect(params.text).toEqual({ format: { type: "json_object" } });
+    }
+
+    {
+      const params = buildOpenAIResponsesParams(model, context, {
+        responseFormat: {
+          type: "json_schema",
+          json_schema: { name: "test", schema: { type: "object" } },
+        },
+      }) as Record<string, unknown>;
+      expect(params.text).toEqual({
+        format: { type: "json_schema", name: "test", schema: { type: "object" } },
+      });
+    }
+
+    {
+      const params = buildOpenAIResponsesParams(model, context, {}) as Record<string, unknown>;
+      expect(params).not.toHaveProperty("text");
+    }
+  });
+
   it("preserves custom Codex-compatible responses params after payload hooks mutate them", () => {
     const payload = {
       model: "gpt-5.4",
@@ -1653,7 +2080,7 @@ describe("openai transport stream", () => {
       temperature: 0.2,
     };
 
-    const sanitized = __testing.sanitizeOpenAICodexResponsesParams(
+    const sanitized = testing.sanitizeOpenAICodexResponsesParams(
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
@@ -1869,6 +2296,166 @@ describe("openai transport stream", () => {
       id: "fc_prior",
       call_id: "call_abc",
     });
+  });
+
+  it("normalizes overlong Copilot Responses replay tool ids before dispatch", () => {
+    const longToolItemId = "iVec" + "A".repeat(360);
+    const longToolCallId = `call_ug6lFGKwZDjHfzW8H0PDQRwN|${longToolItemId}`;
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "github-copilot",
+        baseUrl: "https://api.githubcopilot.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "read the queue", timestamp: 0 },
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "github-copilot",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "toolCall",
+                id: longToolCallId,
+                name: "exec",
+                arguments: { command: "gh pr list --limit 1" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: longToolCallId,
+            toolName: "exec",
+            content: [{ type: "text", text: "[]" }],
+            isError: false,
+            timestamp: 2,
+          },
+          { role: "user", content: "continue", timestamp: 3 },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{ type?: string; id?: string; call_id?: string }>;
+    };
+
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    const functionOutput = params.input?.find((item) => item.type === "function_call_output");
+    expect(functionCall).toBeDefined();
+    expect(functionOutput).toBeDefined();
+    expect(functionCall?.id).toMatch(/^fc_/);
+    expect(functionCall?.id?.length).toBeLessThanOrEqual(64);
+    expect(functionCall?.call_id).toBe("call_ug6lFGKwZDjHfzW8H0PDQRwN");
+    expect(functionOutput?.call_id).toBe(functionCall?.call_id);
+    for (const item of params.input ?? []) {
+      if (item.id !== undefined) {
+        expect(item.id.length).toBeLessThanOrEqual(64);
+      }
+      if (item.call_id !== undefined) {
+        expect(item.call_id.length).toBeLessThanOrEqual(64);
+      }
+    }
+  });
+
+  it("keeps distinct overlong Copilot Responses replay item ids distinct", () => {
+    const sharedToolItemPrefix = "iVec" + "A".repeat(160);
+    const firstToolCallId = `call_first|${sharedToolItemPrefix}Aa`;
+    const secondToolCallId = `call_second|${sharedToolItemPrefix}BB`;
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "github-copilot",
+        baseUrl: "https://api.githubcopilot.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "github-copilot",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              { type: "toolCall", id: firstToolCallId, name: "read", arguments: { path: "a" } },
+              { type: "toolCall", id: secondToolCallId, name: "read", arguments: { path: "b" } },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: firstToolCallId,
+            toolName: "read",
+            content: [{ type: "text", text: "a" }],
+            isError: false,
+            timestamp: 2,
+          },
+          {
+            role: "toolResult",
+            toolCallId: secondToolCallId,
+            toolName: "read",
+            content: [{ type: "text", text: "b" }],
+            isError: false,
+            timestamp: 3,
+          },
+          { role: "user", content: "continue", timestamp: 4 },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{ type?: string; id?: string; call_id?: string }>;
+    };
+
+    const functionCalls = params.input?.filter((item) => item.type === "function_call") ?? [];
+    const functionOutputs =
+      params.input?.filter((item) => item.type === "function_call_output") ?? [];
+    expect(functionCalls).toHaveLength(2);
+    expect(functionOutputs).toHaveLength(2);
+    expect(functionCalls.map((item) => item.id)).toEqual([
+      expect.stringMatching(/^fc_/),
+      expect.stringMatching(/^fc_/),
+    ]);
+    expect(new Set(functionCalls.map((item) => item.id)).size).toBe(2);
+    for (const item of functionCalls) {
+      expect(item.id?.length).toBeLessThanOrEqual(64);
+    }
+    expect(functionOutputs.map((item) => item.call_id)).toEqual(["call_first", "call_second"]);
   });
 
   it("adds minimal user input for Codex responses when only the system prompt is present", () => {
@@ -2312,6 +2899,84 @@ describe("openai transport stream", () => {
         required: [],
       },
     });
+  });
+
+  it("passes explicit Responses tool_choice when tools are present", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      } as never,
+      { toolChoice: "required" } as never,
+    ) as { tool_choice?: string };
+
+    expect(params.tool_choice).toBe("required");
+  });
+
+  it("sorts Responses tools by name for stable prompt-cache payloads", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-responses">;
+    const zetaTool = {
+      name: "zeta",
+      description: "Z",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    };
+    const alphaTool = {
+      name: "alpha",
+      description: "A",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    };
+
+    const first = buildOpenAIResponsesParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [zetaTool, alphaTool],
+      } as never,
+      { sessionId: "session-123" } as never,
+    ) as { tools?: Array<{ name?: string }> };
+    const second = buildOpenAIResponsesParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [alphaTool, zetaTool],
+      } as never,
+      { sessionId: "session-123" } as never,
+    ) as { tools?: Array<{ name?: string }> };
+
+    expect(first.tools?.map((tool) => tool.name)).toEqual(["alpha", "zeta"]);
+    expect(first.tools).toEqual(second.tools);
   });
 
   it("falls back to strict:false when a native OpenAI tool schema is not strict-compatible", () => {
@@ -2918,6 +3583,49 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("reasoning_effort");
   });
 
+  it("maps together thinking format to reasoning enabled", () => {
+    const baseModel = {
+      id: "moonshotai/Kimi-K2.5",
+      name: "Kimi K2.5",
+      api: "openai-completions",
+      provider: "together",
+      baseUrl: "https://api.together.xyz/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 32768,
+      compat: {
+        thinkingFormat: "together",
+        supportsReasoningEffort: true,
+      },
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const enabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "medium",
+    } as never) as {
+      max_completion_tokens?: unknown;
+      max_tokens?: unknown;
+      reasoning?: unknown;
+      reasoning_effort?: unknown;
+    };
+    const disabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "off",
+    } as never) as { reasoning?: unknown; reasoning_effort?: unknown };
+
+    expect(enabled.max_tokens).toBe(32768);
+    expect(enabled).not.toHaveProperty("max_completion_tokens");
+    expect(enabled.reasoning).toEqual({ enabled: true });
+    expect(enabled.reasoning_effort).toBe("medium");
+    expect(disabled.reasoning).toEqual({ enabled: false });
+    expect(disabled).not.toHaveProperty("reasoning_effort");
+  });
+
   it("omits unsupported disabled reasoning for completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -3033,7 +3741,34 @@ describe("openai transport stream", () => {
     expect(params.stream_options?.include_usage).toBe(true);
   });
 
-  it("always includes stream_options.include_usage for known local backends like llama-cpp", () => {
+  it("includes stream_options.include_usage for Volcengine CodingPlan", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "ark-code-latest",
+        name: "Ark Coding Plan",
+        api: "openai-completions",
+        provider: "volcengine-plan",
+        baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 4096,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      stream_options?: { include_usage?: boolean };
+    };
+
+    expect(params.stream_options).toEqual({ include_usage: true });
+  });
+
+  it("includes stream_options.include_usage for known local backends like llama-cpp", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "llama-3",
@@ -3121,6 +3856,54 @@ describe("openai transport stream", () => {
     expect(notOptedIn.prompt_cache_key).toBeUndefined();
   });
 
+  it("sorts Chat Completions tools by function name for stable prompt-cache payloads", () => {
+    const model = {
+      id: "custom-model",
+      name: "Custom Model",
+      api: "openai-completions",
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsPromptCacheKey: true },
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 8192,
+    } as unknown as Model<"openai-completions">;
+    const zetaTool = {
+      name: "zeta",
+      description: "Z",
+      parameters: { type: "object", properties: {} },
+    };
+    const alphaTool = {
+      name: "alpha",
+      description: "A",
+      parameters: { type: "object", properties: {} },
+    };
+
+    const first = buildOpenAICompletionsParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [zetaTool, alphaTool],
+      } as never,
+      { sessionId: "session-123" },
+    ) as { tools?: Array<{ function?: { name?: string } }> };
+    const second = buildOpenAICompletionsParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [alphaTool, zetaTool],
+      } as never,
+      { sessionId: "session-123" },
+    ) as { tools?: Array<{ function?: { name?: string } }> };
+
+    expect(first.tools?.map((tool) => tool.function?.name)).toEqual(["alpha", "zeta"]);
+    expect(first.tools).toEqual(second.tools);
+  });
+
   it("disables developer-role-only compat defaults for configured custom proxy completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -3159,7 +3942,7 @@ describe("openai transport stream", () => {
 
     expect(params.messages?.[0]?.role).toBe("system");
     expect(params).not.toHaveProperty("reasoning_effort");
-    expect(params.stream_options).toEqual({ include_usage: true });
+    expect(params).not.toHaveProperty("stream_options");
     expect(params).not.toHaveProperty("store");
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
   });
@@ -3296,6 +4079,93 @@ describe("openai transport stream", () => {
     );
 
     expect(params.max_completion_tokens).toBe(65_536);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("uses model params max_completion_tokens for OpenAI completions before model maxTokens", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
+        api: "openai-completions",
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262_144,
+        maxTokens: 32_000,
+        params: {
+          max_completion_tokens: 64_000,
+        },
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.max_completion_tokens).toBe(64_000);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("keeps runtime maxTokens ahead of model params max_completion_tokens for OpenAI completions", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
+        api: "openai-completions",
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262_144,
+        maxTokens: 32_000,
+        params: {
+          max_completion_tokens: 64_000,
+        },
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { maxTokens: 16_000 } as never,
+    );
+
+    expect(params.max_completion_tokens).toBe(16_000);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("keeps zero runtime maxTokens falling back to model params for OpenAI completions", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
+        api: "openai-completions",
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262_144,
+        maxTokens: 32_000,
+        params: {
+          max_completion_tokens: 64_000,
+        },
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { maxTokens: 0 } as never,
+    );
+
+    expect(params.max_completion_tokens).toBe(64_000);
     expect(params).not.toHaveProperty("max_tokens");
   });
 
@@ -3463,6 +4333,54 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]?.function?.parameters?.properties?.forbidden).toStrictEqual({});
   });
 
+  it("applies model compat empty array items omission after completions normalization", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "mimo-v2.5",
+        name: "MiMo V2.5",
+        api: "openai-completions",
+        provider: "xiaomi",
+        baseUrl: "https://api.xiaomimimo.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 256000,
+        compat: {
+          omitEmptyArrayItems: true,
+        } as never,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "collect",
+            description: "Collect hints",
+            parameters: {
+              type: "object",
+              properties: {
+                hints: { type: "array" },
+                typedHints: { type: "array", items: { type: "string" } },
+              },
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
+    };
+
+    expect(params.tools?.[0]?.function?.parameters?.properties?.hints).toStrictEqual({
+      type: "array",
+    });
+    expect(params.tools?.[0]?.function?.parameters?.properties?.typedHints).toStrictEqual({
+      type: "array",
+      items: { type: "string" },
+    });
+  });
+
   describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
     const geminiModel = {
       id: "gemini-3-flash-preview",
@@ -3547,7 +4465,7 @@ describe("openai transport stream", () => {
         }
       }
 
-      await __testing.processOpenAICompletionsStream(mockStream(), output, geminiModel, {
+      await testing.processOpenAICompletionsStream(mockStream(), output, geminiModel, {
         push() {},
       });
 
@@ -3690,6 +4608,105 @@ describe("openai transport stream", () => {
       expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
         "skip_thought_signature_validator",
       );
+    });
+
+    it("falls back to skip_thought_signature_validator when a captured same-route Gemini 3 signature is truncated", () => {
+      // Compaction-truncated sig: 109 chars, length mod 4 == 1.
+      // Same-route assistant tool-call whose captured thoughtSignature is truncated.
+      // The guard should fall back to the sentinel instead of dropping the field.
+      const params = buildOpenAICompletionsParams(
+        geminiModel,
+        {
+          messages: [
+            {
+              role: "assistant",
+              api: geminiModel.api,
+              provider: geminiModel.provider,
+              model: geminiModel.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_abc",
+                  name: "echo_value",
+                  arguments: { value: "repro" },
+                  thoughtSignature:
+                    "CmcBjz1rX55U6JcpC2oZVTk40Kx6nVK8LKzbl61rOFztcvSdL7pdIvBEDyJLRqWrPVpdD+rj3GsJ3f9PG6b2Ry2UnK38+dInfGIlJbXHt++EC",
+                },
+              ],
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: Array<Record<string, unknown>> };
+
+      const assistant = params.messages.find((message) => message.role === "assistant") as
+        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
+        | undefined;
+      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+        "skip_thought_signature_validator",
+      );
+    });
+
+    it("drops the field when the model is not Gemini 3 and the captured same-route signature is truncated", () => {
+      // gemini-2.5-pro: requiresGoogleCompatToolCallThoughtSignature returns false,
+      // so fallbackSig is undefined and there is no sentinel to fall back to.
+      // A truncated same-route sig should cause the field to be dropped entirely.
+      const nonGemini3Model = {
+        ...geminiModel,
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+      };
+      const params = buildOpenAICompletionsParams(
+        nonGemini3Model,
+        {
+          messages: [
+            {
+              role: "assistant",
+              api: nonGemini3Model.api,
+              provider: nonGemini3Model.provider,
+              model: nonGemini3Model.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_abc",
+                  name: "echo_value",
+                  arguments: { value: "repro" },
+                  thoughtSignature:
+                    "CmcBjz1rX55U6JcpC2oZVTk40Kx6nVK8LKzbl61rOFztcvSdL7pdIvBEDyJLRqWrPVpdD+rj3GsJ3f9PG6b2Ry2UnK38+dInfGIlJbXHt++EC",
+                },
+              ],
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: Array<Record<string, unknown>> };
+
+      const assistant = params.messages.find((message) => message.role === "assistant") as
+        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
+        | undefined;
+      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBeUndefined();
     });
 
     it("does not trust cross-route thought_signature for non-Gemini-3 Google compat models", () => {
@@ -4042,7 +5059,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("stop");
     expect(
@@ -4136,7 +5153,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     const thinkingBlock = output.content[0] as { type: string; thinking: string };
     const textBlock = output.content[1] as { type: string; text: string };
@@ -4219,7 +5236,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toEqual([
       { type: "thinking", thinking: "Need to think.", thinkingSignature: "content" },
@@ -4303,7 +5320,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toHaveLength(2);
@@ -4399,7 +5416,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
     const toolCall = (output.content as Array<{ type?: string }>).find(
@@ -4505,7 +5522,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toHaveLength(3);
@@ -4602,7 +5619,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toHaveLength(3);
@@ -4692,7 +5709,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toHaveLength(1);
     expectRecordFields(output.content[0], {
@@ -4763,7 +5780,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toHaveLength(3);
     expectRecordFields(output.content[0], { type: "text", text: "Visible first." });
@@ -4833,7 +5850,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toHaveLength(1);
     expectRecordFields(output.content[0], {
@@ -4901,7 +5918,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toHaveLength(2);
     expectRecordFields(output.content[0], { type: "text", text: "Visible answer." });
@@ -5008,7 +6025,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toHaveLength(2);
@@ -5130,7 +6147,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toHaveLength(2);
@@ -5222,7 +6239,7 @@ describe("openai transport stream", () => {
     }
 
     await expect(
-      __testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
+      testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
     ).rejects.toThrow("Exceeded post-tool-call delta buffer limit");
   });
 
@@ -5291,7 +6308,406 @@ describe("openai transport stream", () => {
     }
 
     await expect(
-      __testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
+      testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
+  });
+});
+
+describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () => {
+  const openRouterModel = {
+    id: "deepseek/deepseek-v4-flash",
+    name: "DeepSeek v4 Flash",
+    api: "openai-completions",
+    provider: "openrouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  } satisfies Model<"openai-completions">;
+
+  const openRouterAnthropicModel = {
+    ...openRouterModel,
+    id: "anthropic/claude-sonnet-4.6",
+    name: "Claude Sonnet 4.6",
+  } satisfies Model<"openai-completions">;
+
+  const openRouterXaiModel = {
+    ...openRouterModel,
+    id: "x-ai/grok-4.3",
+    name: "Grok 4.3",
+  } satisfies Model<"openai-completions">;
+
+  const openAIModel = {
+    id: "gpt-5.4-mini",
+    name: "GPT-5.4 Mini",
+    api: "openai-completions",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+  } satisfies Model<"openai-completions">;
+
+  const nativeDeepSeekModel = {
+    id: "deepseek-v4-flash",
+    name: "DeepSeek V4 Flash",
+    api: "openai-completions",
+    provider: "deepseek",
+    baseUrl: "https://api.deepseek.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 384_000,
+  } satisfies Model<"openai-completions">;
+
+  const nativeZaiModel = {
+    id: "glm-5.1",
+    name: "GLM 5.1",
+    api: "openai-completions",
+    provider: "zai",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 131_072,
+  } satisfies Model<"openai-completions">;
+
+  const xiaomiModel = {
+    id: "mimo-v2.5-pro",
+    name: "MiMo V2.5 Pro",
+    api: "openai-completions",
+    provider: "xiaomi",
+    baseUrl: "https://api.xiaomimimo.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_048_576,
+    maxTokens: 32_000,
+  } satisfies Model<"openai-completions">;
+
+  const customMiMoProxyModel = {
+    ...xiaomiModel,
+    provider: "xiaomi-orbit",
+    baseUrl: "https://proxy.example.com/v1",
+  } satisfies Model<"openai-completions">;
+
+  const customKimiProxyModel = {
+    id: "moonshotai/kimi-k2.6",
+    name: "Kimi K2.6",
+    api: "openai-completions",
+    provider: "custom-openai-proxy",
+    baseUrl: "https://proxy.example.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 262_144,
+    maxTokens: 32_000,
+  } satisfies Model<"openai-completions">;
+
+  const kimiCodingProxyModel = {
+    ...customKimiProxyModel,
+    id: "kimi-for-coding",
+    name: "Kimi for Coding",
+    provider: "kimi",
+    baseUrl: "https://api.kimi.com/coding/v1",
+  } satisfies Model<"openai-completions">;
+
+  function getAssistantMessage(params: { messages: unknown }) {
+    expect(Array.isArray(params.messages)).toBe(true);
+    const list = params.messages as Array<Record<string, unknown>>;
+    const assistant = list.find((m) => m.role === "assistant");
+    expect(assistant).toBeDefined();
+    return assistant as Record<string, unknown>;
+  }
+
+  function buildReplayParams(model: Model<"openai-completions">, thinkingSignature: string) {
+    return buildOpenAICompletionsParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "hello" },
+          {
+            role: "assistant",
+            provider: model.provider,
+            api: model.api,
+            model: model.id,
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need to answer politely.",
+                thinkingSignature,
+              },
+              { type: "text", text: "Hello!" },
+            ],
+          },
+          { role: "user", content: "again" },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages: unknown };
+  }
+
+  it.each(["reasoning_details", "reasoning_content", "reasoning", "reasoning_text"])(
+    "strips %s from stock OpenAI Chat Completions assistant replay",
+    (thinkingSignature) => {
+      const assistant = getAssistantMessage(buildReplayParams(openAIModel, thinkingSignature));
+
+      expect(assistant).not.toHaveProperty("reasoning_details");
+      expect(assistant).not.toHaveProperty("reasoning_content");
+      expect(assistant).not.toHaveProperty("reasoning");
+      expect(assistant).not.toHaveProperty("reasoning_text");
+    },
+  );
+
+  it("normalizes OpenRouter string reasoning_details to reasoning", () => {
+    const assistant = getAssistantMessage(buildReplayParams(openRouterModel, "reasoning_details"));
+
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant.reasoning).toBe("Need to answer politely.");
+  });
+
+  it.each([
+    ["Anthropic", openRouterAnthropicModel],
+    ["xAI", openRouterXaiModel],
+  ] as const)("strips OpenRouter %s non-replayable reasoning fields", (_label, model) => {
+    for (const thinkingSignature of [
+      "reasoning_details",
+      "reasoning_content",
+      "reasoning",
+      "reasoning_text",
+    ]) {
+      const assistant = getAssistantMessage(buildReplayParams(model, thinkingSignature));
+
+      expect(assistant).not.toHaveProperty("reasoning_details");
+      expect(assistant).not.toHaveProperty("reasoning_content");
+      expect(assistant).not.toHaveProperty("reasoning");
+      expect(assistant).not.toHaveProperty("reasoning_text");
+    }
+  });
+
+  it.each(["reasoning", "reasoning_content"])(
+    "preserves OpenRouter %s string reasoning replay",
+    (thinkingSignature) => {
+      const assistant = getAssistantMessage(buildReplayParams(openRouterModel, thinkingSignature));
+
+      expect(assistant[thinkingSignature]).toBe("Need to answer politely.");
+    },
+  );
+
+  it("strips empty-string reasoning_content from OpenRouter assistant replay", () => {
+    const params = buildOpenAICompletionsParams(
+      openRouterModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "read config" },
+          {
+            role: "assistant",
+            provider: "openrouter",
+            api: "openai-completions",
+            model: "deepseek/deepseek-v4-pro",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "",
+                thinkingSignature: "reasoning_content",
+              },
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "read_file",
+                arguments: { path: "config.json" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read_file",
+            content: [{ type: "text", text: "{ }" }],
+            isError: false,
+            timestamp: 1,
+          },
+          { role: "user", content: "continue" },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages: Array<Record<string, unknown>> };
+
+    const assistantMessages = params.messages.filter((msg) => msg.role === "assistant");
+    for (const msg of assistantMessages) {
+      expect(msg).not.toHaveProperty("reasoning_content");
+    }
+  });
+
+  it.each([
+    ["DeepSeek", nativeDeepSeekModel],
+    ["Z.AI", nativeZaiModel],
+  ] as const)("preserves native %s reasoning_content replay", (_label, model) => {
+    const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_content"));
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+  });
+
+  it.each([
+    ["DeepSeek", nativeDeepSeekModel],
+    ["Z.AI", nativeZaiModel],
+  ] as const)("strips non-native %s reasoning replay fields", (_label, model) => {
+    const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_details"));
+
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("normalizes OpenRouter reasoning_text to reasoning", () => {
+    const assistant = getAssistantMessage(buildReplayParams(openRouterModel, "reasoning_text"));
+
+    expect(assistant).not.toHaveProperty("reasoning_text");
+    expect(assistant.reasoning).toBe("Need to answer politely.");
+  });
+
+  it("preserves DeepSeek-style reasoning_content replay for Xiaomi MiMo", () => {
+    const assistant = getAssistantMessage(buildReplayParams(xiaomiModel, "reasoning_content"));
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for custom MiMo proxy routes", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(customMiMoProxyModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for custom MiMo V2.6 proxy routes", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(
+        {
+          ...customMiMoProxyModel,
+          id: "xiaomi/mimo-v2.6-pro",
+        },
+        "reasoning_content",
+      ),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for custom Kimi K2 proxy routes", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(customKimiProxyModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for Kimi Coding OpenAI-compatible routes", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(kimiCodingProxyModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for suffixed reasoning model ids", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(
+        {
+          ...customMiMoProxyModel,
+          id: "xiaomi/mimo-v2.5-pro:cloud",
+        },
+        "reasoning_content",
+      ),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+  });
+
+  it("preserves reasoning_content replay for prefixed reasoning model ids", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(
+        {
+          ...customKimiProxyModel,
+          id: "hf:moonshotai/kimi-k2-thinking",
+        },
+        "reasoning_content",
+      ),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+  });
+
+  it("preserves OpenRouter array reasoning_details from tool-call signatures", () => {
+    const reasoningDetail = { type: "reasoning.encrypted", id: "rs_1", data: "ciphertext" };
+    const params = buildOpenAICompletionsParams(
+      openRouterModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "lookup" },
+          {
+            role: "assistant",
+            provider: "openrouter",
+            api: "openai-completions",
+            model: "deepseek/deepseek-v4-flash",
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "lookup",
+                arguments: { query: "weather" },
+                thoughtSignature: JSON.stringify(reasoningDetail),
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [{ type: "text", text: "sunny" }],
+            isError: false,
+            timestamp: 1,
+          },
+          { role: "user", content: "answer" },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages: unknown };
+
+    const assistant = getAssistantMessage(params);
+    expect(assistant.reasoning_details).toEqual([reasoningDetail]);
   });
 });

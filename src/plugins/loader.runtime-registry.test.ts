@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { getCompactionProvider, registerCompactionProvider } from "./compaction-provider.js";
 import {
-  __testing,
+  testing,
   clearPluginLoaderCache,
   clearPluginRegistryLoadCache,
   loadOpenClawPlugins,
@@ -55,7 +55,6 @@ function createLoadedPluginRecord(id: string): PluginRecord {
     migrationProviderIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
-    gatewayMethods: [],
     cliCommands: [],
     services: [],
     gatewayDiscoveryServiceIds: [],
@@ -97,36 +96,36 @@ describe("getCompatibleActivePluginRegistry", () => {
         allowGatewaySubagentBinding: true,
       },
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
 
-    expect(__testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
+    expect(testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         workspaceDir: "/tmp/workspace-b",
       }),
     ).toBeUndefined();
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         onlyPluginIds: ["demo"],
       }),
     ).toBeUndefined();
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         onlyPluginIds: [],
       }),
     ).toBeUndefined();
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         runtimeOptions: undefined,
       }),
     ).toBe(registry);
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         runtimeOptions: {
           subagent: {} as CreatePluginRuntimeOptions["subagent"],
@@ -146,11 +145,11 @@ describe("getCompatibleActivePluginRegistry", () => {
       },
       workspaceDir: "/tmp/workspace-a",
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey, "default");
 
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         runtimeOptions: {
           allowGatewaySubagentBinding: true,
@@ -170,11 +169,11 @@ describe("getCompatibleActivePluginRegistry", () => {
       },
       workspaceDir: "/tmp/workspace-a",
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey, "default");
 
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         activate: false,
         toolDiscovery: true,
@@ -197,11 +196,11 @@ describe("getCompatibleActivePluginRegistry", () => {
         allowGatewaySubagentBinding: true,
       },
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
 
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         onlyPluginIds: ["demo"],
       }),
@@ -223,18 +222,18 @@ describe("getCompatibleActivePluginRegistry", () => {
         allowGatewaySubagentBinding: true,
       },
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
 
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         workspaceDir: "/tmp/workspace-b",
         onlyPluginIds: ["demo"],
       }),
     ).toBeUndefined();
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         config: {
           plugins: {
@@ -246,7 +245,7 @@ describe("getCompatibleActivePluginRegistry", () => {
       }),
     ).toBeUndefined();
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         onlyPluginIds: ["missing"],
       }),
@@ -264,11 +263,11 @@ describe("getCompatibleActivePluginRegistry", () => {
       },
       workspaceDir: "/tmp/workspace-a",
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey, "default");
 
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         activate: false,
         runtimeOptions: {
@@ -280,7 +279,7 @@ describe("getCompatibleActivePluginRegistry", () => {
   });
 
   it("does not embed activation secrets in the loader cache key", () => {
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext({
+    const { cacheKey } = testing.resolvePluginLoadCacheContext({
       config: {
         plugins: {
           allow: ["telegram"],
@@ -311,7 +310,7 @@ describe("getCompatibleActivePluginRegistry", () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry, "startup-registry");
 
-    expect(__testing.getCompatibleActivePluginRegistry()).toBe(registry);
+    expect(testing.getCompatibleActivePluginRegistry()).toBe(registry);
   });
 
   it("does not reuse the active registry when core gateway method names differ", () => {
@@ -328,12 +327,12 @@ describe("getCompatibleActivePluginRegistry", () => {
         "sessions.get": () => undefined,
       },
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey);
 
-    expect(__testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
+    expect(testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         coreGatewayHandlers: {
           "sessions.get": () => undefined,
@@ -361,11 +360,11 @@ describe("getCompatibleActivePluginRegistry", () => {
         allowGatewaySubagentBinding: true,
       },
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(startupOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
     setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
 
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         config: startupOptions.config,
         workspaceDir: "/tmp/workspace-a",
         onlyPluginIds: ["acpx", "telegram"],
@@ -391,11 +390,11 @@ describe("getCompatibleActivePluginRegistry", () => {
         allowGatewaySubagentBinding: true,
       },
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(startupOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
     setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
 
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         config: startupOptions.config,
         workspaceDir: "/tmp/workspace-a",
         onlyPluginIds: ["acpx", "telegram"],
@@ -422,11 +421,11 @@ describe("getCompatibleActivePluginRegistry", () => {
         allowGatewaySubagentBinding: true,
       },
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(startupOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
     setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
 
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         config: startupOptions.config,
         workspaceDir: "/tmp/workspace-a",
         onlyPluginIds: ["acpx", "telegram", "tavily"],
@@ -452,11 +451,11 @@ describe("getCompatibleActivePluginRegistry", () => {
         allowGatewaySubagentBinding: true,
       },
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(startupOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
     setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
 
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         config: startupOptions.config,
         workspaceDir: "/tmp/workspace-a",
       }),
@@ -481,11 +480,11 @@ describe("getCompatibleActivePluginRegistry", () => {
         allowGatewaySubagentBinding: true,
       },
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(startupOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
     setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
 
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         config: startupOptions.config,
         workspaceDir: "/tmp/workspace-a",
         runtimeOptions: {
@@ -515,11 +514,11 @@ describe("getCompatibleActivePluginRegistry", () => {
         allowGatewaySubagentBinding: true,
       },
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(startupOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
     setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
 
     expect(
-      __testing.getCompatibleActivePluginRegistry({
+      testing.getCompatibleActivePluginRegistry({
         config: startupOptions.config,
         workspaceDir: "/tmp/workspace-a",
         onlyPluginIds: ["acpx", "telegram"],
@@ -539,7 +538,7 @@ describe("resolveRuntimePluginRegistry", () => {
       },
       workspaceDir: "/tmp/workspace-a",
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey);
 
     expect(resolveRuntimePluginRegistry(loadOptions)).toBe(registry);
@@ -563,7 +562,7 @@ describe("resolveRuntimePluginRegistry", () => {
       },
       workspaceDir: "/tmp/workspace-a",
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey);
 
     const scopedEmpty = resolveRuntimePluginRegistry({ ...loadOptions, onlyPluginIds: [] });
@@ -572,7 +571,7 @@ describe("resolveRuntimePluginRegistry", () => {
   });
 
   it("keeps the full workspace registry warm when scoped cron registries churn", () => {
-    __testing.setMaxPluginRegistryCacheEntriesForTest(2);
+    testing.setMaxPluginRegistryCacheEntriesForTest(2);
     try {
       const loadOptions = {
         config: {
@@ -589,7 +588,7 @@ describe("resolveRuntimePluginRegistry", () => {
 
       expect(resolveRuntimePluginRegistry(loadOptions)).toBe(fullRegistry);
     } finally {
-      __testing.setMaxPluginRegistryCacheEntriesForTest();
+      testing.setMaxPluginRegistryCacheEntriesForTest();
     }
   });
 });
