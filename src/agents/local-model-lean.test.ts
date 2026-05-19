@@ -61,6 +61,33 @@ describe("local model lean tool filtering", () => {
     ).toEqual(["read", "browser", "cron", "message", "exec"]);
   });
 
+  it("inherits global lean mode when an agent experimental block omits the flag", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: true,
+          },
+        },
+        list: [
+          {
+            id: "main",
+            experimental: {},
+          },
+        ],
+      },
+    };
+
+    expect(isLocalModelLeanEnabled({ config: cfg, agentId: "main" })).toBe(true);
+    expect(
+      filterLocalModelLeanTools({
+        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        config: cfg,
+        agentId: "main",
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "exec"]);
+  });
+
   it("keeps global lean mode for an agent id without an agent entry", () => {
     const cfg: OpenClawConfig = {
       agents: {
