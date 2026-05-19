@@ -70,6 +70,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
@@ -322,6 +323,8 @@ class NodeRuntime(
   val cronJobs: StateFlow<List<GatewayCronJobSummary>> = _cronJobs.asStateFlow()
   private val _cronRefreshing = MutableStateFlow(false)
   val cronRefreshing: StateFlow<Boolean> = _cronRefreshing.asStateFlow()
+  private val _cronSaving = MutableStateFlow(false)
+  val cronSaving: StateFlow<Boolean> = _cronSaving.asStateFlow()
   private val _cronErrorText = MutableStateFlow<String?>(null)
   val cronErrorText: StateFlow<String?> = _cronErrorText.asStateFlow()
   private val _usageSummary = MutableStateFlow(GatewayUsageSummary(updatedAtMs = null, providers = emptyList()))
@@ -716,6 +719,22 @@ class NodeRuntime(
   fun refreshCronJobs() {
     scope.launch {
       refreshCronFromGateway()
+    }
+  }
+
+  fun createCronJob(
+    name: String,
+    message: String,
+    scheduleKind: String,
+    scheduleValue: String,
+  ) {
+    scope.launch {
+      createCronJobOnGateway(
+        name = name,
+        message = message,
+        scheduleKind = scheduleKind,
+        scheduleValue = scheduleValue,
+      )
     }
   }
 
@@ -1742,6 +1761,119 @@ class NodeRuntime(
     } finally {
       _cronRefreshing.value = false
     }
+  }
+
+  private suspend fun createCronJobOnGateway(
+    name: String,
+    message: String,
+    scheduleKind: String,
+    scheduleValue: String,
+  ) {
+    _cronSaving.value = true
+    _cronErrorText.value = null
+    if (!operatorConnected) {
+      _cronErrorText.value = "Connect the gateway before creating a cron job."
+      _cronSaving.value = false
+      return
+    }
+    try {
+      val cleanName = name.trim()
+      val cleanMessage = message.trim()
+      if (cleanName.isEmpty()) {
+        throw IllegalArgumentException("Add a job name.")
+      }
+      if (cleanMessage.isEmpty()) {
+        throw IllegalArgumentException("Add the message OpenClaw should run.")
+      }
+      val schedule = buildCronCreateSchedule(scheduleKind = scheduleKind, scheduleValue = scheduleValue.trim())
+      val params =
+        buildJsonObject {
+          put("name", JsonPrimitive(cleanName))
+          put("enabled", JsonPrimitive(true))
+          put("deleteAfterRun", JsonPrimitive(scheduleKind == "Once"))
+          put("sessionTarget", JsonPrimitive("isolated"))
+          put("wakeMode", JsonPrimitive("now"))
+          put("schedule", schedule)
+          put(
+            "payload",
+            buildJsonObject {
+              put("kind", JsonPrimitive("agentTurn"))
+              put("message", JsonPrimitive(cleanMessage))
+            },
+          )
+          put(
+            "delivery",
+            buildJsonObject {
+              put("mode", JsonPrimitive("announce"))
+              put("channel", JsonPrimitive("last"))
+              put("bestEffort", JsonPrimitive(true))
+            },
+          )
+        }
+      operatorSession.request("cron.add", params.toString())
+      refreshCronFromGateway()
+    } catch (err: IllegalArgumentException) {
+      _cronErrorText.value = err.message ?: "Could not create cron job."
+    } catch (_: Throwable) {
+      _cronErrorText.value = "Could not create cron job."
+    } finally {
+      _cronSaving.value = false
+    }
+  }
+
+  private fun buildCronCreateSchedule(
+    scheduleKind: String,
+    scheduleValue: String,
+  ): JsonObject =
+    when (scheduleKind) {
+      "Every" ->
+        buildJsonObject {
+          put("kind", JsonPrimitive("every"))
+          put("everyMs", JsonPrimitive(parseCronDurationMs(scheduleValue)))
+        }
+      "Once" ->
+        buildJsonObject {
+          put("kind", JsonPrimitive("at"))
+          put("at", JsonPrimitive(resolveCronAtIso(scheduleValue)))
+        }
+      "Cron" ->
+        buildJsonObject {
+          val expr = scheduleValue.takeIf { it.isNotEmpty() } ?: throw IllegalArgumentException("Add a cron expression.")
+          put("kind", JsonPrimitive("cron"))
+          put("expr", JsonPrimitive(expr))
+          put("staggerMs", JsonPrimitive(0))
+        }
+      else -> throw IllegalArgumentException("Choose a schedule.")
+    }
+
+  private fun resolveCronAtIso(value: String): String {
+    val clean = value.trim()
+    if (clean.startsWith("+")) {
+      return Instant.ofEpochMilli(System.currentTimeMillis() + parseCronDurationMs(clean.drop(1))).toString()
+    }
+    return try {
+      Instant.parse(clean).toString()
+    } catch (_: Throwable) {
+      throw IllegalArgumentException("Use ISO time or +30m.")
+    }
+  }
+
+  private fun parseCronDurationMs(value: String): Long {
+    val match =
+      Regex("""^(\d+)\s*([mhd])$""")
+        .matchEntire(value.trim().lowercase())
+        ?: throw IllegalArgumentException("Use 15m, 1h, or 1d.")
+    val amount = match.groupValues[1].toLong()
+    if (amount <= 0) {
+      throw IllegalArgumentException("Use a duration greater than zero.")
+    }
+    val unit = match.groupValues[2]
+    return amount *
+      when (unit) {
+        "m" -> 60_000L
+        "h" -> 3_600_000L
+        else -> 86_400_000L
+      }
   }
 
   private suspend fun refreshUsageFromGateway() {
