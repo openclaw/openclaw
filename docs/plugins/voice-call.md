@@ -727,6 +727,7 @@ Example with a stable public host:
 ```bash
 openclaw voicecall call --to "+15555550123" --message "Hello from OpenClaw"
 openclaw voicecall start --to "+15555550123"   # alias for call
+openclaw voicecall start --to "+15555550123" --message "Hola, buenas tardes" --objective "Book a table for 2 tomorrow at 8pm."
 openclaw voicecall continue --call-id <id> --message "Any questions?"
 openclaw voicecall speak --call-id <id> --message "One moment"
 openclaw voicecall dtmf --call-id <id> --digits "ww123456#"
@@ -751,27 +752,27 @@ for turn latency and listen-wait times.
 
 Tool name: `voice_call`.
 
-| Action          | Args                                       |
-| --------------- | ------------------------------------------ |
-| `initiate_call` | `message`, `to?`, `mode?`, `dtmfSequence?` |
-| `continue_call` | `callId`, `message`                        |
-| `speak_to_user` | `callId`, `message`                        |
-| `send_dtmf`     | `callId`, `digits`                         |
-| `end_call`      | `callId`                                   |
-| `get_status`    | `callId`                                   |
+| Action          | Args                                                     |
+| --------------- | -------------------------------------------------------- |
+| `initiate_call` | `message`, `to?`, `mode?`, `objective?`, `dtmfSequence?` |
+| `continue_call` | `callId`, `message`                                      |
+| `speak_to_user` | `callId`, `message`                                      |
+| `send_dtmf`     | `callId`, `digits`                                       |
+| `end_call`      | `callId`                                                 |
+| `get_status`    | `callId`                                                 |
 
 This repo ships a matching skill doc at `skills/voice-call/SKILL.md`.
 
 ## Gateway RPC
 
-| Method               | Args                                       |
-| -------------------- | ------------------------------------------ |
-| `voicecall.initiate` | `to?`, `message`, `mode?`, `dtmfSequence?` |
-| `voicecall.continue` | `callId`, `message`                        |
-| `voicecall.speak`    | `callId`, `message`                        |
-| `voicecall.dtmf`     | `callId`, `digits`                         |
-| `voicecall.end`      | `callId`                                   |
-| `voicecall.status`   | `callId`                                   |
+| Method               | Args                                                     |
+| -------------------- | -------------------------------------------------------- |
+| `voicecall.initiate` | `to?`, `message`, `mode?`, `objective?`, `dtmfSequence?` |
+| `voicecall.continue` | `callId`, `message`                                      |
+| `voicecall.speak`    | `callId`, `message`                                      |
+| `voicecall.dtmf`     | `callId`, `digits`                                       |
+| `voicecall.end`      | `callId`                                                 |
+| `voicecall.status`   | `callId`                                                 |
 
 `dtmfSequence` is only valid with `mode: "conversation"`. Notify-mode calls
 should use `voicecall.dtmf` after the call exists if they need post-connect

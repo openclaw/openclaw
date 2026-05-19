@@ -302,6 +302,8 @@ export type GetCallStatusResult = {
 export type OutboundCallOptions = {
   /** Message to speak when call connects */
   message?: string;
+  /** Private per-call objective for realtime task calls; not spoken as the opener */
+  objective?: string;
   /** Call mode (overrides config default) */
   mode?: CallMode;
   /** DTMF digits to send after the call is connected */

@@ -454,6 +454,83 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
+  it("adds a private objective to realtime instructions without speaking it as the greeting", async () => {
+    let callbacks:
+      | {
+          onReady?: () => void;
+        }
+      | undefined;
+    let bridgeRequest: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const triggerGreeting = vi.fn();
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        bridgeRequest = request;
+        return makeBridge({ triggerGreeting });
+      },
+    );
+    const getCallByProviderCallId = vi.fn(
+      (): CallRecord => ({
+        callId: "call-1",
+        providerCallId: "CA-objective",
+        provider: "twilio",
+        direction: "outbound",
+        state: "ringing",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: {
+          initialMessage: "Hola, buenas tardes.",
+          objective: "Book a table for two tomorrow at 8pm.",
+        },
+      }),
+    );
+    const handler = makeHandler(
+      { instructions: "Base realtime instructions." },
+      {
+        manager: {
+          getCallByProviderCallId,
+        },
+        realtimeProvider: makeRealtimeProvider(createBridge),
+      },
+    );
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-objective", callSid: "CA-objective" },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        expect(bridgeRequest?.instructions).toContain("Base realtime instructions.");
+        expect(bridgeRequest?.instructions).toContain("Private per-call objective:");
+        expect(bridgeRequest?.instructions).toContain("Book a table for two tomorrow at 8pm.");
+
+        callbacks?.onReady?.();
+
+        expect(triggerGreeting).toHaveBeenCalledTimes(1);
+        const greeting = requireFirstMockCall(triggerGreeting.mock.calls, "greeting")[0];
+        expect(greeting).toContain("Hola, buenas tardes.");
+        expect(greeting).not.toContain("Book a table for two tomorrow at 8pm.");
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("speaks through the active outbound realtime bridge by call id", async () => {
     const triggerGreeting = vi.fn();
     const createBridge = vi.fn(() => makeBridge({ triggerGreeting }));

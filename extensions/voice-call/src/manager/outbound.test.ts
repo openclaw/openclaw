@@ -173,6 +173,34 @@ describe("voice-call outbound helpers", () => {
     expect(persistCallRecordMock).toHaveBeenCalledTimes(2);
   });
 
+  it("stores private outbound objectives without changing the initial message", async () => {
+    const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
+    const ctx = {
+      activeCalls: new Map(),
+      providerCallIdMap: new Map(),
+      provider: { name: "twilio", initiateCall: initiateProviderCall },
+      config: {
+        maxConcurrentCalls: 3,
+        outbound: { defaultMode: "conversation" },
+        fromNumber: "+14155550100",
+      },
+      storePath: "/tmp/voice-call.json",
+      webhookUrl: "https://example.com/webhook",
+    };
+
+    const result = await initiateCall(ctx as never, "+14155550123", "session-1", {
+      message: "Hola, buenas tardes.",
+      objective: "Book a table for two tomorrow at 8pm.",
+    });
+
+    expect(result.success).toBe(true);
+    const metadata = (
+      ctx.activeCalls.get(result.callId) as { metadata?: Record<string, unknown> } | undefined
+    )?.metadata;
+    expect(metadata?.initialMessage).toBe("Hola, buenas tardes.");
+    expect(metadata?.objective).toBe("Book a table for two tomorrow at 8pm.");
+  });
+
   it("assigns per-call session keys to outbound calls when configured", async () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
     const ctx = {

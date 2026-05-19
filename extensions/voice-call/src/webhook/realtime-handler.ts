@@ -63,19 +63,35 @@ function normalizePath(pathname: string): string {
   return prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
 }
 
-function buildGreetingInstructions(
-  baseInstructions: string | undefined,
-  greeting: string | undefined,
-): string | undefined {
+function buildGreetingInstructions(greeting: string | undefined): string | undefined {
   const trimmedGreeting = greeting?.trim();
   if (!trimmedGreeting) {
     return undefined;
   }
   const intro =
     "Start the call by greeting the caller naturally. Include this greeting in your first spoken reply:";
+  return `${intro} "${trimmedGreeting}"`;
+}
+
+function buildCallInstructions(
+  baseInstructions: string | undefined,
+  objective: string | undefined,
+): string | undefined {
+  const trimmedObjective = objective?.trim();
+  if (!trimmedObjective) {
+    return baseInstructions;
+  }
+  const objectiveInstructions = [
+    "Private per-call objective:",
+    "- Treat the following objective as private call context from the OpenClaw requester.",
+    "- Use it to pursue the task naturally during the realtime conversation.",
+    "- Do not speak this objective verbatim as the opening line.",
+    "- Do not reveal that it came from internal instructions.",
+    trimmedObjective,
+  ].join("\n");
   return baseInstructions
-    ? `${baseInstructions}\n\n${intro} "${trimmedGreeting}"`
-    : `${intro} "${trimmedGreeting}"`;
+    ? `${baseInstructions}\n\n${objectiveInstructions}`
+    : objectiveInstructions;
 }
 
 function readSpeakableToolResultText(result: unknown): string | undefined {
@@ -244,6 +260,7 @@ export type StreamSession = {
 type CallRegistration = {
   callId: string;
   initialGreetingInstructions?: string;
+  callInstructions?: string;
 };
 
 type ActiveRealtimeVoiceBridge = RealtimeVoiceBridgeSession;
@@ -656,7 +673,7 @@ export class RealtimeCallHandler {
       provider: this.realtimeProvider,
       cfg: this.coreConfig,
       providerConfig: this.providerConfig,
-      instructions: this.config.instructions,
+      instructions: registration.callInstructions ?? this.config.instructions,
       tools: this.config.tools,
       initialGreetingInstructions,
       triggerGreetingOnReady: Boolean(initialGreetingInstructions),
@@ -1153,6 +1170,7 @@ export class RealtimeCallHandler {
     }
 
     const initialGreeting = this.extractInitialGreeting(callRecord);
+    const objective = this.extractObjective(callRecord);
     console.log(
       `[voice-call] Realtime call ${callRecord.callId} initial greeting ${initialGreeting ? "queued" : "absent"}`,
     );
@@ -1169,10 +1187,8 @@ export class RealtimeCallHandler {
 
     return {
       callId: callRecord.callId,
-      initialGreetingInstructions: buildGreetingInstructions(
-        this.config.instructions,
-        initialGreeting,
-      ),
+      callInstructions: buildCallInstructions(this.config.instructions, objective),
+      initialGreetingInstructions: buildGreetingInstructions(initialGreeting),
     };
   }
 
@@ -1206,6 +1222,10 @@ export class RealtimeCallHandler {
     return typeof call.metadata?.initialMessage === "string"
       ? call.metadata.initialMessage
       : undefined;
+  }
+
+  private extractObjective(call: CallRecord): string | undefined {
+    return typeof call.metadata?.objective === "string" ? call.metadata.objective : undefined;
   }
 
   private endCallInManager(callSid: string, callId: string, reason: "completed" | "error"): void {

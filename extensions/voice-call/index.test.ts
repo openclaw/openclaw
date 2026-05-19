@@ -489,6 +489,72 @@ describe("voice-call plugin", () => {
     expect(payload?.found).toBe(true);
   });
 
+  it("returns completed call status from history", async () => {
+    runtimeStub = createRuntimeStub("active-call");
+    const completed = createCallRecord({
+      callId: "completed-call",
+      providerCallId: "provider-completed-call",
+      state: "completed",
+      endedAt: Date.UTC(2026, 4, 2, 9, 5, 0),
+      endReason: "completed",
+      transcript: [{ timestamp: Date.now(), speaker: "bot", text: "Done", isFinal: true }],
+    });
+    vi.mocked(runtimeStub.manager.getCall).mockReturnValue(undefined);
+    vi.mocked(runtimeStub.manager.getCallByProviderCallId).mockReturnValue(undefined);
+    vi.mocked(runtimeStub.manager.getCallHistory).mockResolvedValue([completed]);
+
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.status") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({ params: { callId: "completed-call" }, respond });
+
+    expect(firstRespondCall(respond)).toEqual([true, { found: true, call: completed }]);
+  });
+
+  it("prefers a completed provider history record with call content", async () => {
+    runtimeStub = createRuntimeStub("active-call");
+    const completed = createCallRecord({
+      callId: "completed-call",
+      providerCallId: "provider-completed-call",
+      state: "completed",
+      endedAt: Date.UTC(2026, 4, 2, 9, 5, 0),
+      endReason: "completed",
+      transcript: [{ timestamp: Date.now(), speaker: "bot", text: "Booked", isFinal: true }],
+      metadata: { objective: "Book a restaurant table." },
+    });
+    const emptyLateDuplicate = createCallRecord({
+      callId: "late-duplicate-call",
+      providerCallId: "provider-completed-call",
+      state: "completed",
+      endedAt: Date.UTC(2026, 4, 2, 9, 6, 0),
+      endReason: "completed",
+      transcript: [],
+    });
+    vi.mocked(runtimeStub.manager.getCall).mockReturnValue(undefined);
+    vi.mocked(runtimeStub.manager.getCallByProviderCallId).mockReturnValue(undefined);
+    vi.mocked(runtimeStub.manager.getCallHistory).mockResolvedValue([
+      completed,
+      emptyLateDuplicate,
+    ]);
+
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.status") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({ params: { callId: "provider-completed-call" }, respond });
+
+    expect(firstRespondCall(respond)).toEqual([true, { found: true, call: completed }]);
+  });
+
   it("sends DTMF via voicecall.dtmf", async () => {
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.dtmf") as

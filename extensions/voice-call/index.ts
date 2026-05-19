@@ -21,9 +21,31 @@ import {
 } from "./src/config.js";
 import type { CoreConfig } from "./src/core-bridge.js";
 import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
+import type { CallRecord } from "./src/types.js";
 
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
 const VOICE_CALL_READ_METHOD_SCOPE = { scope: "operator.read" as const };
+
+function hasPostCallContent(call: CallRecord): boolean {
+  return (
+    call.transcript.length > 0 ||
+    typeof call.metadata?.objective === "string" ||
+    typeof call.metadata?.initialMessage === "string"
+  );
+}
+
+function findCallInHistory(history: CallRecord[], callIdOrProviderCallId: string) {
+  const newestFirst = history.toReversed();
+  const exact = newestFirst.find((candidate) => candidate.callId === callIdOrProviderCallId);
+  if (exact) {
+    return exact;
+  }
+
+  const providerMatches = newestFirst.filter(
+    (candidate) => candidate.providerCallId === callIdOrProviderCallId,
+  );
+  return providerMatches.find(hasPostCallContent) ?? providerMatches[0];
+}
 
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
@@ -181,6 +203,7 @@ const VoiceCallToolSchema = Type.Union([
     action: Type.Literal("initiate_call"),
     to: Type.Optional(Type.String({ description: "Call target" })),
     message: Type.String({ description: "Intro message" }),
+    objective: Type.Optional(Type.String({ description: "Private per-call objective" })),
     mode: Type.Optional(Type.Union([Type.Literal("notify"), Type.Literal("conversation")])),
     sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
     requesterSessionKey: Type.Optional(
@@ -216,6 +239,7 @@ const VoiceCallToolSchema = Type.Union([
     to: Type.Optional(Type.String({ description: "Call target" })),
     sid: Type.Optional(Type.String({ description: "Call SID" })),
     message: Type.Optional(Type.String({ description: "Optional intro message" })),
+    objective: Type.Optional(Type.String({ description: "Private per-call objective" })),
     sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
     requesterSessionKey: Type.Optional(
       Type.String({ description: "OpenClaw session key that initiated the call" }),
@@ -345,9 +369,7 @@ export default definePluginEntry({
 
     const describeHistoricalCall = async (rt: VoiceCallRuntime, callId: string) => {
       const history = await rt.manager.getCallHistory(100);
-      const call = history
-        .toReversed()
-        .find((candidate) => candidate.callId === callId || candidate.providerCallId === callId);
+      const call = findCallInHistory(history, callId);
       if (!call) {
         return undefined;
       }
@@ -357,6 +379,15 @@ export default definePluginEntry({
         call.endedAt ? `endedAt=${new Date(call.endedAt).toISOString()}` : undefined,
       ].filter(Boolean);
       return `call is not active (${details.join(", ")})`;
+    };
+
+    const resolveCallStatus = async (rt: VoiceCallRuntime, callId: string) => {
+      const active = rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
+      if (active) {
+        return active;
+      }
+      const history = await rt.manager.getCallHistory(100);
+      return findCallInHistory(history, callId);
     };
 
     const resolveCallMessageRequest = async (params: GatewayRequestHandlerOptions["params"]) => {
@@ -378,6 +409,7 @@ export default definePluginEntry({
       respond: GatewayRequestHandlerOptions["respond"];
       to: string;
       message?: string;
+      objective?: string;
       mode?: "notify" | "conversation";
       dtmfSequence?: string;
       sessionKey?: string;
@@ -385,6 +417,7 @@ export default definePluginEntry({
     }) => {
       const result = await params.rt.manager.initiateCall(params.to, params.sessionKey, {
         message: params.message,
+        objective: params.objective,
         mode: params.mode,
         dtmfSequence: params.dtmfSequence,
         ...(params.requesterSessionKey ? { requesterSessionKey: params.requesterSessionKey } : {}),
@@ -436,6 +469,7 @@ export default definePluginEntry({
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           const message = normalizeOptionalString(params?.message) ?? "";
+          const objective = normalizeOptionalString(params?.objective);
           if (!message) {
             respondError(respond, "message required", ErrorCodes.INVALID_REQUEST);
             return;
@@ -453,6 +487,7 @@ export default definePluginEntry({
             respond,
             to,
             message,
+            objective,
             mode,
             sessionKey: normalizeOptionalString(params?.sessionKey),
             requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
@@ -626,7 +661,7 @@ export default definePluginEntry({
             respond(true, { found: true, calls: rt.manager.getActiveCalls() });
             return;
           }
-          const call = rt.manager.getCall(raw) || rt.manager.getCallByProviderCallId(raw);
+          const call = await resolveCallStatus(rt, raw);
           if (!call) {
             respond(true, { found: false });
             return;
@@ -645,6 +680,7 @@ export default definePluginEntry({
         try {
           const to = normalizeOptionalString(params?.to) ?? "";
           const message = normalizeOptionalString(params?.message) ?? "";
+          const objective = normalizeOptionalString(params?.objective);
           const dtmfSequence = normalizeOptionalString(params?.dtmfSequence);
           const sessionKey = normalizeOptionalString(params?.sessionKey);
           const requesterSessionKey = normalizeOptionalString(params?.requesterSessionKey);
@@ -660,6 +696,7 @@ export default definePluginEntry({
             respond,
             to,
             message: message || undefined,
+            objective,
             mode,
             dtmfSequence,
             sessionKey,
@@ -700,6 +737,7 @@ export default definePluginEntry({
                 }
                 const result = await rt.manager.initiateCall(to, undefined, {
                   message,
+                  objective: normalizeOptionalString(rawParams.objective),
                   dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
                   mode:
                     rawParams.mode === "notify" || rawParams.mode === "conversation"
@@ -763,8 +801,7 @@ export default definePluginEntry({
                 if (!callId) {
                   throw new Error("callId required");
                 }
-                const call =
-                  rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
+                const call = await resolveCallStatus(rt, callId);
                 return json(call ? { found: true, call } : { found: false });
               }
             }
@@ -776,7 +813,7 @@ export default definePluginEntry({
             if (!sid) {
               throw new Error("sid required for status");
             }
-            const call = rt.manager.getCall(sid) || rt.manager.getCallByProviderCallId(sid);
+            const call = await resolveCallStatus(rt, sid);
             return json(call ? { found: true, call } : { found: false });
           }
 
@@ -790,6 +827,7 @@ export default definePluginEntry({
             {
               dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
               message: normalizeOptionalString(rawParams.message),
+              objective: normalizeOptionalString(rawParams.objective),
               ...(normalizeOptionalString(rawParams.requesterSessionKey)
                 ? { requesterSessionKey: normalizeOptionalString(rawParams.requesterSessionKey) }
                 : {}),
