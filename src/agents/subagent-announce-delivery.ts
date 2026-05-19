@@ -457,8 +457,8 @@ async function maybeSteerSubagentAnnounce(params: {
   }
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
-  const { sessionId } = resolveRequesterSessionActivity(canonicalKey);
-  if (!sessionId) {
+  const { sessionId, isActive } = resolveRequesterSessionActivity(canonicalKey);
+  if (!sessionId || !isActive) {
     return { status: "none" };
   }
 
@@ -691,7 +691,11 @@ async function sendSubagentAnnounceDirectly(params: {
         directOrigin?.channel,
       sessionEntry: requesterEntry,
     });
-    if (params.expectsCompletionMessage && requesterActivity.sessionId) {
+    if (
+      params.expectsCompletionMessage &&
+      requesterActivity.sessionId &&
+      requesterActivity.isActive
+    ) {
       const wakeOutcome = await resolveQueueEmbeddedPiMessageOutcome(
         requesterActivity.sessionId,
         params.triggerMessage,
@@ -715,14 +719,12 @@ async function sendSubagentAnnounceDirectly(params: {
           path: "steered",
         };
       }
-      if (requesterActivity.isActive) {
-        defaultRuntime.log(
-          `[warn] Active requester session could not be woken for subagent completion; falling back to requester-agent handoff: ${formatQueueWakeFailureError(
-            "active requester session could not be woken",
-            wakeOutcome,
-          )}`,
-        );
-      }
+      defaultRuntime.log(
+        `[warn] Active requester session could not be woken for subagent completion; falling back to requester-agent handoff: ${formatQueueWakeFailureError(
+          "active requester session could not be woken",
+          wakeOutcome,
+        )}`,
+      );
     }
     if (params.signal?.aborted) {
       return {
