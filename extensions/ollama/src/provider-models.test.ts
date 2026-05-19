@@ -41,6 +41,13 @@ describe("ollama provider models", () => {
       { name: "llama3:8b", contextWindow: 65536, capabilities: undefined },
       { name: "deepseek-r1:14b", contextWindow: undefined, capabilities: undefined },
     ]);
+    expect(
+      buildOllamaModelDefinition(
+        enriched[1].name,
+        enriched[1].contextWindow,
+        enriched[1].capabilities,
+      ).compat?.supportsTools,
+    ).toBe(true);
   });
 
   it("uses Modelfile num_ctx when it expands the discovered context window", async () => {
