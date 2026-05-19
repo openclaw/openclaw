@@ -189,7 +189,7 @@ private fun V2ChatHeader(
     ) {
       Text(
         text = sessionTitle,
-        style = ClawTheme.type.title.copy(fontSize = 10.4.sp, lineHeight = 13.sp),
+        style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
         color = ClawTheme.colors.text,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
@@ -236,7 +236,7 @@ private fun V2ModelPill(
     Text(
       text = text,
       modifier = Modifier.padding(horizontal = 7.dp, vertical = 1.5.dp),
-      style = ClawTheme.type.caption.copy(fontSize = 7.4.sp, lineHeight = 9.2.sp),
+      style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
       maxLines = 1,
     )
   }
@@ -334,7 +334,7 @@ private fun V2EmptyChatHint(
         } else {
           "Reconnect your Gateway from Settings."
         },
-      style = ClawTheme.type.body.copy(fontSize = 11.sp, lineHeight = 15.sp),
+      style = ClawTheme.type.body,
       color = ClawTheme.colors.textMuted,
       textAlign = TextAlign.Center,
     )
@@ -379,7 +379,7 @@ private fun V2ChatBubble(
               normalizedRole == "system" -> "System"
               else -> "OpenClaw"
             },
-          style = ClawTheme.type.caption.copy(fontSize = 7.3.sp, lineHeight = 9.sp, fontWeight = FontWeight.SemiBold),
+          style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
           color = ClawTheme.colors.text,
         )
         displayableContent.forEach { part ->
@@ -392,7 +392,7 @@ private fun V2ChatBubble(
         timestampMs?.let {
           Text(
             text = formatChatTimestamp(it),
-            style = ClawTheme.type.caption.copy(fontSize = 6.6.sp, lineHeight = 8.sp),
+            style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
             color = ClawTheme.colors.textMuted,
             modifier = Modifier.align(Alignment.End),
           )
@@ -412,7 +412,7 @@ private fun V2ChatText(
   } else {
     Text(
       text = text,
-      style = ClawTheme.type.body.copy(fontSize = 8.1.sp, lineHeight = 10.9.sp),
+      style = ClawTheme.type.body,
       color = textColor,
     )
   }
@@ -536,7 +536,7 @@ private fun V2ChatContextMeter(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
         Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.textSubtle)
-        Text(text = "Context ${contextPercent(thinkingLevel)}%", style = ClawTheme.type.caption.copy(fontSize = 7.3.sp, lineHeight = 9.sp), color = ClawTheme.colors.textMuted)
+        Text(text = "Context ${contextPercent(thinkingLevel)}%", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
       }
     }
     Box(
@@ -581,7 +581,7 @@ private fun V2ChatInputPill(
         BasicTextField(
           value = value,
           onValueChange = onValueChange,
-          textStyle = ClawTheme.type.body.copy(fontSize = 8.3.sp, lineHeight = 10.8.sp, color = ClawTheme.colors.text),
+          textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
           cursorBrush = SolidColor(ClawTheme.colors.primary),
           minLines = 1,
           maxLines = 4,
@@ -589,7 +589,7 @@ private fun V2ChatInputPill(
           decorationBox = { innerTextField ->
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
               if (value.isEmpty()) {
-                Text(text = "Message OpenClaw", style = ClawTheme.type.body.copy(fontSize = 8.3.sp, lineHeight = 10.8.sp), color = ClawTheme.colors.textSubtle)
+                Text(text = "Message OpenClaw", style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
               }
               innerTextField()
             }

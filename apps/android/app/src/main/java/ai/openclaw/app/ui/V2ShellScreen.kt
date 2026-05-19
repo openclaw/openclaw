@@ -177,7 +177,7 @@ private fun V2OverviewScreen(
           ) {
             Text(
               text = "O P E N C L A W",
-              style = ClawTheme.type.title.copy(fontSize = 11.4.sp, lineHeight = 14.sp),
+              style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
               color = ClawTheme.colors.text,
               modifier = Modifier.weight(1f),
             )
@@ -284,7 +284,7 @@ private fun V2OverviewChatButton(
       horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
       Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(14.dp))
-      Text(text = "Chat", style = ClawTheme.type.title.copy(fontSize = 10.8.sp, lineHeight = 13.sp))
+      Text(text = "Chat", style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp))
     }
   }
 }
@@ -299,7 +299,7 @@ private fun V2OverviewAvatar(text: String) {
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Text(text = text.take(2).uppercase(), style = ClawTheme.type.label.copy(fontSize = 9.4.sp, lineHeight = 12.sp))
+      Text(text = text.take(2).uppercase(), style = ClawTheme.type.label)
     }
   }
 }
@@ -314,7 +314,7 @@ private fun V2SectionLabel(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.SpaceBetween,
   ) {
-    Text(text = title.uppercase(), style = ClawTheme.type.caption.copy(fontSize = 8.6.sp, lineHeight = 11.sp), color = ClawTheme.colors.textMuted)
+    Text(text = title.uppercase(), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
     action?.invoke()
   }
 }
@@ -355,7 +355,7 @@ private fun V2ModuleListRow(
       Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.text)
       Text(
         text = row.title,
-        style = ClawTheme.type.body.copy(fontSize = 9.4.sp, lineHeight = 12.sp),
+        style = ClawTheme.type.body,
         color = ClawTheme.colors.text,
         modifier = Modifier.weight(1f),
         maxLines = 1,
@@ -364,7 +364,7 @@ private fun V2ModuleListRow(
       row.metadata?.let {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
           Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(statusDotColor(it)))
-          Text(text = it, style = ClawTheme.type.caption.copy(fontSize = 8.1.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+          Text(text = it, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
         }
       }
       Icon(
@@ -445,10 +445,10 @@ private fun V2RecentSessionRowContent(
         }
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(text = title, style = ClawTheme.type.body.copy(fontSize = 9.3.sp, lineHeight = 12.sp), color = ClawTheme.colors.text, maxLines = 1)
-        Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 7.9.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textSubtle, maxLines = 1)
+        Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
+        Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 1)
       }
-      Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 8.1.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textMuted)
+      Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open session",
@@ -514,7 +514,7 @@ private fun V2ProvidersModelsScreen(
               Text(text = "Providers & Models", style = ClawTheme.type.display.copy(fontSize = 14.8.sp, lineHeight = 18.sp), color = ClawTheme.colors.text, maxLines = 1)
               Text(
                 text = "Connect and manage AI providers\nBrowse models and their capabilities.",
-                style = ClawTheme.type.caption.copy(fontSize = 8.4.sp, lineHeight = 11.sp),
+                style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
                 color = ClawTheme.colors.textMuted,
               )
             }
@@ -654,12 +654,12 @@ private fun V2ProviderListRow(row: V2ProviderRow) {
   Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
     V2ProviderBadge(text = row.name)
     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-      Text(text = row.name, style = ClawTheme.type.body.copy(fontSize = 9.2.sp, lineHeight = 11.8.sp), color = ClawTheme.colors.text, maxLines = 1)
-      Text(text = if (row.modelCount > 0) "${row.modelCount} models" else "Provider setup", style = ClawTheme.type.caption.copy(fontSize = 7.8.sp, lineHeight = 10.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+      Text(text = row.name, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
+      Text(text = if (row.modelCount > 0) "${row.modelCount} models" else "Provider setup", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
     }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
       Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (row.ready) ClawTheme.colors.success else ClawTheme.colors.warning))
-      Text(text = row.status, style = ClawTheme.type.caption.copy(fontSize = 8.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+      Text(text = row.status, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
       Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Open ${row.name}", modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
     }
   }
@@ -669,7 +669,7 @@ private fun V2ProviderListRow(row: V2ProviderRow) {
 private fun V2ProviderBadge(text: String) {
   Surface(modifier = Modifier.size(24.dp), shape = RoundedCornerShape(6.dp), color = ClawTheme.colors.surfacePressed, border = BorderStroke(1.dp, ClawTheme.colors.border)) {
     Box(contentAlignment = Alignment.Center) {
-      Text(text = providerInitials(text), style = ClawTheme.type.section.copy(fontSize = 9.2.sp, lineHeight = 11.5.sp), color = ClawTheme.colors.text, textAlign = TextAlign.Center)
+      Text(text = providerInitials(text), style = ClawTheme.type.section, color = ClawTheme.colors.text, textAlign = TextAlign.Center)
     }
   }
 }
@@ -690,8 +690,8 @@ private fun V2ModelCatalogEmpty(
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 11.dp, vertical = 10.dp)) {
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Text(text = title, style = ClawTheme.type.section.copy(fontSize = 10.8.sp, lineHeight = 14.sp), color = ClawTheme.colors.text)
-      Text(text = body, style = ClawTheme.type.caption.copy(fontSize = 8.8.sp, lineHeight = 12.sp), color = ClawTheme.colors.textMuted)
+      Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = body, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
     }
   }
 }
@@ -705,7 +705,7 @@ private fun V2ModelGroup(
     Column {
       Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         V2ProviderBadge(text = providerDisplayName(provider))
-        Text(text = providerDisplayName(provider), style = ClawTheme.type.body.copy(fontSize = 9.5.sp, lineHeight = 12.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
+        Text(text = providerDisplayName(provider), style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
         V2MiniTag(text = "${models.size} models")
         Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
       }
@@ -716,7 +716,7 @@ private fun V2ModelGroup(
       }
       if (models.size > 3) {
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-          Text(text = "View all models", style = ClawTheme.type.caption.copy(fontSize = 8.2.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textMuted, modifier = Modifier.weight(1f))
+          Text(text = "View all models", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, modifier = Modifier.weight(1f))
           Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
         }
       }
@@ -727,7 +727,7 @@ private fun V2ModelGroup(
 @Composable
 private fun V2ModelRow(model: GatewayModelSummary) {
   Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-    Text(text = model.name, style = ClawTheme.type.mono.copy(fontSize = 8.2.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Text(text = model.name, style = ClawTheme.type.mono, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
     modelCapabilityLabels(model).take(3).forEach { label ->
       V2MiniTag(text = label)
     }
@@ -796,11 +796,11 @@ private fun V2SettingsShellScreen(viewModel: MainViewModel) {
           horizontalAlignment = Alignment.CenterHorizontally,
           verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-          Text(text = "OpenClaw ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", style = ClawTheme.type.caption.copy(fontSize = 8.2.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textMuted)
+          Text(text = "OpenClaw ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
           Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
               text = if (isConnected) "All systems operational" else "Gateway not connected",
-              style = ClawTheme.type.caption.copy(fontSize = 8.2.sp, lineHeight = 10.5.sp),
+              style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
               color = ClawTheme.colors.textSubtle,
             )
             Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (isConnected) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
@@ -842,8 +842,8 @@ private fun V2ProfilePanel(displayName: String) {
         }
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = displayName, style = ClawTheme.type.section.copy(fontSize = 10.8.sp, lineHeight = 13.5.sp), color = ClawTheme.colors.text, maxLines = 1)
-        Text(text = "OpenClaw mobile", style = ClawTheme.type.caption.copy(fontSize = 8.2.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+        Text(text = displayName, style = ClawTheme.type.section, color = ClawTheme.colors.text, maxLines = 1)
+        Text(text = "OpenClaw mobile", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
       }
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -877,9 +877,9 @@ private fun V2SettingsListRow(row: V2SettingsRow) {
     horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
     Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.text)
-    Text(text = row.title, style = ClawTheme.type.body.copy(fontSize = 9.6.sp, lineHeight = 12.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
+    Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-      Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 8.2.sp, lineHeight = 10.5.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+      Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
       row.status?.let { active ->
         Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
       }
@@ -975,7 +975,7 @@ private fun V2ProviderAddButton(
     ) {
       Icon(imageVector = Icons.Default.Add, contentDescription = null, modifier = Modifier.size(13.dp))
       Spacer(modifier = Modifier.width(7.dp))
-      Text(text = "Add Provider", style = ClawTheme.type.label.copy(fontSize = 9.6.sp, lineHeight = 12.sp), maxLines = 1)
+      Text(text = "Add Provider", style = ClawTheme.type.label, maxLines = 1)
     }
   }
 }
@@ -1000,7 +1000,7 @@ private fun V2FilterPill(
       horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
       icon?.let { Icon(imageVector = it, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.text) }
-      Text(text = text, style = ClawTheme.type.label.copy(fontSize = 8.7.sp, lineHeight = 11.sp), color = ClawTheme.colors.text, maxLines = 1)
+      Text(text = text, style = ClawTheme.type.label, color = ClawTheme.colors.text, maxLines = 1)
       if (live) {
         Box(modifier = Modifier.size(4.dp).clip(CircleShape).background(ClawTheme.colors.success))
       }
@@ -1046,7 +1046,7 @@ private fun V2SessionRow(
           Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
               text = title,
-              style = ClawTheme.type.body.copy(fontSize = 8.8.sp, lineHeight = 11.2.sp),
+              style = ClawTheme.type.body,
               color = ClawTheme.colors.text,
               modifier = Modifier.weight(1f),
               maxLines = 1,
@@ -1056,7 +1056,7 @@ private fun V2SessionRow(
               Box(modifier = Modifier.size(3.5.dp).clip(CircleShape).background(ClawTheme.colors.success))
             }
           }
-          Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 7.7.sp, lineHeight = 9.8.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+          Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
           Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             V2MiniTag(text = "Workspace")
             V2MiniTag(text = if (active) "Active" else "OpenClaw")
@@ -1065,7 +1065,7 @@ private fun V2SessionRow(
 
         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(5.dp)) {
           Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Session options", modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
-          Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 7.7.sp, lineHeight = 9.8.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+          Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
         }
       }
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
@@ -1081,7 +1081,7 @@ private fun V2MiniTag(text: String) {
     border = BorderStroke(1.dp, ClawTheme.colors.border),
     contentColor = ClawTheme.colors.textMuted,
   ) {
-    Text(text = text, modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.5.dp), style = ClawTheme.type.caption.copy(fontSize = 7.1.sp, lineHeight = 9.sp), maxLines = 1)
+    Text(text = text, modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.5.dp), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), maxLines = 1)
   }
 }
 
@@ -1134,7 +1134,7 @@ private fun V2SessionsScreen(
 
       item {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-          Text(text = "Sort: Recent", style = ClawTheme.type.body.copy(fontSize = 8.6.sp, lineHeight = 11.sp), color = ClawTheme.colors.textMuted)
+          Text(text = "Sort: Recent", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(11.dp), tint = ClawTheme.colors.textMuted)
         }
       }

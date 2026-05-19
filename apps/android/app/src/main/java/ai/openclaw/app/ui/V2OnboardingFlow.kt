@@ -562,7 +562,7 @@ private fun V2PermissionSetupScreen(
             )
             Text(
               text = "These permissions keep OpenClaw secure\nand useful.",
-              style = ClawTheme.type.body.copy(fontSize = 11.2.sp, lineHeight = 15.5.sp),
+              style = ClawTheme.type.body,
               color = ClawTheme.colors.textMuted,
             )
           }
@@ -743,20 +743,20 @@ private fun V2PermissionRow(row: V2PermissionRowModel) {
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
           text = row.title,
-          style = ClawTheme.type.title.copy(fontSize = 12.8.sp, lineHeight = 15.5.sp),
+          style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
           color = ClawTheme.colors.text,
           maxLines = 1,
         )
         Text(
           text = row.subtitle,
-          style = ClawTheme.type.body.copy(fontSize = 10.1.sp, lineHeight = 13.sp),
+          style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
           maxLines = 1,
         )
       }
       Text(
         text = if (row.granted) "Granted" else "Not granted",
-        style = ClawTheme.type.body.copy(fontSize = 10.4.sp, lineHeight = 13.sp),
+        style = ClawTheme.type.body,
         color = if (row.granted) ClawTheme.colors.success else ClawTheme.colors.textMuted,
         maxLines = 1,
       )
@@ -780,7 +780,7 @@ private fun V2PermissionContinueButton(onClick: () -> Unit) {
     contentColor = ClawTheme.colors.primaryText,
   ) {
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-      Text(text = "Continue", style = ClawTheme.type.title.copy(fontSize = 13.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.primaryText)
+      Text(text = "Continue", style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp), color = ClawTheme.colors.primaryText)
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = null,
