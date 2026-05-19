@@ -201,7 +201,14 @@ export class TwitchClientManager {
     const key = this.getAccountKey(account);
     this.messageHandlers.set(key, handler);
     return () => {
-      this.messageHandlers.delete(key);
+      // Only remove if our handler is still the registered one. A second
+      // onMessage(account, other) call overwrites this entry; invoking the
+      // first caller's cleanup must not yank the live handler out from
+      // under the second caller (silently drops every inbound message).
+      // See #83888.
+      if (this.messageHandlers.get(key) === handler) {
+        this.messageHandlers.delete(key);
+      }
     };
   }
 

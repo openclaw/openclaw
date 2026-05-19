@@ -267,6 +267,30 @@ describe("TwitchClientManager", () => {
       const key = manager.getAccountKey(testAccount);
       expect((manager as any).messageHandlers.get(key)).toBe(handler2);
     });
+
+    it("should not remove a newer handler when the older handler's cleanup runs (#83888)", () => {
+      const handler1 = vi.fn();
+      const handler2 = vi.fn();
+      const key = manager.getAccountKey(testAccount);
+
+      const cleanup1 = manager.onMessage(testAccount, handler1);
+      manager.onMessage(testAccount, handler2);
+      cleanup1();
+
+      // handler2 is still the active handler; cleanup1 must not have evicted it.
+      expect((manager as any).messageHandlers.get(key)).toBe(handler2);
+      expect((manager as any).messageHandlers.has(key)).toBe(true);
+    });
+
+    it("cleanup of the sole registered handler still removes it", () => {
+      const handler = vi.fn();
+      const key = manager.getAccountKey(testAccount);
+
+      const cleanup = manager.onMessage(testAccount, handler);
+      expect((manager as any).messageHandlers.get(key)).toBe(handler);
+      cleanup();
+      expect((manager as any).messageHandlers.has(key)).toBe(false);
+    });
   });
 
   describe("disconnect", () => {
