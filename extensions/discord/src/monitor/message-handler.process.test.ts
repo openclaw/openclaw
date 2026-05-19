@@ -1787,7 +1787,7 @@ describe("processDiscordMessage draft streaming", () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "exec running" });
-      params?.dispatcher.sendFinalReply({ text: "done" });
+      void params?.dispatcher.sendFinalReply({ text: "done" });
       await params?.replyOptions?.onCommandOutput?.({
         phase: "end",
         title: "Exec",
