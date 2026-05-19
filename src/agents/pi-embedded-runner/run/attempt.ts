@@ -96,6 +96,7 @@ import { isTimeoutError } from "../../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
+import { filterLocalModelLeanTools, isLocalModelLeanEnabled } from "../../local-model-lean.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
@@ -1691,7 +1692,11 @@ export async function runEmbeddedAttempt(
             model: params.model,
           })
         : filteredBundledTools;
-    const uncompactedEffectiveTools = [...tools, ...normalizedBundledTools];
+    const uncompactedEffectiveTools = filterLocalModelLeanTools({
+      tools: [...tools, ...normalizedBundledTools],
+      config: params.config,
+      agentId: sessionAgentId,
+    });
     let effectiveTools = uncompactedEffectiveTools;
     const catalogToolHookContext = {
       agentId: sessionAgentId,
@@ -1747,7 +1752,11 @@ export async function runEmbeddedAttempt(
           catalogRef: toolSearchCatalogRef,
           toolHookContext: catalogToolHookContext,
         });
-    effectiveTools = toolSearch.tools;
+    effectiveTools = filterLocalModelLeanTools({
+      tools: toolSearch.tools,
+      config: params.config,
+      agentId: sessionAgentId,
+    });
     if (toolSearch.compacted) {
       prepStages.mark(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
       log.info(
@@ -2545,6 +2554,10 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
         messageProvider: params.messageProvider,
         messageChannel: params.messageChannel,
+        localModelLean: isLocalModelLeanEnabled({
+          config: params.config,
+          agentId: sessionAgentId,
+        }),
         toolCount: effectiveTools.length,
         clientToolCount: clientToolDefs.length,
       });
