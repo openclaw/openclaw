@@ -17,16 +17,24 @@
  * 也作為 bin/nuwa.ts 的共享邏輯層。
  */
 
+import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import readline from "node:readline";
+import { promisify } from "node:util";
 import type { Command } from "commander";
 import { createCostGuard } from "./cost-guard.js";
+import { openDb } from "./db.js";
+import { runDMAD } from "./dmad-debate.js";
 import { createModelPricingDb } from "./model-pricing.js";
 import {
   createSubscriptionRegistry,
   SubscriptionRegistry,
   type SubscriptionId,
 } from "./subscription-registry.js";
+
+const execFileAsync = promisify(execFile);
 
 // ─── 型別（與 index.ts 保持一致）────────────────────────────────
 
@@ -79,11 +87,15 @@ async function safeRead(filePath: string): Promise<string | null> {
 
 async function readPatterns(stateDir: string): Promise<NuwaPattern[]> {
   const content = await safeRead(path.join(stateDir, "patterns.jsonl"));
-  if (!content) return [];
+  if (!content) {
+    return [];
+  }
   const result: NuwaPattern[] = [];
   for (const line of content.split("\n")) {
     const t = line.trim();
-    if (!t) continue;
+    if (!t) {
+      continue;
+    }
     try {
       result.push(JSON.parse(t) as NuwaPattern);
     } catch {
@@ -95,7 +107,9 @@ async function readPatterns(stateDir: string): Promise<NuwaPattern[]> {
 
 async function readRegistry(stateDir: string): Promise<CellRegistry | null> {
   const content = await safeRead(path.join(stateDir, "cell-registry.json"));
-  if (!content) return null;
+  if (!content) {
+    return null;
+  }
   try {
     return JSON.parse(content) as CellRegistry;
   } catch {
@@ -210,7 +224,7 @@ export async function cmdCells(opts: { workspace?: string; json?: boolean }): Pr
 export async function cmdTop(opts: { workspace?: string; json?: boolean }): Promise<void> {
   const stateDir = resolveStateDir(opts.workspace);
   const patterns = await readPatterns(stateDir);
-  const sorted = [...patterns].sort((a, b) => b.sampleCount - a.sampleCount).slice(0, 5);
+  const sorted = [...patterns].toSorted((a, b) => b.sampleCount - a.sampleCount).slice(0, 5);
   if (opts.json) {
     printOrJson(sorted, true);
     return;
@@ -244,7 +258,7 @@ export async function cmdRem(opts: { workspace?: string }): Promise<void> {
     `⚠️  CLI 模式下無法直接觸發完整 REM 週期（需要 OpenClaw 插件上下文）。\n` +
       `   請使用以下方式之一：\n` +
       `   • 在 OpenClaw 對話中輸入 /evolution rem\n` +
-      `   • 等待自動 REM 週期（每 ${8} 小時一次）\n` +
+      `   • 等待自動 REM 週期（每 8 小時一次）\n` +
       `   • 啟動 OpenClaw gateway 後再執行：openclaw evolution rem\n`,
   );
 }
@@ -311,7 +325,7 @@ export async function cmdDistill(
           freq[w] = (freq[w] ?? 0) + 1;
         }
         keywords = Object.entries(freq)
-          .sort((a, b) => b[1] - a[1])
+          .toSorted((a, b) => b[1] - a[1])
           .slice(0, 12)
           .map(([w]) => w)
           .concat([target, slug]);
@@ -375,7 +389,7 @@ export async function cmdSubAdd(
     await reg.add(id as SubscriptionId, {
       note: opts.note,
       apiKey: opts.key,
-      monthlyBudgetUsd: opts.budget ? parseFloat(opts.budget) : undefined,
+      monthlyBudgetUsd: opts.budget ? Number.parseFloat(opts.budget) : undefined,
     });
     process.stdout.write(`✅ 已登記訂閱：${id}\n`);
     process.stdout.write((await reg.summary()) + "\n");
@@ -463,8 +477,8 @@ export async function cmdSubBudget(
   amount: string,
   opts: { workspace?: string; behavior?: string },
 ): Promise<void> {
-  const usd = parseFloat(amount);
-  if (isNaN(usd) || usd < 0) {
+  const usd = Number.parseFloat(amount);
+  if (Number.isNaN(usd) || usd < 0) {
     process.stderr.write(`❌ 無效金額：${amount}（請輸入非負數字，例如 10 或 0）\n`);
     process.exitCode = 1;
     return;
@@ -556,7 +570,7 @@ export async function cmdCostStatus(opts: { workspace?: string }): Promise<void>
         `   ${plan.displayName.padEnd(24)} [${bar}] ${cycle.percentElapsed.toFixed(0).padStart(3)}%  ` +
           `剩 ${cycle.daysRemaining} 天  下次重置：${cycle.periodEnd.getFullYear()}-` +
           `${String(cycle.periodEnd.getMonth() + 1).padStart(2, "0")}-` +
-          `${String(cycle.periodEnd.getDate()).padStart(2, "0")}`,
+          String(cycle.periodEnd.getDate()).padStart(2, "0"),
       );
     }
     lines.push(``);
@@ -719,7 +733,7 @@ export async function cmdHatch(slug: string, opts: { workspace?: string }): Prom
   }
 
   process.stdout.write(
-    `🐣 孵化完成：\n` + `   技能文件：${skillPath}\n` + `   skillPath 已更新至 patterns.jsonl\n`,
+    `🐣 孵化完成：\n   技能文件：${skillPath}\n   skillPath 已更新至 patterns.jsonl\n`,
   );
 }
 
@@ -877,4 +891,364 @@ export function registerEvolutionCli(program: Command): void {
     .option("-w, --workspace <dir>", "指定工作目錄")
     .option("--behavior <mode>", "超過預算時的行為：block（封鎖）或 warn（僅警告）", "block")
     .action((amount: string, opts) => void cmdSubBudget(amount, opts));
+}
+
+// ─── 互動式 REPL 對話 ────────────────────────────────────────────
+
+export async function cmdChat(opts: {
+  workspace?: string;
+  persona?: string;
+  session?: string;
+  agent?: string;
+}): Promise<void> {
+  const stateDir = resolveStateDir(opts.workspace);
+  const db = openDb(stateDir);
+  const agent = opts.agent ?? "claude";
+  const persona = opts.persona;
+  let personaDescription = "";
+
+  if (persona) {
+    const row = db.local
+      .prepare("SELECT name, description FROM personas WHERE slug = ?")
+      .get(persona) as { name: string; description: string } | undefined;
+    if (row) {
+      console.log(`[角色] ${row.name}：${row.description}`);
+      personaDescription = row.description;
+    }
+  }
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  const history: string[] = [];
+  const prompt = `nuwa [${persona ?? "default"}] > `;
+
+  const ask = (): void => {
+    rl.question(prompt, (input) => {
+      const trimmed = input.trim();
+      if (!trimmed) {
+        ask();
+        return;
+      }
+      history.push(trimmed);
+
+      if (trimmed === "/exit") {
+        console.log("💾 對話已結束");
+        db.local.close();
+        db.global.close();
+        rl.close();
+        return;
+      }
+
+      if (trimmed === "/save") {
+        console.log("💾 對話摘要已儲存（請使用 MCP save_conversation 工具完成完整儲存）");
+      } else if (trimmed === "/patterns") {
+        const rows = db.local
+          .prepare("SELECT slug, target, confidence FROM patterns ORDER BY confidence DESC LIMIT 5")
+          .all() as Array<{ slug: string; target: string; confidence: number }>;
+        if (rows.length === 0) {
+          console.log("（無 patterns）");
+        } else {
+          rows.forEach((r, i) =>
+            console.log(`  ${i + 1}. ${r.slug} [${r.target}] conf=${r.confidence.toFixed(2)}`),
+          );
+        }
+      } else if (trimmed === "/history") {
+        history.forEach((h, i) => console.log(`  ${i + 1}. ${h}`));
+      } else if (trimmed.startsWith("/assign ")) {
+        const parts = trimmed.split(" ");
+        const ag = parts[1] ?? "claude";
+        const p = parts[2] ?? "(未指定)";
+        console.log(`✅ 已指派 ${p} 給 ${ag}`);
+      } else if (trimmed.startsWith("/debate ")) {
+        const topic = trimmed.slice(8).trim();
+        if (!topic) {
+          console.log("用法：/debate <主題>");
+          ask();
+          return;
+        }
+        console.log(`🗣️ 觸發辯論：${topic}`);
+        runDMAD(topic, db.local, { maxRounds: 3 })
+          .then((result) => {
+            console.log(`\n✅ 辯論完成（${result.totalRounds} 輪，停止原因：${result.stoppedBy}）`);
+            console.log(`收斂分：${result.convergenceScore.toFixed(2)}`);
+            console.log(`費用估算：$${result.estimatedCostUsd}`);
+            console.log(`\n## 最終答案\n${result.finalAnswer}`);
+            ask();
+          })
+          .catch((err: unknown) => {
+            console.error("辯論失敗：", err);
+            ask();
+          });
+        return;
+      } else {
+        const label = `${agent}${persona ? ` / ${persona}` : ""}`;
+        process.stdout.write(`[${label}] 思考中...`);
+        const systemPrompt = personaDescription ? `你正在扮演：${personaDescription}\n` : "";
+        const fullPrompt = systemPrompt + trimmed;
+
+        execFileAsync("claude", ["-p", fullPrompt, "--output-format", "json"], {
+          timeout: 30_000,
+        })
+          .then(({ stdout }) => {
+            try {
+              const json = JSON.parse(stdout) as { result?: string };
+              process.stdout.write(`\r[${label}]: ${json.result ?? stdout}\n`);
+            } catch {
+              process.stdout.write(`\r[${label}]: ${stdout.slice(0, 500)}\n`);
+            }
+            ask();
+          })
+          .catch((err: NodeJS.ErrnoException) => {
+            if (err.code === "ENOENT") {
+              process.stdout.write(
+                `\r[${label}]: （claude CLI 未安裝，請執行：npm install -g @anthropic-ai/claude-code）\n`,
+              );
+            } else {
+              process.stdout.write(`\r[${label}]: （呼叫失敗：${String(err).slice(0, 100)}）\n`);
+            }
+            ask();
+          });
+        return;
+      }
+
+      ask();
+    });
+  };
+
+  ask();
+  await new Promise<void>((resolve) => rl.on("close", resolve));
+}
+
+// ─── 三代理辯論 ──────────────────────────────────────────────────
+
+export async function cmdDebate(
+  topic: string,
+  opts: { workspace?: string; rounds?: number; model?: string; noMoa?: boolean },
+): Promise<void> {
+  const stateDir = resolveStateDir(opts.workspace);
+  const db = openDb(stateDir);
+  try {
+    console.log(`🗣️  DMAD 三代理辯論啟動...`);
+    console.log(`主題：${topic}`);
+    console.log(`最多輪次：${opts.rounds ?? 3}`);
+    console.log();
+
+    const result = await runDMAD(topic, db.local, {
+      maxRounds: opts.rounds ?? 3,
+      claudeModel: opts.model ?? "claude-haiku-4-5",
+    });
+
+    console.log(`\n✅ 辯論完成（${result.totalRounds} 輪，停止原因：${result.stoppedBy}）`);
+    console.log(`收斂分：${result.convergenceScore.toFixed(2)}`);
+    console.log(`費用估算：$${result.estimatedCostUsd}`);
+    console.log(`激活 patterns：${result.patternSlugsUsed.join(", ") || "無"}`);
+    console.log(`\n## MoA 最終答案`);
+    console.log(result.finalAnswer);
+  } finally {
+    db.local.close();
+    db.global.close();
+  }
+}
+
+// ─── Persona 管理 ────────────────────────────────────────────────
+
+export async function cmdPersonaList(opts: {
+  workspace?: string;
+  minFitness?: number;
+}): Promise<void> {
+  const stateDir = resolveStateDir(opts.workspace);
+  const db = openDb(stateDir);
+
+  const minFitness = opts.minFitness ?? 0;
+  const rows = db.local
+    .prepare(
+      "SELECT slug, name, description, fitness_score, agent_type FROM personas WHERE fitness_score >= ? ORDER BY fitness_score DESC",
+    )
+    .all(minFitness) as Array<{
+    slug: string;
+    name: string;
+    description: string;
+    fitness_score: number;
+    agent_type: string;
+  }>;
+
+  if (rows.length === 0) {
+    console.log("（無角色）");
+    return;
+  }
+
+  console.log(`找到 ${rows.length} 個角色：\n`);
+  for (const r of rows) {
+    console.log(`  slug        : ${r.slug}`);
+    console.log(`  名稱        : ${r.name}`);
+    console.log(`  描述        : ${r.description}`);
+    console.log(`  代理        : ${r.agent_type}`);
+    console.log(`  適應度      : ${r.fitness_score.toFixed(3)}`);
+    console.log();
+  }
+}
+
+export async function cmdPersonaCreate(opts: {
+  workspace?: string;
+  slug: string;
+  name: string;
+  description: string;
+  style?: string;
+  focus?: string;
+  pattern?: string;
+}): Promise<void> {
+  const stateDir = resolveStateDir(opts.workspace);
+  const db = openDb(stateDir);
+
+  const id = `persona-${randomUUID()}`;
+  db.local
+    .prepare(
+      `INSERT INTO personas (id, slug, name, description, style, focus, base_pattern_slug)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      opts.slug,
+      opts.name,
+      opts.description,
+      opts.style ?? null,
+      opts.focus ?? null,
+      opts.pattern ?? null,
+    );
+
+  console.log(`✅ 角色已建立：${opts.slug} (${opts.name})`);
+}
+
+export async function cmdPersonaUse(slug: string, opts: { workspace?: string }): Promise<void> {
+  const stateDir = resolveStateDir(opts.workspace);
+  const db = openDb(stateDir);
+
+  const row = db.local
+    .prepare("SELECT name, description, fitness_score FROM personas WHERE slug = ?")
+    .get(slug) as { name: string; description: string; fitness_score: number } | undefined;
+
+  if (!row) {
+    console.error(`錯誤：找不到角色 "${slug}"`);
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log(`角色：${row.name} (${slug})`);
+  console.log(`描述：${row.description}`);
+  console.log(`適應度：${row.fitness_score.toFixed(3)}`);
+  console.log();
+  console.log(`使用方式：nuwa chat --persona ${slug}`);
+}
+
+// ─── 對話歷程 ────────────────────────────────────────────────────
+
+export async function cmdHistory(opts: {
+  workspace?: string;
+  sessionId?: string;
+  mode?: string;
+  search?: string;
+  limit?: number;
+}): Promise<void> {
+  const stateDir = resolveStateDir(opts.workspace);
+  const db = openDb(stateDir);
+  const limit = opts.limit ?? 20;
+
+  if (opts.sessionId) {
+    const turns = db.local
+      .prepare(
+        `SELECT turn_index, speaker, persona_slug, content, recorded_at
+         FROM dialogue_turns dt
+         JOIN conversations c ON c.id = dt.conversation_id
+         WHERE c.id = ? OR c.session_id = ?
+         ORDER BY turn_index ASC`,
+      )
+      .all(opts.sessionId, opts.sessionId) as Array<{
+      turn_index: number;
+      speaker: string;
+      persona_slug: string | null;
+      content: string;
+      recorded_at: string;
+    }>;
+
+    if (turns.length === 0) {
+      console.log(`（Session "${opts.sessionId}" 無對話記錄）`);
+      return;
+    }
+
+    console.log(`Session：${opts.sessionId}，共 ${turns.length} 輪\n`);
+    for (const t of turns) {
+      const label = t.persona_slug ? `${t.speaker}/${t.persona_slug}` : t.speaker;
+      console.log(`  [${t.turn_index}] ${label}（${t.recorded_at}）`);
+      console.log(`       ${t.content}`);
+    }
+    return;
+  }
+
+  if (opts.search) {
+    const rows = db.local
+      .prepare(
+        `SELECT id, session_id, summary, dialogue_mode, started_at
+         FROM conversations
+         WHERE summary LIKE ?
+         ORDER BY started_at DESC
+         LIMIT ?`,
+      )
+      .all(`%${opts.search}%`, limit) as Array<{
+      id: string;
+      session_id: string | null;
+      summary: string;
+      dialogue_mode: string;
+      started_at: string;
+    }>;
+
+    if (rows.length === 0) {
+      console.log(`（無符合 "${opts.search}" 的對話）`);
+      return;
+    }
+
+    console.log(`搜尋結果：${rows.length} 筆\n`);
+    for (const r of rows) {
+      console.log(`  ID   : ${r.id}`);
+      console.log(`  摘要 : ${r.summary}`);
+      console.log(`  模式 : ${r.dialogue_mode}  時間 : ${r.started_at}`);
+      console.log();
+    }
+    return;
+  }
+
+  const modeClause = opts.mode ? "AND dialogue_mode = ?" : "";
+  const params: unknown[] = opts.mode ? [opts.mode, limit] : [limit];
+  const rows = db.local
+    .prepare(
+      `SELECT id, session_id, summary, dialogue_mode, role_assignments, started_at
+       FROM conversations
+       WHERE 1=1 ${modeClause}
+       ORDER BY started_at DESC
+       LIMIT ?`,
+    )
+    .all(...params) as Array<{
+    id: string;
+    session_id: string | null;
+    summary: string;
+    dialogue_mode: string;
+    role_assignments: string;
+    started_at: string;
+  }>;
+
+  if (rows.length === 0) {
+    console.log("（無對話歷程）");
+    return;
+  }
+
+  console.log(`最近 ${rows.length} 筆對話：\n`);
+  for (const r of rows) {
+    const roles = r.role_assignments !== "{}" ? ` 角色：${r.role_assignments}` : "";
+    console.log(`  ${r.started_at}  [${r.dialogue_mode}]${roles}`);
+    console.log(`    ${r.summary.slice(0, 80)}${r.summary.length > 80 ? "…" : ""}`);
+    console.log(`    ID: ${r.id}`);
+    console.log();
+  }
 }

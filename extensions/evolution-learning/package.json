@@ -5,6 +5,7 @@
   "description": "OpenClaw 四層進化學習插件 — 女媧思維框架自動注入、成熟度追蹤與 REM 週期成長心跳",
   "bin": {
     "nuwa": "./bin/nuwa.js",
+    "nuwa-a2a": "./mcp/a2a-server.js",
     "nuwa-mcp": "./mcp/server.js"
   },
   "type": "module",
@@ -15,20 +16,39 @@
     "./src/subscription-registry": "./src/subscription-registry.ts",
     "./src/model-pricing": "./src/model-pricing.ts",
     "./src/subscription-verifier": "./src/subscription-verifier.ts",
-    "./mcp/server": "./mcp/server.ts"
+    "./src/db": "./src/db.ts",
+    "./src/migrate": "./src/migrate.ts",
+    "./src/constitutional": "./src/constitutional.ts",
+    "./src/role-evolution": "./src/role-evolution.ts",
+    "./src/got-reasoning": "./src/got-reasoning.ts",
+    "./src/mar-reflexion": "./src/mar-reflexion.ts",
+    "./src/cognitive-cycle": "./src/cognitive-cycle.ts",
+    "./src/embedding": "./src/embedding.ts",
+    "./src/croner": "./src/croner.ts",
+    "./src/dmad-debate": "./src/dmad-debate.ts",
+    "./src/hermes-gate": "./src/hermes-gate.ts",
+    "./mcp/server": "./mcp/server.ts",
+    "./mcp/a2a-server": "./mcp/a2a-server.ts"
   },
   "scripts": {
+    "a2a": "tsx mcp/a2a-server.ts",
+    "a2a:prod": "node mcp/a2a-server.js",
     "mcp": "tsx mcp/server.ts",
     "mcp:prod": "node mcp/server.js"
   },
-  "devDependencies": {
+  "dependencies": {
     "@hono/node-server": "^1.13.8",
     "@modelcontextprotocol/sdk": "^1.12.0",
-    "@openclaw/plugin-sdk": "workspace:*",
+    "better-sqlite3": "^12.10.0",
     "commander": "^12.0.0",
     "hono": "^4.7.10",
-    "openclaw": "workspace:*",
+    "typebox": "^0.34.35",
     "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "@types/better-sqlite3": "^7.6.12",
+    "openclaw": "workspace:*"
   },
   "peerDependencies": {
     "openclaw": ">=2026.5.5"

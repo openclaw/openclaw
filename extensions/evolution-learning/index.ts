@@ -7,6 +7,7 @@
  * 第四層（有機細胞）  ：追蹤幹細胞成熟度，自動晉升常駐細胞
  */
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -224,8 +225,12 @@ const TASK_KEYWORD_MAP: Record<TaskType, string[]> = {
 function classifyTask(prompt: string): TaskType {
   const lower = prompt.toLowerCase();
   for (const [type, keywords] of Object.entries(TASK_KEYWORD_MAP) as Array<[TaskType, string[]]>) {
-    if (type === "general") continue;
-    if (keywords.some((kw) => lower.includes(kw))) return type;
+    if (type === "general") {
+      continue;
+    }
+    if (keywords.some((kw) => lower.includes(kw))) {
+      return type;
+    }
   }
   return "general";
 }
@@ -283,19 +288,25 @@ async function ensureEvolutionDir(stateDir: string): Promise<void> {
 
 /** 從 JSONL 讀取並快取所有 Nuwa 模式 */
 async function loadPatterns(logger?: { debug?: (msg: string) => void }): Promise<NuwaPattern[]> {
-  if (!evolutionStateDir) return [];
+  if (!evolutionStateDir) {
+    return [];
+  }
   const now = Date.now();
   if (patternsCache.length > 0 && now - patternsCacheAt < CACHE_TTL_MS) {
     return patternsCache;
   }
   const patternsPath = path.join(evolutionStateDir, "patterns.jsonl");
   const content = await safeReadFile(patternsPath);
-  if (!content) return [];
+  if (!content) {
+    return [];
+  }
 
   const patterns: NuwaPattern[] = [];
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
-    if (!trimmed) continue;
+    if (!trimmed) {
+      continue;
+    }
     try {
       const obj = JSON.parse(trimmed) as NuwaPattern;
       if (obj.category === "nuwa" || obj.category === "distilled") {
@@ -313,14 +324,18 @@ async function loadPatterns(logger?: { debug?: (msg: string) => void }): Promise
 
 /** 讀取並快取細胞登記表 */
 async function loadRegistry(): Promise<CellRegistry | null> {
-  if (!evolutionStateDir) return null;
+  if (!evolutionStateDir) {
+    return null;
+  }
   const now = Date.now();
   if (registryCache && now - registryCacheAt < CACHE_TTL_MS) {
     return registryCache;
   }
   const registryPath = path.join(evolutionStateDir, "cell-registry.json");
   const content = await safeReadFile(registryPath);
-  if (!content) return null;
+  if (!content) {
+    return null;
+  }
   try {
     registryCache = JSON.parse(content) as CellRegistry;
     registryCacheAt = now;
@@ -344,11 +359,17 @@ function invalidateCache(): void {
 /** 載入或初始化軟連線矩陣 */
 async function loadSoftLinks(): Promise<SoftLinks> {
   const empty: SoftLinks = { version: 1, links: {}, lastUpdated: new Date().toISOString() };
-  if (!evolutionStateDir) return empty;
+  if (!evolutionStateDir) {
+    return empty;
+  }
   const now = Date.now();
-  if (softLinksCache && now - softLinksCacheAt < CACHE_TTL_MS) return softLinksCache;
+  if (softLinksCache && now - softLinksCacheAt < CACHE_TTL_MS) {
+    return softLinksCache;
+  }
   const content = await safeReadFile(path.join(evolutionStateDir, "soft-links.json"));
-  if (!content) return empty;
+  if (!content) {
+    return empty;
+  }
   try {
     softLinksCache = JSON.parse(content) as SoftLinks;
     softLinksCacheAt = now;
@@ -360,7 +381,9 @@ async function loadSoftLinks(): Promise<SoftLinks> {
 
 /** 持久化軟連線矩陣 */
 async function saveSoftLinks(sl: SoftLinks): Promise<void> {
-  if (!evolutionStateDir) return;
+  if (!evolutionStateDir) {
+    return;
+  }
   sl.lastUpdated = new Date().toISOString();
   softLinksCache = sl;
   softLinksCacheAt = Date.now();
@@ -372,13 +395,17 @@ async function saveSoftLinks(sl: SoftLinks): Promise<void> {
  * 在同一 SOFT_LINK_WINDOW_MS 視窗內多次共激活 → 連線越強。
  */
 async function recordCoActivation(patternIdA: string, patternIdB: string): Promise<void> {
-  if (patternIdA === patternIdB) return;
+  if (patternIdA === patternIdB) {
+    return;
+  }
   const sl = await loadSoftLinks();
   for (const [from, to] of [
     [patternIdA, patternIdB],
     [patternIdB, patternIdA],
   ]) {
-    if (!sl.links[from]) sl.links[from] = {};
+    if (!sl.links[from]) {
+      sl.links[from] = {};
+    }
     sl.links[from][to] = Math.min(
       SOFT_LINK_MAX_WEIGHT,
       (sl.links[from][to] ?? 0) + SOFT_LINK_INCREMENT,
@@ -392,7 +419,9 @@ async function recordCoActivation(patternIdA: string, patternIdB: string): Promi
  * 若 candidate 與最近視窗內激活過的任意 pattern 有足夠強的連線 → 給加成。
  */
 function getSoftBoost(candidateId: string, sl: SoftLinks, recentIds: string[]): number {
-  if (recentIds.length === 0) return 0;
+  if (recentIds.length === 0) {
+    return 0;
+  }
   const links = sl.links[candidateId] ?? {};
   const maxWeight = Math.max(0, ...recentIds.map((id) => links[id] ?? 0));
   return maxWeight >= SOFT_LINK_THRESHOLD ? SOFT_LINK_BOOST : 0;
@@ -412,7 +441,9 @@ async function warmStartSoftLinks(
   patterns: NuwaPattern[],
   logger?: { info?: (m: string) => void },
 ): Promise<number> {
-  if (patterns.length < 2) return 0;
+  if (patterns.length < 2) {
+    return 0;
+  }
 
   const sl = await loadSoftLinks();
   let seeded = 0;
@@ -423,13 +454,17 @@ async function warmStartSoftLinks(
       const b = patterns[j];
 
       // 關鍵字重疊（不區分大小寫，部分包含也算）
-      const aKw = a.keywords.map((k) => k.toLowerCase());
-      const bKw = new Set(b.keywords.map((k) => k.toLowerCase()));
+      const aKw = (a.keywords ?? []).map((k) => k.toLowerCase());
+      const bKw = new Set((b.keywords ?? []).map((k) => k.toLowerCase()));
       const kwOverlap = aKw.filter((k) => {
-        if (bKw.has(k)) return true;
+        if (bKw.has(k)) {
+          return true;
+        }
         // 部分包含：aKw 中某詞含在 bKw 的某詞中（反之亦然）
         for (const bk of bKw) {
-          if (k.includes(bk) || bk.includes(k)) return true;
+          if (k.includes(bk) || bk.includes(k)) {
+            return true;
+          }
         }
         return false;
       }).length;
@@ -438,18 +473,28 @@ async function warmStartSoftLinks(
       const aMm = a.mentalModels.map((m) => m.toLowerCase());
       const bMm = new Set(b.mentalModels.map((m) => m.toLowerCase()));
       const mmOverlap = aMm.filter((m) => {
-        if (bMm.has(m)) return true;
+        if (bMm.has(m)) {
+          return true;
+        }
         for (const bm of bMm) {
-          if (m.includes(bm) || bm.includes(m)) return true;
+          if (m.includes(bm) || bm.includes(m)) {
+            return true;
+          }
         }
         return false;
       }).length;
 
-      if (kwOverlap + mmOverlap < WARM_SEED_MIN_OVERLAP) continue;
+      if (kwOverlap + mmOverlap < WARM_SEED_MIN_OVERLAP) {
+        continue;
+      }
 
       // 雙向播種底線，不破壞已有真實資料
-      if (!sl.links[a.id]) sl.links[a.id] = {};
-      if (!sl.links[b.id]) sl.links[b.id] = {};
+      if (!sl.links[a.id]) {
+        sl.links[a.id] = {};
+      }
+      if (!sl.links[b.id]) {
+        sl.links[b.id] = {};
+      }
 
       if ((sl.links[a.id][b.id] ?? 0) < WARM_SEED_WEIGHT) {
         sl.links[a.id][b.id] = WARM_SEED_WEIGHT;
@@ -496,7 +541,9 @@ function detectPersonaIntent(
   for (const p of patterns) {
     const softBoost = softBoostMap?.[p.id] ?? 0;
     const effectiveConfidence = p.confidence + softBoost;
-    if (effectiveConfidence < threshold) continue;
+    if (effectiveConfidence < threshold) {
+      continue;
+    }
     const patternKeywords = Array.isArray((p as Record<string, unknown>)["keywords"])
       ? ((p as Record<string, unknown>)["keywords"] as string[])
       : [];
@@ -525,11 +572,15 @@ function detectPersonaIntent(
 
   for (const re of usageRegexes) {
     const match = re.exec(prompt);
-    if (!match) continue;
+    if (!match) {
+      continue;
+    }
     const namePart = (match[1] ?? "").trim().toLowerCase();
     for (const p of patterns) {
       const softBoost = softBoostMap?.[p.id] ?? 0;
-      if (p.confidence + softBoost < threshold) continue;
+      if (p.confidence + softBoost < threshold) {
+        continue;
+      }
       if (
         namePart.includes(p.slug.replace(/-/g, " ")) ||
         p.target.toLowerCase().includes(namePart)
@@ -671,7 +722,9 @@ async function runRemCycle(
   changed = false;
 
   for (const cell of registry.stemCells) {
-    if (cell.status === "installed") continue;
+    if (cell.status === "installed") {
+      continue;
+    }
 
     // 計算新成熟度：基於使用次數和正向評分
     const usageBonus = Math.min(cell.usageCount * 0.05, 0.3);
@@ -747,10 +800,14 @@ async function recordPatternUsage(
   success: boolean,
   logger?: { debug?: (msg: string) => void },
 ): Promise<void> {
-  if (!evolutionStateDir) return;
+  if (!evolutionStateDir) {
+    return;
+  }
   const patternsPath = path.join(evolutionStateDir, "patterns.jsonl");
   const content = await safeReadFile(patternsPath);
-  if (!content) return;
+  if (!content) {
+    return;
+  }
 
   const lines = content.split("\n");
   const updatedLines: string[] = [];
@@ -795,10 +852,14 @@ async function recordPatternUsage(
 
 /** 同時更新幹細胞的使用次數 */
 async function recordStemCellUsage(slug: string, positive: boolean): Promise<void> {
-  if (!evolutionStateDir) return;
+  if (!evolutionStateDir) {
+    return;
+  }
   const registryPath = path.join(evolutionStateDir, "cell-registry.json");
   const content = await safeReadFile(registryPath);
-  if (!content) return;
+  if (!content) {
+    return;
+  }
   try {
     const registry = JSON.parse(content) as CellRegistry;
     const cell = registry.stemCells.find((c) => c.slug === slug);
@@ -908,7 +969,7 @@ function buildInsightsTool(): AnyAgentTool {
       }
 
       if (query === "top") {
-        const sorted = [...patterns].sort((a, b) => b.sampleCount - a.sampleCount).slice(0, 5);
+        const sorted = [...patterns].toSorted((a, b) => b.sampleCount - a.sampleCount).slice(0, 5);
         const text =
           sorted.length === 0
             ? "📭 尚無使用記錄。"
@@ -1069,7 +1130,9 @@ async function runMetabolism(
 ): Promise<number> {
   const patternsPath = path.join(stateDir, "patterns.jsonl");
   const content = await safeReadFile(patternsPath);
-  if (!content) return 0;
+  if (!content) {
+    return 0;
+  }
 
   const now = Date.now();
   const lines = content.split("\n");
@@ -1140,8 +1203,12 @@ function computePatternSimilarity(topic: string, pattern: NuwaPattern): number {
   const keywords = (pattern.keywords ?? []).map((k) => k.toLowerCase());
 
   // 關鍵字直接命中 → 高分
-  if (keywords.some((k) => topicL.includes(k) || k.includes(topicL))) return 0.85;
-  if (topicL.includes(targetL) || targetL.includes(topicL)) return 0.75;
+  if (keywords.some((k) => topicL.includes(k) || k.includes(topicL))) {
+    return 0.85;
+  }
+  if (topicL.includes(targetL) || targetL.includes(topicL)) {
+    return 0.75;
+  }
 
   // 字元 bigram Jaccard
   const bigrams = (s: string) =>
@@ -1180,26 +1247,36 @@ async function growL2FromCausalChain(
 ): Promise<number> {
   const causalPath = path.join(stateDir, "causal-chain.jsonl");
   const content = await safeReadFile(causalPath);
-  if (!content) return 0;
+  if (!content) {
+    return 0;
+  }
 
   // 讀取所有正向因果鏈記錄
   const positive: CausalChainEntry[] = [];
   for (const line of content.split("\n")) {
     const t = line.trim();
-    if (!t) continue;
+    if (!t) {
+      continue;
+    }
     try {
       const e = JSON.parse(t) as CausalChainEntry;
-      if (e.result === "positive") positive.push(e);
+      if (e.result === "positive") {
+        positive.push(e);
+      }
     } catch {
       /* skip */
     }
   }
-  if (positive.length === 0) return 0;
+  if (positive.length === 0) {
+    return 0;
+  }
 
   // 按 patternId 分組，統計 context 中出現的詞彙頻率
   const phrasesByPattern: Record<string, Record<string, number>> = {};
   for (const e of positive) {
-    if (!phrasesByPattern[e.patternId]) phrasesByPattern[e.patternId] = {};
+    if (!phrasesByPattern[e.patternId]) {
+      phrasesByPattern[e.patternId] = {};
+    }
     const freq = phrasesByPattern[e.patternId];
     // 提取中文 2-4 字詞 + 英文大寫詞組
     const cnWords = e.context.match(/[一-鿿]{2,4}/g) ?? [];
@@ -1212,7 +1289,9 @@ async function growL2FromCausalChain(
   // 更新 patterns.jsonl
   const patternsPath = path.join(stateDir, "patterns.jsonl");
   const patternsContent = await safeReadFile(patternsPath);
-  if (!patternsContent) return 0;
+  if (!patternsContent) {
+    return 0;
+  }
 
   const lines = patternsContent.split("\n");
   const updatedLines: string[] = [];
@@ -1235,7 +1314,7 @@ async function growL2FromCausalChain(
             ([phrase, count]) =>
               count >= L2_GROWTH_MIN_POSITIVE && !obj.mentalModels.some((m) => m.includes(phrase)),
           )
-          .sort(([, a], [, b]) => b - a)
+          .toSorted(([, a], [, b]) => b - a)
           .slice(0, L2_GROWTH_MAX_NEW_MODELS)
           .map(([phrase]) => `${phrase}框架`); // 格式化為心智模型名稱
 
@@ -1279,34 +1358,46 @@ async function runCirculatoryFeedback(
 ): Promise<number> {
   const causalPath = path.join(stateDir, "causal-chain.jsonl");
   const content = await safeReadFile(causalPath);
-  if (!content || patterns.length < 2) return 0;
+  if (!content || patterns.length < 2) {
+    return 0;
+  }
 
   // 讀取所有正向因果鏈記錄
   const positiveEntries: CausalChainEntry[] = [];
   for (const line of content.split("\n")) {
     const t = line.trim();
-    if (!t) continue;
+    if (!t) {
+      continue;
+    }
     try {
       const e = JSON.parse(t) as CausalChainEntry;
-      if (e.result === "positive") positiveEntries.push(e);
+      if (e.result === "positive") {
+        positiveEntries.push(e);
+      }
     } catch {
       /* skip */
     }
   }
-  if (positiveEntries.length === 0) return 0;
+  if (positiveEntries.length === 0) {
+    return 0;
+  }
 
   const sl = await loadSoftLinks();
   let updates = 0;
 
   for (const entry of positiveEntries) {
     const sourcePattern = patterns.find((p) => p.id === entry.patternId);
-    if (!sourcePattern) continue;
+    if (!sourcePattern) {
+      continue;
+    }
 
     const contextLower = entry.context.toLowerCase();
 
     // 找出 context 中出現了哪些其他 pattern 的關鍵字
     for (const other of patterns) {
-      if (other.id === entry.patternId) continue;
+      if (other.id === entry.patternId) {
+        continue;
+      }
 
       const otherKeywords = [
         ...(other.keywords ?? []),
@@ -1315,11 +1406,17 @@ async function runCirculatoryFeedback(
       ];
 
       const hit = otherKeywords.some((kw) => kw && contextLower.includes(kw.toLowerCase()));
-      if (!hit) continue;
+      if (!hit) {
+        continue;
+      }
 
       // 強化軟連線（L4 → L2 反饋）
-      if (!sl.links[entry.patternId]) sl.links[entry.patternId] = {};
-      if (!sl.links[other.id]) sl.links[other.id] = {};
+      if (!sl.links[entry.patternId]) {
+        sl.links[entry.patternId] = {};
+      }
+      if (!sl.links[other.id]) {
+        sl.links[other.id] = {};
+      }
 
       sl.links[entry.patternId][other.id] = Math.min(
         SOFT_LINK_MAX_WEIGHT,
@@ -1339,10 +1436,14 @@ async function runCirculatoryFeedback(
       const w = sl.links[from][to];
       if (w > 0) {
         sl.links[from][to] = Math.max(0, w - SOFT_LINK_DECAY);
-        if (sl.links[from][to] === 0) delete sl.links[from][to];
+        if (sl.links[from][to] === 0) {
+          delete sl.links[from][to];
+        }
       }
     }
-    if (Object.keys(sl.links[from] ?? {}).length === 0) delete sl.links[from];
+    if (Object.keys(sl.links[from] ?? {}).length === 0) {
+      delete sl.links[from];
+    }
   }
 
   if (updates > 0 || content.length > 0) {
@@ -1372,7 +1473,9 @@ async function syncHermesToEvolution(
 ): Promise<number> {
   const hermesPath = path.join(workspaceDir, HERMES_LEARNING_RELATIVE_PATH);
   const hermesContent = await safeReadFile(hermesPath);
-  if (!hermesContent) return 0;
+  if (!hermesContent) {
+    return 0;
+  }
 
   type HermesRecord = { trace_id: string; summary: string; created_at: string; tags: string[] };
   type HermesState = { success_patterns: HermesRecord[]; failure_patterns: HermesRecord[] };
@@ -1391,11 +1494,17 @@ async function syncHermesToEvolution(
   );
 
   const allRecords: Array<HermesRecord & { result: QualitySignal }> = [
-    ...(hermesState.success_patterns ?? []).map((r) => ({ ...r, result: "positive" as const })),
-    ...(hermesState.failure_patterns ?? []).map((r) => ({ ...r, result: "negative" as const })),
+    ...(hermesState.success_patterns ?? []).map((r) =>
+      Object.assign({}, r, { result: "positive" as const }),
+    ),
+    ...(hermesState.failure_patterns ?? []).map((r) =>
+      Object.assign({}, r, { result: "negative" as const }),
+    ),
   ].filter((r) => !importedIds.has(r.trace_id));
 
-  if (allRecords.length === 0) return 0;
+  if (allRecords.length === 0) {
+    return 0;
+  }
 
   let synced = 0;
   const newIds: string[] = [];
@@ -1495,7 +1604,9 @@ async function searchTavily(query: string, apiKey: string): Promise<string[]> {
       body: JSON.stringify({ api_key: apiKey, query, max_results: 5, search_depth: "basic" }),
       signal: AbortSignal.timeout(6000),
     });
-    if (!response.ok) return [];
+    if (!response.ok) {
+      return [];
+    }
     const data = (await response.json()) as {
       results?: Array<{ content?: string; snippet?: string }>;
     };
@@ -1507,25 +1618,31 @@ async function searchTavily(query: string, apiKey: string): Promise<string[]> {
 
 /** 從搜尋結果文字萃取觸發關鍵字（用於 pattern.keywords） */
 function extractSearchKeywords(text: string, topic: string): string[] {
-  if (!text) return [];
+  if (!text) {
+    return [];
+  }
   const topicLower = topic.toLowerCase();
   const cnWords = text.match(/[一-鿿]{2,4}/g) ?? [];
   const enWords = (text.match(/[A-Z][a-zA-Z]{3,}/g) ?? []).map((w) => w.toLowerCase());
   const freq: Record<string, number> = {};
   for (const w of [...cnWords, ...enWords]) {
-    if (w === topicLower || w.length < 2) continue;
+    if (w === topicLower || w.length < 2) {
+      continue;
+    }
     freq[w] = (freq[w] ?? 0) + 1;
   }
   return Object.entries(freq)
     .filter(([, c]) => c >= 2)
-    .sort(([, a], [, b]) => b - a)
+    .toSorted(([, a], [, b]) => b - a)
     .slice(0, 8)
     .map(([w]) => w);
 }
 
 /** 從搜尋結果文字萃取心智模型名稱（用於 pattern.mentalModels） */
 function extractSearchMentalModels(text: string, topic: string): string[] {
-  if (!text) return [`${topic} 核心框架`, `${topic} 決策方法`];
+  if (!text) {
+    return [`${topic} 核心框架`, `${topic} 決策方法`];
+  }
   const cnPhrases = text.match(/[一-鿿]{2,8}(?:思維|框架|原則|方法|理論|模型|策略)/g) ?? [];
   const enPhrases =
     text.match(/[A-Z][a-zA-Z\s]{4,30}(?:Model|Principle|Framework|Theory|Thinking|Rule)/g) ?? [];
@@ -1553,14 +1670,18 @@ async function autoDistillTopic(
     .toLowerCase()
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9一-鿿-]/g, "");
-  if (!slug) return false;
+  if (!slug) {
+    return false;
+  }
 
   const patternId = `${slug}-auto-distilled-v1`;
 
   // 確認尚未存在
   const patternsPath = path.join(stateDir, "patterns.jsonl");
   const existing = await safeReadFile(patternsPath);
-  if (existing && existing.includes(`"id":"${patternId}"`)) return false;
+  if (existing && existing.includes(`"id":"${patternId}"`)) {
+    return false;
+  }
 
   // 搜尋（若有 API key）
   let searchTexts: string[] = [];
@@ -1624,12 +1745,16 @@ async function checkAndAutoDistill(
 ): Promise<number> {
   const filePath = path.join(stateDir, "unmatched-queries.jsonl");
   const content = await safeReadFile(filePath);
-  if (!content) return 0;
+  if (!content) {
+    return 0;
+  }
 
   const counts: Record<string, number> = {};
   for (const line of content.split("\n")) {
     const t = line.trim();
-    if (!t) continue;
+    if (!t) {
+      continue;
+    }
     try {
       const q = JSON.parse(t) as UnmatchedQuery;
       for (const hint of q.topicHints) {
@@ -1659,10 +1784,12 @@ async function checkAndAutoDistill(
         .replace(/[^a-z0-9一-鿿-]/g, "");
       return count >= threshold && !completed.has(topic) && !existingSlugs.has(slug);
     })
-    .sort(([, a], [, b]) => b - a)
+    .toSorted(([, a], [, b]) => b - a)
     .slice(0, 2); // 每輪最多 2 個，避免一次搜尋太多
 
-  if (candidates.length === 0) return 0;
+  if (candidates.length === 0) {
+    return 0;
+  }
 
   let distilled = 0;
   const newCompleted = [...completed];
@@ -1704,7 +1831,9 @@ function extractTopicHints(prompt: string): string[] {
     // 優先加最長的短語
     if (!words.some((w) => addedPhrases.has(w))) {
       hints.push(phrase);
-      for (const w of words) addedPhrases.add(w);
+      for (const w of words) {
+        addedPhrases.add(w);
+      }
     }
   }
 
@@ -1715,7 +1844,9 @@ function extractTopicHints(prompt: string): string[] {
 }
 
 async function recordUnmatchedQuery(prompt: string): Promise<void> {
-  if (!evolutionStateDir) return;
+  if (!evolutionStateDir) {
+    return;
+  }
   const filePath = path.join(evolutionStateDir, "unmatched-queries.jsonl");
   const entry: UnmatchedQuery = {
     timestamp: new Date().toISOString(),
@@ -1735,19 +1866,25 @@ async function analyzeUnmatchedAndCreateEmbryos(
 ): Promise<number> {
   const filePath = path.join(stateDir, "unmatched-queries.jsonl");
   const content = await safeReadFile(filePath);
-  if (!content) return 0;
+  if (!content) {
+    return 0;
+  }
 
   const queries: UnmatchedQuery[] = [];
   for (const line of content.split("\n")) {
     const t = line.trim();
-    if (!t) continue;
+    if (!t) {
+      continue;
+    }
     try {
       queries.push(JSON.parse(t) as UnmatchedQuery);
     } catch {
       /* skip */
     }
   }
-  if (queries.length < 5) return 0;
+  if (queries.length < 5) {
+    return 0;
+  }
 
   // Count topic hint frequencies
   const counts: Record<string, number> = {};
@@ -1760,10 +1897,12 @@ async function analyzeUnmatchedAndCreateEmbryos(
   // Candidates: appear 5+ times
   const candidates = Object.entries(counts)
     .filter(([, c]) => c >= 5)
-    .sort(([, a], [, b]) => b - a)
+    .toSorted(([, a], [, b]) => b - a)
     .slice(0, 3);
 
-  if (candidates.length === 0) return 0;
+  if (candidates.length === 0) {
+    return 0;
+  }
 
   // DNA 遺傳：找最相似的現有 pattern 作為親代
   const existingPatterns = await loadPatterns();
@@ -1774,7 +1913,9 @@ async function analyzeUnmatchedAndCreateEmbryos(
       .toLowerCase()
       .replace(/\s+/g, "-")
       .replace(/[^a-z0-9一-鿿-]/g, "");
-    if (!slug || registry.stemCells.some((c) => c.slug === slug || c.target === topic)) continue;
+    if (!slug || registry.stemCells.some((c) => c.slug === slug || c.target === topic)) {
+      continue;
+    }
 
     // ── DNA 遺傳：找最相似的親代 pattern ──────────────────────────
     let bestParent: NuwaPattern | null = null;
@@ -1851,10 +1992,12 @@ type QualitySignal = "positive" | "negative" | "neutral";
 
 function detectQualitySignal(messages: Array<Record<string, unknown>>): QualitySignal {
   // Find last user message after assistant response
-  const reversed = [...messages].reverse();
+  const reversed = [...messages].toReversed();
   const lastUser = reversed.find((m) => m.role === "user");
   const lastAssistant = reversed.find((m) => m.role === "assistant");
-  if (!lastAssistant) return "neutral";
+  if (!lastAssistant) {
+    return "neutral";
+  }
 
   const userText = typeof lastUser?.content === "string" ? lastUser.content : "";
   const assistantText = typeof lastAssistant.content === "string" ? lastAssistant.content : "";
@@ -1862,31 +2005,43 @@ function detectQualitySignal(messages: Array<Record<string, unknown>>): QualityS
   // Explicit negative signals in user messages
   const negativeRe =
     /不對|不是我要的|你沒理解|再說一次|重新|這不對|答非所問|不符合|你誤解了|no[,.]?\s*that|wrong|you (didn|don)'?t understand|try again/i;
-  if (negativeRe.test(userText)) return "negative";
+  if (negativeRe.test(userText)) {
+    return "negative";
+  }
 
   // Explicit positive signals
   const positiveRe =
     /謝謝|很好|對了|就是這個|太棒了|完全正確|你理解了|thank|perfect|exactly|great|that'?s? right|you got it/i;
-  if (positiveRe.test(userText)) return "positive";
+  if (positiveRe.test(userText)) {
+    return "positive";
+  }
 
   // Implicit: long detailed response = probably useful
-  if (assistantText.length > 400) return "positive";
+  if (assistantText.length > 400) {
+    return "positive";
+  }
 
   return "neutral";
 }
 
 async function demotePatternIfNeeded(patternId: string, slug: string): Promise<boolean> {
-  if (!evolutionStateDir) return false;
+  if (!evolutionStateDir) {
+    return false;
+  }
 
   // Read current pattern confidence
   const patternsPath = path.join(evolutionStateDir, "patterns.jsonl");
   const content = await safeReadFile(patternsPath);
-  if (!content) return false;
+  if (!content) {
+    return false;
+  }
 
   let currentConfidence = 1.0;
   for (const line of content.split("\n")) {
     const t = line.trim();
-    if (!t) continue;
+    if (!t) {
+      continue;
+    }
     try {
       const obj = JSON.parse(t) as NuwaPattern;
       if (obj.id === patternId) {
@@ -1900,16 +2055,22 @@ async function demotePatternIfNeeded(patternId: string, slug: string): Promise<b
 
   // Only demote if confidence has fallen significantly
   const DEMOTE_CONFIDENCE_THRESHOLD = 0.45;
-  if (currentConfidence >= DEMOTE_CONFIDENCE_THRESHOLD) return false;
+  if (currentConfidence >= DEMOTE_CONFIDENCE_THRESHOLD) {
+    return false;
+  }
 
   const registryPath = path.join(evolutionStateDir, "cell-registry.json");
   const regContent = await safeReadFile(registryPath);
-  if (!regContent) return false;
+  if (!regContent) {
+    return false;
+  }
 
   try {
     const registry = JSON.parse(regContent) as CellRegistry;
     const cell = registry.stemCells.find((c) => c.slug === slug);
-    if (!cell || cell.status === "embryo") return false;
+    if (!cell || cell.status === "embryo") {
+      return false;
+    }
 
     const order: Array<StemCell["status"]> = ["embryo", "incubating", "ready", "installed"];
     const idx = order.indexOf(cell.status);
@@ -1967,7 +2128,7 @@ ${modelsSection}
 
 ## 關鍵觸發詞
 
-${pattern.keywords.map((k) => `- ${k}`).join("\n")}
+${(pattern.keywords ?? []).map((k) => `- ${k}`).join("\n")}
 
 ---
 
@@ -2015,10 +2176,14 @@ async function updatePatternSkillPath(
 ): Promise<void> {
   const patternsPath = path.join(stateDir, "patterns.jsonl");
   const content = await safeReadFile(patternsPath);
-  if (!content) return;
+  if (!content) {
+    return;
+  }
   const newLines = content.split("\n").map((line) => {
     const t = line.trim();
-    if (!t) return line;
+    if (!t) {
+      return line;
+    }
     try {
       const obj = JSON.parse(t) as NuwaPattern;
       if (obj.id === patternId) {
@@ -2067,7 +2232,9 @@ async function mergeNuwaAgentEntry(
     config.agents = { list: [] };
   }
   const agents = config.agents as { list?: unknown[] };
-  if (!Array.isArray(agents.list)) agents.list = [];
+  if (!Array.isArray(agents.list)) {
+    agents.list = [];
+  }
 
   const idx = agents.list.findIndex(
     (e) => typeof e === "object" && e !== null && (e as Record<string, unknown>).id === agentId,
@@ -2095,7 +2262,9 @@ async function autoHatchAgent(
   try {
     const patterns = await loadPatterns();
     const pattern = patterns.find((p) => p.slug === cell.slug);
-    if (!pattern) return;
+    if (!pattern) {
+      return;
+    }
 
     // Step 1：生成技能 Markdown（已有手動版就跳過）
     const skillDir = path.join(workspaceDir, "skills", "nuwa", "examples");
@@ -2136,7 +2305,7 @@ export default definePluginEntry({
   description: "四層進化學習系統 — 女媧思維框架自動注入與成熟度追蹤",
 
   register(api: OpenClawPluginApi) {
-    let config = normalizeConfig(api.pluginConfig as Record<string, unknown> | undefined);
+    let config = normalizeConfig(api.pluginConfig);
 
     // ── 背景服務：初始化狀態目錄 + REM 週期定時器 ──────────────
     api.registerService({
@@ -2174,7 +2343,11 @@ export default definePluginEntry({
         // 非阻塞背景執行，不影響服務啟動速度
         import("./src/subscription-verifier.js")
           .then(({ createSubscriptionVerifier }) => {
-            const verifier = createSubscriptionVerifier(evolutionStateDir);
+            const serviceStateDir = evolutionStateDir;
+            if (!serviceStateDir) {
+              return;
+            }
+            const verifier = createSubscriptionVerifier(serviceStateDir);
             verifier.checkAndRunIfDue().catch((err) => {
               ctx.logger.warn?.(`[evolution-learning] 訂閱查驗失敗：${String(err)}`);
             });
@@ -2211,7 +2384,9 @@ export default definePluginEntry({
         // REM 週期定時器
         const intervalMs = config.remCycleHours * 60 * 60 * 1000;
         const runCycle = async () => {
-          if (!evolutionStateDir) return;
+          if (!evolutionStateDir) {
+            return;
+          }
           try {
             await runRemCycle(
               evolutionStateDir,
@@ -2231,7 +2406,9 @@ export default definePluginEntry({
 
         // Hermes Curator：自適應排程（活躍期縮短間隔，閒置期恢復原始間隔）
         function scheduleNextRem() {
-          if (hermesTimer) clearTimeout(hermesTimer);
+          if (hermesTimer) {
+            clearTimeout(hermesTimer);
+          }
           const isActive = Date.now() - hermesLastActivityAt < HERMES_ACTIVITY_WINDOW_MS;
           const delay = isActive ? HERMES_ACTIVE_INTERVAL_MS : intervalMs;
           hermesTimer = setTimeout(() => {
@@ -2263,15 +2440,23 @@ export default definePluginEntry({
     api.on(
       "before_model_resolve",
       async (event, _ctx) => {
-        config = normalizeConfig(api.pluginConfig as Record<string, unknown> | undefined);
-        if (!config.enabled) return undefined;
-        if (!evolutionStateDir) return undefined;
+        config = normalizeConfig(api.pluginConfig);
+        if (!config.enabled) {
+          return undefined;
+        }
+        if (!evolutionStateDir) {
+          return undefined;
+        }
 
-        const prompt = (event.prompt as string) ?? "";
-        if (!prompt.trim()) return undefined;
+        const prompt = event.prompt ?? "";
+        if (!prompt.trim()) {
+          return undefined;
+        }
 
         const patterns = await loadPatterns();
-        if (patterns.length === 0) return undefined;
+        if (patterns.length === 0) {
+          return undefined;
+        }
 
         // 軟連線加成計算（與 before_prompt_build 共用邏輯）
         const nowMs = Date.now();
@@ -2282,7 +2467,9 @@ export default definePluginEntry({
         const softBoostMap: Record<string, number> = {};
         for (const p of patterns) {
           const boost = getSoftBoost(p.id, sl, recentIds);
-          if (boost > 0) softBoostMap[p.id] = boost;
+          if (boost > 0) {
+            softBoostMap[p.id] = boost;
+          }
         }
 
         const match = detectPersonaIntent(
@@ -2291,7 +2478,9 @@ export default definePluginEntry({
           config.confidenceThreshold,
           softBoostMap,
         );
-        if (!match) return undefined;
+        if (!match) {
+          return undefined;
+        }
 
         // 若 pattern 有 preferredModel 欄位，回傳模型路由指示
         const preferredModel = (match.pattern as Record<string, unknown>)["preferredModel"] as
@@ -2316,19 +2505,27 @@ export default definePluginEntry({
       "before_prompt_build",
       async (event, _ctx) => {
         // 重新讀取最新設定
-        config = normalizeConfig(api.pluginConfig as Record<string, unknown> | undefined);
-        if (!config.enabled) return undefined;
-        if (!evolutionStateDir) return undefined;
+        config = normalizeConfig(api.pluginConfig);
+        if (!config.enabled) {
+          return undefined;
+        }
+        if (!evolutionStateDir) {
+          return undefined;
+        }
 
-        const prompt = event.prompt ?? "";
-        if (!prompt.trim()) return undefined;
+        const prompt = typeof event.prompt === "string" ? event.prompt : "";
+        if (!prompt.trim()) {
+          return undefined;
+        }
 
         // 定期清理過期的捕獲狀態（防記憶體洩漏）
         purgeStaleActivations();
 
         // 載入模式
         const patterns = await loadPatterns(config.logging ? api.logger : undefined);
-        if (patterns.length === 0) return undefined;
+        if (patterns.length === 0) {
+          return undefined;
+        }
 
         // ── 軟連線加成：計算最近視窗內激活過的 pattern 帶來的加成 ──
         const nowMs = Date.now();
@@ -2344,7 +2541,9 @@ export default definePluginEntry({
         const softBoostMap: Record<string, number> = {};
         for (const p of patterns) {
           const boost = getSoftBoost(p.id, sl, recentIds);
-          if (boost > 0) softBoostMap[p.id] = boost;
+          if (boost > 0) {
+            softBoostMap[p.id] = boost;
+          }
         }
 
         // 偵測是否有人物框架需求（含軟連線加成）
@@ -2361,11 +2560,11 @@ export default definePluginEntry({
         }
 
         // ── Gate 1 通過：記錄本輪激活（供 agent_end Gate 2 使用）──
-        const _ev = event as Record<string, unknown>;
-        const _agentId = typeof _ev["agentId"] === "string" ? _ev["agentId"] : null;
-        const _reqId = typeof _ev["requestId"] === "string" ? _ev["requestId"] : null;
-        const requestKey =
-          _agentId ?? _reqId ?? `req-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const eventRecord = event as Record<string, unknown>;
+        const agentId = typeof eventRecord["agentId"] === "string" ? eventRecord["agentId"] : null;
+        const reqId =
+          typeof eventRecord["requestId"] === "string" ? eventRecord["requestId"] : null;
+        const requestKey = agentId ?? reqId ?? `req-${randomUUID()}`;
 
         capturedActivations.set(requestKey, {
           patternId: match.pattern.id,
@@ -2376,7 +2575,7 @@ export default definePluginEntry({
         });
 
         // 同時在 event 上附帶 requestKey，讓 agent_end 能取回
-        (event as Record<string, unknown>)._evolutionRequestKey = requestKey;
+        (event as Record<string, unknown>).evolutionRequestKey = requestKey;
 
         // ── 軟連線：記錄本次激活到共激活視窗 ────────────────────
         // 若視窗內已有其他 pattern，雙向強化連線
@@ -2426,16 +2625,16 @@ export default definePluginEntry({
     //   「responseText 是否包含心智模型字串」——它只看用戶訊息語義，
     //   獨立於 Gate 1 的 pattern 資訊，避免自我確認偏誤。
     api.on("agent_end", async (event, _ctx) => {
-      if (!config.enabled || !evolutionStateDir) return;
+      if (!config.enabled || !evolutionStateDir) {
+        return;
+      }
 
       const messages = Array.isArray(event.messages) ? event.messages : [];
 
       // ── Gate 2 入口：從 event 取回 requestKey ─────────────────
       // 優先用 event 上附帶的 key，其次找時間最近的捕獲（容錯）
       let activation: CapturedActivation | undefined;
-      const eventKey = (event as Record<string, unknown>)._evolutionRequestKey as
-        | string
-        | undefined;
+      const eventKey = (event as Record<string, unknown>).evolutionRequestKey as string | undefined;
 
       if (eventKey) {
         activation = capturedActivations.get(eventKey);
@@ -2465,12 +2664,12 @@ export default definePluginEntry({
       const allMessages = messages as Array<Record<string, unknown>>;
       const qualitySignal = detectQualitySignal(allMessages);
 
-      const lastAssistant = [...allMessages].reverse().find((m) => m.role === "assistant");
+      const lastAssistant = [...allMessages].toReversed().find((m) => m.role === "assistant");
       const responseText = typeof lastAssistant?.content === "string" ? lastAssistant.content : "";
 
       const isPositive =
         qualitySignal === "positive" ||
-        (qualitySignal === "neutral" && Boolean(event.success) && responseText.length > 200);
+        (qualitySignal === "neutral" && event.success && responseText.length > 200);
 
       if (config.logging) {
         api.logger.debug?.(
@@ -2490,7 +2689,7 @@ export default definePluginEntry({
 
       // ── L4 因果鏈寫入（Strategic Memory）──────────────────────
       // context→method→result→cause→recommendation
-      const matchedPattern = (await loadPatterns()).find((p) => p.id === activation!.patternId);
+      const matchedPattern = (await loadPatterns()).find((p) => p.id === activation.patternId);
       if (matchedPattern && evolutionStateDir) {
         void appendCausalChain(evolutionStateDir, {
           patternId: activation.patternId,
@@ -2659,7 +2858,9 @@ export default definePluginEntry({
           }
 
           if (action === "top") {
-            const sorted = [...patterns].sort((a, b) => b.sampleCount - a.sampleCount).slice(0, 5);
+            const sorted = [...patterns]
+              .toSorted((a, b) => b.sampleCount - a.sampleCount)
+              .slice(0, 5);
             const text =
               sorted.length === 0
                 ? "📭 尚無使用記錄。"
@@ -2761,15 +2962,23 @@ export default definePluginEntry({
         // ── 操作指令 ──────────────────────────────────────────────
 
         if (action === "freeze" || action === "unfreeze") {
-          if (!arg) return { text: `❌ 用法：/evolution ${action} <slug>` };
-          if (!evolutionStateDir) return { text: "❌ 服務尚未就緒。" };
+          if (!arg) {
+            return { text: `❌ 用法：/evolution ${action} <slug>` };
+          }
+          if (!evolutionStateDir) {
+            return { text: "❌ 服務尚未就緒。" };
+          }
           const patternsPath = path.join(evolutionStateDir, "patterns.jsonl");
           const content = await safeReadFile(patternsPath);
-          if (!content) return { text: "❌ 找不到 patterns.jsonl。" };
+          if (!content) {
+            return { text: "❌ 找不到 patterns.jsonl。" };
+          }
           let found = false;
           const newLines = content.split("\n").map((line) => {
             const t = line.trim();
-            if (!t) return line;
+            if (!t) {
+              return line;
+            }
             try {
               const obj = JSON.parse(t) as NuwaPattern;
               if (obj.slug === arg || obj.id === arg) {
@@ -2782,25 +2991,37 @@ export default definePluginEntry({
             }
             return line;
           });
-          if (!found) return { text: `❌ 找不到 slug 為 "${arg}" 的 pattern。` };
+          if (!found) {
+            return { text: `❌ 找不到 slug 為 "${arg}" 的 pattern。` };
+          }
           await safeWriteFile(patternsPath, newLines.join("\n"));
           invalidateCache();
           return { text: `${action === "freeze" ? "🔒 已凍結" : "🔓 已解凍"} pattern：${arg}` };
         }
 
         if (action === "demote") {
-          if (!arg) return { text: "❌ 用法：/evolution demote <slug>" };
-          if (!evolutionStateDir) return { text: "❌ 服務尚未就緒。" };
+          if (!arg) {
+            return { text: "❌ 用法：/evolution demote <slug>" };
+          }
+          if (!evolutionStateDir) {
+            return { text: "❌ 服務尚未就緒。" };
+          }
           const registryPath = path.join(evolutionStateDir, "cell-registry.json");
           const regContent = await safeReadFile(registryPath);
-          if (!regContent) return { text: "❌ 找不到細胞登記表。" };
+          if (!regContent) {
+            return { text: "❌ 找不到細胞登記表。" };
+          }
           try {
             const reg = JSON.parse(regContent) as CellRegistry;
             const cell = reg.stemCells.find((c) => c.slug === arg);
-            if (!cell) return { text: `❌ 找不到 slug 為 "${arg}" 的幹細胞。` };
+            if (!cell) {
+              return { text: `❌ 找不到 slug 為 "${arg}" 的幹細胞。` };
+            }
             const order: Array<StemCell["status"]> = ["embryo", "incubating", "ready", "installed"];
             const idx = order.indexOf(cell.status);
-            if (idx <= 0) return { text: `⚠️ ${arg} 已是最低等級（胚胎），無法再降級。` };
+            if (idx <= 0) {
+              return { text: `⚠️ ${arg} 已是最低等級（胚胎），無法再降級。` };
+            }
             const prevStatus = cell.status;
             cell.status = order[idx - 1];
             cell.maturityScore = Math.max(0.01, cell.maturityScore - 0.15);
@@ -2813,16 +3034,26 @@ export default definePluginEntry({
         }
 
         if (action === "install") {
-          if (!arg) return { text: "❌ 用法：/evolution install <slug>" };
-          if (!evolutionStateDir) return { text: "❌ 服務尚未就緒。" };
+          if (!arg) {
+            return { text: "❌ 用法：/evolution install <slug>" };
+          }
+          if (!evolutionStateDir) {
+            return { text: "❌ 服務尚未就緒。" };
+          }
           const registryPath = path.join(evolutionStateDir, "cell-registry.json");
           const regContent = await safeReadFile(registryPath);
-          if (!regContent) return { text: "❌ 找不到細胞登記表。" };
+          if (!regContent) {
+            return { text: "❌ 找不到細胞登記表。" };
+          }
           try {
             const reg = JSON.parse(regContent) as CellRegistry;
             const cell = reg.stemCells.find((c) => c.slug === arg);
-            if (!cell) return { text: `❌ 找不到 slug 為 "${arg}" 的幹細胞。` };
-            if (cell.status === "installed") return { text: `⚠️ ${arg} 已是常駐狀態。` };
+            if (!cell) {
+              return { text: `❌ 找不到 slug 為 "${arg}" 的幹細胞。` };
+            }
+            if (cell.status === "installed") {
+              return { text: `⚠️ ${arg} 已是常駐狀態。` };
+            }
             cell.status = "installed";
             cell.maturityScore = Math.max(cell.maturityScore, config.maturityThreshold);
             await safeWriteFile(registryPath, JSON.stringify(reg, null, 2));
@@ -2840,15 +3071,23 @@ export default definePluginEntry({
         }
 
         if (action === "forget") {
-          if (!arg) return { text: "❌ 用法：/evolution forget <slug>" };
-          if (!evolutionStateDir) return { text: "❌ 服務尚未就緒。" };
+          if (!arg) {
+            return { text: "❌ 用法：/evolution forget <slug>" };
+          }
+          if (!evolutionStateDir) {
+            return { text: "❌ 服務尚未就緒。" };
+          }
           const patternsPath = path.join(evolutionStateDir, "patterns.jsonl");
           const content = await safeReadFile(patternsPath);
-          if (!content) return { text: "❌ 找不到 patterns.jsonl。" };
+          if (!content) {
+            return { text: "❌ 找不到 patterns.jsonl。" };
+          }
           let removed = false;
           const newLines = content.split("\n").filter((line) => {
             const t = line.trim();
-            if (!t) return false;
+            if (!t) {
+              return false;
+            }
             try {
               const obj = JSON.parse(t) as NuwaPattern;
               if (obj.slug === arg || obj.id === arg) {
@@ -2860,7 +3099,9 @@ export default definePluginEntry({
             }
             return true;
           });
-          if (!removed) return { text: `❌ 找不到 slug 為 "${arg}" 的 pattern。` };
+          if (!removed) {
+            return { text: `❌ 找不到 slug 為 "${arg}" 的 pattern。` };
+          }
           await safeWriteFile(patternsPath, newLines.join("\n") + "\n");
           // 同步刪除細胞登記表中的條目
           const registryPath = path.join(evolutionStateDir, "cell-registry.json");

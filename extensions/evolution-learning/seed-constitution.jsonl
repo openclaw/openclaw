@@ -1,0 +1,20 @@
+{"taskType":"architecture","principle":"最小化系統複雜度","weight":1.0,"winCount":0}
+{"taskType":"architecture","principle":"優先可維護性而非過早優化","weight":1.0,"winCount":0}
+{"taskType":"architecture","principle":"明確的責任邊界，避免模組間隱性耦合","weight":1.0,"winCount":0}
+{"taskType":"architecture","principle":"先讓它能用，再讓它更快","weight":0.9,"winCount":0}
+{"taskType":"security","principle":"最小權限原則：每個元件只擁有完成任務所需的最小權限","weight":1.0,"winCount":0}
+{"taskType":"security","principle":"深度防禦：不依賴單一安全控制","weight":1.0,"winCount":0}
+{"taskType":"security","principle":"永不信任輸入：所有外部資料都需驗證","weight":1.0,"winCount":0}
+{"taskType":"security","principle":"顯式優於隱式：安全行為必須明確宣告","weight":0.9,"winCount":0}
+{"taskType":"cost_optimization","principle":"使用最便宜能完成任務的模型（優先 Haiku，而非 Sonnet）","weight":1.0,"winCount":0}
+{"taskType":"cost_optimization","principle":"本地計算優先於 API 呼叫","weight":1.0,"winCount":0}
+{"taskType":"cost_optimization","principle":"批次處理優先於即時逐筆處理","weight":0.9,"winCount":0}
+{"taskType":"cost_optimization","principle":"快取優先：重複計算的結果必須快取","weight":1.0,"winCount":0}
+{"taskType":"code_quality","principle":"程式碼是寫給人讀的，順帶讓機器執行","weight":1.0,"winCount":0}
+{"taskType":"code_quality","principle":"每個函數只做一件事","weight":1.0,"winCount":0}
+{"taskType":"code_quality","principle":"錯誤處理必須明確，不得靜默吞掉例外","weight":1.0,"winCount":0}
+{"taskType":"code_quality","principle":"測試是文件，描述系統的預期行為","weight":0.9,"winCount":0}
+{"taskType":"agent_design","principle":"代理決策必須可解釋、可稽核","weight":1.0,"winCount":0}
+{"taskType":"agent_design","principle":"費用有上限：任何代理呼叫前必須預估費用","weight":1.0,"winCount":0}
+{"taskType":"agent_design","principle":"失敗必須優雅退化，而非整體崩潰","weight":1.0,"winCount":0}
+{"taskType":"agent_design","principle":"學習閉環：每次決策結果都必須回寫記憶","weight":0.9,"winCount":0}
