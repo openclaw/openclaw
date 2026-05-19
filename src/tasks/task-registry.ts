@@ -835,6 +835,9 @@ function findExistingTaskForCreate(params: {
   if (taskKindMatch) {
     return taskKindMatch;
   }
+  if (taskKind) {
+    return undefined;
+  }
   const exact = runId
     ? runScopeMatches.find(
         (task) =>
