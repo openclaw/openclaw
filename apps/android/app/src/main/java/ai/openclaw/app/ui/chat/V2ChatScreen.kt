@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -199,7 +200,7 @@ private fun V2ChatHeader(
           when {
             pendingRunCount > 0 -> "Working"
             healthOk -> "auto"
-            else -> "Offline"
+            else -> "offline"
           },
         status =
           when {
@@ -221,10 +222,10 @@ private fun V2ModelPill(
   status: ClawStatus,
 ) {
   val borderColor =
-    when (status) {
-      ClawStatus.Danger -> ClawTheme.colors.danger
-      ClawStatus.Warning -> ClawTheme.colors.warning
-      else -> ClawTheme.colors.border
+    if (status == ClawStatus.Warning) {
+      ClawTheme.colors.warning
+    } else {
+      ClawTheme.colors.border
     }
   Surface(
     shape = RoundedCornerShape(ClawTheme.radii.pill),
@@ -234,7 +235,7 @@ private fun V2ModelPill(
   ) {
     Text(
       text = text,
-      modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
       style = ClawTheme.type.caption.copy(fontSize = 9.5.sp, lineHeight = 12.sp),
       maxLines = 1,
     )
@@ -447,11 +448,23 @@ private fun V2ChatNotice(
   title: String,
   body: String,
 ) {
-  ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      ClawStatusPill(text = "Needs attention", status = ClawStatus.Danger)
-      Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      Text(text = body, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+  Surface(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(ClawTheme.radii.panel),
+    color = ClawTheme.colors.surface,
+    contentColor = ClawTheme.colors.text,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+      Box(modifier = Modifier.size(6.dp).background(ClawTheme.colors.warning, CircleShape))
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = body, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
     }
   }
 }
@@ -498,10 +511,6 @@ private fun V2ChatComposer(
         }
       }
     }
-
-    if (!healthOk) {
-      Text(text = "Gateway offline. Open Settings to reconnect.", style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
-    }
   }
 }
 
@@ -511,7 +520,7 @@ private fun V2ChatContextMeter(
   onClick: () -> Unit,
 ) {
   Row(
-    modifier = Modifier.fillMaxWidth(),
+    modifier = Modifier.width(230.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(9.dp),
   ) {
@@ -556,18 +565,18 @@ private fun V2ChatInputPill(
   modifier: Modifier = Modifier,
 ) {
   Surface(
-    modifier = modifier.heightIn(min = 46.dp),
-    shape = RoundedCornerShape(17.dp),
+    modifier = modifier.heightIn(min = 42.dp),
+    shape = RoundedCornerShape(15.dp),
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      Icon(imageVector = Icons.Default.AttachFile, contentDescription = "Attach file", modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
+      Icon(imageVector = Icons.Default.AttachFile, contentDescription = "Attach file", modifier = Modifier.size(18.dp), tint = ClawTheme.colors.text)
       Box(modifier = Modifier.weight(1f)) {
         BasicTextField(
           value = value,
@@ -589,13 +598,13 @@ private fun V2ChatInputPill(
       }
       Surface(
         onClick = onVoice,
-        modifier = Modifier.size(34.dp),
+        modifier = Modifier.size(30.dp),
         shape = CircleShape,
         color = ClawTheme.colors.surfaceRaised,
         contentColor = ClawTheme.colors.text,
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Mic, contentDescription = "Voice", modifier = Modifier.size(19.dp))
+          Icon(imageVector = Icons.Default.Mic, contentDescription = "Voice", modifier = Modifier.size(18.dp))
         }
       }
     }
@@ -619,14 +628,14 @@ private fun V2SendButton(
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = Modifier.size(48.dp),
+    modifier = Modifier.size(44.dp),
     shape = CircleShape,
     color = if (enabled) ClawTheme.colors.primary else ClawTheme.colors.surfacePressed,
     contentColor = if (enabled) ClawTheme.colors.primaryText else ClawTheme.colors.textSubtle,
     border = BorderStroke(1.dp, if (enabled) ClawTheme.colors.primary else ClawTheme.colors.border),
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(21.dp))
+      Icon(imageVector = Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(20.dp))
     }
   }
 }
