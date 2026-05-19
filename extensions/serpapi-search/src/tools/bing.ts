@@ -79,14 +79,21 @@ export function createSerpApiBingTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
     },
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
+      const mkt = readStringParam(args, "mkt");
+      const cc = readStringParam(args, "cc");
+      if (mkt && cc) {
+        throw new Error(
+          "serpapi_bing: mkt and cc are mutually exclusive; provide one or the other",
+        );
+      }
       const raw = await callSerpApi({
         cfg,
         engine: "bing",
         allowedParams: ALLOWED_PARAMS,
         params: {
           q: readStringParam(args, "query", { required: true }),
-          mkt: readStringParam(args, "mkt") ?? undefined,
-          cc: readStringParam(args, "cc") ?? undefined,
+          mkt: mkt ?? undefined,
+          cc: cc ?? undefined,
           location: readStringParam(args, "location") ?? undefined,
           safeSearch: readStringParam(args, "safeSearch") ?? undefined,
           first: readNumberParam(args, "first", { integer: true }) ?? undefined,
