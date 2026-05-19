@@ -674,4 +674,49 @@ describe("processDiscordMessage draft streaming", () => {
 
     expect(draftStream.update).not.toHaveBeenCalled();
   });
+
+  it("preserves the streamed assistant preview when an unfinalizable error follows (#83831)", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      // Assistant text streams into the preview message via partial updates.
+      await params?.replyOptions?.onPartialReply?.({ text: "delivery survived" });
+      // Tool-failure warning arrives as the only final payload; without the
+      // fix it would call draftStream.clear() and delete the preview,
+      // leaving only the warning visible.
+      await params?.dispatcher.sendFinalReply({
+        text: "⚠️ run openclaw definitely-not-a-real-subcommand failed",
+        isError: true,
+      } as never);
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    await runInPartialStreamMode();
+
+    expect(draftStream.stop).toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    // The warning still gets delivered as a follow-up reply.
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("still clears the preview when a non-error final cannot be finalized via edit", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({ text: "hello" });
+      // Final payload has media, so preview-edit is skipped and the preview
+      // should be cleared (legacy behavior).
+      await params?.dispatcher.sendFinalReply({
+        text: "follow-up with attachment",
+        mediaUrl: "https://example.test/cat.png",
+      } as never);
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    await runInPartialStreamMode();
+
+    expect(draftStream.clear).toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
 });

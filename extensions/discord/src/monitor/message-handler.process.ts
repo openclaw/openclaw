@@ -614,6 +614,22 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           const previewFinalText = resolvePreviewFinalText(finalText);
           const previewMessageId = draftStream.messageId();
 
+          // When the only final payload is a tool-failure warning (isError) and
+          // a streamed assistant preview already exists, preserve the preview
+          // as the visible assistant reply and let the warning be delivered as
+          // a separate follow-up message. Synchronously claim the "finalized"
+          // state before any further awaits so the cleanup finally block does
+          // not race ahead and delete the preserved preview (#83831).
+          const preserveStreamedPreviewAsReply =
+            !finalizedViaPreviewMessage &&
+            hasStreamedMessage &&
+            payload.isError &&
+            typeof previewMessageId === "string";
+          if (preserveStreamedPreviewAsReply) {
+            finalizedViaPreviewMessage = true;
+            replyReference.markSent();
+          }
+
           // Try to finalize via preview edit (text-only, fits in 2000 chars, not an error)
           const canFinalizeViaPreviewEdit =
             !finalizedViaPreviewMessage &&
@@ -675,8 +691,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
             }
           }
 
-          // Clear the preview and fall through to standard delivery
-          if (!finalizedViaPreviewMessage) {
+          // When preserving the streamed preview (see #83831 above) stop the
+          // draft loop without deleting the preview message, then fall through
+          // to deliver the warning as a separate follow-up message.
+          if (preserveStreamedPreviewAsReply) {
+            await draftStream.stop();
+          } else if (!finalizedViaPreviewMessage) {
+            // Clear the preview and fall through to standard delivery.
             await draftStream.clear();
           }
         }
