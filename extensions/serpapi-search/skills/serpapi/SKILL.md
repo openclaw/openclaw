@@ -10,6 +10,29 @@ metadata:
 
 # SerpApi Tools
 
+## Configuration
+
+Set your API key and optional default language under `config.webSearch`:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "serpapi-search": {
+        "config": {
+          "webSearch": {
+            "apiKey": "your-serpapi-key",
+            "hl": "en"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`apiKey` can also be provided via the `SERPAPI_API_KEY` environment variable. `hl` defaults to `en`.
+
 ## When to use which tool
 
 | Need                             | Tool                         |
