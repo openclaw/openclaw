@@ -495,6 +495,16 @@ export class TelegramPollingSession {
     return laneKeys;
   }
 
+  #activeSpooledUpdateHandlerKeysForSpool(spoolDir: string): Set<string> {
+    const handlerKeys = new Set<string>();
+    for (const handlerKey of activeSpooledUpdateHandlersByLane.keys()) {
+      if (isSpooledUpdateHandlerKeyForSpool(handlerKey, spoolDir)) {
+        handlerKeys.add(handlerKey);
+      }
+    }
+    return handlerKeys;
+  }
+
   async #drainSpooledUpdates(params: {
     bot: TelegramBot;
     spoolDir: string;
@@ -741,25 +751,32 @@ export class TelegramPollingSession {
       try {
         const drain = await this.#drainSpooledUpdates({ bot, spoolDir });
         consecutiveDrainFailures = 0;
+        const timeoutCandidateHandlerKeys = this.#activeSpooledUpdateHandlerKeysForSpool(spoolDir);
+        for (const handlerKey of drain.blockedByLane) {
+          timeoutCandidateHandlerKeys.add(handlerKey);
+        }
         for (const handlerKey of stalledBacklogKeys) {
           if (
             !activeSpooledUpdateHandlersByLane.has(handlerKey) ||
-            !drain.blockedByLane.has(handlerKey)
+            (!drain.blockedByLane.has(handlerKey) && !timeoutCandidateHandlerKeys.has(handlerKey))
           ) {
             stalledBacklogKeys.delete(handlerKey);
           }
         }
-        for (const handlerKey of drain.blockedByLane) {
+        for (const handlerKey of timeoutCandidateHandlerKeys) {
           const handler = activeSpooledUpdateHandlersByLane.get(handlerKey);
           if (handler?.timedOutAt === undefined) {
             continue;
           }
+          const alreadyStalled = stalledBacklogKeys.has(handlerKey);
           stalledBacklogKeys.add(handlerKey);
-          if (handler.timeoutMessage) {
+          if (!alreadyStalled && handler.timeoutMessage) {
             this.#status.notePollingError(handler.timeoutMessage);
           }
         }
-        const timedOutRecovery = await this.#recoverTimedOutSpooledHandler(drain.blockedByLane);
+        const timedOutRecovery = await this.#recoverTimedOutSpooledHandler(
+          timeoutCandidateHandlerKeys,
+        );
         if (timedOutRecovery?.restart) {
           restartRequested = true;
           void worker.stop();

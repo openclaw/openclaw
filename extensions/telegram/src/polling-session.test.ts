@@ -1900,6 +1900,97 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+  it("fails a timed-out lone spooled handler with no later same-lane update", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const log = vi.fn();
+    const events: string[] = [];
+    const firstBot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async (update: { update_id?: number }) => {
+        events.push(`first:${update.update_id}`);
+        await waitForTestReplyFenceAbort({
+          key: "test-session:topic-10",
+          laneKey: "telegram:-100:topic:10",
+        });
+      }),
+      stop: vi.fn(async () => undefined),
+    };
+    const secondBot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async (update: { update_id?: number }) => {
+        events.push(`second:${update.update_id}`);
+      }),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValueOnce(firstBot).mockReturnValueOnce(secondBot);
+    await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "wedged topic 10 turn")]);
+
+    const stopWorkers: Array<() => void> = [];
+    const createWorker = vi.fn(() => {
+      let stopWorker: (() => void) | undefined;
+      const workerDone = new Promise<void>((resolve) => {
+        stopWorker = resolve;
+      });
+      stopWorkers.push(() => stopWorker?.());
+      return {
+        onMessage: vi.fn(() => () => undefined),
+        stop: vi.fn(async () => {
+          stopWorker?.();
+        }),
+        task: vi.fn(async () => {
+          await workerDone;
+        }),
+      };
+    });
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+      isolatedIngress: {
+        enabled: true,
+        spoolDir: tempDir,
+        createWorker,
+        drainIntervalMs: 10,
+        spooledUpdateHandlerTimeoutMs: 100,
+        spooledUpdateHandlerAbortGraceMs: 100,
+      },
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(events).toEqual(["first:42"]));
+
+      await vi.advanceTimersByTimeAsync(150);
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(2));
+
+      expect(events).toEqual(["first:42"]);
+      expect(createTelegramBotMock).toHaveBeenCalledTimes(2);
+      expect(firstBot.stop).toHaveBeenCalledTimes(1);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expect(await failedUpdateIds(tempDir)).toEqual([42]);
+      expectLogIncludes(log, "spool handler timed out behind update 42");
+
+      abort.abort();
+      stopWorkers.forEach((stopWorker) => stopWorker());
+      await vi.advanceTimersByTimeAsync(20_000);
+      await runPromise;
+    } finally {
+      abort.abort();
+      stopWorkers.forEach((stopWorker) => stopWorker());
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a timed-out lane guarded until the old handler stops", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();
