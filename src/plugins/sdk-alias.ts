@@ -702,22 +702,62 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
 }
 
 const JITI_NORMALIZED_ALIAS_SYMBOL = Symbol.for("pathe:normalizedAlias");
+const JITI_NORMALIZED_ALIAS_RESULT_SYMBOL = Symbol.for("pathe:normalizedAliasCache");
+const PLUGIN_LOADER_MODULE_CACHE_KEY_SYMBOL = Symbol.for("pathe:pluginLoaderModuleCacheKey");
+type CachedCacheKeysByTryNative = { true?: string; false?: string };
+
+function resolvePluginLoaderModuleCacheKey(
+  aliasMap: Record<string, string>,
+  tryNative: boolean,
+): string | undefined {
+  const slot = (aliasMap as Record<symbol, CachedCacheKeysByTryNative>)[
+    PLUGIN_LOADER_MODULE_CACHE_KEY_SYMBOL
+  ];
+  return slot?.[String(tryNative) as "true" | "false"];
+}
+
+function setPluginLoaderModuleCacheKey(
+  aliasMap: Record<string, string>,
+  tryNative: boolean,
+  cacheKey: string,
+): void {
+  let slot = (aliasMap as Record<symbol, CachedCacheKeysByTryNative>)[
+    PLUGIN_LOADER_MODULE_CACHE_KEY_SYMBOL
+  ];
+  if (!slot) {
+    slot = {};
+    Object.defineProperty(aliasMap, PLUGIN_LOADER_MODULE_CACHE_KEY_SYMBOL, {
+      value: slot,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  slot[String(tryNative) as "true" | "false"] = cacheKey;
+}
 const JITI_ALIAS_ROOT_SENTINELS = new Set<string | undefined>(["/", "\\", undefined]);
 
 // Memoize loader alias/config by effective resolution context so repeated
 // loader setup avoids rebuilding the same filesystem-derived map and cache key.
 // Include cwd/env inputs because the fallback root and private QA alias
 // surfaces depend on them.
+//
+// Memory: a normalized jiti alias map for ~24 bundled plugins weighs ~101 KB
+// of retained strings (heap snapshot, Node 24, Linux x64). Content-key reuse
+// via normalizedJitiAliasMapCache collapses identical maps across different
+// source objects into a single retained copy, avoiding O(N × plugins) copies
+// when N distinct plugin loaders share the same alias surface.
 const aliasMapCache = new PluginLruCache<Record<string, string>>(
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
 const normalizedJitiAliasMapCache = new PluginLruCache<Record<string, string>>(
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
+const aliasMapContentCache = new PluginLruCache<Record<string, string>>(
+  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
+);
 const pluginLoaderModuleConfigCache = new PluginLruCache<{
   tryNative: boolean;
   aliasMap: Record<string, string>;
-  cacheKey: string;
 }>(MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES);
 
 function hasJitiNormalizedAliasMarker(aliasMap: Record<string, string>) {
@@ -736,9 +776,19 @@ function normalizePluginLoaderAliasMapForJiti(
   if (hasJitiNormalizedAliasMarker(aliasMap)) {
     return aliasMap;
   }
+  const attached = (aliasMap as Record<symbol, Record<string, string>>)[
+    JITI_NORMALIZED_ALIAS_RESULT_SYMBOL
+  ];
+  if (attached) {
+    return attached;
+  }
   const cacheKey = createJitiAliasContentCacheKey(aliasMap);
   const cached = normalizedJitiAliasMapCache.get(cacheKey);
   if (cached) {
+    Object.defineProperty(aliasMap, JITI_NORMALIZED_ALIAS_RESULT_SYMBOL, {
+      value: cached,
+      enumerable: false,
+    });
     return cached;
   }
   const normalizedAliasMap = Object.fromEntries(
@@ -765,6 +815,10 @@ function normalizePluginLoaderAliasMapForJiti(
     enumerable: false,
   });
   normalizedJitiAliasMapCache.set(cacheKey, normalizedAliasMap);
+  Object.defineProperty(aliasMap, JITI_NORMALIZED_ALIAS_RESULT_SYMBOL, {
+    value: normalizedAliasMap,
+    enumerable: false,
+  });
   return normalizedAliasMap;
 }
 
@@ -853,6 +907,17 @@ export function buildPluginLoaderAliasMap(
       ).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
     ),
   };
+  const contentKey = createPluginLoaderModuleCacheKey({
+    tryNative: true,
+    aliasMap: result,
+  });
+  setPluginLoaderModuleCacheKey(result, true, contentKey);
+  const sharedResult = aliasMapContentCache.get(contentKey);
+  if (sharedResult) {
+    aliasMapCache.set(cacheKey, sharedResult);
+    return sharedResult;
+  }
+  aliasMapContentCache.set(contentKey, result);
   aliasMapCache.set(cacheKey, result);
   return result;
 }
@@ -973,7 +1038,15 @@ export function resolvePluginLoaderModuleConfig(params: {
   const configCacheKey = buildPluginLoaderModuleConfigCacheKey(params);
   const cached = pluginLoaderModuleConfigCache.get(configCacheKey);
   if (cached) {
-    return cached;
+    let cacheKey = resolvePluginLoaderModuleCacheKey(cached.aliasMap, cached.tryNative);
+    if (!cacheKey) {
+      cacheKey = createPluginLoaderModuleCacheKey({
+        tryNative: cached.tryNative,
+        aliasMap: cached.aliasMap,
+      });
+      setPluginLoaderModuleCacheKey(cached.aliasMap, cached.tryNative, cacheKey);
+    }
+    return { ...cached, cacheKey };
   }
 
   const tryNative = resolvePluginLoaderTryNative(
@@ -986,15 +1059,19 @@ export function resolvePluginLoaderModuleConfig(params: {
     params.moduleUrl,
     params.pluginSdkResolution,
   );
+  const cacheKey =
+    resolvePluginLoaderModuleCacheKey(aliasMap, tryNative) ??
+    createPluginLoaderModuleCacheKey({
+      tryNative,
+      aliasMap,
+    });
+  setPluginLoaderModuleCacheKey(aliasMap, tryNative, cacheKey);
   const result = {
     tryNative,
     aliasMap,
-    cacheKey: createPluginLoaderModuleCacheKey({
-      tryNative,
-      aliasMap,
-    }),
+    cacheKey,
   };
-  pluginLoaderModuleConfigCache.set(configCacheKey, result);
+  pluginLoaderModuleConfigCache.set(configCacheKey, { tryNative, aliasMap });
   return result;
 }
 
