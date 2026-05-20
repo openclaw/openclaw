@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { InvalidArgumentError, type Command } from "commander";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
@@ -75,7 +75,13 @@ export function registerPluginsCli(program: Command) {
     .command("search")
     .description("Search ClawHub plugin packages")
     .argument("[query...]", "Search query")
-    .option("--limit <n>", "Max results", (value) => Number.parseInt(value, 10))
+    .option("--limit <n>", "Max results", (value) => {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n !== Math.trunc(n) || n < 1 || value.trim() !== String(n)) {
+        throw new InvalidArgumentError("--limit must be a positive integer");
+      }
+      return n;
+    })
     .option("--json", "Print JSON", false)
     .action(async (queryParts: string[], opts: PluginSearchOptions) => {
       const { runPluginsSearchCommand } = await import("./plugins-search-command.js");

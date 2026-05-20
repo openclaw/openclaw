@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { InvalidArgumentError, type Command } from "commander";
 import {
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
@@ -120,7 +120,13 @@ export function registerSkillsCli(program: Command) {
     .command("search")
     .description("Search ClawHub skills")
     .argument("[query...]", "Optional search query")
-    .option("--limit <n>", "Max results", (value) => Number.parseInt(value, 10))
+    .option("--limit <n>", "Max results", (value) => {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n !== Math.trunc(n) || n < 1 || value.trim() !== String(n)) {
+        throw new InvalidArgumentError("--limit must be a positive integer");
+      }
+      return n;
+    })
     .option("--json", "Output as JSON", false)
     .action(async (queryParts: string[], opts: { limit?: number; json?: boolean }) => {
       try {
