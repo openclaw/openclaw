@@ -12,6 +12,7 @@ import { checkQmdBinaryAvailability } from "openclaw/plugin-sdk/memory-core-host
 import {
   resolveMemoryBackendConfig,
   type MemoryEmbeddingProbeResult,
+  type MemoryProviderStatus,
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
   type MemorySource,
@@ -108,6 +109,11 @@ export type MemorySearchManagerResult = {
 };
 
 export type MemorySearchManagerPurpose = "default" | "status" | "cli";
+type MemorySearchManagerParams = {
+  cfg: OpenClawConfig;
+  agentId: string;
+  purpose?: MemorySearchManagerPurpose;
+};
 
 function getActiveQmdManagerOpenFailure(
   scopeKey: string,
@@ -145,11 +151,9 @@ function clearQmdManagerOpenFailure(scopeKey: string, identityKey: string): void
   }
 }
 
-export async function getMemorySearchManager(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  purpose?: MemorySearchManagerPurpose;
-}): Promise<MemorySearchManagerResult> {
+export async function getMemorySearchManager(
+  params: MemorySearchManagerParams,
+): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "qmd" && resolved.qmd) {
     const qmdResolved = resolved.qmd;
@@ -224,8 +228,8 @@ export async function getMemorySearchManager(params: {
         {
           primary,
           fallbackFactory: async () => {
-            const { MemoryIndexManager } = await loadManagerRuntime();
-            return await MemoryIndexManager.get(params);
+            const fallback = await getAvailableBuiltinFallbackMemorySearchManager(params);
+            return fallback.manager;
           },
         },
         () => {
@@ -266,7 +270,7 @@ export async function getMemorySearchManager(params: {
     const recentFailure = getActiveQmdManagerOpenFailure(scopeKey, identityKey);
     if (recentFailure) {
       log.debug?.(`qmd memory unavailable; using builtin during cooldown: ${recentFailure.reason}`);
-      return await getBuiltinMemorySearchManager(params);
+      return await getAvailableBuiltinFallbackMemorySearchManager(params);
     }
 
     const pending = PENDING_QMD_MANAGER_CREATES.get(scopeKey);
@@ -303,17 +307,60 @@ export async function getMemorySearchManager(params: {
     };
     PENDING_QMD_MANAGER_CREATES.set(scopeKey, pendingCreate);
     const manager = await pendingCreate.promise;
-    return manager ? { manager } : await getBuiltinMemorySearchManager(params);
+    return manager ? { manager } : await getAvailableBuiltinFallbackMemorySearchManager(params);
   }
 
   return await getBuiltinMemorySearchManager(params);
 }
 
-async function getBuiltinMemorySearchManager(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  purpose?: MemorySearchManagerPurpose;
-}): Promise<MemorySearchManagerResult> {
+async function getAvailableBuiltinFallbackMemorySearchManager(
+  params: MemorySearchManagerParams,
+): Promise<MemorySearchManagerResult> {
+  try {
+    const { MemoryIndexManager } = await loadManagerRuntime();
+    // Probe with a transient manager so an unavailable fallback does not leave
+    // builtin memory watchers running beside the active QMD backend.
+    const probe = await MemoryIndexManager.get({ ...params, purpose: "status" });
+    if (!probe) {
+      const message = "builtin memory search unavailable";
+      log.warn(`memory fallback skipped because ${message}`);
+      return { manager: null, error: message };
+    }
+    try {
+      const availability = await probe.probeEmbeddingAvailability();
+      if (!availability.ok) {
+        const message = availability.error ?? "unknown error";
+        if (!canUseBuiltinFtsOnlyFallback(probe.status())) {
+          log.warn(
+            `memory fallback skipped because builtin embeddings and FTS are unavailable: ${message}`,
+          );
+          return { manager: null, error: message };
+        }
+        log.warn(`memory fallback using builtin FTS-only search: ${message}`);
+      }
+    } finally {
+      await probe.close?.().catch(() => {});
+    }
+    const manager = await MemoryIndexManager.get(params);
+    return { manager };
+  } catch (err) {
+    const message = formatErrorMessage(err);
+    return { manager: null, error: message };
+  }
+}
+
+function canUseBuiltinFtsOnlyFallback(status: MemoryProviderStatus): boolean {
+  return (
+    status.backend === "builtin" &&
+    status.fts?.enabled === true &&
+    status.fts.available === true &&
+    (status.provider === "none" || status.custom?.searchMode === "fts-only")
+  );
+}
+
+async function getBuiltinMemorySearchManager(
+  params: MemorySearchManagerParams,
+): Promise<MemorySearchManagerResult> {
   try {
     const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);

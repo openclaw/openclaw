@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { checkQmdBinaryAvailability as checkQmdBinaryAvailabilityFn } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
@@ -12,6 +13,8 @@ function createManagerStatus(params: {
   provider: string;
   model: string;
   requestedProvider: string;
+  fts?: { enabled: boolean; available: boolean; error?: string };
+  searchMode?: "hybrid" | "fts-only";
   withMemorySourceCounts?: boolean;
 }) {
   const base = {
@@ -24,6 +27,8 @@ function createManagerStatus(params: {
     dirty: false,
     workspaceDir: "/tmp",
     dbPath: "/tmp/index.sqlite",
+    ...(params.fts ? { fts: params.fts } : {}),
+    ...(params.searchMode ? { custom: { searchMode: params.searchMode } } : {}),
   };
   if (!params.withMemorySourceCounts) {
     return base;
@@ -44,6 +49,8 @@ function createManagerMock(params: {
   provider: string;
   model: string;
   requestedProvider: string;
+  fts?: { enabled: boolean; available: boolean; error?: string };
+  searchMode?: "hybrid" | "fts-only";
   searchResults?: Array<{
     path: string;
     startLine: number;
@@ -63,11 +70,15 @@ function createManagerMock(params: {
         provider: params.provider,
         model: params.model,
         requestedProvider: params.requestedProvider,
+        fts: params.fts,
+        searchMode: params.searchMode,
         withMemorySourceCounts: params.withMemorySourceCounts,
       }),
     ),
     sync: vi.fn(async () => {}),
-    probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+    probeEmbeddingAvailability: vi.fn<() => Promise<MemoryEmbeddingProbeResult>>(async () => ({
+      ok: true,
+    })),
     probeVectorAvailability: vi.fn(async () => true),
     close: vi.fn(async () => {}),
   };
@@ -107,7 +118,11 @@ const fallbackManager = vi.hoisted(() => ({
 }));
 
 const fallbackSearch = fallbackManager.search;
-const mockMemoryIndexGet = vi.hoisted(() => vi.fn(async () => fallbackManager));
+const mockMemoryIndexGet = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => Promise<typeof fallbackManager | null>>(
+    async () => fallbackManager,
+  ),
+);
 const mockCloseAllMemoryIndexManagers = vi.hoisted(() => vi.fn(async () => {}));
 const mockCloseMemoryIndexManagersForAgent = vi.hoisted(() => vi.fn(async () => {}));
 const checkQmdBinaryAvailability = vi.hoisted(() =>
@@ -349,6 +364,13 @@ describe("getMemorySearchManager caching", () => {
 
   it("falls back immediately when the qmd binary is unavailable", async () => {
     const cfg = createQmdCfg("missing-qmd");
+    const probeManager = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    mockMemoryIndexGet.mockResolvedValueOnce(probeManager).mockResolvedValueOnce(fallbackManager);
     checkQmdBinaryAvailability.mockResolvedValueOnce({
       available: false,
       error: "spawn qmd ENOENT",
@@ -359,8 +381,112 @@ describe("getMemorySearchManager caching", () => {
     const searchResults = await manager.search("hello");
 
     expect(createQmdManagerMock).not.toHaveBeenCalled();
-    expect(mockMemoryIndexGet).toHaveBeenCalled();
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(2);
+    expect(mockMemoryIndexGet).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ agentId: "missing-qmd", purpose: "status" }),
+    );
+    expect(mockMemoryIndexGet).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ agentId: "missing-qmd" }),
+    );
     expect(searchResults).toHaveLength(1);
+  });
+
+  it("falls back to builtin FTS-only search when qmd cannot open and embeddings are unavailable", async () => {
+    const agentId = "missing-qmd-fts-only-fallback";
+    const cfg = createQmdCfg(agentId);
+    const unavailableProbe = createManagerMock({
+      backend: "builtin",
+      provider: "none",
+      model: "fts-only",
+      requestedProvider: "auto",
+      fts: { enabled: true, available: true },
+      searchMode: "fts-only",
+    });
+    unavailableProbe.probeEmbeddingAvailability.mockResolvedValueOnce({
+      ok: false,
+      error: "Local embeddings unavailable",
+    });
+    mockMemoryIndexGet
+      .mockResolvedValueOnce(unavailableProbe)
+      .mockResolvedValueOnce(fallbackManager);
+    checkQmdBinaryAvailability.mockResolvedValueOnce({
+      available: false,
+      error: "spawn qmd ENOENT",
+    });
+
+    const result = await getMemorySearchManager({ cfg, agentId });
+    const manager = requireManager(result);
+    const searchResults = await manager.search("hello");
+
+    expect(searchResults).toHaveLength(1);
+    expect(createQmdManagerMock).not.toHaveBeenCalled();
+    expect(unavailableProbe.probeEmbeddingAvailability).toHaveBeenCalledTimes(1);
+    expect(unavailableProbe.status).toHaveBeenCalledTimes(1);
+    expect(unavailableProbe.close).toHaveBeenCalledTimes(1);
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(2);
+    expect(mockMemoryIndexGet).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ agentId, purpose: "status" }),
+    );
+    expect(mockMemoryIndexGet).toHaveBeenNthCalledWith(2, expect.objectContaining({ agentId }));
+  });
+
+  it("does not create a full builtin fallback when qmd cannot open and builtin FTS is unavailable", async () => {
+    const agentId = "missing-qmd-no-builtin-search";
+    const cfg = createQmdCfg(agentId);
+    const unavailableProbe = createManagerMock({
+      backend: "builtin",
+      provider: "none",
+      model: "fts-only",
+      requestedProvider: "auto",
+      fts: { enabled: true, available: false, error: "fts unavailable" },
+      searchMode: "fts-only",
+    });
+    unavailableProbe.probeEmbeddingAvailability.mockResolvedValueOnce({
+      ok: false,
+      error: "Local embeddings unavailable",
+    });
+    mockMemoryIndexGet.mockResolvedValueOnce(unavailableProbe);
+    checkQmdBinaryAvailability.mockResolvedValueOnce({
+      available: false,
+      error: "spawn qmd ENOENT",
+    });
+
+    const result = await getMemorySearchManager({ cfg, agentId });
+
+    expect(result.manager).toBeNull();
+    expect(result.error).toBe("Local embeddings unavailable");
+    expect(createQmdManagerMock).not.toHaveBeenCalled();
+    expect(unavailableProbe.probeEmbeddingAvailability).toHaveBeenCalledTimes(1);
+    expect(unavailableProbe.status).toHaveBeenCalledTimes(1);
+    expect(unavailableProbe.close).toHaveBeenCalledTimes(1);
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+    expect(mockMemoryIndexGet).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId, purpose: "status" }),
+    );
+  });
+
+  it("does not create a full builtin fallback when qmd cannot open and builtin probe is unavailable", async () => {
+    const agentId = "missing-qmd-no-fallback-probe";
+    const cfg = createQmdCfg(agentId);
+    mockMemoryIndexGet.mockResolvedValueOnce(null);
+    checkQmdBinaryAvailability.mockResolvedValueOnce({
+      available: false,
+      error: "spawn qmd ENOENT",
+    });
+
+    const result = await getMemorySearchManager({ cfg, agentId });
+
+    expect(result.manager).toBeNull();
+    expect(result.error).toBe("builtin memory search unavailable");
+    expect(createQmdManagerMock).not.toHaveBeenCalled();
+    expect(fallbackSearch).not.toHaveBeenCalled();
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+    expect(mockMemoryIndexGet).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId, purpose: "status" }),
+    );
   });
 
   it("backs off repeated full qmd open failures until the cooldown expires", async () => {
@@ -920,6 +1046,13 @@ describe("getMemorySearchManager caching", () => {
 
   it("falls back to builtin search when qmd fails with sqlite busy", async () => {
     const retryAgentId = "retry-agent-busy";
+    const probeManager = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    mockMemoryIndexGet.mockResolvedValueOnce(probeManager).mockResolvedValueOnce(fallbackManager);
     const { manager: firstManager } = await createFailedQmdSearchHarness({
       agentId: retryAgentId,
       errorMessage: "qmd index busy while reading results: SQLITE_BUSY: database is locked",
@@ -929,6 +1062,16 @@ describe("getMemorySearchManager caching", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.path).toBe("MEMORY.md");
     expect(fallbackSearch).toHaveBeenCalledTimes(1);
+    expect(probeManager.probeEmbeddingAvailability).toHaveBeenCalledTimes(1);
+    expect(probeManager.close).toHaveBeenCalledTimes(1);
+    expect(mockMemoryIndexGet).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ agentId: retryAgentId, purpose: "status" }),
+    );
+    expect(mockMemoryIndexGet).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ agentId: retryAgentId }),
+    );
   });
 
   it("keeps original qmd error when fallback manager initialization fails", async () => {
@@ -940,6 +1083,95 @@ describe("getMemorySearchManager caching", () => {
     mockMemoryIndexGet.mockRejectedValueOnce(new Error("No API key found for provider openai"));
 
     await expect(firstManager.search("hello")).rejects.toThrow("qmd query failed");
+  });
+
+  it("keeps original qmd error when builtin fallback probe is unavailable", async () => {
+    const retryAgentId = "retry-agent-no-fallback-probe";
+    mockMemoryIndexGet.mockResolvedValueOnce(null);
+    const { manager: firstManager } = await createFailedQmdSearchHarness({
+      agentId: retryAgentId,
+      errorMessage: "qmd query failed",
+    });
+
+    await expect(firstManager.search("hello")).rejects.toThrow("qmd query failed");
+
+    expect(fallbackSearch).not.toHaveBeenCalled();
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+    expect(mockMemoryIndexGet).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: retryAgentId, purpose: "status" }),
+    );
+  });
+
+  it("falls back to builtin FTS-only search when builtin fallback embeddings are unavailable", async () => {
+    const retryAgentId = "retry-agent-fts-only-fallback";
+    const unavailableProbe = createManagerMock({
+      backend: "builtin",
+      provider: "none",
+      model: "fts-only",
+      requestedProvider: "auto",
+      fts: { enabled: true, available: true },
+      searchMode: "fts-only",
+    });
+    unavailableProbe.probeEmbeddingAvailability.mockResolvedValueOnce({
+      ok: false,
+      error: "Local embeddings unavailable",
+    });
+    mockMemoryIndexGet
+      .mockResolvedValueOnce(unavailableProbe)
+      .mockResolvedValueOnce(fallbackManager);
+    const { manager: firstManager } = await createFailedQmdSearchHarness({
+      agentId: retryAgentId,
+      errorMessage: "qmd query failed",
+    });
+
+    const results = await firstManager.search("hello");
+
+    expect(results).toHaveLength(1);
+    expect(unavailableProbe.probeEmbeddingAvailability).toHaveBeenCalledTimes(1);
+    expect(unavailableProbe.status).toHaveBeenCalledTimes(1);
+    expect(unavailableProbe.close).toHaveBeenCalledTimes(1);
+    expect(fallbackSearch).toHaveBeenCalledTimes(1);
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(2);
+    expect(mockMemoryIndexGet).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ agentId: retryAgentId, purpose: "status" }),
+    );
+    expect(mockMemoryIndexGet).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ agentId: retryAgentId }),
+    );
+  });
+
+  it("keeps original qmd error when builtin fallback embeddings and FTS are unavailable", async () => {
+    const retryAgentId = "retry-agent-no-builtin-search";
+    const unavailableProbe = createManagerMock({
+      backend: "builtin",
+      provider: "none",
+      model: "fts-only",
+      requestedProvider: "auto",
+      fts: { enabled: true, available: false, error: "fts unavailable" },
+      searchMode: "fts-only",
+    });
+    unavailableProbe.probeEmbeddingAvailability.mockResolvedValueOnce({
+      ok: false,
+      error: "Local embeddings unavailable",
+    });
+    mockMemoryIndexGet.mockResolvedValueOnce(unavailableProbe);
+    const { manager: firstManager } = await createFailedQmdSearchHarness({
+      agentId: retryAgentId,
+      errorMessage: "qmd query failed",
+    });
+
+    await expect(firstManager.search("hello")).rejects.toThrow("qmd query failed");
+
+    expect(unavailableProbe.probeEmbeddingAvailability).toHaveBeenCalledTimes(1);
+    expect(unavailableProbe.status).toHaveBeenCalledTimes(1);
+    expect(unavailableProbe.close).toHaveBeenCalledTimes(1);
+    expect(fallbackSearch).not.toHaveBeenCalled();
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+    expect(mockMemoryIndexGet).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: retryAgentId, purpose: "status" }),
+    );
   });
 
   it("closes cached managers on global teardown", async () => {
