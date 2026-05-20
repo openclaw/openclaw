@@ -35,7 +35,7 @@ describe("brain config patch helpers", () => {
     expect(next.agents.list[0].model).toBe("openai-codex/gpt-5.5");
   });
 
-  it("preserves object model shape and fallbacks when patching primary", () => {
+  it("clears stale object fallbacks when the resolved profile has none", () => {
     const tierConfig = normalizeBrainTierConfigParts({
       tierRouting: { baller: "openai-api-balanced" },
     });
@@ -57,7 +57,7 @@ describe("brain config patch helpers", () => {
 
     expect(next.agents.list[0].model).toEqual({
       primary: "openai/gpt-5.4",
-      fallbacks: ["x/y"],
+      fallbacks: [],
     });
   });
 

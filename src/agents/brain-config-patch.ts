@@ -28,14 +28,16 @@ function ensureAgentDefaults(config: ConfigObject): ConfigObject {
 }
 
 function modelValueForResolved(current: unknown, resolved: ResolvedBrainProfile): unknown {
-  const modelObject =
-    resolved.fallbacks.length > 0
-      ? { primary: resolved.modelRef, fallbacks: resolved.fallbacks }
-      : { primary: resolved.modelRef };
   if (current && typeof current === "object" && !Array.isArray(current)) {
-    return { ...(current as Record<string, unknown>), ...modelObject };
+    return {
+      ...(current as Record<string, unknown>),
+      primary: resolved.modelRef,
+      fallbacks: resolved.fallbacks,
+    };
   }
-  return resolved.fallbacks.length > 0 ? modelObject : resolved.modelRef;
+  return resolved.fallbacks.length > 0
+    ? { primary: resolved.modelRef, fallbacks: resolved.fallbacks }
+    : resolved.modelRef;
 }
 
 function ensureModelParams(config: ConfigObject, resolved: ResolvedBrainProfile): void {
