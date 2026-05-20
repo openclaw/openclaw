@@ -6,12 +6,26 @@ import { resolveGesahniResearcherConfig } from "./src/config.js";
 import { GESAHNI_RESEARCHER_TOOL_NAMES, createGesahniResearcherTools } from "./src/tools.js";
 
 type RegisteredTool = ReturnType<typeof createGesahniResearcherTools>[number];
+type ToolParameters = {
+  properties: Record<string, unknown>;
+  required?: string[];
+};
 type RequestLog = {
   url: string;
   method: string;
   headers: Record<string, string>;
   body?: string;
 };
+
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
+  return input.url;
+}
 
 const CREATE_ARTIFACT_KEYS = [
   "user_id",
@@ -85,45 +99,24 @@ describe("gesahni-researcher plugin", () => {
 
   it("publishes locked-down researcher tool schemas", () => {
     const tools = toolMap(vi.fn());
+    const createArtifact = tools.create_artifact.parameters as ToolParameters;
+    const attachTaskOutputs = tools.attach_task_outputs.parameters as ToolParameters;
+    const updateTaskStatus = tools.update_task_status.parameters as ToolParameters;
+    const appendProjectEvent = tools.append_project_event.parameters as ToolParameters;
 
-    expect(Object.keys(tools.create_artifact.parameters.properties ?? {})).toEqual([
-      ...CREATE_ARTIFACT_KEYS,
-    ]);
-    expect(tools.create_artifact.parameters.required).toEqual([
-      "user_id",
-      "project_id",
-      "task_id",
-      "artifact",
-    ]);
+    expect(Object.keys(createArtifact.properties ?? {})).toEqual([...CREATE_ARTIFACT_KEYS]);
+    expect(createArtifact.required).toEqual(["user_id", "project_id", "task_id", "artifact"]);
 
-    expect(Object.keys(tools.attach_task_outputs.parameters.properties ?? {})).toEqual([
-      ...ATTACH_TASK_OUTPUTS_KEYS,
-    ]);
-    expect(tools.attach_task_outputs.parameters.required).toEqual([
-      "user_id",
-      "project_id",
-      "task_id",
-      "outputs",
-    ]);
+    expect(Object.keys(attachTaskOutputs.properties ?? {})).toEqual([...ATTACH_TASK_OUTPUTS_KEYS]);
+    expect(attachTaskOutputs.required).toEqual(["user_id", "project_id", "task_id", "outputs"]);
 
-    expect(Object.keys(tools.update_task_status.parameters.properties ?? {})).toEqual([
-      ...UPDATE_TASK_STATUS_KEYS,
-    ]);
-    expect(tools.update_task_status.parameters.required).toEqual([
-      "user_id",
-      "project_id",
-      "task_id",
-      "status",
-    ]);
+    expect(Object.keys(updateTaskStatus.properties ?? {})).toEqual([...UPDATE_TASK_STATUS_KEYS]);
+    expect(updateTaskStatus.required).toEqual(["user_id", "project_id", "task_id", "status"]);
 
-    expect(Object.keys(tools.append_project_event.parameters.properties ?? {})).toEqual([
+    expect(Object.keys(appendProjectEvent.properties ?? {})).toEqual([
       ...APPEND_PROJECT_EVENT_KEYS,
     ]);
-    expect(tools.append_project_event.parameters.required).toEqual([
-      "user_id",
-      "project_id",
-      "event",
-    ]);
+    expect(appendProjectEvent.required).toEqual(["user_id", "project_id", "event"]);
   });
 
   it("keeps the researcher tool surface stable", () => {
@@ -417,7 +410,7 @@ describe("gesahni-researcher plugin", () => {
 
 function createApi(params?: {
   pluginConfig?: Record<string, unknown>;
-  registerTool?: (tool: RegisteredTool, options?: { optional?: boolean }) => void;
+  registerTool?: OpenClawPluginApi["registerTool"];
 }): OpenClawPluginApi {
   return {
     id: "gesahni-researcher",
@@ -441,7 +434,7 @@ function createApi(params?: {
       return input;
     },
     on() {},
-  };
+  } as unknown as OpenClawPluginApi;
 }
 
 function toolMap(fetchImpl: typeof fetch) {
@@ -470,13 +463,14 @@ async function collectRequests(
   const requests: RequestLog[] = [];
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
+    const url = requestUrl(input);
     requests.push({
-      url: String(input),
-      method: String(init?.method ?? "GET"),
+      url,
+      method: init?.method ?? "GET",
       headers: Object.fromEntries(headers.entries()),
       body: typeof init?.body === "string" ? init.body : undefined,
     });
-    return new Response(JSON.stringify({ ok: true, url: String(input) }), {
+    return new Response(JSON.stringify({ ok: true, url }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });

@@ -267,13 +267,11 @@ export function resolveGesahniUserIdForContext(params: {
   if (params.isGroup) {
     return null;
   }
-  const channel = String(params.surface || params.provider || "")
-    .trim()
-    .toLowerCase();
+  const channel = (params.surface || params.provider || "").trim().toLowerCase();
   if (channel !== "telegram") {
     return null;
   }
-  const to = String(params.originatingTo || params.to || "").trim();
+  const to = (params.originatingTo || params.to || "").trim();
   const match = to.match(/^telegram:(-?\d+)$/);
   if (!match) {
     return null;

@@ -13,8 +13,6 @@ type ToolSpec = {
 };
 
 type ToolArgs = Record<string, unknown>;
-type ReviewSeverity = "info" | "warning" | "blocking";
-type ReviewArea = "content" | "structure" | "implementation" | "readiness" | "other";
 type ApprovalRecommendation = "approve" | "revise" | "blocked";
 type RecommendedNextStep = "approval" | "revision" | "preview_ready" | "blocked";
 

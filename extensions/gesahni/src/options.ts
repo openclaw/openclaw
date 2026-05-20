@@ -29,8 +29,8 @@ function normalizeExpiry(value: string, now: Date = new Date()): string | undefi
   if (!match) {
     return undefined;
   }
-  const month = Number.parseInt(match[1]!, 10);
-  const day = Number.parseInt(match[2]!, 10);
+  const month = Number.parseInt(match[1], 10);
+  const day = Number.parseInt(match[2], 10);
   if (month < 1 || month > 12 || day < 1 || day > 31) {
     return undefined;
   }
@@ -57,7 +57,7 @@ export function toOccOptionSymbol(contract: {
   right: OptionRight;
 }): string {
   const [year, month, day] = contract.expiry.split("-");
-  const date = `${year!.slice(2)}${month}${day}`;
+  const date = `${year.slice(2)}${month}${day}`;
   const right = contract.right === "call" ? "C" : "P";
   const strike = Math.round(contract.strike * 1000)
     .toString()
@@ -82,11 +82,11 @@ export function parseOptionContract(
   if (!verbose) {
     return null;
   }
-  const symbol = normalizeSymbol(verbose[1]!);
-  const strike = Number.parseFloat(verbose[2]!);
-  const rightToken = verbose[3]!.toLowerCase();
+  const symbol = normalizeSymbol(verbose[1]);
+  const strike = Number.parseFloat(verbose[2]);
+  const rightToken = verbose[3].toLowerCase();
   const right: OptionRight = rightToken === "p" || rightToken === "put" ? "put" : "call";
-  const expiry = normalizeExpiry(verbose[4]!, now);
+  const expiry = normalizeExpiry(verbose[4], now);
   if (!symbol || !Number.isFinite(strike) || strike <= 0 || !expiry) {
     return null;
   }
@@ -103,7 +103,7 @@ export function parseEntryPrice(input: string): number | undefined {
   if (!match) {
     return undefined;
   }
-  const value = Number.parseFloat(match[1]!);
+  const value = Number.parseFloat(match[1]);
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
@@ -112,7 +112,7 @@ export function parseOptionTradeContext(input: string): ParsedOptionTradeContext
     /\b(?:sold|bought|bot|buy|closed|trimmed|have|holding)?\s*(\d{1,4})\s+[A-Za-z]{1,6}\b/i.exec(
       input,
     );
-  const quantity = quantityMatch ? Number.parseInt(quantityMatch[1]!, 10) : 1;
+  const quantity = quantityMatch ? Number.parseInt(quantityMatch[1], 10) : 1;
   const posture = /\b(sold|sold-to-close|closed|trimmed)\b/i.test(input)
     ? "sold"
     : /\b(bought|bot|buy|holding|held|have)\b/i.test(input)

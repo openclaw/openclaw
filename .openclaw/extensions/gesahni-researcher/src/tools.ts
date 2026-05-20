@@ -24,7 +24,6 @@ const ProjectIdSchema = { type: "string", minLength: 1 } as const;
 const TaskIdSchema = { type: "string", minLength: 1 } as const;
 const RunIdSchema = { type: "string", minLength: 1 } as const;
 const IdempotencyKeySchema = { type: "string", minLength: 1 } as const;
-const NonEmptyStringSchema = { type: "string", minLength: 1 } as const;
 const JsonObjectSchema = {
   type: "object",
   additionalProperties: true,

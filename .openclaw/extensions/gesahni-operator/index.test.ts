@@ -9,6 +9,16 @@ import { GESAHNI_OPERATOR_TOOL_NAMES, createGesahniOperatorTools } from "./src/t
 type RegisteredTool = ReturnType<typeof createGesahniOperatorTools>[number];
 type ToolName = (typeof GESAHNI_OPERATOR_TOOL_NAMES)[number];
 
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
+  return input.url;
+}
+
 describe("gesahni-operator plugin", () => {
   const originalEnv = { ...process.env };
 
@@ -330,13 +340,14 @@ describe("gesahni-operator plugin", () => {
     const requests: RequestRecord[] = [];
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
+      const url = requestUrl(input);
       requests.push({
-        url: String(input),
-        method: String(init?.method ?? "GET"),
+        url,
+        method: init?.method ?? "GET",
         headers: Object.fromEntries(headers.entries()),
         body: typeof init?.body === "string" ? init.body : undefined,
       });
-      return new Response(JSON.stringify({ ok: true, url: String(input) }), {
+      return new Response(JSON.stringify({ ok: true, url }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
@@ -875,7 +886,7 @@ describe("gesahni-operator plugin", () => {
     const requests: string[] = [];
     const tools = toolMap(
       vi.fn(async (input: RequestInfo | URL) => {
-        requests.push(String(input));
+        requests.push(requestUrl(input));
         return new Response(JSON.stringify({ ok: true }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -909,7 +920,7 @@ describe("gesahni-operator plugin", () => {
   it("never calls non-bridge routes", async () => {
     const fetchImpl = vi.fn(
       async (input: RequestInfo | URL) =>
-        new Response(JSON.stringify({ ok: true, url: String(input) }), {
+        new Response(JSON.stringify({ ok: true, url: requestUrl(input) }), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
@@ -919,10 +930,10 @@ describe("gesahni-operator plugin", () => {
     await tools.list_projects.execute("call-1", { user_id: "tg:1" });
     await tools.create_project.execute("call-2", baseCreateProjectArgs());
 
-    expect(fetchImpl.mock.calls.every((call) => String(call[0]).includes("/v1/bridge/"))).toBe(
+    expect(fetchImpl.mock.calls.every((call) => requestUrl(call[0]).includes("/v1/bridge/"))).toBe(
       true,
     );
-    expect(fetchImpl.mock.calls.some((call) => String(call[0]).includes("/v1/projects"))).toBe(
+    expect(fetchImpl.mock.calls.some((call) => requestUrl(call[0]).includes("/v1/projects"))).toBe(
       false,
     );
   });
@@ -1074,8 +1085,8 @@ function baseCreateProjectArgs(): Record<string, unknown> {
 function recordingFetch(requests: RequestRecord[]) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     requests.push({
-      url: String(input),
-      method: String(init?.method ?? "GET"),
+      url: requestUrl(input),
+      method: init?.method ?? "GET",
       headers: Object.fromEntries(new Headers(init?.headers).entries()),
       body: typeof init?.body === "string" ? init.body : undefined,
     });
@@ -1088,7 +1099,7 @@ function recordingFetch(requests: RequestRecord[]) {
 
 function createApi(params?: {
   pluginConfig?: Record<string, unknown>;
-  registerTool?: (tool: RegisteredTool, options?: { optional?: boolean }) => void;
+  registerTool?: OpenClawPluginApi["registerTool"];
 }): OpenClawPluginApi {
   return {
     id: "gesahni-operator",
@@ -1112,7 +1123,7 @@ function createApi(params?: {
       return input;
     },
     on() {},
-  };
+  } as unknown as OpenClawPluginApi;
 }
 
 function toolMap(fetchImpl: typeof fetch) {

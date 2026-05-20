@@ -25,7 +25,7 @@ function normalizeBaseUrl(value: string): string {
 export function resolveGesahniBuilderConfig(
   api: Pick<OpenClawPluginApi, "pluginConfig">,
 ): GesahniBuilderConfig {
-  const pluginConfig = (api.pluginConfig ?? {}) as Record<string, unknown>;
+  const pluginConfig = api.pluginConfig ?? {};
   const baseUrl =
     readConfiguredString(pluginConfig.baseUrl) ??
     readConfiguredString(process.env.GESAHNI_BASE_URL);

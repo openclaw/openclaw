@@ -551,7 +551,7 @@ function parseAlertDeletionCriteria(input: string): {
     .find((token) => !ignored.has(token.toLowerCase()));
   const conditionValueMatch = /\$?(\d+(?:\.\d+)?)/.exec(input);
   const conditionValue = conditionValueMatch
-    ? Number.parseFloat(conditionValueMatch[1]!)
+    ? Number.parseFloat(conditionValueMatch[1])
     : undefined;
   return {
     ...(symbol ? { symbol } : {}),
@@ -748,6 +748,7 @@ export default definePluginEntry({
   },
 });
 
+// eslint-disable-next-line no-underscore-dangle
 export const __testing = {
   createQuoteCommand,
   createContractCommand,

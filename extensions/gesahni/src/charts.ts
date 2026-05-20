@@ -31,8 +31,8 @@ export function formatChartText(symbol: string, bars: MarketBar[]): string {
   const closes = bars.map((bar) => bar.close);
   const min = Math.min(...closes);
   const max = Math.max(...closes);
-  const first = closes[0]!;
-  const last = closes[closes.length - 1]!;
+  const first = closes[0];
+  const last = closes[closes.length - 1];
   const change = last - first;
   const changePct = (change / first) * 100;
   const tail = bars
@@ -68,8 +68,8 @@ export function renderChartSvg(symbol: string, bars: MarketBar[]): string {
   const closes = bars.map((bar) => bar.close);
   const min = Math.min(...closes);
   const max = Math.max(...closes);
-  const first = closes[0]!;
-  const last = closes[closes.length - 1]!;
+  const first = closes[0];
+  const last = closes[closes.length - 1];
   const change = last - first;
   const stroke = change >= 0 ? "#138a48" : "#c2412d";
   const points = buildPolylinePoints(bars);

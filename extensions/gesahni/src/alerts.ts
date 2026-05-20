@@ -151,7 +151,9 @@ function matchesListParams(alert: AlertRecord, params: { scope?: AlertScope; sen
 }
 
 function latestByCreatedAt(alerts: AlertRecord[]): AlertRecord | undefined {
-  return alerts.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+  return alerts.toSorted(
+    (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
+  )[0];
 }
 
 function alertMatchesSymbol(alert: AlertRecord, symbol?: string): boolean {
@@ -300,11 +302,11 @@ function parseThreshold(input: string): { operator: ">=" | "<="; value: number }
   if (!match) {
     return null;
   }
-  const value = Number.parseFloat(match[1]!);
+  const value = Number.parseFloat(match[1]);
   if (!Number.isFinite(value) || value <= 0) {
     return null;
   }
-  const prefix = match[0]!.toLowerCase();
+  const prefix = match[0].toLowerCase();
   return {
     operator: /\b(below|under|<=|at most)\b/.test(prefix) ? "<=" : ">=",
     value,

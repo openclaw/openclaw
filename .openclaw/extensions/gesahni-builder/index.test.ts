@@ -6,6 +6,10 @@ import { resolveGesahniBuilderConfig } from "./src/config.js";
 import { GESAHNI_BUILDER_TOOL_NAMES, createGesahniBuilderTools } from "./src/tools.js";
 
 type RegisteredTool = ReturnType<typeof createGesahniBuilderTools>[number];
+type ToolParameters = {
+  properties: Record<string, unknown>;
+  required?: string[];
+};
 type RequestLog = {
   url: string;
   method: string;
@@ -88,45 +92,24 @@ describe("gesahni-builder plugin", () => {
 
   it("publishes locked-down builder tool schemas", () => {
     const tools = toolMap(vi.fn());
+    const createArtifact = tools.create_artifact.parameters as ToolParameters;
+    const attachTaskOutputs = tools.attach_task_outputs.parameters as ToolParameters;
+    const updateTaskStatus = tools.update_task_status.parameters as ToolParameters;
+    const appendProjectEvent = tools.append_project_event.parameters as ToolParameters;
 
-    expect(Object.keys(tools.create_artifact.parameters.properties ?? {})).toEqual([
-      ...CREATE_ARTIFACT_KEYS,
-    ]);
-    expect(tools.create_artifact.parameters.required).toEqual([
-      "user_id",
-      "project_id",
-      "task_id",
-      "artifact",
-    ]);
+    expect(Object.keys(createArtifact.properties ?? {})).toEqual([...CREATE_ARTIFACT_KEYS]);
+    expect(createArtifact.required).toEqual(["user_id", "project_id", "task_id", "artifact"]);
 
-    expect(Object.keys(tools.attach_task_outputs.parameters.properties ?? {})).toEqual([
-      ...ATTACH_TASK_OUTPUTS_KEYS,
-    ]);
-    expect(tools.attach_task_outputs.parameters.required).toEqual([
-      "user_id",
-      "project_id",
-      "task_id",
-      "outputs",
-    ]);
+    expect(Object.keys(attachTaskOutputs.properties ?? {})).toEqual([...ATTACH_TASK_OUTPUTS_KEYS]);
+    expect(attachTaskOutputs.required).toEqual(["user_id", "project_id", "task_id", "outputs"]);
 
-    expect(Object.keys(tools.update_task_status.parameters.properties ?? {})).toEqual([
-      ...UPDATE_TASK_STATUS_KEYS,
-    ]);
-    expect(tools.update_task_status.parameters.required).toEqual([
-      "user_id",
-      "project_id",
-      "task_id",
-      "status",
-    ]);
+    expect(Object.keys(updateTaskStatus.properties ?? {})).toEqual([...UPDATE_TASK_STATUS_KEYS]);
+    expect(updateTaskStatus.required).toEqual(["user_id", "project_id", "task_id", "status"]);
 
-    expect(Object.keys(tools.append_project_event.parameters.properties ?? {})).toEqual([
+    expect(Object.keys(appendProjectEvent.properties ?? {})).toEqual([
       ...APPEND_PROJECT_EVENT_KEYS,
     ]);
-    expect(tools.append_project_event.parameters.required).toEqual([
-      "user_id",
-      "project_id",
-      "event",
-    ]);
+    expect(appendProjectEvent.required).toEqual(["user_id", "project_id", "event"]);
   });
 
   it("resolves config from plugin config first and env fallback second", () => {
@@ -469,7 +452,7 @@ describe("gesahni-builder plugin", () => {
 
 function createApi(params?: {
   pluginConfig?: Record<string, unknown>;
-  registerTool?: (tool: RegisteredTool, options?: { optional?: boolean }) => void;
+  registerTool?: OpenClawPluginApi["registerTool"];
 }): OpenClawPluginApi {
   return {
     id: "gesahni-builder",
@@ -493,7 +476,7 @@ function createApi(params?: {
       return input;
     },
     on() {},
-  };
+  } as unknown as OpenClawPluginApi;
 }
 
 function toolMap(fetchImpl: typeof fetch) {
@@ -528,7 +511,7 @@ async function collectRequests(
       url,
       method: init?.method ?? "GET",
       headers,
-      body: init?.body ? String(init.body) : undefined,
+      body: typeof init?.body === "string" ? init.body : undefined,
     });
 
     return new Response(JSON.stringify({ ok: true, artifact_id: "a1" }), {

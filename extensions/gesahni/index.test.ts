@@ -9,7 +9,7 @@ import type {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import register, { __testing } from "./index.js";
-import { runAlertCheck } from "./src/alert-runner.js";
+import { runAlertCheck, type AlertDelivery } from "./src/alert-runner.js";
 import { createAlertStore, parseAlertRequest } from "./src/alerts.js";
 import { readGesahniConfig } from "./src/config.js";
 import type { MarketDataClient } from "./src/market-data.js";
@@ -124,7 +124,7 @@ describe("gesahni plugin", () => {
         }),
       );
 
-      expect(commands.map((command) => command.name).sort()).toEqual([
+      expect(commands.map((command) => command.name).toSorted()).toEqual([
         "alert",
         "alerts",
         "chart",
@@ -627,7 +627,7 @@ describe("gesahni plugin", () => {
       expect(alert).toBeTruthy();
       const preview = await store.preview(alert!);
       await store.confirm(preview.id, "1309247958029701190");
-      const deliver = vi.fn(async () => {});
+      const deliver = vi.fn<AlertDelivery>(async () => {});
 
       const first = await runAlertCheck({
         cfg: {},
@@ -649,8 +649,12 @@ describe("gesahni plugin", () => {
       expect(first).toMatchObject({ checked: 1, triggered: 1, errors: 0 });
       expect(second).toMatchObject({ checked: 1, triggered: 0, errors: 0 });
       expect(deliver).toHaveBeenCalledTimes(1);
-      expect(deliver.mock.calls[0]?.[0].text).toContain("Stock alert: AAPL is above 210.00.");
-      expect(deliver.mock.calls[0]?.[0].text).toContain("Entry reference: 205.00");
+      const firstDelivery = deliver.mock.calls[0]?.[0];
+      if (!firstDelivery) {
+        throw new Error("Expected one stock alert delivery");
+      }
+      expect(firstDelivery.text).toContain("Stock alert: AAPL is above 210.00.");
+      expect(firstDelivery.text).toContain("Entry reference: 205.00");
     });
   });
 
