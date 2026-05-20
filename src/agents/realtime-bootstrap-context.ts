@@ -19,22 +19,10 @@ export const REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES = [
 export type RealtimeBootstrapContextFileName =
   (typeof REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES)[number];
 
-export const DEFAULT_REALTIME_BOOTSTRAP_CONTEXT_MAX_CHARS = 4_000;
-const MIN_REALTIME_BOOTSTRAP_CONTEXT_MAX_CHARS = 256;
-const MAX_REALTIME_BOOTSTRAP_CONTEXT_MAX_CHARS = 20_000;
+const DEFAULT_REALTIME_BOOTSTRAP_CONTEXT_MAX_CHARS = 4_000;
 const REALTIME_BOOTSTRAP_CONTEXT_TITLE = "OpenClaw realtime voice profile context:";
 const REALTIME_BOOTSTRAP_CONTEXT_GUIDANCE =
   "Use these profile files for identity, persona, and user grounding; do not mention them unless asked.";
-
-function resolveRealtimeBootstrapContextMaxChars(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_REALTIME_BOOTSTRAP_CONTEXT_MAX_CHARS;
-  }
-  return Math.min(
-    MAX_REALTIME_BOOTSTRAP_CONTEXT_MAX_CHARS,
-    Math.max(MIN_REALTIME_BOOTSTRAP_CONTEXT_MAX_CHARS, Math.floor(value)),
-  );
-}
 
 function formatRealtimeBootstrapContextFileName(pathValue: string): string {
   return path.basename(pathValue.trim().replace(/\\/g, "/"));
@@ -57,11 +45,10 @@ export async function resolveRealtimeBootstrapContextInstructions(params: {
   agentId: string;
   config: OpenClawConfig;
   files?: readonly RealtimeBootstrapContextFileName[];
-  maxChars?: number;
   sessionKey?: string;
   warn?: (message: string) => void;
 }): Promise<string | undefined> {
-  const requestedFiles = params.files ?? [];
+  const requestedFiles = params.files ?? REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES;
   if (requestedFiles.length === 0) {
     return undefined;
   }
@@ -90,7 +77,7 @@ export async function resolveRealtimeBootstrapContextInstructions(params: {
     return undefined;
   }
 
-  const totalMaxChars = resolveRealtimeBootstrapContextMaxChars(params.maxChars);
+  const totalMaxChars = DEFAULT_REALTIME_BOOTSTRAP_CONTEXT_MAX_CHARS;
   const preamble = [REALTIME_BOOTSTRAP_CONTEXT_TITLE, REALTIME_BOOTSTRAP_CONTEXT_GUIDANCE].join(
     "\n",
   );

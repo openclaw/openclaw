@@ -231,11 +231,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.realtime.bootstrapContextFiles": {
     label: "Discord Realtime Bootstrap Context Files",
-    help: "Agent profile bootstrap files to include in realtime provider instructions for direct voice identity/persona grounding. Supported values: IDENTITY.md, USER.md, SOUL.md.",
-  },
-  "voice.realtime.bootstrapContextMaxChars": {
-    label: "Discord Realtime Bootstrap Context Max Chars",
-    help: "Total character budget for Discord realtime bootstrap profile context. Default: 4000.",
+    help: "Agent profile bootstrap files included in realtime provider instructions for direct voice identity/persona grounding. Defaults to IDENTITY.md, USER.md, and SOUL.md; set [] to disable.",
   },
   "voice.realtime.bargeIn": {
     label: "Discord Realtime Barge-In",

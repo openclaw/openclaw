@@ -131,7 +131,9 @@ const {
         _runtime?: unknown,
       ): Promise<{ payloads?: Array<{ text?: string }> }> => ({ payloads: [] }),
     ),
-    resolveRealtimeBootstrapContextInstructionsMock: vi.fn(async () => undefined),
+    resolveRealtimeBootstrapContextInstructionsMock: vi.fn<
+      (...args: unknown[]) => Promise<string | undefined>
+    >(async () => undefined),
     transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
     textToSpeechStreamMock: vi.fn(
       async (): Promise<unknown> => ({ success: false, error: "stream unavailable" }),
@@ -2889,7 +2891,7 @@ describe("DiscordVoiceManager", () => {
     ]);
   });
 
-  it("adds configured bootstrap profile context to realtime voice instructions", async () => {
+  it("adds default bootstrap profile context to realtime voice instructions", async () => {
     resolveAgentRouteMock.mockReturnValue({
       agentId: "main",
       sessionKey: "agent:main:discord:channel:1001",
@@ -2905,8 +2907,6 @@ describe("DiscordVoiceManager", () => {
         realtime: {
           provider: "openai",
           consultPolicy: "always",
-          bootstrapContextFiles: ["IDENTITY.md", "USER.md", "SOUL.md"],
-          bootstrapContextMaxChars: 2048,
         },
       },
     });
@@ -2917,8 +2917,7 @@ describe("DiscordVoiceManager", () => {
       config: {},
       agentId: "main",
       sessionKey: "agent:main:discord:channel:1001",
-      files: ["IDENTITY.md", "USER.md", "SOUL.md"],
-      maxChars: 2048,
+      files: undefined,
       warn: expect.any(Function),
     });
     const bridgeParams = lastRealtimeBridgeParams() as

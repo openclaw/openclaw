@@ -580,7 +580,6 @@ const DiscordVoiceRealtimeSchema = z
     toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
     consultPolicy: DiscordVoiceRealtimeConsultPolicySchema.optional(),
     bootstrapContextFiles: z.array(DiscordVoiceRealtimeBootstrapContextFileSchema).optional(),
-    bootstrapContextMaxChars: z.number().int().min(256).max(20_000).optional(),
     bargeIn: z.boolean().optional(),
     minBargeInAudioEndMs: z.number().int().min(0).max(10_000).optional(),
     debounceMs: z.number().int().positive().max(10_000).optional(),

@@ -171,7 +171,7 @@ export async function resolveDiscordVoiceRealtimeBootstrapContext(params: {
 }): Promise<string | undefined> {
   const realtimeConfig = params.discordConfig.voice?.realtime;
   const files = realtimeConfig?.bootstrapContextFiles;
-  if (!files || files.length === 0) {
+  if (files?.length === 0) {
     return undefined;
   }
   try {
@@ -180,7 +180,6 @@ export async function resolveDiscordVoiceRealtimeBootstrapContext(params: {
       agentId: params.entry.route.agentId,
       sessionKey: params.entry.route.sessionKey,
       files,
-      maxChars: realtimeConfig.bootstrapContextMaxChars,
       warn: (message) => logger.warn(`discord voice: realtime bootstrap context: ${message}`),
     });
   } catch (error) {
