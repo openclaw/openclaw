@@ -134,6 +134,19 @@ export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapsho
   return snapshot;
 }
 
+export function getActiveSecretsRuntimeConfigSnapshot(): Pick<
+  PreparedSecretsRuntimeSnapshot,
+  "config" | "sourceConfig"
+> | null {
+  if (!activeSnapshot) {
+    return null;
+  }
+  return {
+    config: structuredClone(activeSnapshot.config),
+    sourceConfig: structuredClone(activeSnapshot.sourceConfig),
+  };
+}
+
 export function getLiveSecretsRuntimeAuthStores(): PreparedSecretsRuntimeSnapshot["authStores"] {
   if (!activeSnapshot) {
     return [];

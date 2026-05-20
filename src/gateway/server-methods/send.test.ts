@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
+  getActiveSecretsRuntimeConfigSnapshot: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -77,6 +78,10 @@ vi.mock("../../agents/agent-scope.js", () => ({
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: ({ config, env }: { config: unknown; env?: unknown }) =>
     mocks.applyPluginAutoEnable({ config, env }),
+}));
+
+vi.mock("../../secrets/runtime-state.js", () => ({
+  getActiveSecretsRuntimeConfigSnapshot: mocks.getActiveSecretsRuntimeConfigSnapshot,
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
@@ -280,6 +285,7 @@ describe("gateway send mirroring", () => {
       changes: [],
       autoEnabledReasons: {},
     }));
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue(null);
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
     mocks.resolveOutboundSessionRoute.mockImplementation(
       async ({ agentId, channel }: { agentId?: string; channel?: string }) => ({
@@ -301,6 +307,144 @@ describe("gateway send mirroring", () => {
       actions: { handleAction: true },
       outbound: { sendPoll: mocks.sendPoll },
     });
+  });
+
+  it("uses the active resolved runtime config for message.action without cloning full secrets state", async () => {
+    const sourceConfig = {
+      channels: {
+        discord: {
+          accounts: {
+            drclaw: {
+              token: {
+                source: "env",
+                provider: "default",
+                id: "DISCORD_BOT_TOKEN_DRCLAW",
+              },
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig = {
+      channels: {
+        discord: {
+          accounts: {
+            drclaw: {
+              token: "resolved-token",
+            },
+          },
+        },
+      },
+    };
+    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({
+      config: sourceConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({
+      config: runtimeConfig,
+      sourceConfig,
+    });
+
+    const context = {
+      ...makeContext(),
+      getRuntimeConfig: () => sourceConfig,
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn();
+    await sendHandlers["message.action"]({
+      params: {
+        channel: "discord",
+        action: "channel-info",
+        params: { channelId: "123", accountId: "drclaw" },
+        idempotencyKey: "idem-action-runtime-config",
+      } as never,
+      respond,
+      context,
+      req: { type: "req", id: "1", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.getActiveSecretsRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
+    expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(runtimeConfig);
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(true);
+  });
+
+  it("keeps the request context config for message.action when the active snapshot source does not match", async () => {
+    const contextConfig = {
+      channels: {
+        discord: {
+          accounts: {
+            drclaw: {
+              token: {
+                source: "env",
+                provider: "default",
+                id: "DISCORD_BOT_TOKEN_DRCLAW",
+              },
+            },
+          },
+        },
+      },
+    };
+    mocks.applyPluginAutoEnable.mockImplementation(() => ({
+      config: contextConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({
+      config: {
+        channels: {
+          discord: {
+            accounts: {
+              drclaw: { token: "stale-runtime-token" },
+            },
+          },
+        },
+      },
+      sourceConfig: {
+        channels: {
+          discord: {
+            accounts: {
+              other: { token: "different-source" },
+            },
+          },
+        },
+      },
+    });
+
+    const context = {
+      ...makeContext(),
+      getRuntimeConfig: () => contextConfig,
+    } as unknown as GatewayRequestContext;
+    await sendHandlers["message.action"]({
+      params: {
+        channel: "discord",
+        action: "channel-info",
+        params: { channelId: "123", accountId: "drclaw" },
+        idempotencyKey: "idem-action-stale-runtime-config",
+      } as never,
+      respond: vi.fn(),
+      context,
+      req: { type: "req", id: "1", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(contextConfig);
+  });
+
+  it("does not read the active secrets runtime config snapshot for send requests", async () => {
+    mockDeliverySuccess("m-no-runtime-config-read");
+
+    await runSend({
+      to: "channel:C1",
+      message: "hi",
+      channel: "slack",
+      idempotencyKey: "idem-send-no-runtime-config-read",
+    });
+
+    expect(mocks.getActiveSecretsRuntimeConfigSnapshot).not.toHaveBeenCalled();
   });
 
   it("dedupes concurrent message.action requests while inflight", async () => {
