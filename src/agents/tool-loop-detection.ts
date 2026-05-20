@@ -29,16 +29,20 @@ export const WARNING_THRESHOLD = 10;
 export const CRITICAL_THRESHOLD = 20;
 export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
 
-// P2.12 tool-call loop guard (gemma-memory follow-up).
+// P2.12 / P2.15 tool-call loop guard (gemma-memory follow-up).
 // Small local models (e.g. gemma) re-issue the *same* (tool, args) call dozens of
 // times after every ENOENT/sanitize failure, burning tokens + latency (observed
 // up to 61 identical `read` calls in a single session). The pre-existing
 // generic_repeat detector only *warns* and never blocks, so add a low-threshold
-// blocking escalation: once the same (toolName, args) repeats this many times
-// (inclusive of the current attempt) the call is blocked with a synthetic
-// tool_result via the before-tool-call hook, letting the model respond with text.
-// "window" = number of prior identical calls tolerated; block fires on
-// (window + 1)-th. Default window 4 -> block on the 5th identical call.
+// blocking escalation: once the same (toolName, args) appears this many times
+// in the recent history window (inclusive of the current attempt) the call is
+// blocked with a synthetic tool_result via the before-tool-call hook, letting
+// the model respond with text. "window" = number of prior identical calls
+// tolerated; block fires on (window + 1)-th. Default window 4 -> block on the
+// 5th identical call. P2.15: occurrence count is windowed across the recent
+// history (not a strict trailing run), so interleaved variant calls between
+// the identical attempts (the real gemma runaway pattern) still trigger the
+// block.
 export const DEFAULT_GENERIC_REPEAT_BLOCK_WINDOW = 4;
 
 // Env knobs so operators can tune/disable without editing config files.
@@ -447,29 +451,6 @@ function canonicalPairKey(signatureA: string, signatureB: string): string {
 }
 
 /**
- * Count the trailing run of identical (toolName, argsHash) calls at the end of
- * history. Any interleaved different toolName/args resets the run, so this is
- * a true consecutive streak (not a windowed occurrence count). Used by the
- * P2.12 generic-repeat hard block so that legitimate alternating patterns
- * (handled by the ping-pong detector) are never preempted.
- */
-function getConsecutiveIdenticalStreak(
-  history: ReadonlyArray<{ toolName: string; argsHash: string }>,
-  toolName: string,
-  argsHash: string,
-): number {
-  let streak = 0;
-  for (let i = history.length - 1; i >= 0; i -= 1) {
-    const record = history[i];
-    if (!record || record.toolName !== toolName || record.argsHash !== argsHash) {
-      break;
-    }
-    streak += 1;
-  }
-  return streak;
-}
-
-/**
  * Detect if an agent is stuck in a repetitive tool call loop.
  * Checks if the same tool+params combination has been called excessively.
  */
@@ -580,33 +561,72 @@ export function detectToolCallLoop(
   const recentCount = history.filter(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
   ).length;
+  const totalIdenticalIncludingCurrent = recentCount + 1;
 
-  // P2.12: hard-block consecutive runaways. Count the trailing run of identical
-  // calls (any interleaved different tool/args resets it) and, once the same
-  // call has repeated genericRepeatBlockThreshold times in a row (default 5),
-  // block it with a critical result so the before-tool-call hook injects a
-  // synthetic blocked tool_result instead of executing. Every subsequent
-  // identical attempt keeps getting blocked (the model can never re-run it),
-  // which is the catastrophic-loop backstop. Using a consecutive streak (not a
-  // windowed count) keeps legitimate alternating patterns for the ping-pong
-  // detector, which is evaluated earlier.
-  const consecutiveIdentical = getConsecutiveIdenticalStreak(history, toolName, currentHash) + 1;
+  // P2.15: hard-block runaways using a windowed-occurrence count instead of a
+  // trailing-consecutive-run count. Real local-model runaways (e.g. the 12:25
+  // KST 2026-05-20 gemma session) interleave variant attempts between identical
+  // calls — `read({file_path:"<|<|"})`, `exec({command:"<garbage>"})`, etc. —
+  // which the prior trailing-run detector treated as a reset to 1, never
+  // firing. Counting occurrences across the historySize window (default 30)
+  // catches "same (tool, args) repeated 5+ times in the recent window" even
+  // when variant calls are interleaved.
+  //
+  // Two gates keep us from over-blocking legitimate patterns:
+  //   1. Progress gate: a model re-calling the same (tool, args) and getting
+  //      *different* results each time is exploring, not stuck. Skip the block
+  //      when matching prior calls produced >1 distinct resultHash. Matches
+  //      with no resultHash yet (outcome not recorded) count as "no progress
+  //      evidence" so test fixtures that exercise the detector via
+  //      detect+record without outcomes still trip the guard.
+  //   2. Ping-pong defer gate: if the trailing window that contains the
+  //      matched calls is a strict 2-argsHash alternation (e.g. A,B,A,B,A),
+  //      defer to the dedicated ping-pong detector instead of pre-empting it
+  //      at this lower threshold. The gemma pattern interleaves the matched
+  //      call with *varying* argsHashes, so its trailing window has >2
+  //      distinct hashes and is NOT deferred.
   if (
     !knownPollTool &&
     resolvedConfig.detectors.genericRepeat &&
-    consecutiveIdentical >= resolvedConfig.genericRepeatBlockThreshold
+    totalIdenticalIncludingCurrent >= resolvedConfig.genericRepeatBlockThreshold
   ) {
-    log.error(
-      `Blocking ${toolName}: called ${consecutiveIdentical} times in a row with identical arguments (generic repeat block)`,
-    );
-    return {
-      stuck: true,
-      level: "critical",
-      detector: "generic_repeat",
-      count: consecutiveIdentical,
-      message: `CRITICAL: ${toolName} has been called ${consecutiveIdentical} times in a row with identical arguments and the previous attempts all returned the same result. Session execution blocked to prevent a runaway loop. Do not retry this exact call — try a different approach or report the result honestly to the user.`,
-      warningKey: `generic:${toolName}:${currentHash}`,
-    };
+    const distinctMatchingResultHashes = new Set<string>();
+    for (const record of history) {
+      if (
+        record.toolName === toolName &&
+        record.argsHash === currentHash &&
+        typeof record.resultHash === "string" &&
+        record.resultHash.length > 0
+      ) {
+        distinctMatchingResultHashes.add(record.resultHash);
+      }
+    }
+    // Strict ping-pong window: the smallest tail that could fit `recentCount`
+    // matches in a strict alternation is `2*recentCount - 1` entries.
+    const alternationWindow = Math.max(0, 2 * recentCount - 1);
+    const windowSize = Math.min(history.length, alternationWindow);
+    const trailingArgsHashes = new Set<string>();
+    trailingArgsHashes.add(currentHash);
+    for (let i = history.length - windowSize; i < history.length; i += 1) {
+      const record = history[i];
+      if (record) {
+        trailingArgsHashes.add(record.argsHash);
+      }
+    }
+    const isStrictPingPongShape = trailingArgsHashes.size === 2;
+    if (distinctMatchingResultHashes.size <= 1 && !isStrictPingPongShape) {
+      log.error(
+        `Blocking ${toolName}: called ${totalIdenticalIncludingCurrent} times with identical arguments in recent history (generic repeat block)`,
+      );
+      return {
+        stuck: true,
+        level: "critical",
+        detector: "generic_repeat",
+        count: totalIdenticalIncludingCurrent,
+        message: `CRITICAL: ${toolName} has been called ${totalIdenticalIncludingCurrent} times with identical arguments in the recent tool-call window. Session execution blocked to prevent a runaway loop. Do not retry this exact call — try a different approach or report the result honestly to the user.`,
+        warningKey: `generic:${toolName}:${currentHash}`,
+      };
+    }
   }
 
   if (
