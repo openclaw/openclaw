@@ -1402,12 +1402,7 @@ describe("runCodexAppServerAttempt", () => {
       testing.buildDeveloperInstructions(params, {
         dynamicTools: [createMessageDynamicTool("Message test tool")],
       }),
-    ).toContain('call `message` with `action="send"` before ending the turn');
-    expect(
-      testing.buildDeveloperInstructions(params, {
-        dynamicTools: [createMessageDynamicTool("Message test tool")],
-      }),
-    ).toContain("Do not rely on normal final assistant text for visible delivery");
+    ).toContain("To send a visible message, use the `message` tool.");
 
     const withoutMessageToolInstructions = testing.buildDeveloperInstructions(params, {
       dynamicTools: [],
@@ -1418,7 +1413,7 @@ describe("runCodexAppServerAttempt", () => {
     params.sourceReplyDeliveryMode = "automatic";
     const automaticInstructions = testing.buildDeveloperInstructions(params);
     expect(automaticInstructions).toContain("active Codex delivery path");
-    expect(automaticInstructions).not.toContain('call `message` with `action="send"`');
+    expect(automaticInstructions).not.toContain("use the `message` tool");
   });
 
   it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
