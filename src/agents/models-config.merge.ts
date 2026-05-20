@@ -134,7 +134,7 @@ export function mergeProviderModels(
     seen.add(id);
     const implicitModel = implicitById.get(id);
     if (!implicitModel) {
-      return applyInputDefaultForExplicitOnlyEntry(explicitModel as ModelDefinitionConfig);
+      return applyInputDefaultForExplicitOnlyEntry(explicitModel);
     }
 
     const contextWindow = resolvePreferredTokenLimit({
