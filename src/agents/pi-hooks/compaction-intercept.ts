@@ -112,6 +112,18 @@ export default function compactionInterceptExtension(api: ExtensionAPI): void {
       return undefined;
     }
 
+    log.info("[compaction-intercept] engine handled compaction intercept", {
+      engineId: engine.info.id,
+      sessionId,
+      sessionKey: runtime.sessionKey,
+      tokenBudget,
+      currentTokenCount,
+      tokensBefore: result.tokensBefore,
+      tokensAfter: result.tokensAfter,
+      firstKeptEntryId: result.firstKeptEntryId,
+      summaryChars: result.summary.length,
+    });
+
     return {
       compaction: {
         summary: result.summary,

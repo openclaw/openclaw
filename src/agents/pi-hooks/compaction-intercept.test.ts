@@ -12,6 +12,25 @@ import {
 } from "./compaction-intercept-runtime.js";
 import compactionInterceptExtension from "./compaction-intercept.js";
 
+const logInfo = vi.hoisted(() => vi.fn());
+const logDebug = vi.hoisted(() => vi.fn());
+const logWarn = vi.hoisted(() => vi.fn());
+
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    subsystem: "compaction-intercept",
+    isEnabled: () => true,
+    trace: vi.fn(),
+    debug: logDebug,
+    info: logInfo,
+    warn: logWarn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn(),
+  }),
+}));
+
 type CompactionHandler = (event: unknown, ctx: unknown) => Promise<unknown>;
 
 function stubSessionManager(
@@ -116,6 +135,9 @@ function makeCtx(
 }
 
 afterEach(() => {
+  logInfo.mockClear();
+  logDebug.mockClear();
+  logWarn.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -181,6 +203,19 @@ describe("compactionInterceptExtension", () => {
           details: { engine: "lcm", strategy: "intercept" },
         },
       });
+      expect(logInfo).toHaveBeenCalledWith(
+        "[compaction-intercept] engine handled compaction intercept",
+        expect.objectContaining({
+          engineId: "lcm",
+          sessionId: "abc-123",
+          tokenBudget: 258_000,
+          currentTokenCount: 232_000,
+          tokensBefore: 232_000,
+          tokensAfter: 80_000,
+          firstKeptEntryId: "entry-keep-me",
+          summaryChars: "LCM-produced summary text".length,
+        }),
+      );
     } finally {
       setCompactionInterceptRuntime(sm, null);
     }
