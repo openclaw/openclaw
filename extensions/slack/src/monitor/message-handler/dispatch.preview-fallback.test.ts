@@ -1063,7 +1063,7 @@ vi.mock("../reply.runtime.js", () => ({
         } else if (entry.kind === "concurrent_items") {
           await Promise.all(
             entry.progressTexts.map((progressText) =>
-              params.replyOptions?.onItemEvent?.({ progressText }),
+              Promise.resolve(params.replyOptions?.onItemEvent?.({ progressText })),
             ),
           );
         } else if (entry.kind === "partial") {
