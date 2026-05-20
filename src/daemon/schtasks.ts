@@ -4,7 +4,9 @@ import path from "node:path";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports.js";
+import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { killProcessTree } from "../process/kill-tree.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
@@ -35,7 +37,7 @@ function resolveTaskName(env: GatewayServiceEnv): string {
 
 function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
   return (
-    /access is denied/i.test(params.detail) ||
+    /(?:access is denied|acceso denegado)/i.test(params.detail) ||
     params.code === 124 ||
     /schtasks timed out/i.test(params.detail) ||
     /schtasks produced no output/i.test(params.detail)
@@ -77,9 +79,19 @@ function sanitizeWindowsFilename(value: string): string {
   return value.replace(/[<>:"/\\|?*]/g, "_").replace(/\p{Cc}/gu, "_");
 }
 
-function resolveStartupEntryPath(env: GatewayServiceEnv): string {
+function resolveStartupEntryPath(env: GatewayServiceEnv, extension?: "cmd" | "vbs"): string {
   const taskName = resolveTaskName(env);
-  return path.join(resolveWindowsStartupDir(env), `${sanitizeWindowsFilename(taskName)}.cmd`);
+  const entryExtension = extension ?? (shouldUseHiddenWindowsTaskLauncher(env) ? "vbs" : "cmd");
+  return path.join(
+    resolveWindowsStartupDir(env),
+    `${sanitizeWindowsFilename(taskName)}.${entryExtension}`,
+  );
+}
+
+function resolveStartupEntryPaths(env: GatewayServiceEnv): string[] {
+  const primaryPath = resolveStartupEntryPath(env);
+  const legacyCmdPath = resolveStartupEntryPath(env, "cmd");
+  return Array.from(new Set([primaryPath, legacyCmdPath]));
 }
 
 // `/TR` is parsed by schtasks itself, while the generated `gateway.cmd` line is parsed by cmd.exe.
@@ -106,6 +118,19 @@ function resolveTaskUser(env: GatewayServiceEnv): string | null {
   return username;
 }
 
+function shouldUseHiddenWindowsTaskLauncher(env: GatewayServiceEnv): boolean {
+  const value = normalizeLowercaseStringOrEmpty(env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER);
+  return value === "1" || value === "true" || value === "yes";
+}
+
+function resolveTaskLauncherScriptPath(env: GatewayServiceEnv, scriptPath: string): string {
+  if (!shouldUseHiddenWindowsTaskLauncher(env)) {
+    return scriptPath;
+  }
+  const parsed = path.parse(scriptPath);
+  return path.join(parsed.dir, `${parsed.name}.vbs`);
+}
+
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
@@ -120,7 +145,7 @@ export async function readScheduledTaskCommand(
       if (!line) {
         continue;
       }
-      const lower = line.toLowerCase();
+      const lower = normalizeLowercaseStringOrEmpty(line);
       if (line.startsWith("@echo")) {
         continue;
       }
@@ -148,6 +173,13 @@ export async function readScheduledTaskCommand(
       programArguments: parseCmdScriptCommandLine(commandLine),
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(Object.keys(environment).length > 0 ? { environment } : {}),
+      ...(Object.keys(environment).length > 0
+        ? {
+            environmentValueSources: Object.fromEntries(
+              Object.keys(environment).map((key) => [key, "inline"]),
+            ),
+          }
+        : {}),
       sourcePath: scriptPath,
     };
   } catch {
@@ -191,7 +223,7 @@ function normalizeTaskResultCode(value?: string): string | null {
   if (!value) {
     return null;
   }
-  const raw = value.trim().toLowerCase();
+  const raw = normalizeLowercaseStringOrEmpty(value);
   if (!raw) {
     return null;
   }
@@ -211,8 +243,11 @@ function normalizeTaskResultCode(value?: string): string | null {
 }
 
 const RUNNING_RESULT_CODES = new Set(["0x41301"]);
+const NOT_YET_RUN_RESULT_CODES = new Set(["0x41303"]);
 const UNKNOWN_STATUS_DETAIL =
   "Task status is locale-dependent and no numeric Last Run Result was available.";
+const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
+const SCHEDULED_TASK_FALLBACK_TIMEOUT_MS = 15_000;
 
 export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   status: GatewayServiceRuntime["status"];
@@ -265,6 +300,10 @@ function buildTaskScript({
   return `${lines.join("\r\n")}\r\n`;
 }
 
+function renderStartupLaunchCommand(scriptPath: string): string {
+  return `start "" /min cmd.exe /d /c ${quoteCmdScriptArg(scriptPath)}`;
+}
+
 function buildStartupLauncherScript(params: { description?: string; scriptPath: string }): string {
   const lines = ["@echo off"];
   const trimmedDescription = params.description?.trim();
@@ -272,7 +311,28 @@ function buildStartupLauncherScript(params: { description?: string; scriptPath: 
     assertNoCmdLineBreak(trimmedDescription, "Startup launcher description");
     lines.push(`rem ${trimmedDescription}`);
   }
-  lines.push(`start "" /min cmd.exe /d /c ${quoteCmdScriptArg(params.scriptPath)}`);
+  lines.push(renderStartupLaunchCommand(params.scriptPath));
+  return `${lines.join("\r\n")}\r\n`;
+}
+
+function quoteVbsString(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function quoteVbsRunCommand(scriptPath: string): string {
+  return quoteVbsString(`"${scriptPath}"`);
+}
+
+function buildHiddenLauncherScript(params: { description?: string; scriptPath: string }): string {
+  const lines = [];
+  const trimmedDescription = params.description?.trim();
+  if (trimmedDescription) {
+    assertNoCmdLineBreak(trimmedDescription, "Hidden launcher description");
+    lines.push(`' ${trimmedDescription}`);
+  }
+  lines.push(
+    `CreateObject("WScript.Shell").Run ${quoteVbsRunCommand(params.scriptPath)}, 0, False`,
+  );
   return `${lines.join("\r\n")}\r\n`;
 }
 
@@ -286,12 +346,13 @@ async function assertSchtasksAvailable() {
 }
 
 async function isStartupEntryInstalled(env: GatewayServiceEnv): Promise<boolean> {
-  try {
-    await fs.access(resolveStartupEntryPath(env));
-    return true;
-  } catch {
-    return false;
+  for (const startupEntryPath of resolveStartupEntryPaths(env)) {
+    try {
+      await fs.access(startupEntryPath);
+      return true;
+    } catch {}
   }
+  return false;
 }
 
 async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise<boolean> {
@@ -304,8 +365,26 @@ async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise<boolea
   return res.code === 0;
 }
 
-function launchFallbackTaskScript(scriptPath: string): void {
-  const child = spawn("cmd.exe", ["/d", "/s", "/c", quoteCmdScriptArg(scriptPath)], {
+async function launchFallbackTaskScript(env: GatewayServiceEnv): Promise<void> {
+  const scriptPath = resolveTaskScriptPath(env);
+  const command = await readScheduledTaskCommand(env);
+  if (command?.programArguments.length) {
+    const [executable, ...args] = command.programArguments;
+    const child = spawn(executable, args, {
+      cwd: command.workingDirectory || undefined,
+      detached: true,
+      env: {
+        ...process.env,
+        ...command.environment,
+      },
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+    return;
+  }
+
+  const child = spawn("cmd.exe", ["/d", "/c", scriptPath], {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
@@ -401,6 +480,24 @@ async function resolveScheduledTaskGatewayListenerPids(port: number): Promise<nu
   );
 }
 
+async function resolveListenerBackedScheduledTaskRuntime(
+  env: GatewayServiceEnv,
+): Promise<Pick<GatewayServiceRuntime, "status" | "pid" | "detail"> | null> {
+  const port = await resolveScheduledTaskPort(env);
+  if (!port) {
+    return null;
+  }
+  const pids = findVerifiedGatewayListenerPidsOnPortSync(port);
+  if (pids.length === 0) {
+    return null;
+  }
+  return {
+    status: "running",
+    pid: pids[0],
+    detail: `Verified gateway listener detected on port ${port} even though schtasks did not report a running task.`,
+  };
+}
+
 async function terminateScheduledTaskGatewayListeners(env: GatewayServiceEnv): Promise<number[]> {
   const port = await resolveScheduledTaskPort(env);
   if (!port) {
@@ -438,11 +535,7 @@ async function terminateGatewayProcessTree(pid: number, graceMs: number): Promis
     killProcessTree(pid, { graceMs });
     return;
   }
-  const taskkillPath = path.join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32",
-    "taskkill.exe",
-  );
+  const taskkillPath = path.join(getWindowsInstallRoots().systemRoot, "System32", "taskkill.exe");
   spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
     stdio: "ignore",
     timeout: 5_000,
@@ -544,21 +637,25 @@ async function restartStartupEntry(
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
-  launchFallbackTaskScript(resolveTaskScriptPath(env));
+  await launchFallbackTaskScript(env);
   stdout.write(`${formatLine("Restarted Windows login item", resolveTaskName(env))}\n`);
   return { outcome: "completed" };
 }
 
-export async function installScheduledTask({
+async function writeScheduledTaskScript({
   env,
-  stdout,
   programArguments,
   workingDirectory,
   environment,
   description,
-}: GatewayServiceInstallArgs): Promise<{ scriptPath: string }> {
-  await assertSchtasksAvailable();
+}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{
+  scriptPath: string;
+  taskLaunchPath: string;
+  taskDescription: string;
+}> {
+  await assertSchtasksAvailable().catch(() => undefined);
   const scriptPath = resolveTaskScriptPath(env);
+  const taskLaunchPath = resolveTaskLauncherScriptPath(env, scriptPath);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
   const taskDescription = resolveGatewayServiceDescription({ env, environment, description });
   const script = buildTaskScript({
@@ -568,9 +665,227 @@ export async function installScheduledTask({
     environment,
   });
   await fs.writeFile(scriptPath, script, "utf8");
+  if (taskLaunchPath !== scriptPath) {
+    const launcher = buildHiddenLauncherScript({
+      description: taskDescription,
+      scriptPath,
+    });
+    await fs.writeFile(taskLaunchPath, launcher, "utf8");
+  }
+  return { scriptPath, taskLaunchPath, taskDescription };
+}
 
-  const taskName = resolveTaskName(env);
-  const quotedScript = quoteSchtasksArg(scriptPath);
+export async function stageScheduledTask({
+  stdout,
+  ...args
+}: GatewayServiceInstallArgs): Promise<{ scriptPath: string }> {
+  const { scriptPath } = await writeScheduledTaskScript(args);
+  writeFormattedLines(stdout, [{ label: "Staged task script", value: scriptPath }], {
+    leadingBlankLine: true,
+  });
+  return { scriptPath };
+}
+
+async function updateExistingScheduledTask(params: {
+  env: GatewayServiceEnv;
+  stdout: NodeJS.WritableStream;
+  taskName: string;
+  quotedLaunchPath: string;
+  scriptPath: string;
+}): Promise<boolean> {
+  if (!(await isRegisteredScheduledTask(params.env))) {
+    return false;
+  }
+  const change = await execSchtasks([
+    "/Change",
+    "/TN",
+    params.taskName,
+    "/TR",
+    params.quotedLaunchPath,
+  ]);
+  if (change.code !== 0) {
+    return false;
+  }
+  await runScheduledTaskOrThrow({
+    taskName: params.taskName,
+    env: params.env,
+    scriptPath: params.scriptPath,
+  });
+  writeFormattedLines(
+    params.stdout,
+    [
+      { label: "Updated Scheduled Task", value: params.taskName },
+      { label: "Task script", value: params.scriptPath },
+    ],
+    { leadingBlankLine: true },
+  );
+  return true;
+}
+
+async function shouldFallbackScheduledTaskLaunch(params: {
+  env: GatewayServiceEnv;
+  scriptPath: string;
+}): Promise<boolean> {
+  const readLaunchObservation = async (): Promise<{
+    state: "running" | "not-yet-run" | "other";
+    signature: string;
+  }> => {
+    const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
+    if (runtime?.status === "running") {
+      return {
+        state: "running",
+        signature: [runtime.state, runtime.lastRunTime, runtime.lastRunResult, runtime.detail]
+          .filter(Boolean)
+          .join("|"),
+      };
+    }
+    const normalizedResult = normalizeTaskResultCode(runtime?.lastRunResult);
+    if (normalizedResult && NOT_YET_RUN_RESULT_CODES.has(normalizedResult)) {
+      return {
+        state: "not-yet-run",
+        signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
+          .filter(Boolean)
+          .join("|"),
+      };
+    }
+    return {
+      state: "other",
+      signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
+        .filter(Boolean)
+        .join("|"),
+    };
+  };
+
+  const hasLaunchEvidence = async (): Promise<boolean> => {
+    const port = await resolveScheduledTaskPort(params.env);
+    if (port) {
+      const listenerPids = await resolveScheduledTaskGatewayListenerPids(port);
+      if (listenerPids.length > 0) {
+        return true;
+      }
+    }
+
+    if (process.platform !== "win32") {
+      return false;
+    }
+
+    const scriptPathNeedle = normalizeLowercaseStringOrEmpty(
+      params.scriptPath.replaceAll("/", "\\"),
+    );
+    if (!scriptPathNeedle) {
+      return false;
+    }
+
+    const processSnapshot = spawnSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+      ],
+      {
+        encoding: "utf8",
+        timeout: 1_500,
+        windowsHide: true,
+      },
+    );
+    if (processSnapshot.error || processSnapshot.status !== 0) {
+      return false;
+    }
+
+    type WindowsProcessSnapshotEntry = {
+      ProcessId?: number;
+      CommandLine?: string | null;
+    };
+
+    let parsedSnapshot: unknown;
+    try {
+      parsedSnapshot = JSON.parse(processSnapshot.stdout.trim() || "[]");
+    } catch {
+      return false;
+    }
+
+    const entries = (Array.isArray(parsedSnapshot) ? parsedSnapshot : [parsedSnapshot]).filter(
+      (entry): entry is WindowsProcessSnapshotEntry => typeof entry === "object" && entry !== null,
+    );
+    const matchingTaskScriptProcess = entries.some((entry) =>
+      normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "")
+        .replaceAll("/", "\\")
+        .includes(scriptPathNeedle),
+    );
+    if (matchingTaskScriptProcess) {
+      return true;
+    }
+
+    if (!port) {
+      return false;
+    }
+
+    return entries.some((entry) => {
+      const commandLine = normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "");
+      if (!commandLine) {
+        return false;
+      }
+      const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
+      if (!isGatewayArgv(argv, { allowGatewayBinary: true })) {
+        return false;
+      }
+      return parsePortFromProgramArguments(argv) === port;
+    });
+  };
+
+  const initial = await readLaunchObservation();
+  if (initial.state !== "not-yet-run") {
+    return false;
+  }
+
+  const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
+    const current = await readLaunchObservation();
+    if (current.state !== "not-yet-run") {
+      return false;
+    }
+    if (current.signature !== initial.signature) {
+      return false;
+    }
+  }
+  return !(await hasLaunchEvidence());
+}
+
+async function runScheduledTaskOrThrow(params: {
+  taskName: string;
+  env: GatewayServiceEnv;
+  scriptPath: string;
+}): Promise<void> {
+  const run = await execSchtasks(["/Run", "/TN", params.taskName]);
+  if (run.code !== 0) {
+    throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
+  }
+  if (
+    !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
+  ) {
+    return;
+  }
+  await launchFallbackTaskScript(params.env);
+}
+
+async function activateScheduledTask(params: {
+  env: GatewayServiceEnv;
+  stdout: NodeJS.WritableStream;
+  scriptPath: string;
+  taskLaunchPath: string;
+  description?: string;
+}) {
+  const taskDescription = params.description ?? "OpenClaw Gateway";
+
+  const taskName = resolveTaskName(params.env);
+  const quotedLaunchPath = quoteSchtasksArg(params.taskLaunchPath);
+
+  if (await updateExistingScheduledTask({ ...params, taskName, quotedLaunchPath })) {
+    return;
+  }
+
   const baseArgs = [
     "/Create",
     "/F",
@@ -581,11 +896,12 @@ export async function installScheduledTask({
     "/TN",
     taskName,
     "/TR",
-    quotedScript,
+    quotedLaunchPath,
   ];
-  const taskUser = resolveTaskUser(env);
+  const taskUser = resolveTaskUser(params.env);
+  const taskUserArgs = taskUser ? ["/RU", taskUser, "/NP", "/IT"] : [];
   let create = await execSchtasks(
-    taskUser ? [...baseArgs, "/RU", taskUser, "/NP", "/IT"] : baseArgs,
+    taskUserArgs.length > 0 ? [...baseArgs, ...taskUserArgs] : baseArgs,
   );
   if (create.code !== 0 && taskUser) {
     create = await execSchtasks(baseArgs);
@@ -593,35 +909,60 @@ export async function installScheduledTask({
   if (create.code !== 0) {
     const detail = create.stderr || create.stdout;
     if (shouldFallbackToStartupEntry({ code: create.code, detail })) {
-      const startupEntryPath = resolveStartupEntryPath(env);
+      const startupEntryPath = resolveStartupEntryPath(params.env);
       await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
-      const launcher = buildStartupLauncherScript({ description: taskDescription, scriptPath });
+      const launcher = shouldUseHiddenWindowsTaskLauncher(params.env)
+        ? buildHiddenLauncherScript({
+            description: taskDescription,
+            scriptPath: params.scriptPath,
+          })
+        : buildStartupLauncherScript({
+            description: taskDescription,
+            scriptPath: params.scriptPath,
+          });
       await fs.writeFile(startupEntryPath, launcher, "utf8");
-      launchFallbackTaskScript(scriptPath);
+      await launchFallbackTaskScript(params.env);
       writeFormattedLines(
-        stdout,
+        params.stdout,
         [
           { label: "Installed Windows login item", value: startupEntryPath },
-          { label: "Task script", value: scriptPath },
+          { label: "Task script", value: params.scriptPath },
         ],
         { leadingBlankLine: true },
       );
-      return { scriptPath };
+      return;
     }
     throw new Error(`schtasks create failed: ${detail}`.trim());
   }
 
-  await execSchtasks(["/Run", "/TN", taskName]);
+  await runScheduledTaskOrThrow({
+    taskName,
+    env: params.env,
+    scriptPath: params.scriptPath,
+  });
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(
-    stdout,
+    params.stdout,
     [
       { label: "Installed Scheduled Task", value: taskName },
-      { label: "Task script", value: scriptPath },
+      { label: "Task script", value: params.scriptPath },
     ],
     { leadingBlankLine: true },
   );
-  return { scriptPath };
+}
+
+export async function installScheduledTask(
+  args: GatewayServiceInstallArgs,
+): Promise<{ scriptPath: string }> {
+  const staged = await writeScheduledTaskScript(args);
+  await activateScheduledTask({
+    env: args.env,
+    stdout: args.stdout,
+    scriptPath: staged.scriptPath,
+    taskLaunchPath: staged.taskLaunchPath,
+    description: staged.taskDescription,
+  });
+  return { scriptPath: staged.scriptPath };
 }
 
 export async function uninstallScheduledTask({
@@ -635,13 +976,21 @@ export async function uninstallScheduledTask({
     await execSchtasks(["/Delete", "/F", "/TN", taskName]);
   }
 
-  const startupEntryPath = resolveStartupEntryPath(env);
-  try {
-    await fs.unlink(startupEntryPath);
-    stdout.write(`${formatLine("Removed Windows login item", startupEntryPath)}\n`);
-  } catch {}
+  for (const startupEntryPath of resolveStartupEntryPaths(env)) {
+    try {
+      await fs.unlink(startupEntryPath);
+      stdout.write(`${formatLine("Removed Windows login item", startupEntryPath)}\n`);
+    } catch {}
+  }
 
   const scriptPath = resolveTaskScriptPath(env);
+  const launcherPath = resolveTaskLauncherScriptPath(env, scriptPath);
+  if (launcherPath !== scriptPath) {
+    try {
+      await fs.unlink(launcherPath);
+      stdout.write(`${formatLine("Removed task launcher", launcherPath)}\n`);
+    } catch {}
+  }
   try {
     await fs.unlink(scriptPath);
     stdout.write(`${formatLine("Removed task script", scriptPath)}\n`);
@@ -651,7 +1000,7 @@ export async function uninstallScheduledTask({
 }
 
 function isTaskNotRunning(res: { stdout: string; stderr: string; code: number }): boolean {
-  const detail = (res.stderr || res.stdout).toLowerCase();
+  const detail = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
   return detail.includes("not running");
 }
 
@@ -726,10 +1075,11 @@ export async function restartScheduledTask({
       }
     }
   }
-  const res = await execSchtasks(["/Run", "/TN", taskName]);
-  if (res.code !== 0) {
-    throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());
-  }
+  await runScheduledTaskOrThrow({
+    taskName,
+    env: effectiveEnv,
+    scriptPath: resolveTaskScriptPath(effectiveEnv),
+  });
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
   return { outcome: "completed" };
 }
@@ -763,7 +1113,7 @@ export async function readScheduledTaskRuntime(
       return await resolveFallbackRuntime(env);
     }
     const detail = (res.stderr || res.stdout).trim();
-    const missing = detail.toLowerCase().includes("cannot find the file");
+    const missing = normalizeLowercaseStringOrEmpty(detail).includes("cannot find the file");
     return {
       status: missing ? "stopped" : "unknown",
       detail: detail || undefined,
@@ -772,6 +1122,17 @@ export async function readScheduledTaskRuntime(
   }
   const parsed = parseSchtasksQuery(res.stdout || "");
   const derived = deriveScheduledTaskRuntimeStatus(parsed);
+  if (derived.status !== "running") {
+    const observedRuntime = await resolveListenerBackedScheduledTaskRuntime(env);
+    if (observedRuntime) {
+      return {
+        ...observedRuntime,
+        state: parsed.status,
+        lastRunTime: parsed.lastRunTime,
+        lastRunResult: parsed.lastRunResult,
+      };
+    }
+  }
   return {
     status: derived.status,
     state: parsed.status,

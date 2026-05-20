@@ -1,25 +1,17 @@
 import { t } from "../i18n/index.ts";
 import type { IconName } from "./icons.js";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 export const TAB_GROUPS = [
   { label: "chat", tabs: ["chat"] },
   {
     label: "control",
-    tabs: ["overview", "channels", "instances", "sessions", "usage", "cron"],
+    tabs: ["overview", "instances", "sessions", "usage", "cron"],
   },
-  { label: "agent", tabs: ["agents", "skills", "nodes"] },
+  { label: "agent", tabs: ["agents", "skills", "nodes", "dreams"] },
   {
     label: "settings",
-    tabs: [
-      "config",
-      "communications",
-      "appearance",
-      "automation",
-      "infrastructure",
-      "aiAgents",
-      "debug",
-      "logs",
-    ],
+    tabs: ["config"],
   },
 ] as const;
 
@@ -41,7 +33,20 @@ export type Tab =
   | "infrastructure"
   | "aiAgents"
   | "debug"
-  | "logs";
+  | "logs"
+  | "dreams";
+
+export const SETTINGS_TABS = [
+  "config",
+  "channels",
+  "communications",
+  "appearance",
+  "automation",
+  "infrastructure",
+  "aiAgents",
+  "debug",
+  "logs",
+] as const satisfies readonly Tab[];
 
 const TAB_PATHS: Record<Tab, string> = {
   agents: "/agents",
@@ -62,9 +67,17 @@ const TAB_PATHS: Record<Tab, string> = {
   aiAgents: "/ai-agents",
   debug: "/debug",
   logs: "/logs",
+  dreams: "/dreaming",
 };
 
-const PATH_TO_TAB = new Map(Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab]));
+const PATH_ALIASES: Record<string, Tab> = {
+  "/dreams": "dreams",
+};
+
+const PATH_TO_TAB = new Map<string, Tab>([
+  ...Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab] as const),
+  ...Object.entries(PATH_ALIASES),
+]);
 
 export function normalizeBasePath(basePath: string): string {
   if (!basePath) {
@@ -103,6 +116,17 @@ export function pathForTab(tab: Tab, basePath = ""): string {
   return base ? `${base}${path}` : path;
 }
 
+export function isSettingsTab(tab: Tab): boolean {
+  return (SETTINGS_TABS as readonly Tab[]).includes(tab);
+}
+
+export function isTabInGroup(group: (typeof TAB_GROUPS)[number], tab: Tab): boolean {
+  if (group.label === "settings") {
+    return isSettingsTab(tab);
+  }
+  return (group.tabs as readonly Tab[]).includes(tab);
+}
+
 export function tabFromPath(pathname: string, basePath = ""): Tab | null {
   const base = normalizeBasePath(basePath);
   let path = pathname || "/";
@@ -113,7 +137,7 @@ export function tabFromPath(pathname: string, basePath = ""): Tab | null {
       path = path.slice(base.length);
     }
   }
-  let normalized = normalizePath(path).toLowerCase();
+  let normalized = normalizeLowercaseStringOrEmpty(normalizePath(path));
   if (normalized.endsWith("/index.html")) {
     normalized = "/";
   }
@@ -136,7 +160,7 @@ export function inferBasePathFromPathname(pathname: string): string {
     return "";
   }
   for (let i = 0; i < segments.length; i++) {
-    const candidate = `/${segments.slice(i).join("/")}`.toLowerCase();
+    const candidate = normalizeLowercaseStringOrEmpty(`/${segments.slice(i).join("/")}`);
     if (PATH_TO_TAB.has(candidate)) {
       const prefix = segments.slice(0, i);
       return prefix.length ? `/${prefix.join("/")}` : "";
@@ -183,12 +207,17 @@ export function iconForTab(tab: Tab): IconName {
       return "bug";
     case "logs":
       return "scrollText";
+    case "dreams":
+      return "moon";
     default:
       return "folder";
   }
 }
 
 export function titleForTab(tab: Tab) {
+  if (tab === "config") {
+    return t("nav.settings");
+  }
   return t(`tabs.${tab}`);
 }
 

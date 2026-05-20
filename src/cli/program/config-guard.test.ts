@@ -1,8 +1,10 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../../runtime.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatCliCommand } from "../command-format.js";
+import { ensureConfigReady, testApi } from "./config-guard.js";
 
 const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
+const setRuntimeConfigSnapshotMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/doctor-config-preflight.js", () => ({
   runDoctorConfigPreflight: loadAndMaybeMigrateDoctorConfigMock,
@@ -10,6 +12,7 @@ vi.mock("../../commands/doctor-config-preflight.js", () => ({
 
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
+  setRuntimeConfigSnapshot: setRuntimeConfigSnapshotMock,
 }));
 
 function makeSnapshot() {
@@ -29,6 +32,11 @@ function makeRuntime() {
   };
 }
 
+function plainErrorCalls(runtime: ReturnType<typeof makeRuntime>): string[] {
+  const ansiPattern = new RegExp(String.raw`\u001b\[[0-9;]*m`, "g");
+  return runtime.error.mock.calls.map((call) => String(call[0]).replace(ansiPattern, ""));
+}
+
 async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
   const writes: string[] = [];
   const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
@@ -44,12 +52,7 @@ async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
 }
 
 describe("ensureConfigReady", () => {
-  let ensureConfigReady: (params: {
-    runtime: RuntimeEnv;
-    commandPath?: string[];
-    suppressDoctorStdout?: boolean;
-  }) => Promise<void>;
-  let resetConfigGuardStateForTests: () => void;
+  const resetConfigGuardStateForTests = testApi.resetConfigGuardStateForTests;
 
   async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
     const runtime = makeRuntime();
@@ -62,7 +65,7 @@ describe("ensureConfigReady", () => {
       ...makeSnapshot(),
       exists: true,
       valid: false,
-      issues: [{ path: "channels.whatsapp", message: "invalid" }],
+      issues: [{ path: "channels.quietchat", message: "invalid" }],
       ...overrides,
     };
     readConfigFileSnapshotMock.mockResolvedValue(snapshot);
@@ -71,13 +74,6 @@ describe("ensureConfigReady", () => {
       baseConfig: {},
     });
   }
-
-  beforeAll(async () => {
-    ({
-      ensureConfigReady,
-      __test__: { resetConfigGuardStateForTests },
-    } = await import("./config-guard.js"));
-  });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -93,6 +89,11 @@ describe("ensureConfigReady", () => {
     {
       name: "skips doctor flow for read-only fast path commands",
       commandPath: ["status"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for update status",
+      commandPath: ["update", "status"],
       expectedDoctorCalls: 0,
     },
     {
@@ -112,12 +113,62 @@ describe("ensureConfigReady", () => {
     }
   });
 
+  it("pins a valid preflight snapshot for command code reuse", async () => {
+    const snapshot = {
+      ...makeSnapshot(),
+      config: { runtime: true },
+      runtimeConfig: { runtime: true, materialized: true },
+      sourceConfig: { source: true },
+    };
+    readConfigFileSnapshotMock.mockResolvedValue(snapshot);
+
+    await runEnsureConfigReady(["status"]);
+
+    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
+      snapshot.runtimeConfig,
+      snapshot.sourceConfig,
+    );
+  });
+
+  it("retries the cached config snapshot after a read rejection", async () => {
+    const originalVitest = process.env.VITEST;
+    process.env.VITEST = "false";
+    const transientError = new Error("temporary config read failure");
+    const recoveredSnapshot = makeSnapshot();
+    readConfigFileSnapshotMock
+      .mockRejectedValueOnce(transientError)
+      .mockResolvedValueOnce(recoveredSnapshot);
+
+    try {
+      await expect(runEnsureConfigReady(["status"])).rejects.toThrow(transientError);
+      await expect(runEnsureConfigReady(["status"])).resolves.toBeDefined();
+      await expect(runEnsureConfigReady(["status"])).resolves.toBeDefined();
+    } finally {
+      if (originalVitest === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = originalVitest;
+      }
+    }
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(undefined, undefined);
+  });
+
   it("exits for invalid config on non-allowlisted commands", async () => {
     setInvalidSnapshot();
     const runtime = await runEnsureConfigReady(["message"]);
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Config invalid"));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("doctor --fix"));
+    expect(plainErrorCalls(runtime)).toEqual([
+      "OpenClaw config is invalid",
+      "File: /tmp/openclaw.json",
+      "Problem:",
+      "  - channels.quietchat: invalid",
+      "",
+      `Fix: ${formatCliCommand("openclaw doctor --fix")}`,
+      `Inspect: ${formatCliCommand("openclaw config validate")}`,
+      "Status, health, logs, and doctor commands still run with invalid config.",
+    ]);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
@@ -126,8 +177,25 @@ describe("ensureConfigReady", () => {
     const statusRuntime = await runEnsureConfigReady(["status"]);
     expect(statusRuntime.exit).not.toHaveBeenCalled();
 
+    const bareGatewayRuntime = await runEnsureConfigReady(["gateway"]);
+    expect(bareGatewayRuntime.exit).not.toHaveBeenCalled();
+
+    const gatewayRunRuntime = await runEnsureConfigReady(["gateway", "run"]);
+    expect(gatewayRunRuntime.exit).not.toHaveBeenCalled();
+
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("allows an explicit invalid-config override", async () => {
+    setInvalidSnapshot();
+    const runtime = makeRuntime();
+    await ensureConfigReady({
+      runtime: runtime as never,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("runs doctor migration flow only once per module instance", async () => {
@@ -136,7 +204,6 @@ describe("ensureConfigReady", () => {
 
     await ensureConfigReady({ runtime: runtimeA as never, commandPath: ["message"] });
     await ensureConfigReady({ runtime: runtimeB as never, commandPath: ["message"] });
-
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
   });
 

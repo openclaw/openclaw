@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { CONFIG_DIR, ensureDir } from "../utils.js";
 
 export function normalizeWideAreaDomain(raw?: string | null): string | null {
@@ -29,9 +30,7 @@ export function getWideAreaZonePath(domain: string): string {
 }
 
 function dnsLabel(raw: string, fallback: string): string {
-  const normalized = raw
-    .trim()
-    .toLowerCase()
+  const normalized = normalizeLowercaseStringOrEmpty(raw)
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+/, "")
     .replace(/-+$/, "");
@@ -96,6 +95,7 @@ export type WideAreaGatewayZoneOpts = {
   tailnetIPv6?: string;
   gatewayTlsEnabled?: boolean;
   gatewayTlsFingerprintSha256?: string;
+  gatewayDirectReachable?: boolean;
   instanceLabel?: string;
   hostLabel?: string;
   tailnetDns?: string;
@@ -120,6 +120,9 @@ function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string 
     if (opts.gatewayTlsFingerprintSha256) {
       txt.push(`gatewayTlsSha256=${opts.gatewayTlsFingerprintSha256}`);
     }
+  }
+  if (opts.gatewayDirectReachable) {
+    txt.push(`gatewayDirectReachable=1`);
   }
   if (opts.tailnetDns?.trim()) {
     txt.push(`tailnetDns=${opts.tailnetDns.trim()}`);

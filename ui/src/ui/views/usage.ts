@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { getUsageCacheRefreshTitle } from "../usage-cache-status.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "../usage-helpers.ts";
 import {
   buildAggregatesFromSessions,
@@ -8,9 +9,8 @@ import {
   formatCost,
   formatIsoDate,
   formatTokens,
-  getZonedHour,
   renderUsageMosaic,
-  setToHourEnd,
+  sessionTouchesSelectedHours,
 } from "./usage-metrics.ts";
 import {
   addQueryToken,
@@ -128,9 +128,7 @@ function renderUsageEmptyState(onRefresh: () => void) {
         <span class="usage-empty-state__feature">${t("usage.empty.featureTimeline")}</span>
       </div>
       <div class="usage-empty-state__actions">
-        <button class="btn primary usage-action-btn usage-primary-btn" @click=${onRefresh}>
-          ${t("common.refresh")}
-        </button>
+        <button class="btn primary" @click=${onRefresh}>${t("common.refresh")}</button>
       </div>
     </section>
   `;
@@ -173,35 +171,11 @@ export function renderUsage(props: UsageProps) {
         })
       : sortedSessions;
 
-  const sessionTouchesHours = (session: UsageSessionEntry, hours: number[]): boolean => {
-    if (hours.length === 0) {
-      return true;
-    }
-    const usage = session.usage;
-    const start = usage?.firstActivity ?? session.updatedAt;
-    const end = usage?.lastActivity ?? session.updatedAt;
-    if (!start || !end) {
-      return false;
-    }
-    const startMs = Math.min(start, end);
-    const endMs = Math.max(start, end);
-    let cursor = startMs;
-    while (cursor <= endMs) {
-      const date = new Date(cursor);
-      const hour = getZonedHour(date, filters.timeZone);
-      if (hours.includes(hour)) {
-        return true;
-      }
-      const nextHour = setToHourEnd(date, filters.timeZone);
-      const nextMs = Math.min(nextHour.getTime(), endMs);
-      cursor = nextMs + 1;
-    }
-    return false;
-  };
-
   const hourFilteredSessions =
     filters.selectedHours.length > 0
-      ? dayFilteredSessions.filter((s) => sessionTouchesHours(s, filters.selectedHours))
+      ? dayFilteredSessions.filter((s) =>
+          sessionTouchesSelectedHours(s, filters.selectedHours, filters.timeZone),
+        )
       : dayFilteredSessions;
 
   // Filter sessions by query (client-side)
@@ -326,6 +300,7 @@ export function renderUsage(props: UsageProps) {
 
   const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates);
   const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
+  const cacheStatusTitle = getUsageCacheRefreshTitle(data.cacheStatus);
   const hasMissingCost =
     (displayTotals?.missingCostEntries ?? 0) > 0 ||
     (displayTotals
@@ -341,6 +316,8 @@ export function renderUsage(props: UsageProps) {
     { label: t("usage.presets.today"), days: 1 },
     { label: t("usage.presets.last7d"), days: 7 },
     { label: t("usage.presets.last30d"), days: 30 },
+    { label: t("usage.presets.last90d"), days: 90 },
+    { label: t("usage.presets.last1y"), days: 365 },
   ];
   const applyPreset = (days: number) => {
     const end = new Date();
@@ -348,6 +325,10 @@ export function renderUsage(props: UsageProps) {
     start.setDate(start.getDate() - (days - 1));
     filterActions.onStartDateChange(formatIsoDate(start));
     filterActions.onEndDateChange(formatIsoDate(end));
+  };
+  const applyAllRange = () => {
+    filterActions.onStartDateChange("1970-01-01");
+    filterActions.onEndDateChange(formatIsoDate(new Date()));
   };
   const renderFilterSelect = (key: string, label: string, options: string[]) => {
     if (options.length === 0) {
@@ -378,18 +359,14 @@ export function renderUsage(props: UsageProps) {
       >
         <summary>
           <span>${label}</span>
-          ${
-            selectedCount > 0
-              ? html`<span class="usage-filter-badge">${selectedCount}</span>`
-              : html`
-                  <span class="usage-filter-badge">${t("usage.filters.all")}</span>
-                `
-          }
+          ${selectedCount > 0
+            ? html`<span class="usage-filter-badge">${selectedCount}</span>`
+            : html` <span class="usage-filter-badge">${t("usage.filters.all")}</span> `}
         </summary>
         <div class="usage-filter-popover">
           <div class="usage-filter-actions">
             <button
-              class="btn btn-sm"
+              class="btn btn--sm"
               @click=${(e: Event) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -402,7 +379,7 @@ export function renderUsage(props: UsageProps) {
               ${t("usage.filters.selectAll")}
             </button>
             <button
-              class="btn btn-sm"
+              class="btn btn--sm"
               @click=${(e: Event) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -444,43 +421,40 @@ export function renderUsage(props: UsageProps) {
 
   return html`
     <div class="usage-page">
-      <section class="usage-page-header">
-        <div class="usage-page-title">${t("tabs.usage")}</div>
-        <div class="usage-page-subtitle">${t("usage.page.subtitle")}</div>
-      </section>
-
       <section class="card usage-header ${display.headerPinned ? "pinned" : ""}">
         <div class="usage-header-row">
           <div class="usage-header-title">
             <div class="card-title usage-section-title">${t("usage.filters.title")}</div>
-            ${data.loading ? html`<span class="usage-refresh-indicator">${t("usage.loading.badge")}</span>` : nothing}
-            ${isEmpty ? html`<span class="usage-query-hint">${t("usage.empty.hint")}</span>` : nothing}
+            ${data.loading || cacheStatusTitle
+              ? html`<span class="usage-refresh-indicator" title=${cacheStatusTitle ?? ""}>
+                  ${t("usage.loading.badge")}
+                </span>`
+              : nothing}
+            ${isEmpty
+              ? html`<span class="usage-query-hint">${t("usage.empty.hint")}</span>`
+              : nothing}
           </div>
           <div class="usage-header-metrics">
-            ${
-              displayTotals
-                ? html`
-                    <span class="usage-metric-badge">
-                      <strong>${formatTokens(displayTotals.totalTokens)}</strong>
-                      ${t("usage.metrics.tokens")}
-                    </span>
-                    <span class="usage-metric-badge">
-                      <strong>${formatCost(displayTotals.totalCost)}</strong>
-                      ${t("usage.metrics.cost")}
-                    </span>
-                    <span class="usage-metric-badge">
-                      <strong>${displaySessionCount}</strong>
-                      ${
-                        displaySessionCount === 1
-                          ? t("usage.metrics.session")
-                          : t("usage.metrics.sessions")
-                      }
-                    </span>
-                  `
-                : nothing
-            }
+            ${displayTotals
+              ? html`
+                  <span class="usage-metric-badge">
+                    <strong>${formatTokens(displayTotals.totalTokens)}</strong>
+                    ${t("usage.metrics.tokens")}
+                  </span>
+                  <span class="usage-metric-badge">
+                    <strong>${formatCost(displayTotals.totalCost)}</strong>
+                    ${t("usage.metrics.cost")}
+                  </span>
+                  <span class="usage-metric-badge">
+                    <strong>${displaySessionCount}</strong>
+                    ${displaySessionCount === 1
+                      ? t("usage.metrics.session")
+                      : t("usage.metrics.sessions")}
+                  </span>
+                `
+              : nothing}
             <button
-              class="usage-pin-btn ${display.headerPinned ? "active" : ""}"
+              class="btn btn--sm usage-pin-btn ${display.headerPinned ? "active" : ""}"
               title=${display.headerPinned ? t("usage.filters.unpin") : t("usage.filters.pin")}
               @click=${filterActions.onToggleHeaderPinned}
             >
@@ -503,7 +477,7 @@ export function renderUsage(props: UsageProps) {
                 window.addEventListener("click", onClick, true);
               }}
             >
-              <summary class="usage-export-button">${t("usage.export.label")} ▾</summary>
+              <summary class="btn btn--sm">${t("usage.export.label")} ▾</summary>
               <div class="usage-export-popover">
                 <div class="usage-export-list">
                   <button
@@ -572,11 +546,12 @@ export function renderUsage(props: UsageProps) {
             <div class="usage-presets">
               ${datePresets.map(
                 (preset) => html`
-                  <button class="btn btn-sm" @click=${() => applyPreset(preset.days)}>
+                  <button class="btn btn--sm" @click=${() => applyPreset(preset.days)}>
                     ${preset.label}
                   </button>
                 `,
               )}
+              <button class="btn btn--sm" @click=${applyAllRange}>${t("usage.presets.all")}</button>
             </div>
             <div class="usage-date-range">
               <input
@@ -584,6 +559,7 @@ export function renderUsage(props: UsageProps) {
                 type="date"
                 .value=${filters.startDate}
                 title=${t("usage.filters.startDate")}
+                aria-label=${t("usage.filters.startDate")}
                 @change=${(e: Event) =>
                   filterActions.onStartDateChange((e.target as HTMLInputElement).value)}
               />
@@ -593,6 +569,7 @@ export function renderUsage(props: UsageProps) {
                 type="date"
                 .value=${filters.endDate}
                 title=${t("usage.filters.endDate")}
+                aria-label=${t("usage.filters.endDate")}
                 @change=${(e: Event) =>
                   filterActions.onEndDateChange((e.target as HTMLInputElement).value)}
               />
@@ -600,6 +577,7 @@ export function renderUsage(props: UsageProps) {
             <select
               class="usage-select"
               title=${t("usage.filters.timeZone")}
+              aria-label=${t("usage.filters.timeZone")}
               .value=${filters.timeZone}
               @change=${(e: Event) =>
                 filterActions.onTimeZoneChange(
@@ -611,20 +589,36 @@ export function renderUsage(props: UsageProps) {
             </select>
             <div class="chart-toggle">
               <button
-                class="toggle-btn ${isTokenMode ? "active" : ""}"
+                class="btn btn--sm toggle-btn ${filters.scope === "instance" ? "active" : ""}"
+                title=${t("usage.scope.instanceHint")}
+                @click=${() => filterActions.onScopeChange("instance")}
+              >
+                ${t("usage.scope.instance")}
+              </button>
+              <button
+                class="btn btn--sm toggle-btn ${filters.scope === "family" ? "active" : ""}"
+                title=${t("usage.scope.familyHint")}
+                @click=${() => filterActions.onScopeChange("family")}
+              >
+                ${t("usage.scope.family")}
+              </button>
+            </div>
+            <div class="chart-toggle">
+              <button
+                class="btn btn--sm toggle-btn ${isTokenMode ? "active" : ""}"
                 @click=${() => displayActions.onChartModeChange("tokens")}
               >
                 ${t("usage.metrics.tokens")}
               </button>
               <button
-                class="toggle-btn ${!isTokenMode ? "active" : ""}"
+                class="btn btn--sm toggle-btn ${!isTokenMode ? "active" : ""}"
                 @click=${() => displayActions.onChartModeChange("cost")}
               >
                 ${t("usage.metrics.cost")}
               </button>
             </div>
             <button
-              class="btn btn-sm usage-action-btn usage-primary-btn"
+              class="btn btn--sm primary"
               @click=${filterActions.onRefresh}
               ?disabled=${data.loading}
             >
@@ -651,33 +645,26 @@ export function renderUsage(props: UsageProps) {
             />
             <div class="usage-query-actions">
               <button
-                class="btn btn-sm usage-action-btn usage-secondary-btn"
+                class="btn btn--sm"
                 @click=${filterActions.onApplyQuery}
                 ?disabled=${data.loading || (!hasDraftQuery && !hasQuery)}
               >
                 ${t("usage.query.apply")}
               </button>
-              ${
-                hasDraftQuery || hasQuery
-                  ? html`
-                      <button
-                        class="btn btn-sm usage-action-btn usage-secondary-btn"
-                        @click=${filterActions.onClearQuery}
-                      >
-                        ${t("usage.filters.clear")}
-                      </button>
-                    `
-                  : nothing
-              }
+              ${hasDraftQuery || hasQuery
+                ? html`
+                    <button class="btn btn--sm" @click=${filterActions.onClearQuery}>
+                      ${t("usage.filters.clear")}
+                    </button>
+                  `
+                : nothing}
               <span class="usage-query-hint">
-                ${
-                  hasQuery
-                    ? t("usage.query.matching", {
-                        shown: String(filteredSessions.length),
-                        total: String(totalSessions),
-                      })
-                    : t("usage.query.inRange", { total: String(totalSessions) })
-                }
+                ${hasQuery
+                  ? t("usage.query.matching", {
+                      shown: String(filteredSessions.length),
+                      total: String(totalSessions),
+                    })
+                  : t("usage.query.inRange", { total: String(totalSessions) })}
               </span>
             </div>
           </div>
@@ -689,169 +676,160 @@ export function renderUsage(props: UsageProps) {
             ${renderFilterSelect("tool", t("usage.filters.tool"), toolOptions)}
             <span class="usage-query-hint">${t("usage.query.tip")}</span>
           </div>
-          ${
-            queryTerms.length > 0
-              ? html`
-                  <div class="usage-query-chips">
-                    ${queryTerms.map((term) => {
-                      const label = term.raw;
-                      return html`
-                        <span class="usage-query-chip">
-                          ${label}
-                          <button
-                            title=${t("usage.filters.remove")}
-                            @click=${() =>
-                              filterActions.onQueryDraftChange(
-                                removeQueryToken(filters.queryDraft, label),
-                              )}
-                          >
-                            ×
-                          </button>
-                        </span>
-                      `;
-                    })}
-                  </div>
-                `
-              : nothing
-          }
-          ${
-            querySuggestions.length > 0
-              ? html`
-                  <div class="usage-query-suggestions">
-                    ${querySuggestions.map(
-                      (suggestion) => html`
+          ${queryTerms.length > 0
+            ? html`
+                <div class="usage-query-chips">
+                  ${queryTerms.map((term) => {
+                    const label = term.raw;
+                    return html`
+                      <span class="usage-query-chip">
+                        ${label}
                         <button
-                          class="usage-query-suggestion"
+                          title=${t("usage.filters.remove")}
                           @click=${() =>
                             filterActions.onQueryDraftChange(
-                              applySuggestionToQuery(filters.queryDraft, suggestion.value),
+                              removeQueryToken(filters.queryDraft, label),
                             )}
                         >
-                          ${suggestion.label}
+                          ×
                         </button>
-                      `,
-                    )}
-                  </div>
-                `
-              : nothing
-          }
-          ${
-            queryWarnings.length > 0
-              ? html`
-                  <div class="callout warning usage-callout usage-callout--tight">
-                    ${queryWarnings.join(" · ")}
-                  </div>
-                `
-              : nothing
-          }
-        </div>
-
-        ${data.error ? html`<div class="callout danger usage-callout">${data.error}</div>` : nothing}
-
-        ${
-          data.sessionsLimitReached
-            ? html`
-                <div class="callout warning usage-callout">
-                  ${t("usage.sessions.limitReached")}
+                      </span>
+                    `;
+                  })}
                 </div>
               `
-            : nothing
-        }
-      </section>
-
-      ${
-        isEmpty
-          ? renderUsageEmptyState(filterActions.onRefresh)
-          : html`
-              ${renderUsageInsights(
-                displayTotals,
-                activeAggregates,
-                insightStats,
-                hasMissingCost,
-                buildPeakErrorHours(aggregateSessions, filters.timeZone),
-                displaySessionCount,
-                totalSessions,
-              )}
-
-              ${renderUsageMosaic(
-                aggregateSessions,
-                filters.timeZone,
-                filters.selectedHours,
-                filterActions.onSelectHour,
-              )}
-
-              <div class="usage-grid">
-                <div class="usage-grid-column">
-                  <div class="card usage-left-card">
-                    ${renderDailyChartCompact(
-                      filteredDaily,
-                      filters.selectedDays,
-                      display.chartMode,
-                      display.dailyChartMode,
-                      displayActions.onDailyChartModeChange,
-                      filterActions.onSelectDay,
-                    )}
-                    ${
-                      displayTotals
-                        ? renderCostBreakdownCompact(displayTotals, display.chartMode)
-                        : nothing
-                    }
-                  </div>
-                  ${renderSessionsCard(
-                    filteredSessions,
-                    filters.selectedSessions,
-                    filters.selectedDays,
-                    isTokenMode,
-                    display.sessionSort,
-                    display.sessionSortDir,
-                    display.recentSessions,
-                    display.sessionsTab,
-                    detailActions.onSelectSession,
-                    displayActions.onSessionSortChange,
-                    displayActions.onSessionSortDirChange,
-                    displayActions.onSessionsTabChange,
-                    display.visibleColumns,
-                    totalSessions,
-                    filterActions.onClearSessions,
+            : nothing}
+          ${querySuggestions.length > 0
+            ? html`
+                <div class="usage-query-suggestions">
+                  ${querySuggestions.map(
+                    (suggestion) => html`
+                      <button
+                        class="usage-query-suggestion"
+                        @click=${() =>
+                          filterActions.onQueryDraftChange(
+                            applySuggestionToQuery(filters.queryDraft, suggestion.value),
+                          )}
+                      >
+                        ${suggestion.label}
+                      </button>
+                    `,
                   )}
                 </div>
-                ${
-                  primarySelectedEntry
-                    ? html`<div class="usage-grid-column">
-                        ${renderSessionDetailPanel(
-                          primarySelectedEntry,
-                          detail.timeSeries,
-                          detail.timeSeriesLoading,
-                          detail.timeSeriesMode,
-                          detailActions.onTimeSeriesModeChange,
-                          detail.timeSeriesBreakdownMode,
-                          detailActions.onTimeSeriesBreakdownChange,
-                          detail.timeSeriesCursorStart,
-                          detail.timeSeriesCursorEnd,
-                          detailActions.onTimeSeriesCursorRangeChange,
-                          filters.startDate,
-                          filters.endDate,
-                          filters.selectedDays,
-                          detail.sessionLogs,
-                          detail.sessionLogsLoading,
-                          detail.sessionLogsExpanded,
-                          detailActions.onToggleSessionLogsExpanded,
-                          detail.logFilters,
-                          detailActions.onLogFilterRolesChange,
-                          detailActions.onLogFilterToolsChange,
-                          detailActions.onLogFilterHasToolsChange,
-                          detailActions.onLogFilterQueryChange,
-                          detailActions.onLogFilterClear,
-                          display.contextExpanded,
-                          detailActions.onToggleContextExpanded,
-                          filterActions.onClearSessions,
-                        )}
-                      </div>`
-                    : nothing
-                }
+              `
+            : nothing}
+          ${queryWarnings.length > 0
+            ? html`
+                <div class="callout warning usage-callout usage-callout--tight">
+                  ${queryWarnings.join(" · ")}
+                </div>
+              `
+            : nothing}
+        </div>
+
+        ${data.error
+          ? html`<div class="callout danger usage-callout">${data.error}</div>`
+          : nothing}
+        ${cacheStatusTitle
+          ? html`
+              <div class="callout warning usage-callout usage-cache-warning">
+                ${t("usage.cacheStatus.warning")} ${cacheStatusTitle}
               </div>
             `
-      }
+          : nothing}
+        ${data.sessionsLimitReached
+          ? html`
+              <div class="callout warning usage-callout">${t("usage.sessions.limitReached")}</div>
+            `
+          : nothing}
+      </section>
+
+      ${isEmpty
+        ? renderUsageEmptyState(filterActions.onRefresh)
+        : html`
+            ${renderUsageInsights(
+              displayTotals,
+              activeAggregates,
+              insightStats,
+              hasMissingCost,
+              buildPeakErrorHours(aggregateSessions, filters.timeZone),
+              displaySessionCount,
+              totalSessions,
+            )}
+            ${renderUsageMosaic(
+              aggregateSessions,
+              filters.timeZone,
+              filters.selectedHours,
+              filterActions.onSelectHour,
+            )}
+
+            <div class="usage-grid">
+              <div class="usage-grid-column">
+                <div class="card usage-left-card">
+                  ${renderDailyChartCompact(
+                    filteredDaily,
+                    filters.selectedDays,
+                    display.chartMode,
+                    display.dailyChartMode,
+                    displayActions.onDailyChartModeChange,
+                    filterActions.onSelectDay,
+                  )}
+                  ${displayTotals
+                    ? renderCostBreakdownCompact(displayTotals, display.chartMode)
+                    : nothing}
+                </div>
+                ${renderSessionsCard(
+                  filteredSessions,
+                  filters.selectedSessions,
+                  filters.selectedDays,
+                  isTokenMode,
+                  display.sessionSort,
+                  display.sessionSortDir,
+                  display.recentSessions,
+                  display.sessionsTab,
+                  detailActions.onSelectSession,
+                  displayActions.onSessionSortChange,
+                  displayActions.onSessionSortDirChange,
+                  displayActions.onSessionsTabChange,
+                  display.visibleColumns,
+                  totalSessions,
+                  filterActions.onClearSessions,
+                )}
+              </div>
+              ${primarySelectedEntry
+                ? html`<div class="usage-grid-column">
+                    ${renderSessionDetailPanel(
+                      primarySelectedEntry,
+                      detail.timeSeries,
+                      detail.timeSeriesLoading,
+                      detail.timeSeriesMode,
+                      detailActions.onTimeSeriesModeChange,
+                      detail.timeSeriesBreakdownMode,
+                      detailActions.onTimeSeriesBreakdownChange,
+                      detail.timeSeriesCursorStart,
+                      detail.timeSeriesCursorEnd,
+                      detailActions.onTimeSeriesCursorRangeChange,
+                      filters.startDate,
+                      filters.endDate,
+                      filters.selectedDays,
+                      detail.sessionLogs,
+                      detail.sessionLogsLoading,
+                      detail.sessionLogsExpanded,
+                      detailActions.onToggleSessionLogsExpanded,
+                      detail.logFilters,
+                      detailActions.onLogFilterRolesChange,
+                      detailActions.onLogFilterToolsChange,
+                      detailActions.onLogFilterHasToolsChange,
+                      detailActions.onLogFilterQueryChange,
+                      detailActions.onLogFilterClear,
+                      display.contextExpanded,
+                      detailActions.onToggleContextExpanded,
+                      filterActions.onClearSessions,
+                    )}
+                  </div>`
+                : nothing}
+            </div>
+          `}
     </div>
   `;
 }

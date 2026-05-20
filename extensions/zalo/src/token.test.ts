@@ -32,6 +32,21 @@ describe("resolveZaloToken", () => {
     expect(res.source).toBe("config");
   });
 
+  it("uses configured defaultAccount token when accountId is omitted", () => {
+    const cfg = {
+      defaultAccount: "work",
+      botToken: "top-level-token",
+      accounts: {
+        work: {
+          botToken: "work-token",
+        },
+      },
+    } as ZaloConfig;
+    const res = resolveZaloToken(cfg);
+    expect(res.token).toBe("work-token");
+    expect(res.source).toBe("config");
+  });
+
   it("does not inherit top-level token when account token is explicitly blank", () => {
     const cfg = {
       botToken: "top-level-token",

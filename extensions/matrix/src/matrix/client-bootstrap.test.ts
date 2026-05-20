@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
   matrixClientResolverMocks,
@@ -13,6 +13,8 @@ const {
   isBunRuntimeMock,
   resolveMatrixAuthContextMock,
 } = matrixClientResolverMocks;
+
+const TEST_CFG = {};
 
 vi.mock("../runtime.js", () => ({
   getMatrixRuntime: () => getMatrixRuntimeMock(),
@@ -32,10 +34,15 @@ vi.mock("./client/shared.js", () => ({
   releaseSharedClientInstance: (...args: unknown[]) => releaseSharedClientInstanceMock(...args),
 }));
 
-const { resolveRuntimeMatrixClientWithReadiness, withResolvedRuntimeMatrixClient } =
-  await import("./client-bootstrap.js");
+let resolveRuntimeMatrixClientWithReadiness: typeof import("./client-bootstrap.js").resolveRuntimeMatrixClientWithReadiness;
+let withResolvedRuntimeMatrixClient: typeof import("./client-bootstrap.js").withResolvedRuntimeMatrixClient;
 
 describe("client bootstrap", () => {
+  beforeAll(async () => {
+    ({ resolveRuntimeMatrixClientWithReadiness, withResolvedRuntimeMatrixClient } =
+      await import("./client-bootstrap.js"));
+  });
+
   beforeEach(() => {
     primeMatrixClientResolverMocks({ resolved: {} });
   });
@@ -51,6 +58,7 @@ describe("client bootstrap", () => {
 
     await expect(
       resolveRuntimeMatrixClientWithReadiness({
+        cfg: TEST_CFG,
         accountId: "default",
         readiness: "prepared",
       }),
@@ -67,6 +75,7 @@ describe("client bootstrap", () => {
     await expect(
       withResolvedRuntimeMatrixClient(
         {
+          cfg: TEST_CFG,
           accountId: "default",
           readiness: "started",
         },

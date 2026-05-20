@@ -1,14 +1,15 @@
 package ai.openclaw.app.node
 
-import android.os.Build
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.LocationMode
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.VoiceWakeMode
 import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayTlsParams
-import ai.openclaw.app.LocationMode
-import ai.openclaw.app.VoiceWakeMode
+import ai.openclaw.app.gateway.isLoopbackGatewayHost
+import android.os.Build
 
 class ConnectionManager(
   private val prefs: SecurePrefs,
@@ -19,7 +20,9 @@ class ConnectionManager(
   private val motionPedometerAvailable: () -> Boolean,
   private val sendSmsAvailable: () -> Boolean,
   private val readSmsAvailable: () -> Boolean,
+  private val smsSearchPossible: () -> Boolean,
   private val callLogAvailable: () -> Boolean,
+  private val photosAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
   private val manualTls: () -> Boolean,
 ) {
@@ -32,9 +35,10 @@ class ConnectionManager(
       val stableId = endpoint.stableId
       val stored = storedFingerprint?.trim().takeIf { !it.isNullOrEmpty() }
       val isManual = stableId.startsWith("manual|")
+      val cleartextAllowedHost = isLoopbackGatewayHost(endpoint.host)
 
       if (isManual) {
-        if (!manualTlsEnabled) return null
+        if (!manualTlsEnabled && cleartextAllowedHost) return null
         if (!stored.isNullOrBlank()) {
           return GatewayTlsParams(
             required = true,
@@ -72,6 +76,15 @@ class ConnectionManager(
         )
       }
 
+      if (!cleartextAllowedHost) {
+        return GatewayTlsParams(
+          required = true,
+          expectedFingerprint = null,
+          allowTOFU = false,
+          stableId = stableId,
+        )
+      }
+
       return null
     }
   }
@@ -82,7 +95,9 @@ class ConnectionManager(
       locationEnabled = locationMode() != LocationMode.Off,
       sendSmsAvailable = sendSmsAvailable(),
       readSmsAvailable = readSmsAvailable(),
+      smsSearchPossible = smsSearchPossible(),
       callLogAvailable = callLogAvailable(),
+      photosAvailable = photosAvailable(),
       voiceWakeEnabled = voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission(),
       motionActivityAvailable = motionActivityAvailable(),
       motionPedometerAvailable = motionPedometerAvailable(),
@@ -102,22 +117,27 @@ class ConnectionManager(
     }
   }
 
-  fun resolveModelIdentifier(): String? {
-    return listOfNotNull(Build.MANUFACTURER, Build.MODEL)
+  fun resolveModelIdentifier(): String? =
+    listOfNotNull(Build.MANUFACTURER, Build.MODEL)
       .joinToString(" ")
       .trim()
       .ifEmpty { null }
-  }
 
   fun buildUserAgent(): String {
     val version = resolvedVersionName()
-    val release = Build.VERSION.RELEASE?.trim().orEmpty()
+    val release =
+      Build.VERSION.RELEASE
+        ?.trim()
+        .orEmpty()
     val releaseLabel = if (release.isEmpty()) "unknown" else release
     return "OpenClawAndroid/$version (Android $releaseLabel; SDK ${Build.VERSION.SDK_INT})"
   }
 
-  fun buildClientInfo(clientId: String, clientMode: String): GatewayClientInfo {
-    return GatewayClientInfo(
+  fun buildClientInfo(
+    clientId: String,
+    clientMode: String,
+  ): GatewayClientInfo =
+    GatewayClientInfo(
       id = clientId,
       displayName = prefs.displayName.value,
       version = resolvedVersionName(),
@@ -127,10 +147,9 @@ class ConnectionManager(
       deviceFamily = "Android",
       modelIdentifier = resolveModelIdentifier(),
     )
-  }
 
-  fun buildNodeConnectOptions(): GatewayConnectOptions {
-    return GatewayConnectOptions(
+  fun buildNodeConnectOptions(): GatewayConnectOptions =
+    GatewayConnectOptions(
       role = "node",
       scopes = emptyList(),
       caps = buildCapabilities(),
@@ -139,19 +158,24 @@ class ConnectionManager(
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "node"),
       userAgent = buildUserAgent(),
     )
-  }
 
-  fun buildOperatorConnectOptions(): GatewayConnectOptions {
-    return GatewayConnectOptions(
+  fun buildOperatorConnectOptions(): GatewayConnectOptions =
+    GatewayConnectOptions(
       role = "operator",
-      scopes = listOf("operator.read", "operator.write", "operator.talk.secrets"),
+      // QR bootstrap hands Android a bounded operator token that includes approvals; keep the
+      // default operator reconnect request aligned so the post-bootstrap loop can approve work.
+      scopes =
+        listOf(
+          "operator.approvals",
+          "operator.read",
+          "operator.write",
+        ),
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),
       userAgent = buildUserAgent(),
     )
-  }
 
   fun resolveTlsParams(endpoint: GatewayEndpoint): GatewayTlsParams? {
     val stored = prefs.loadGatewayTlsFingerprint(endpoint.stableId)

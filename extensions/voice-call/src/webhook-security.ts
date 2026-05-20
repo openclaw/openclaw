@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getHeader } from "./http-headers.js";
 import type { WebhookContext } from "./types.js";
 
@@ -76,7 +80,7 @@ function markReplay(cache: ReplayCache, replayKey: string): boolean {
  *
  * @see https://www.twilio.com/docs/usage/webhooks/webhooks-security
  */
-export function validateTwilioSignature(
+function validateTwilioSignature(
   authToken: string,
   signature: string | undefined,
   url: string,
@@ -120,22 +124,13 @@ function buildCanonicalTwilioParamString(params: URLSearchParams): string {
  * Timing-safe string comparison to prevent timing attacks.
  */
 function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    // Still do comparison to maintain constant time
-    const dummy = Buffer.from(a);
-    crypto.timingSafeEqual(dummy, dummy);
-    return false;
-  }
-
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  return crypto.timingSafeEqual(bufA, bufB);
+  return safeEqualSecret(a, b);
 }
 
 /**
  * Configuration for secure URL reconstruction.
  */
-export interface WebhookUrlOptions {
+interface WebhookUrlOptions {
   /**
    * Whitelist of allowed hostnames. If provided, only these hosts will be
    * accepted from forwarding headers. This prevents host header injection attacks.
@@ -196,8 +191,8 @@ function extractHostname(hostHeader: string): string | null {
     if (endBracket === -1) {
       return null; // Malformed IPv6
     }
-    hostname = hostHeader.substring(1, endBracket);
-    return hostname.toLowerCase();
+    hostname = hostHeader.slice(1, endBracket);
+    return normalizeLowercaseStringOrEmpty(hostname);
   }
 
   // Handle IPv4/domain with optional port
@@ -213,7 +208,7 @@ function extractHostname(hostHeader: string): string | null {
     return null;
   }
 
-  return hostname.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(hostname);
 }
 
 function extractHostnameFromHeader(headerValue: string): string | null {
@@ -366,19 +361,6 @@ function buildTwilioVerificationUrl(
   }
 }
 
-function isLoopbackAddress(address?: string): boolean {
-  if (!address) {
-    return false;
-  }
-  if (address === "127.0.0.1" || address === "::1") {
-    return true;
-  }
-  if (address.startsWith("::ffff:127.")) {
-    return true;
-  }
-  return false;
-}
-
 function stripPortFromUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -417,7 +399,7 @@ function extractPortFromHostHeader(hostHeader?: string): string | undefined {
 /**
  * Result of Twilio webhook verification with detailed info.
  */
-export interface TwilioVerificationResult {
+interface TwilioVerificationResult {
   ok: boolean;
   reason?: string;
   /** The URL that was used for verification (for debugging) */
@@ -430,7 +412,7 @@ export interface TwilioVerificationResult {
   verifiedRequestKey?: string;
 }
 
-export interface TelnyxVerificationResult {
+interface TelnyxVerificationResult {
   ok: boolean;
   reason?: string;
   /** Request is cryptographically valid but was already processed recently. */
@@ -526,7 +508,7 @@ export function verifyTelnyxWebhook(
     return { ok: false, reason: "Missing signature or timestamp header" };
   }
 
-  const eventTimeSec = parseInt(timestamp, 10);
+  const eventTimeSec = Number.parseInt(timestamp, 10);
   if (!Number.isFinite(eventTimeSec)) {
     return { ok: false, reason: "Invalid timestamp header" };
   }
@@ -534,6 +516,8 @@ export function verifyTelnyxWebhook(
   try {
     const signedPayload = `${timestamp}|${ctx.rawBody}`;
     const signatureBuffer = decodeBase64OrBase64Url(signature);
+    // Canonicalize equivalent Base64/Base64URL encodings before replay hashing.
+    const canonicalSignature = signatureBuffer.toString("base64");
     const key = importEd25519PublicKey(publicKey);
 
     const isValid = crypto.verify(null, Buffer.from(signedPayload), key, signatureBuffer);
@@ -548,13 +532,13 @@ export function verifyTelnyxWebhook(
       return { ok: false, reason: "Timestamp too old" };
     }
 
-    const replayKey = `telnyx:${sha256Hex(`${timestamp}\n${signature}\n${ctx.rawBody}`)}`;
+    const replayKey = `telnyx:${sha256Hex(`${timestamp}\n${canonicalSignature}\n${ctx.rawBody}`)}`;
     const isReplay = markReplay(telnyxReplayCache, replayKey);
     return { ok: true, isReplay, verifiedRequestKey: replayKey };
   } catch (err) {
     return {
       ok: false,
-      reason: `Verification error: ${err instanceof Error ? err.message : String(err)}`,
+      reason: `Verification error: ${formatErrorMessage(err)}`,
     };
   }
 }
@@ -618,7 +602,7 @@ export function verifyTwilioWebhook(
     return { ok: false, reason: "Missing X-Twilio-Signature header" };
   }
 
-  const isLoopback = isLoopbackAddress(options?.remoteIP ?? ctx.remoteAddress);
+  const isLoopback = isLoopbackHost(options?.remoteIP ?? ctx.remoteAddress ?? "");
   const allowLoopbackForwarding = options?.allowNgrokFreeTierLoopbackBypass && isLoopback;
 
   // Reconstruct the URL Twilio used
@@ -702,7 +686,7 @@ export function verifyTwilioWebhook(
 /**
  * Result of Plivo webhook verification with detailed info.
  */
-export interface PlivoVerificationResult {
+interface PlivoVerificationResult {
   ok: boolean;
   reason?: string;
   verificationUrl?: string;
@@ -724,13 +708,26 @@ function getBaseUrlNoQuery(url: string): string {
   return `${u.protocol}//${u.host}${u.pathname}`;
 }
 
+function createPlivoV2ReplayKey(url: string, nonce: string): string {
+  return `plivo:v2:${sha256Hex(`${getBaseUrlNoQuery(url)}\n${nonce}`)}`;
+}
+
+function createPlivoV3ReplayKey(params: {
+  method: "GET" | "POST";
+  url: string;
+  postParams: PlivoParamMap;
+  nonce: string;
+}): string {
+  const baseUrl = constructPlivoV3BaseUrl({
+    method: params.method,
+    url: params.url,
+    postParams: params.postParams,
+  });
+  return `plivo:v3:${sha256Hex(`${baseUrl}\n${params.nonce}`)}`;
+}
+
 function timingSafeEqualString(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    const dummy = Buffer.from(a);
-    crypto.timingSafeEqual(dummy, dummy);
-    return false;
-  }
-  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  return safeEqualSecret(a, b);
 }
 
 function validatePlivoV2Signature(params: {
@@ -947,7 +944,12 @@ export function verifyPlivoWebhook(
         reason: "Invalid Plivo V3 signature",
       };
     }
-    const replayKey = `plivo:v3:${sha256Hex(`${verificationUrl}\n${nonceV3}`)}`;
+    const replayKey = createPlivoV3ReplayKey({
+      method,
+      url: verificationUrl,
+      postParams,
+      nonce: nonceV3,
+    });
     const isReplay = markReplay(plivoReplayCache, replayKey);
     return { ok: true, version: "v3", verificationUrl, isReplay, verifiedRequestKey: replayKey };
   }
@@ -967,7 +969,7 @@ export function verifyPlivoWebhook(
         reason: "Invalid Plivo V2 signature",
       };
     }
-    const replayKey = `plivo:v2:${sha256Hex(`${verificationUrl}\n${nonceV2}`)}`;
+    const replayKey = createPlivoV2ReplayKey(verificationUrl, nonceV2);
     const isReplay = markReplay(plivoReplayCache, replayKey);
     return { ok: true, version: "v2", verificationUrl, isReplay, verifiedRequestKey: replayKey };
   }

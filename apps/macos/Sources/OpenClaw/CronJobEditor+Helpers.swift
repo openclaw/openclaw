@@ -17,10 +17,10 @@ extension CronJobEditor {
         self.enabled = job.enabled
         self.deleteAfterRun = job.deleteAfterRun ?? false
         switch job.parsedSessionTarget {
-        case .predefined(let target):
+        case let .predefined(target):
             self.sessionTarget = target
             self.preservedSessionTargetRaw = nil
-        case .session(let id):
+        case let .session(id):
             self.sessionTarget = .isolated
             self.preservedSessionTargetRaw = "session:\(id)"
         }
@@ -265,7 +265,10 @@ extension CronJobEditor {
     }
 
     var effectiveSessionTargetRaw: String {
-        if self.sessionTarget == .isolated, let preserved = self.preservedSessionTargetRaw?.trimmingCharacters(in: .whitespacesAndNewlines), !preserved.isEmpty {
+        if self.sessionTarget == .isolated,
+           let preserved = self.preservedSessionTargetRaw?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !preserved.isEmpty
+        {
             return preserved
         }
         return self.sessionTarget.rawValue

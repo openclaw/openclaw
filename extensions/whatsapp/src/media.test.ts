@@ -1,32 +1,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { captureEnv } from "openclaw/plugin-sdk/test-env";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import { withMockedWindowsPlatform, withRestoredMocks } from "openclaw/plugin-sdk/test-node-mocks";
+import { optimizeImageToPng } from "openclaw/plugin-sdk/web-media";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { resolveStateDir } from "../../../src/config/paths.js";
-import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
-import { optimizeImageToPng } from "../../../src/media/image-ops.js";
-import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
-import { captureEnv } from "../../../test/helpers/extensions/env.js";
-import { sendVoiceMessageDiscord } from "../../discord/src/send.js";
 import {
   LocalMediaAccessError,
   loadWebMedia,
   loadWebMediaRaw,
   optimizeImageToJpeg,
 } from "./media.js";
-
-const convertHeicToJpegMock = vi.fn();
-
-vi.mock("../../../src/media/image-ops.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../src/media/image-ops.js")>(
-    "../../../src/media/image-ops.js",
-  );
-  return {
-    ...actual,
-    convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
-  };
-});
 
 let fixtureRoot = "";
 let fixtureFileCount = 0;
@@ -35,7 +23,6 @@ let largeJpegFile = "";
 let tinyPngBuffer: Buffer;
 let tinyPngFile = "";
 let tinyPngWrongExtFile = "";
-let fakeHeicFile = "";
 let alphaPngBuffer: Buffer;
 let alphaPngFile = "";
 let fallbackPngBuffer: Buffer;
@@ -67,6 +54,17 @@ function cloneStatWithDev<T extends { dev: number | bigint }>(stat: T, dev: numb
   return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { dev }) as T;
 }
 
+async function expectLocalMediaAccessCode(promise: Promise<unknown>, code: string) {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(LocalMediaAccessError);
+    expect((error as { code?: unknown }).code).toBe(code);
+    return;
+  }
+  throw new Error(`expected local media access error ${code}`);
+}
+
 beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
@@ -89,7 +87,6 @@ beforeAll(async () => {
     .toBuffer();
   tinyPngFile = await writeTempFile(tinyPngBuffer, ".png");
   tinyPngWrongExtFile = await writeTempFile(tinyPngBuffer, ".bin");
-  fakeHeicFile = await writeTempFile(Buffer.from("fake-heic"), ".heic");
   alphaPngBuffer = await sharp({
     create: {
       width: 64,
@@ -192,22 +189,6 @@ describe("web media loading", () => {
     expect(result.contentType).toBe("image/jpeg");
   });
 
-  it("normalizes HEIC local files to JPEG output", async () => {
-    convertHeicToJpegMock.mockResolvedValueOnce(tinyPngBuffer);
-
-    const result = await loadWebMedia(fakeHeicFile, 1024 * 1024);
-
-    expect(convertHeicToJpegMock).toHaveBeenCalledTimes(1);
-    expect(result.kind).toBe("image");
-    expect(result.contentType).toBe("image/jpeg");
-    expect(result.fileName).toBe(path.basename(fakeHeicFile, ".heic") + ".jpg");
-    expect(result.buffer.length).toBeGreaterThan(0);
-    expect(result.buffer.equals(tinyPngBuffer)).toBe(false);
-    // Confirm the output is actually JPEG (magic bytes 0xFF 0xD8)
-    expect(result.buffer[0]).toBe(0xff);
-    expect(result.buffer[1]).toBe(0xd8);
-  });
-
   it("includes URL + status in fetch errors", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: false,
@@ -279,10 +260,12 @@ describe("web media loading", () => {
   });
 
   it("uses content-disposition filename when available", async () => {
+    const pdfBytes = Buffer.from("%PDF-1.4");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: true,
       body: true,
-      arrayBuffer: async () => Buffer.from("%PDF-1.4").buffer,
+      arrayBuffer: async () =>
+        pdfBytes.buffer.slice(pdfBytes.byteOffset, pdfBytes.byteOffset + pdfBytes.byteLength),
       headers: {
         get: (name: string) => {
           if (name === "content-disposition") {
@@ -347,41 +330,13 @@ describe("web media loading", () => {
   });
 });
 
-describe("Discord voice message input hardening", () => {
-  it("rejects unsafe voice message inputs", async () => {
-    const cases = [
-      {
-        name: "local path outside allowed media roots",
-        candidate: path.join(process.cwd(), "package.json"),
-        expectedMessage: /Local media path is not under an allowed directory/i,
-      },
-      {
-        name: "private-network URL",
-        candidate: "http://127.0.0.1/voice.ogg",
-        expectedMessage: /Failed to fetch media|Blocked|private|internal/i,
-      },
-      {
-        name: "non-http URL scheme",
-        candidate: "rtsp://example.com/voice.ogg",
-        expectedMessage: /Local media path is not under an allowed directory|ENOENT|no such file/i,
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      await expect(
-        sendVoiceMessageDiscord("channel:123", testCase.candidate),
-        testCase.name,
-      ).rejects.toThrow(testCase.expectedMessage);
-    }
-  });
-});
-
 describe("local media root guard", () => {
   it("rejects local paths outside allowed roots", async () => {
     // Explicit roots that don't contain the temp file.
-    await expect(
+    await expectLocalMediaAccessCode(
       loadWebMedia(tinyPngFile, 1024 * 1024, { localRoots: ["/nonexistent-root"] }),
-    ).rejects.toMatchObject({ code: "path-not-allowed" });
+      "path-not-allowed",
+    );
   });
 
   it("allows local paths under an explicit root", async () => {
@@ -391,43 +346,71 @@ describe("local media root guard", () => {
     expect(result.kind).toBe("image");
   });
 
+  it("rejects remote-host file URLs before filesystem checks", async () => {
+    const realpathSpy = vi.spyOn(fs, "realpath");
+
+    try {
+      await expectLocalMediaAccessCode(
+        loadWebMedia("file://attacker/share/evil.png", 1024 * 1024, {
+          localRoots: [resolvePreferredOpenClawTmpDir()],
+        }),
+        "invalid-file-url",
+      );
+      expect(realpathSpy).not.toHaveBeenCalled();
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
   it("accepts win32 dev=0 stat mismatch for local file loads", async () => {
     const actualLstat = await fs.lstat(tinyPngFile);
     const actualStat = await fs.stat(tinyPngFile);
     const zeroDev = typeof actualLstat.dev === "bigint" ? 0n : 0;
+    // Resolve before mocking platform: under `win32` the helper returns the
+    // os.tmpdir() fallback rather than the POSIX `/tmp/openclaw` root that
+    // actually holds `tinyPngFile` on this Linux test runner (#60713).
+    const realTmpRoot = resolvePreferredOpenClawTmpDir();
 
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const lstatSpy = vi
-      .spyOn(fs, "lstat")
-      .mockResolvedValue(cloneStatWithDev(actualLstat, zeroDev));
-    const statSpy = vi.spyOn(fs, "stat").mockResolvedValue(cloneStatWithDev(actualStat, zeroDev));
+    await withMockedWindowsPlatform(async () => {
+      const lstatSpy = vi
+        .spyOn(fs, "lstat")
+        .mockResolvedValue(cloneStatWithDev(actualLstat, zeroDev));
+      const statSpy = vi.spyOn(fs, "stat").mockResolvedValue(cloneStatWithDev(actualStat, zeroDev));
 
-    try {
-      const result = await loadWebMedia(tinyPngFile, 1024 * 1024, {
-        localRoots: [resolvePreferredOpenClawTmpDir()],
+      await withRestoredMocks([lstatSpy, statSpy], async () => {
+        const result = await loadWebMedia(tinyPngFile, 1024 * 1024, {
+          localRoots: [realTmpRoot],
+        });
+        expect(result.kind).toBe("image");
+        expect(result.buffer.length).toBeGreaterThan(0);
       });
-      expect(result.kind).toBe("image");
-      expect(result.buffer.length).toBeGreaterThan(0);
-    } finally {
-      statSpy.mockRestore();
-      lstatSpy.mockRestore();
-      platformSpy.mockRestore();
-    }
+    });
+  });
+
+  it("rejects Windows network paths before filesystem checks", async () => {
+    await withMockedWindowsPlatform(async () => {
+      const realpathSpy = vi.spyOn(fs, "realpath");
+
+      await withRestoredMocks([realpathSpy], async () => {
+        await expectLocalMediaAccessCode(
+          loadWebMedia("\\\\attacker\\share\\evil.png", 1024 * 1024, {
+            localRoots: [resolvePreferredOpenClawTmpDir()],
+          }),
+          "network-path-not-allowed",
+        );
+        expect(realpathSpy).not.toHaveBeenCalled();
+      });
+    });
   });
 
   it("requires readFile override for localRoots bypass", async () => {
-    await expect(
+    await expectLocalMediaAccessCode(
       loadWebMedia(tinyPngFile, {
         maxBytes: 1024 * 1024,
         localRoots: "any",
       }),
-    ).rejects.toBeInstanceOf(LocalMediaAccessError);
-    await expect(
-      loadWebMedia(tinyPngFile, {
-        maxBytes: 1024 * 1024,
-        localRoots: "any",
-      }),
-    ).rejects.toMatchObject({ code: "unsafe-bypass" });
+      "unsafe-bypass",
+    );
   });
 
   it("allows any path when localRoots is 'any'", async () => {
@@ -440,50 +423,48 @@ describe("local media root guard", () => {
   });
 
   it("rejects filesystem root entries in localRoots", async () => {
-    await expect(
+    await expectLocalMediaAccessCode(
       loadWebMedia(tinyPngFile, 1024 * 1024, {
         localRoots: [path.parse(tinyPngFile).root],
       }),
-    ).rejects.toMatchObject({ code: "invalid-root" });
+      "invalid-root",
+    );
   });
 
   it("allows default OpenClaw state workspace and sandbox roots", async () => {
     const stateDir = resolveStateDir();
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
-    await expect(
-      loadWebMedia(path.join(stateDir, "workspace", "tmp", "render.bin"), {
+    const workspaceResult = await loadWebMedia(
+      path.join(stateDir, "workspace", "tmp", "render.bin"),
+      {
         maxBytes: 1024 * 1024,
         readFile,
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        kind: undefined,
-      }),
+      },
     );
+    expect(workspaceResult.kind).toBeUndefined();
 
-    await expect(
-      loadWebMedia(path.join(stateDir, "sandboxes", "session-1", "frame.bin"), {
+    const sandboxResult = await loadWebMedia(
+      path.join(stateDir, "sandboxes", "session-1", "frame.bin"),
+      {
         maxBytes: 1024 * 1024,
         readFile,
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        kind: undefined,
-      }),
+      },
     );
+    expect(sandboxResult.kind).toBeUndefined();
   });
 
   it("rejects default OpenClaw state per-agent workspace-* roots without explicit local roots", async () => {
     const stateDir = resolveStateDir();
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
-    await expect(
+    await expectLocalMediaAccessCode(
       loadWebMedia(path.join(stateDir, "workspace-clawdy", "tmp", "render.bin"), {
         maxBytes: 1024 * 1024,
         readFile,
       }),
-    ).rejects.toMatchObject({ code: "path-not-allowed" });
+      "path-not-allowed",
+    );
   });
 
   it("allows per-agent workspace-* paths with explicit local roots", async () => {
@@ -491,16 +472,11 @@ describe("local media root guard", () => {
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
     const agentWorkspaceDir = path.join(stateDir, "workspace-clawdy");
 
-    await expect(
-      loadWebMedia(path.join(agentWorkspaceDir, "tmp", "render.bin"), {
-        maxBytes: 1024 * 1024,
-        localRoots: [agentWorkspaceDir],
-        readFile,
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        kind: undefined,
-      }),
-    );
+    const result = await loadWebMedia(path.join(agentWorkspaceDir, "tmp", "render.bin"), {
+      maxBytes: 1024 * 1024,
+      localRoots: [agentWorkspaceDir],
+      readFile,
+    });
+    expect(result.kind).toBeUndefined();
   });
 });

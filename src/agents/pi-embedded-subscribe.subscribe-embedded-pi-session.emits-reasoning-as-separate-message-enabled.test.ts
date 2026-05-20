@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   THINKING_TAG_CASES,
@@ -8,7 +8,7 @@ import {
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  function createReasoningBlockReplyHarness() {
+  function createReasoningBlockReplyHarness(params: { thinkingLevel?: "off" | "medium" } = {}) {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
 
@@ -18,15 +18,24 @@ describe("subscribeEmbeddedPiSession", () => {
       onBlockReply,
       blockReplyBreak: "message_end",
       reasoningMode: "on",
+      thinkingLevel: params.thinkingLevel,
     });
 
     return { emit, onBlockReply };
   }
 
+  function blockReplyTextAt(onBlockReply: ReturnType<typeof vi.fn>, callIndex: number): string {
+    const call = onBlockReply.mock.calls[callIndex];
+    if (!call) {
+      throw new Error(`expected block reply call ${callIndex + 1}`);
+    }
+    return (call[0] as { text?: string }).text ?? "";
+  }
+
   function expectReasoningAndAnswerCalls(onBlockReply: ReturnType<typeof vi.fn>) {
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply.mock.calls[0][0].text).toBe("Reasoning:\n_Because it helps_");
-    expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
+    expect(blockReplyTextAt(onBlockReply, 0)).toBe("Because it helps");
+    expect(blockReplyTextAt(onBlockReply, 1)).toBe("Final answer");
   }
 
   it("emits reasoning as a separate message when enabled", () => {
@@ -38,6 +47,16 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expectReasoningAndAnswerCalls(onBlockReply);
   });
+
+  it("does not emit native reasoning when thinking is disabled", () => {
+    const { emit, onBlockReply } = createReasoningBlockReplyHarness({ thinkingLevel: "off" });
+
+    emit({ type: "message_end", message: createReasoningFinalAnswerMessage() });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(blockReplyTextAt(onBlockReply, 0)).toBe("Final answer");
+  });
+
   it.each(THINKING_TAG_CASES)(
     "promotes <%s> tags to thinking blocks at write-time",
     ({ open, close }) => {

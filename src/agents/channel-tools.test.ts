@@ -5,7 +5,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  __testing,
+  testing,
   listAllChannelSupportedActions,
   listChannelSupportedActions,
 } from "./channel-tools.js";
@@ -35,22 +35,21 @@ describe("channel tools", () => {
       },
     };
 
-    __testing.resetLoggedListActionErrors();
+    testing.resetLoggedListActionErrors();
     errorSpy.mockClear();
     setActivePluginRegistry(createTestRegistry([{ pluginId: "test", source: "test", plugin }]));
   });
 
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
-    errorSpy.mockClear();
   });
 
   it("skips crashing plugins and logs once", () => {
     const cfg = {} as OpenClawConfig;
-    expect(listAllChannelSupportedActions({ cfg })).toEqual([]);
+    expect(listAllChannelSupportedActions({ cfg })).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
 
-    expect(listAllChannelSupportedActions({ cfg })).toEqual([]);
+    expect(listAllChannelSupportedActions({ cfg })).toStrictEqual([]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -81,8 +80,8 @@ describe("channel tools", () => {
     setActivePluginRegistry(createTestRegistry([{ pluginId: "polltest", source: "test", plugin }]));
 
     const cfg = {} as OpenClawConfig;
-    expect(listChannelSupportedActions({ cfg, channel: "polltest" })).toEqual([]);
-    expect(listAllChannelSupportedActions({ cfg })).toEqual([]);
+    expect(listChannelSupportedActions({ cfg, channel: "polltest" })).toStrictEqual([]);
+    expect(listAllChannelSupportedActions({ cfg })).toStrictEqual([]);
   });
 
   it("normalizes channel aliases before listing supported actions", () => {

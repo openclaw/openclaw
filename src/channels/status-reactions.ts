@@ -1,3 +1,7 @@
+import { TOOL_DISPLAY_CONFIG } from "../agents/tool-display-config.js";
+import { resolveToolDisplay } from "../agents/tool-display.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+
 /**
  * Channel-agnostic status reaction controller.
  * Provides a unified interface for displaying agent status via message reactions.
@@ -10,6 +14,8 @@
 export type StatusReactionAdapter = {
   /** Set/replace the current reaction emoji. */
   setReaction: (emoji: string) => Promise<void>;
+  /** Clear all status reactions for single-slot platforms such as WhatsApp. */
+  clearReaction?: () => Promise<void>;
   /** Remove a specific reaction emoji (optional — needed for Discord-style platforms). */
   removeReaction?: (emoji: string) => Promise<void>;
 };
@@ -20,11 +26,14 @@ export type StatusReactionEmojis = {
   tool?: string; // Default: "🛠️"
   coding?: string; // Default: "💻"
   web?: string; // Default: "🌐"
+  deploy?: string; // Default: "🛫"
+  build?: string; // Default: "🏗️"
+  concierge?: string; // Default: "💁"
   done?: string; // Default: "✅"
   error?: string; // Default: "❌"
   stallSoft?: string; // Default: "⏳"
   stallHard?: string; // Default: "⚠️"
-  compacting?: string; // Default: "✍"
+  compacting?: string; // Default: "🗜️"
 };
 
 export type StatusReactionTiming = {
@@ -54,15 +63,18 @@ export type StatusReactionController = {
 
 export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
   queued: "👀",
-  thinking: "🤔",
-  tool: "🔥",
-  coding: "👨‍💻",
-  web: "⚡",
-  done: "👍",
-  error: "😱",
-  stallSoft: "🥱",
-  stallHard: "😨",
-  compacting: "✍",
+  thinking: "🧠",
+  tool: "🛠️",
+  coding: "💻",
+  web: "🌐",
+  deploy: "🛫",
+  build: "🏗️",
+  concierge: "💁",
+  done: "✅",
+  error: "❌",
+  stallSoft: "⏳",
+  stallHard: "⚠️",
+  compacting: "🗜️",
 };
 
 export const DEFAULT_TIMING: Required<StatusReactionTiming> = {
@@ -91,6 +103,46 @@ export const WEB_TOOL_TOKENS: string[] = [
   "browser",
 ];
 
+export const DEPLOY_TOOL_TOKENS: string[] = [
+  "fastlane",
+  "deploy",
+  "upload",
+  "testflight",
+  "ship",
+  "release",
+  "publish",
+  "distribute",
+];
+
+export const BUILD_TOOL_TOKENS: string[] = [
+  "build",
+  "compile",
+  "xcode",
+  "swift",
+  "gradle",
+  "cargo",
+  "make",
+  "cmake",
+  "webpack",
+  "vite",
+  "tsc",
+  "lint",
+];
+
+export const CONCIERGE_TOOL_TOKENS: string[] = [
+  "navigate",
+  "click",
+  "fill",
+  "screenshot",
+  "scroll",
+  "page",
+  "form",
+  "puppeteer",
+  "playwright",
+  "selenium",
+  "chromedp",
+];
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Functions
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,15 +153,43 @@ export const WEB_TOOL_TOKENS: string[] = [
 export function resolveToolEmoji(
   toolName: string | undefined,
   emojis: Required<StatusReactionEmojis>,
+  emojiOverrides?: StatusReactionEmojis,
 ): string {
-  const normalized = toolName?.trim().toLowerCase() ?? "";
+  const normalized = normalizeOptionalLowercaseString(toolName) ?? "";
   if (!normalized) {
     return emojis.tool;
   }
-  if (WEB_TOOL_TOKENS.some((token) => normalized.includes(token))) {
+
+  const category = DEPLOY_TOOL_TOKENS.some((token) => normalized.includes(token))
+    ? "deploy"
+    : BUILD_TOOL_TOKENS.some((token) => normalized.includes(token))
+      ? "build"
+      : CONCIERGE_TOOL_TOKENS.some((token) => normalized.includes(token))
+        ? "concierge"
+        : WEB_TOOL_TOKENS.some((token) => normalized.includes(token))
+          ? "web"
+          : CODING_TOOL_TOKENS.some((token) => normalized.includes(token))
+            ? "coding"
+            : "tool";
+  if (emojiOverrides?.[category] !== undefined) {
+    return emojis[category];
+  }
+  if (Object.hasOwn(TOOL_DISPLAY_CONFIG.tools, normalized)) {
+    return resolveToolDisplay({ name: toolName }).emoji;
+  }
+  if (category === "deploy") {
+    return emojis.deploy;
+  }
+  if (category === "build") {
+    return emojis.build;
+  }
+  if (category === "concierge") {
+    return emojis.concierge;
+  }
+  if (category === "web") {
     return emojis.web;
   }
-  if (CODING_TOOL_TOKENS.some((token) => normalized.includes(token))) {
+  if (category === "coding") {
     return emojis.coding;
   }
   return emojis.tool;
@@ -123,6 +203,8 @@ export function resolveToolEmoji(
  * - Debouncing (intermediate states debounce, terminal states are immediate)
  * - Stall timers (soft/hard warnings on inactivity)
  * - Terminal state protection (done/error mark finished, subsequent updates ignored)
+ * - Defers reaction removals until final cleanup to avoid visible flicker on
+ *   platforms without atomic reaction replacement
  */
 export function createStatusReactionController(params: {
   enabled: boolean;
@@ -154,21 +236,7 @@ export function createStatusReactionController(params: {
   let stallHardTimer: NodeJS.Timeout | null = null;
   let finished = false;
   let chainPromise = Promise.resolve();
-
-  // Known emojis for clear operation
-  const knownEmojis = new Set<string>([
-    initialEmoji,
-    emojis.queued,
-    emojis.thinking,
-    emojis.tool,
-    emojis.coding,
-    emojis.web,
-    emojis.done,
-    emojis.error,
-    emojis.stallSoft,
-    emojis.stallHard,
-    emojis.compacting,
-  ]);
+  const activeEmojis = new Set<string>();
 
   /**
    * Serialize async operations to prevent race conditions.
@@ -226,8 +294,29 @@ export function createStatusReactionController(params: {
     }, timing.stallHardMs);
   }
 
+  async function removeActiveEmojis(options: { keepEmoji?: string } = {}): Promise<void> {
+    if (!adapter.removeReaction) {
+      return;
+    }
+
+    for (const emoji of Array.from(activeEmojis)) {
+      if (emoji === options.keepEmoji) {
+        continue;
+      }
+      try {
+        await adapter.removeReaction(emoji);
+      } catch (err) {
+        if (onError) {
+          onError(err);
+        }
+      } finally {
+        activeEmojis.delete(emoji);
+      }
+    }
+  }
+
   /**
-   * Apply an emoji: set new reaction and optionally remove old one.
+   * Apply an emoji while keeping previous active-loop reactions visible.
    */
   async function applyEmoji(newEmoji: string): Promise<void> {
     if (!enabled) {
@@ -235,14 +324,11 @@ export function createStatusReactionController(params: {
     }
 
     try {
-      const previousEmoji = currentEmoji;
-      await adapter.setReaction(newEmoji);
-
-      // If adapter supports removeReaction and there's a different previous emoji, remove it
-      if (adapter.removeReaction && previousEmoji && previousEmoji !== newEmoji) {
-        await adapter.removeReaction(previousEmoji);
+      if (!adapter.removeReaction || !activeEmojis.has(newEmoji)) {
+        await adapter.setReaction(newEmoji);
       }
 
+      activeEmojis.add(newEmoji);
       currentEmoji = newEmoji;
     } catch (err) {
       if (onError) {
@@ -282,6 +368,7 @@ export function createStatusReactionController(params: {
     } else {
       // Debounced execution for intermediate states
       debounceTimer = setTimeout(() => {
+        debounceTimer = null;
         void enqueue(async () => {
           await applyEmoji(emoji);
           pendingEmoji = "";
@@ -308,7 +395,7 @@ export function createStatusReactionController(params: {
   }
 
   function setTool(toolName?: string): void {
-    const emoji = resolveToolEmoji(toolName, emojis);
+    const emoji = resolveToolEmoji(toolName, emojis, params.emojis);
     scheduleEmoji(emoji);
   }
 
@@ -332,6 +419,7 @@ export function createStatusReactionController(params: {
     // Directly enqueue to ensure we return the updated promise
     return enqueue(async () => {
       await applyEmoji(emoji);
+      await removeActiveEmojis({ keepEmoji: emoji });
       pendingEmoji = "";
     });
   }
@@ -353,21 +441,20 @@ export function createStatusReactionController(params: {
     finished = true;
 
     await enqueue(async () => {
-      if (adapter.removeReaction) {
-        // Remove all known emojis (Discord-style)
-        const emojisToRemove = Array.from(knownEmojis);
-        for (const emoji of emojisToRemove) {
-          try {
-            await adapter.removeReaction(emoji);
-          } catch (err) {
-            if (onError) {
-              onError(err);
-            }
+      if (adapter.clearReaction) {
+        try {
+          await adapter.clearReaction();
+        } catch (err) {
+          if (onError) {
+            onError(err);
           }
+        } finally {
+          activeEmojis.clear();
         }
+      } else if (adapter.removeReaction) {
+        await removeActiveEmojis();
       } else {
-        // For platforms without removeReaction, set empty or just skip
-        // (Telegram handles this atomically on the next setReaction)
+        // Telegram handles this atomically on the next setReaction.
       }
       currentEmoji = "";
       pendingEmoji = "";
@@ -379,9 +466,23 @@ export function createStatusReactionController(params: {
       return;
     }
 
+    const alreadyInitial = currentEmoji === initialEmoji;
+    const pendingBeforeClear = pendingEmoji;
+    const hadDebouncedPending = debounceTimer !== null;
+    const hasExtraActiveEmoji = Array.from(activeEmojis).some((emoji) => emoji !== initialEmoji);
     clearAllTimers();
+    if (alreadyInitial && (!pendingBeforeClear || hadDebouncedPending) && !hasExtraActiveEmoji) {
+      pendingEmoji = "";
+      return;
+    }
+    if (pendingBeforeClear === initialEmoji && !hadDebouncedPending) {
+      await chainPromise;
+      return;
+    }
+
     await enqueue(async () => {
       await applyEmoji(initialEmoji);
+      await removeActiveEmojis({ keepEmoji: initialEmoji });
       pendingEmoji = "";
     });
   }

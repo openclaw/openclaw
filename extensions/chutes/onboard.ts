@@ -1,14 +1,14 @@
 import {
-  CHUTES_BASE_URL,
-  CHUTES_DEFAULT_MODEL_REF,
-  CHUTES_MODEL_CATALOG,
-  buildChutesModelDefinition,
-} from "openclaw/plugin-sdk/provider-models";
-import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithModelCatalogPreset,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
+import {
+  CHUTES_BASE_URL,
+  CHUTES_DEFAULT_MODEL_REF,
+  CHUTES_MODEL_CATALOG,
+  buildChutesModelDefinition,
+} from "./models.js";
 
 export { CHUTES_DEFAULT_MODEL_REF };
 

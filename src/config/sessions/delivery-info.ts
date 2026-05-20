@@ -1,32 +1,40 @@
-import { loadConfig } from "../io.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+} from "../../gateway/session-store-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import { getRuntimeConfig } from "../io.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 import { loadSessionStore } from "./store.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
+import { parseSessionThreadInfo } from "./thread-info.js";
+import type { SessionEntry } from "./types.js";
+export { parseSessionThreadInfo };
 
-/**
- * Extract deliveryContext and threadId from a sessionKey.
- * Supports both :thread: (most channels) and :topic: (Telegram).
- */
-export function parseSessionThreadInfo(sessionKey: string | undefined): {
-  baseSessionKey: string | undefined;
-  threadId: string | undefined;
+function hasRoutableDeliveryContext(context?: {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+}): context is {
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string | number;
 } {
-  if (!sessionKey) {
-    return { baseSessionKey: undefined, threadId: undefined };
-  }
-  const topicIndex = sessionKey.lastIndexOf(":topic:");
-  const threadIndex = sessionKey.lastIndexOf(":thread:");
-  const markerIndex = Math.max(topicIndex, threadIndex);
-  const marker = topicIndex > threadIndex ? ":topic:" : ":thread:";
-
-  const baseSessionKey = markerIndex === -1 ? sessionKey : sessionKey.slice(0, markerIndex);
-  const threadIdRaw =
-    markerIndex === -1 ? undefined : sessionKey.slice(markerIndex + marker.length);
-  const threadId = threadIdRaw?.trim() || undefined;
-  return { baseSessionKey, threadId };
+  return Boolean(context?.channel && context?.to);
 }
 
-export function extractDeliveryInfo(sessionKey: string | undefined): {
-  deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
+export function extractDeliveryInfo(
+  sessionKey: string | undefined,
+  options?: { cfg?: OpenClawConfig },
+): {
+  deliveryContext:
+    | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
+    | undefined;
   threadId: string | undefined;
 } {
   const { baseSessionKey, threadId } = parseSessionThreadInfo(sessionKey);
@@ -34,24 +42,177 @@ export function extractDeliveryInfo(sessionKey: string | undefined): {
     return { deliveryContext: undefined, threadId };
   }
 
-  let deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
+  let deliveryContext:
+    | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
+    | undefined;
   try {
-    const cfg = loadConfig();
-    const storePath = resolveStorePath(cfg.session?.store);
-    const store = loadSessionStore(storePath);
-    let entry = store[sessionKey];
-    if (!entry?.deliveryContext && baseSessionKey !== sessionKey) {
-      entry = store[baseSessionKey];
+    const cfg = options?.cfg ?? getRuntimeConfig();
+    const lookup = loadDeliverySessionEntry({ cfg, sessionKey, baseSessionKey });
+    let entry = lookup.entry;
+    let storedDeliveryContext = deliveryContextFromSession(entry);
+    if (!hasRoutableDeliveryContext(storedDeliveryContext) && baseSessionKey !== sessionKey) {
+      entry = lookup.baseEntry;
+      storedDeliveryContext = deliveryContextFromSession(entry);
     }
-    if (entry?.deliveryContext) {
+    if (hasRoutableDeliveryContext(storedDeliveryContext)) {
       deliveryContext = {
-        channel: entry.deliveryContext.channel,
-        to: entry.deliveryContext.to,
-        accountId: entry.deliveryContext.accountId,
+        channel: storedDeliveryContext.channel,
+        to: storedDeliveryContext.to,
+        accountId: storedDeliveryContext.accountId,
+        threadId: storedDeliveryContext.threadId,
       };
     }
   } catch {
     // ignore: best-effort
   }
   return { deliveryContext, threadId };
+}
+
+function resolveDeliveryStorePaths(cfg: OpenClawConfig, agentId: string): string[] {
+  const paths = new Set<string>();
+  paths.add(resolveStorePath(cfg.session?.store, { agentId }));
+  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
+    if (target.agentId === agentId) {
+      paths.add(target.storePath);
+    }
+  }
+  return [...paths];
+}
+
+function findSessionEntryInStore(
+  store: ReturnType<typeof loadSessionStore>,
+  keys: readonly string[],
+) {
+  let normalizedIndex: Map<string, SessionEntry> | undefined;
+  let bestEntry: SessionEntry | undefined;
+  let bestUpdatedAt = 0;
+  let bestRoutable = false;
+  const acceptCandidate = (candidate: SessionEntry | undefined) => {
+    if (!candidate) {
+      return;
+    }
+    const candidateRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(candidate));
+    const candidateUpdatedAt = candidate.updatedAt ?? 0;
+    if (
+      !bestEntry ||
+      (candidateRoutable && !bestRoutable) ||
+      (candidateRoutable === bestRoutable && candidateUpdatedAt > bestUpdatedAt)
+    ) {
+      bestEntry = candidate;
+      bestUpdatedAt = candidateUpdatedAt;
+      bestRoutable = candidateRoutable;
+    }
+  };
+  for (const key of keys) {
+    const trimmed = key.trim();
+    const normalized = normalizeStoreSessionKey(key);
+    const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
+    let foundRoutableCandidate = false;
+    if (Object.prototype.hasOwnProperty.call(store, normalized)) {
+      foundRoutableCandidate ||= hasRoutableDeliveryContext(
+        deliveryContextFromSession(store[normalized]),
+      );
+      acceptCandidate(store[normalized]);
+    }
+    if (
+      foldedLegacyKey !== normalized &&
+      Object.prototype.hasOwnProperty.call(store, foldedLegacyKey)
+    ) {
+      foundRoutableCandidate ||= hasRoutableDeliveryContext(
+        deliveryContextFromSession(store[foldedLegacyKey]),
+      );
+      acceptCandidate(store[foldedLegacyKey]);
+    }
+    if (trimmed !== normalized && Object.prototype.hasOwnProperty.call(store, trimmed)) {
+      foundRoutableCandidate ||= hasRoutableDeliveryContext(
+        deliveryContextFromSession(store[trimmed]),
+      );
+      acceptCandidate(store[trimmed]);
+    }
+    if (trimmed !== normalized || !foundRoutableCandidate) {
+      normalizedIndex ??= buildFreshestSessionEntryIndex(store);
+      const freshest = normalizedIndex.get(normalized);
+      acceptCandidate(freshest);
+      if (foldedLegacyKey !== normalized) {
+        acceptCandidate(normalizedIndex.get(foldedLegacyKey));
+      }
+    }
+  }
+  return bestEntry;
+}
+
+function buildFreshestSessionEntryIndex(
+  store: Record<string, SessionEntry>,
+): Map<string, SessionEntry> {
+  const index = new Map<string, SessionEntry>();
+  for (const [key, entry] of Object.entries(store)) {
+    const normalized = normalizeStoreSessionKey(key);
+    const existing = index.get(normalized);
+    const entryRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(entry));
+    const existingRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(existing));
+    if (
+      !existing ||
+      (entryRoutable && !existingRoutable) ||
+      (entryRoutable === existingRoutable && (entry.updatedAt ?? 0) > (existing.updatedAt ?? 0))
+    ) {
+      index.set(normalized, entry);
+    }
+    const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
+    if (foldedLegacyKey === normalized) {
+      continue;
+    }
+    const foldedExisting = index.get(foldedLegacyKey);
+    const foldedExistingRoutable = hasRoutableDeliveryContext(
+      deliveryContextFromSession(foldedExisting),
+    );
+    if (
+      !foldedExisting ||
+      (entryRoutable && !foldedExistingRoutable) ||
+      (entryRoutable === foldedExistingRoutable &&
+        (entry.updatedAt ?? 0) > (foldedExisting.updatedAt ?? 0))
+    ) {
+      index.set(foldedLegacyKey, entry);
+    }
+  }
+  return index;
+}
+
+function loadDeliverySessionEntry(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  baseSessionKey: string;
+}) {
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
+  const canonicalBaseKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: params.baseSessionKey,
+  });
+  const agentId = resolveSessionStoreAgentId(params.cfg, canonicalKey);
+  const sessionKeys = [params.sessionKey, canonicalKey];
+  const baseKeys = [params.baseSessionKey, canonicalBaseKey];
+  let fallback:
+    | {
+        entry: ReturnType<typeof findSessionEntryInStore>;
+        baseEntry: ReturnType<typeof findSessionEntryInStore>;
+      }
+    | undefined;
+  for (const storePath of resolveDeliveryStorePaths(params.cfg, agentId)) {
+    const store = loadSessionStore(storePath);
+    const entry = findSessionEntryInStore(store, sessionKeys);
+    const baseEntry = findSessionEntryInStore(store, baseKeys);
+    if (!entry && !baseEntry) {
+      continue;
+    }
+    fallback ??= { entry, baseEntry };
+    if (
+      hasRoutableDeliveryContext(deliveryContextFromSession(entry)) ||
+      hasRoutableDeliveryContext(deliveryContextFromSession(baseEntry))
+    ) {
+      return { entry, baseEntry };
+    }
+  }
+  return fallback ?? { entry: undefined, baseEntry: undefined };
 }

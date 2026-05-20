@@ -7,6 +7,8 @@
 
 import { ApiClient } from "@twurple/api";
 import { StaticAuthProvider } from "@twurple/auth";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelResolveKind, ChannelResolveResult } from "./types.js";
 import type { ChannelLogSink, TwitchAccountConfig } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
@@ -17,9 +19,9 @@ import { normalizeToken } from "./utils/twitch.js";
 function normalizeUsername(input: string): string {
   const trimmed = input.trim();
   if (trimmed.startsWith("@")) {
-    return trimmed.slice(1).toLowerCase();
+    return normalizeLowercaseStringOrEmpty(trimmed.slice(1));
   }
-  return trimmed.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(trimmed);
 }
 
 /**
@@ -46,7 +48,7 @@ function createLogger(logger?: ChannelLogSink): ChannelLogSink {
 export async function resolveTwitchTargets(
   inputs: string[],
   account: TwitchAccountConfig,
-  kind: ChannelResolveKind,
+  _kind: ChannelResolveKind,
   logger?: ChannelLogSink,
 ): Promise<ChannelResolveResult[]> {
   const log = createLogger(logger);
@@ -123,7 +125,7 @@ export async function resolveTwitchTargets(
         }
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error);
       results.push({
         input,
         resolved: false,

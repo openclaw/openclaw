@@ -1,38 +1,14 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
+import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import type { MsgContext } from "../templating.js";
 import type { CommandContext } from "./commands-types.js";
 import { stripMentions } from "./mentions.js";
-
-function normalizeCommandBodyLite(raw: string, botUsername?: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed.startsWith("/")) {
-    return trimmed;
-  }
-
-  const newline = trimmed.indexOf("\n");
-  const singleLine = newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
-  const colonMatch = singleLine.match(/^\/([^\s:]+)\s*:(.*)$/);
-  const normalized = colonMatch
-    ? (() => {
-        const [, command, rest] = colonMatch;
-        const normalizedRest = rest.trimStart();
-        return normalizedRest ? `/${command} ${normalizedRest}` : `/${command}`;
-      })()
-    : singleLine;
-
-  const normalizedBotUsername = botUsername?.trim().toLowerCase();
-  const mentionMatch = normalizedBotUsername
-    ? normalized.match(/^\/([^\s@]+)@([^\s]+)(.*)$/)
-    : null;
-  const mentionNormalized =
-    mentionMatch && mentionMatch[2].toLowerCase() === normalizedBotUsername
-      ? `/${mentionMatch[1]}${mentionMatch[3] ?? ""}`
-      : normalized;
-  return mentionNormalized.replace(/^\/([^\s]+)(.*)$/, (_, command: string, rest: string) => {
-    return `/${command.toLowerCase()}${rest ?? ""}`;
-  });
-}
 
 export function buildCommandContext(params: {
   ctx: MsgContext;
@@ -49,19 +25,26 @@ export function buildCommandContext(params: {
     cfg,
     commandAuthorized: params.commandAuthorized,
   });
-  const surface = (ctx.Surface ?? ctx.Provider ?? "").trim().toLowerCase();
-  const channel = (ctx.Provider ?? surface).trim().toLowerCase();
-  const abortKey = sessionKey ?? (auth.from || undefined) ?? (auth.to || undefined);
+  const surface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
+  const channel = normalizeLowercaseStringOrEmpty(
+    ctx.OriginatingChannel ?? ctx.Provider ?? surface,
+  );
+  const from = auth.from ?? normalizeOptionalString(ctx.SenderId);
+  const to = auth.to ?? normalizeOptionalString(ctx.OriginatingTo);
+  const abortKey = sessionKey ?? from ?? to;
+  const channelId =
+    normalizeAnyChannelId(channel) ??
+    (channel ? (channel as CommandContext["channelId"]) : undefined);
   const rawBodyNormalized = triggerBodyNormalized;
-  const commandBodyNormalized = normalizeCommandBodyLite(
+  const commandBodyNormalized = normalizeCommandBody(
     isGroup ? stripMentions(rawBodyNormalized, ctx, cfg, agentId) : rawBodyNormalized,
-    ctx.BotUsername,
+    { botUsername: ctx.BotUsername },
   );
 
   return {
     surface,
     channel,
-    channelId: auth.providerId,
+    channelId: channelId ?? auth.providerId,
     ownerList: auth.ownerList,
     senderIsOwner: auth.senderIsOwner,
     isAuthorizedSender: auth.isAuthorizedSender,
@@ -69,7 +52,7 @@ export function buildCommandContext(params: {
     abortKey,
     rawBodyNormalized,
     commandBodyNormalized,
-    from: auth.from,
-    to: auth.to,
+    from,
+    to,
   };
 }

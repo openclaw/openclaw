@@ -1,17 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { isRecord } from "../utils.js";
+import {
+  inspectBundleServerRuntimeSupport,
+  loadEnabledBundleConfig,
+  readBundleJsonObject,
+} from "./bundle-config-shared.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   mergeBundlePathLists,
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginBundleFormat } from "./types.js";
+import type { PluginBundleFormat } from "./manifest-types.js";
 
 export type BundleLspServerConfig = Record<string, unknown>;
 
@@ -29,33 +32,6 @@ export type BundleLspRuntimeSupport = {
 const MANIFEST_PATH_BY_FORMAT: Partial<Record<PluginBundleFormat, string>> = {
   claude: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
 };
-
-function readPluginJsonObject(params: {
-  rootDir: string;
-  relativePath: string;
-}): { ok: true; raw: Record<string, unknown> } | { ok: false; error: string } {
-  const absolutePath = path.join(params.rootDir, params.relativePath);
-  const opened = openBoundaryFileSync({
-    absolutePath,
-    rootPath: params.rootDir,
-    boundaryLabel: "plugin root",
-    rejectHardlinks: true,
-  });
-  if (!opened.ok) {
-    return { ok: true, raw: {} };
-  }
-  try {
-    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-    if (!isRecord(raw)) {
-      return { ok: false, error: `${params.relativePath} must contain a JSON object` };
-    }
-    return { ok: true, raw };
-  } catch (error) {
-    return { ok: false, error: `failed to parse ${params.relativePath}: ${String(error)}` };
-  } finally {
-    fs.closeSync(opened.fd);
-  }
-}
 
 function extractLspServerMap(raw: unknown): Record<string, BundleLspServerConfig> {
   if (!isRecord(raw)) {
@@ -84,30 +60,32 @@ function resolveBundleLspConfigPaths(params: {
   return mergeBundlePathLists(defaults, declared);
 }
 
-function loadBundleLspConfigFile(params: {
-  rootDir: string;
-  relativePath: string;
-}): BundleLspConfig {
-  const absolutePath = path.resolve(params.rootDir, params.relativePath);
-  const opened = openBoundaryFileSync({
-    absolutePath,
-    rootPath: params.rootDir,
+function loadBundleLspConfigFile(params: { rootDir: string; relativePath: string }): {
+  config: BundleLspConfig;
+  diagnostics: string[];
+} {
+  const result = readRootJsonObjectSync({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
     boundaryLabel: "plugin root",
     rejectHardlinks: true,
   });
-  if (!opened.ok) {
-    return { lspServers: {} };
-  }
-  try {
-    const stat = fs.fstatSync(opened.fd);
-    if (!stat.isFile()) {
-      return { lspServers: {} };
+  if (!result.ok) {
+    if (result.reason === "open") {
+      return {
+        config: { lspServers: {} },
+        diagnostics:
+          result.failure.reason === "path"
+            ? []
+            : [`unable to read ${params.relativePath}: ${result.failure.reason}`],
+      };
     }
-    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-    return { lspServers: extractLspServerMap(raw) };
-  } finally {
-    fs.closeSync(opened.fd);
+    return {
+      config: { lspServers: {} },
+      diagnostics: [`unable to read ${params.relativePath}: ${result.error}`],
+    };
   }
+  return { config: { lspServers: extractLspServerMap(result.value) }, diagnostics: [] };
 }
 
 function loadBundleLspConfig(params: {
@@ -120,7 +98,7 @@ function loadBundleLspConfig(params: {
     return { config: { lspServers: {} }, diagnostics: [] };
   }
 
-  const manifestLoaded = readPluginJsonObject({
+  const manifestLoaded = readBundleJsonObject({
     rootDir: params.rootDir,
     relativePath: manifestRelativePath,
   });
@@ -133,17 +111,17 @@ function loadBundleLspConfig(params: {
     raw: manifestLoaded.raw,
     rootDir: params.rootDir,
   });
+  const diagnostics: string[] = [];
   for (const relativePath of filePaths) {
-    merged = applyMergePatch(
-      merged,
-      loadBundleLspConfigFile({
-        rootDir: params.rootDir,
-        relativePath,
-      }),
-    ) as BundleLspConfig;
+    const loaded = loadBundleLspConfigFile({
+      rootDir: params.rootDir,
+      relativePath,
+    });
+    diagnostics.push(...loaded.diagnostics);
+    merged = applyMergePatch(merged, loaded.config) as BundleLspConfig;
   }
 
-  return { config: merged, diagnostics: [] };
+  return { config: merged, diagnostics };
 }
 
 export function inspectBundleLspRuntimeSupport(params: {
@@ -151,23 +129,15 @@ export function inspectBundleLspRuntimeSupport(params: {
   rootDir: string;
   bundleFormat: PluginBundleFormat;
 }): BundleLspRuntimeSupport {
-  const loaded = loadBundleLspConfig(params);
-  const supportedServerNames: string[] = [];
-  const unsupportedServerNames: string[] = [];
-  let hasStdioServer = false;
-  for (const [serverName, server] of Object.entries(loaded.config.lspServers)) {
-    if (typeof server.command === "string" && server.command.trim().length > 0) {
-      hasStdioServer = true;
-      supportedServerNames.push(serverName);
-      continue;
-    }
-    unsupportedServerNames.push(serverName);
-  }
+  const support = inspectBundleServerRuntimeSupport({
+    loaded: loadBundleLspConfig(params),
+    resolveServers: (config) => config.lspServers,
+  });
   return {
-    hasStdioServer,
-    supportedServerNames,
-    unsupportedServerNames,
-    diagnostics: loaded.diagnostics,
+    hasStdioServer: support.hasSupportedServer,
+    supportedServerNames: support.supportedServerNames,
+    unsupportedServerNames: support.unsupportedServerNames,
+    diagnostics: support.diagnostics,
   };
 }
 
@@ -175,38 +145,11 @@ export function loadEnabledBundleLspConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
 }): { config: BundleLspConfig; diagnostics: Array<{ pluginId: string; message: string }> } {
-  const registry = loadPluginManifestRegistry({
+  return loadEnabledBundleConfig({
     workspaceDir: params.workspaceDir,
-    config: params.cfg,
+    cfg: params.cfg,
+    createEmptyConfig: () => ({ lspServers: {} }),
+    loadBundleConfig: loadBundleLspConfig,
+    createDiagnostic: (pluginId, message) => ({ pluginId, message }),
   });
-  const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
-  const diagnostics: Array<{ pluginId: string; message: string }> = [];
-  let merged: BundleLspConfig = { lspServers: {} };
-
-  for (const record of registry.plugins) {
-    if (record.format !== "bundle" || !record.bundleFormat) {
-      continue;
-    }
-    const enableState = resolveEffectiveEnableState({
-      id: record.id,
-      origin: record.origin,
-      config: normalizedPlugins,
-      rootConfig: params.cfg,
-    });
-    if (!enableState.enabled) {
-      continue;
-    }
-
-    const loaded = loadBundleLspConfig({
-      pluginId: record.id,
-      rootDir: record.rootDir,
-      bundleFormat: record.bundleFormat,
-    });
-    merged = applyMergePatch(merged, loaded.config) as BundleLspConfig;
-    for (const message of loaded.diagnostics) {
-      diagnostics.push({ pluginId: record.id, message });
-    }
-  }
-
-  return { config: merged, diagnostics };
 }

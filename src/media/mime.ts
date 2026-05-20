@@ -1,24 +1,40 @@
 import path from "node:path";
-import { fileTypeFromBuffer } from "file-type";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
+
+/** @internal */
+export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;
 
 // Map common mimes to preferred file extensions.
 const EXT_BY_MIME: Record<string, string> = {
   "image/heic": ".heic",
   "image/heif": ".heif",
+  "image/bmp": ".bmp",
+  "image/jpg": ".jpg",
   "image/jpeg": ".jpg",
   "image/png": ".png",
+  "image/svg+xml": ".svg",
   "image/webp": ".webp",
   "image/gif": ".gif",
   "audio/ogg": ".ogg",
   "audio/mpeg": ".mp3",
+  "audio/mp3": ".mp3",
   "audio/wav": ".wav",
+  "audio/wave": ".wav",
+  "audio/x-wav": ".wav",
   "audio/flac": ".flac",
   "audio/aac": ".aac",
   "audio/opus": ".opus",
+  "audio/webm": ".webm",
   "audio/x-m4a": ".m4a",
   "audio/mp4": ".m4a",
+  "audio/x-caf": ".caf",
+  "video/x-msvideo": ".avi",
   "video/mp4": ".mp4",
+  "video/x-matroska": ".mkv",
+  "video/webm": ".webm",
+  "video/x-flv": ".flv",
+  "video/x-ms-wmv": ".wmv",
   "video/quicktime": ".mov",
   "application/pdf": ".pdf",
   "application/json": ".json",
@@ -36,13 +52,33 @@ const EXT_BY_MIME: Record<string, string> = {
   "text/csv": ".csv",
   "text/plain": ".txt",
   "text/markdown": ".md",
+  "text/html": ".html",
+  "text/xml": ".xml",
+  "text/css": ".css",
+  "application/xml": ".xml",
 };
 
+function buildMimeByExt(): Record<string, string> {
+  const byExt: Record<string, string> = {};
+  for (const [mime, ext] of Object.entries(EXT_BY_MIME)) {
+    byExt[ext] ??= mime;
+  }
+  return byExt;
+}
+
 const MIME_BY_EXT: Record<string, string> = {
-  ...Object.fromEntries(Object.entries(EXT_BY_MIME).map(([mime, ext]) => [ext, mime])),
+  ...buildMimeByExt(),
+  // Canonical extension mappings for common MIME aliases
+  ".jpg": "image/jpeg",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".webm": "video/webm",
   // Additional extension aliases
   ".jpeg": "image/jpeg",
   ".js": "text/javascript",
+  ".log": "text/plain",
+  ".htm": "text/html",
+  ".xml": "text/xml",
 };
 
 const AUDIO_FILE_EXTENSIONS = new Set([
@@ -57,12 +93,25 @@ const AUDIO_FILE_EXTENSIONS = new Set([
   ".wav",
 ]);
 
+const fileTypeModuleLoader = createLazyImportLoader(() => import("file-type"));
+
 export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
     return undefined;
   }
   const cleaned = mime.split(";")[0]?.trim().toLowerCase();
+  if (cleaned === "image/apng") {
+    return "image/png";
+  }
   return cleaned || undefined;
+}
+
+/** @internal */
+export function sliceMimeSniffBuffer(buffer: Buffer): Buffer {
+  if (buffer.byteLength <= FILE_TYPE_SNIFF_MAX_BYTES) {
+    return buffer;
+  }
+  return buffer.subarray(0, FILE_TYPE_SNIFF_MAX_BYTES);
 }
 
 async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
@@ -70,11 +119,27 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
     return undefined;
   }
   try {
-    const type = await fileTypeFromBuffer(buffer);
-    return type?.mime ?? undefined;
+    const { fileTypeFromBuffer } = await fileTypeModuleLoader.load();
+    const type = await fileTypeFromBuffer(sliceMimeSniffBuffer(buffer));
+    if (type?.mime) {
+      return normalizeMimeType(type.mime);
+    }
   } catch {
-    return undefined;
+    // fall through to manual magic-byte sniffs
   }
+  return sniffKnownAudioMagic(buffer);
+}
+
+// Fallbacks for audio containers `file-type` doesn't recognize natively (e.g.
+// Apple's CAF, used by iMessage voice memos when produced by `afconvert`).
+// Without this the host-local-media validator drops these buffers as unknown
+// binary blobs because the sniff returns undefined, even though the file is
+// a valid audio container.
+function sniffKnownAudioMagic(buffer: Buffer): string | undefined {
+  if (buffer.byteLength >= 4 && buffer.toString("ascii", 0, 4) === "caff") {
+    return "audio/x-caf";
+  }
+  return undefined;
 }
 
 export function getFileExtension(filePath?: string | null): string | undefined {
@@ -91,6 +156,14 @@ export function getFileExtension(filePath?: string | null): string | undefined {
   }
   const ext = path.extname(filePath).toLowerCase();
   return ext || undefined;
+}
+
+export function mimeTypeFromFilePath(filePath?: string | null): string | undefined {
+  const ext = getFileExtension(filePath);
+  if (!ext) {
+    return undefined;
+  }
+  return MIME_BY_EXT[ext];
 }
 
 export function isAudioFileName(fileName?: string | null): boolean {
@@ -117,6 +190,10 @@ function isGenericMime(mime?: string): boolean {
   return m === "application/octet-stream" || m === "application/zip";
 }
 
+function isImageMime(mime?: string): boolean {
+  return mediaKindFromMime(normalizeMimeType(mime)) === "image";
+}
+
 async function detectMimeImpl(opts: {
   buffer?: Buffer;
   headerMime?: string | null;
@@ -127,23 +204,27 @@ async function detectMimeImpl(opts: {
 
   const headerMime = normalizeMimeType(opts.headerMime);
   const sniffed = await sniffMime(opts.buffer);
+  const sniffedGenericContainer = sniffed && isGenericMime(sniffed);
+  const trustedExtMime = sniffedGenericContainer && isImageMime(extMime) ? undefined : extMime;
+  const trustedHeaderMime =
+    sniffedGenericContainer && isImageMime(headerMime) ? undefined : headerMime;
 
   // Prefer sniffed types, but don't let generic container types override a more
   // specific extension mapping (e.g. XLSX vs ZIP).
-  if (sniffed && (!isGenericMime(sniffed) || !extMime)) {
+  if (sniffed && (!isGenericMime(sniffed) || !trustedExtMime)) {
     return sniffed;
   }
-  if (extMime) {
-    return extMime;
+  if (trustedExtMime) {
+    return trustedExtMime;
   }
-  if (headerMime && !isGenericMime(headerMime)) {
-    return headerMime;
+  if (trustedHeaderMime && !isGenericMime(trustedHeaderMime)) {
+    return trustedHeaderMime;
   }
   if (sniffed) {
     return sniffed;
   }
-  if (headerMime) {
-    return headerMime;
+  if (trustedHeaderMime) {
+    return trustedHeaderMime;
   }
 
   return undefined;
