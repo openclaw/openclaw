@@ -2053,18 +2053,29 @@ function inheritedDefaultModelPolicyHasExplicitNonDefaultRuntimePin(params: {
   if (!defaultModels) {
     return false;
   }
-  for (const [ref, entry] of Object.entries(defaultModels)) {
-    if (ref !== params.modelRef && toCanonicalOpenAIModelRef(ref) !== params.modelRef) {
-      continue;
-    }
-    const runtimeId = normalizeRuntimeString(
-      asMutableRecord(asMutableRecord(entry)?.agentRuntime)?.id,
-    );
-    if (runtimeId && runtimeId !== "auto" && runtimeId !== "default" && runtimeId !== "codex") {
-      return true;
-    }
+  const parsed = parseModelRef(params.modelRef);
+  if (!parsed) {
+    return false;
   }
-  return false;
+  const inheritedDefaultsOnlyConfig = {
+    agents: {
+      defaults: {
+        models: defaultModels,
+      },
+      list: [{ id: params.agentId }],
+    },
+  } as unknown as OpenClawConfig;
+  const runtimeId = normalizeRuntimeString(
+    resolveModelRuntimePolicy({
+      config: inheritedDefaultsOnlyConfig,
+      provider: parsed.provider,
+      modelId: parsed.modelId,
+      agentId: params.agentId,
+    }).policy?.id,
+  );
+  return Boolean(
+    runtimeId && runtimeId !== "auto" && runtimeId !== "default" && runtimeId !== "codex",
+  );
 }
 
 function ensureCodexRuntimePolicy(params: {
