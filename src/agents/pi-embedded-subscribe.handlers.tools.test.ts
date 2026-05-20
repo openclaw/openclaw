@@ -533,6 +533,67 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       timedOut: true,
     });
   });
+
+  it("records structured error codes for failed tool results", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-denied",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "SYSTEM_RUN_DENIED: approval required" }],
+          details: {
+            status: "failed",
+            error: {
+              code: "SYSTEM_RUN_DENIED",
+              message: "approval required",
+            },
+          },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      errorCode: "SYSTEM_RUN_DENIED",
+      error: "approval required",
+    });
+  });
+
+  it("records node denial codes from thrown gateway error results", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-node-denied",
+        isError: true,
+        result: {
+          details: {
+            status: "error",
+            error: "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
+            gatewayCode: "UNAVAILABLE",
+            nodeError: {
+              code: "UNAVAILABLE",
+              message: "SYSTEM_RUN_DENIED: approval required",
+            },
+          },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      errorCode: "SYSTEM_RUN_DENIED",
+      error: "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
+    });
+  });
 });
 
 describe("handleToolExecutionEnd exec approval prompts", () => {
