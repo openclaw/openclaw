@@ -1403,6 +1403,7 @@ async function runPackageInstallUpdate(params: {
       const entryPath = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
       if (entryPath) {
         await createUpdateConfigSnapshot();
+        const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
         return await runUpdateStep({
           name: `${CLI_NAME} doctor`,
           argv: [
@@ -1421,6 +1422,7 @@ async function runPackageInstallUpdate(params: {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
             [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+            OPENCLAW_COMPATIBILITY_HOST_VERSION: candidateHostVersion,
           },
           timeoutMs: params.timeoutMs,
           progress: params.progress,
