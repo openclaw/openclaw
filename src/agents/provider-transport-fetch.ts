@@ -495,7 +495,7 @@ function resolveModelTransportSsrFPolicy(params: {
 export function buildGuardedModelFetch(
   model: Model<Api>,
   timeoutMs?: number,
-  options?: { sanitizeSse?: boolean },
+  options?: { sanitizeSse?: boolean; rejectHtmlAsApiResponse?: boolean },
 ): typeof fetch {
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
@@ -613,6 +613,16 @@ export function buildGuardedModelFetch(
         statusText: response.statusText,
         headers,
       });
+    }
+    if (
+      options?.rejectHtmlAsApiResponse === true &&
+      response.ok &&
+      /\btext\/html\b/i.test(response.headers.get("content-type") ?? "")
+    ) {
+      await response.body?.cancel().catch(() => undefined);
+      void result.release();
+      localServiceLease?.release();
+      throw new Error("OpenAI-compatible provider returned text/html instead of an API response");
     }
     response = buildManagedResponse(
       response,

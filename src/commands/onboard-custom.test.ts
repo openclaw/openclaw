@@ -163,6 +163,35 @@ describe("promptCustomApiConfig", () => {
     expect(prompter.select).toHaveBeenCalledTimes(3);
   });
 
+  it("rejects successful non-json verification responses with a base URL hint", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://spanagent.xyz", "test-key", "bad-model", "good-model", "custom", ""],
+      select: ["plaintext", "openai", "model"],
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError("Unexpected token '<'");
+        },
+      })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ id: "ok" }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runPromptCustomApi(prompter);
+
+    const stopMessages = prompter.progress.mock.results.flatMap((result) => {
+      const progress = result.value as { stop: ReturnType<typeof vi.fn> };
+      return progress.stop.mock.calls.map(([message]) => message);
+    });
+    expect(stopMessages).toContain(
+      "Verification failed: Verification response was not JSON. Check that the base URL includes the provider API path, for example /v1 for OpenAI-compatible servers.",
+    );
+    expect(prompter.select).toHaveBeenCalledTimes(3);
+  });
+
   it("detects openai compatibility when unknown", async () => {
     const prompter = createTestPrompter({
       text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
