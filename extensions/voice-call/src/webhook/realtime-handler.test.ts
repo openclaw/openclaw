@@ -1063,6 +1063,83 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
+  it("does not concatenate streaming user deltas onto the final user transcript", async () => {
+    // Regression: providers (notably Gemini native-audio) stream partial
+    // user-transcript chunks via isFinal=false and then deliver the same
+    // sentence as the fully aggregated final via isFinal=true. The handler
+    // must treat the final text as authoritative and not re-append it to the
+    // partial buffer, or the persisted speech text duplicates the streaming
+    // chunks (e.g. "I'm just te sting some thing. I'm just testing something.").
+    let callbacks:
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+    const processEvent = vi.fn();
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge();
+      },
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        processEvent,
+        getCallByProviderCallId: vi.fn(
+          (): CallRecord => ({
+            callId: "call-dedup",
+            providerCallId: "CA-dedup",
+            provider: "twilio",
+            direction: "inbound",
+            state: "ringing",
+            from: "+15550001234",
+            to: "+15550009999",
+            startedAt: Date.now(),
+            transcript: [],
+            processedEventIds: [],
+            metadata: {},
+          }),
+        ),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-dedup", callSid: "CA-dedup" },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        callbacks?.onTranscript?.("user", " I'm just te", false);
+        callbacks?.onTranscript?.("user", " sting some thing.", false);
+        callbacks?.onTranscript?.("user", "I'm just testing something.", true);
+
+        const speechTranscripts = processEvent.mock.calls
+          .map(([event]) => event as NormalizedEvent)
+          .filter(
+            (event): event is Extract<NormalizedEvent, { type: "call.speech" }> =>
+              event.type === "call.speech",
+          )
+          .map((event) => event.transcript);
+        expect(speechTranscripts).toEqual(["I'm just testing something."]);
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("waits for partial transcript fragments to settle before consulting", async () => {
     let callbacks:
       | {

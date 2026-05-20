@@ -723,8 +723,12 @@ export class RealtimeCallHandler {
           return;
         }
         if (role === "user") {
-          const transcript = this.recordPartialUserTranscript(callId, text);
+          // Final user transcript from the realtime provider is already the
+          // fully aggregated turn; do not re-append it to the partial buffer
+          // (which has been collecting streaming deltas), or the persisted
+          // text duplicates the streaming chunks with the final.
           this.clearPartialUserTranscript(callId);
+          const transcript = text.trim();
           this.setRecentFinalUserTranscript(callId, transcript);
           console.log(
             `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=true chars=${text.trim().length} aggregateChars=${transcript.length}`,
