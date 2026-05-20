@@ -16,7 +16,7 @@ function createRecentSessionRow(): SessionStatus {
     model: "gpt-5",
     configuredModel: "gpt-5",
     selectedModel: "gpt-5",
-    modelSelectionReason: null,
+    modelSelectionReason: "configured-default",
     contextTokens: 200_000,
     flags: ["id:sess-1"],
   };

@@ -306,6 +306,9 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           timeoutMs: usageSummaryTimeoutMs,
           providers: [currentUsageProvider],
           agentDir: statusAgentDir,
+          preferredProfileIds: sessionEntry?.authProfileOverride
+            ? { [currentUsageProvider]: sessionEntry.authProfileOverride }
+            : undefined,
         }),
         new Promise<never>((_, reject) => {
           usageTimeout = setTimeout(
@@ -398,19 +401,27 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   });
   return buildStatusMessage({
     config: cfg,
-    agent: {
-      ...agentDefaults,
-      model: {
+    agent: (() => {
+      const agentModel = {
         ...toAgentModelListLike(agentDefaults.model),
         primary: params.primaryModelLabelOverride ?? `${provider}/${model}`,
-        ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
-      },
-      ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
-      thinkingDefault: explicitThinkingDefault,
-      verboseDefault: agentDefaults.verboseDefault,
-      reasoningDefault: agentConfig?.reasoningDefault ?? agentDefaults.reasoningDefault,
-      elevatedDefault: agentDefaults.elevatedDefault,
-    },
+      };
+      if (agentFallbacksOverride !== undefined) {
+        agentModel.fallbacks = agentFallbacksOverride;
+      }
+      const agent = {
+        ...agentDefaults,
+        model: agentModel,
+        thinkingDefault: explicitThinkingDefault,
+        verboseDefault: agentDefaults.verboseDefault,
+        reasoningDefault: agentConfig?.reasoningDefault ?? agentDefaults.reasoningDefault,
+        elevatedDefault: agentDefaults.elevatedDefault,
+      };
+      if (typeof contextTokens === "number" && contextTokens > 0) {
+        agent.contextTokens = contextTokens;
+      }
+      return agent;
+    })(),
     agentId: statusAgentId,
     configuredDefaultModelLabel,
     explicitConfiguredContextTokens:

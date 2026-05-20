@@ -81,10 +81,9 @@ function hasProviderAuthEnvCredentialSource(params: {
 }): boolean {
   const candidates = resolveProviderAuthEnvVarCandidates({
     config: params.state.cfg,
-    env: {
-      ...(process.env.VITEST ? process.env : {}),
-      ...params.state.env,
-    },
+    env: process.env.VITEST
+      ? { ...process.env, ...params.state.env }
+      : { ...params.state.env },
   });
   for (const providerId of normalizeProviderIds(params.providerIds)) {
     const envVars = Object.hasOwn(candidates, providerId) ? candidates[providerId] : undefined;
@@ -207,17 +206,27 @@ function resolveUsageCredentialProviderIds(params: {
 async function resolveOAuthToken(params: {
   state: UsageAuthState;
   provider: string;
+  preferredProfileId?: string;
 }): Promise<ProviderAuth | null> {
   if (!params.state.allowAuthProfileStore) {
     return null;
   }
   const store = resolveUsageAuthStore(params.state);
+  const preferredProfileId = params.preferredProfileId?.trim();
+  const preferredProfile = preferredProfileId ? store.profiles[preferredProfileId] : undefined;
+  const normalizedProvider = normalizeProviderId(params.provider);
   const order = resolveAuthProfileOrder({
     cfg: params.state.cfg,
     store,
     provider: params.provider,
   });
-  const deduped = dedupeProfileIds(order);
+  const deduped = dedupeProfileIds(
+    preferredProfileId &&
+      preferredProfile &&
+      normalizeProviderId(preferredProfile.provider) === normalizedProvider
+      ? [preferredProfileId, ...order]
+      : order,
+  );
 
   for (const profileId of deduped) {
     const cred = store.profiles[profileId];
@@ -236,14 +245,19 @@ async function resolveOAuthToken(params: {
       if (!resolved) {
         continue;
       }
-      return {
+      const auth: ProviderAuth = {
         provider: params.provider as UsageProviderId,
         token: resolved.apiKey,
-        accountId:
-          cred.type === "oauth" && "accountId" in cred
-            ? (cred as { accountId?: string }).accountId
-            : undefined,
       };
+      if (
+        cred.type === "oauth" &&
+        "accountId" in cred &&
+        typeof (cred as { accountId?: string }).accountId === "string" &&
+        (cred as { accountId?: string }).accountId
+      ) {
+        auth.accountId = (cred as { accountId?: string }).accountId;
+      }
+      return auth;
     } catch {
       // ignore
     }
@@ -255,6 +269,7 @@ async function resolveOAuthToken(params: {
 async function resolveProviderUsageAuthViaPlugin(params: {
   state: UsageAuthState;
   provider: UsageProviderId;
+  preferredProfileId?: string;
 }): Promise<ProviderAuth | null> {
   const resolved = await resolveProviderUsageAuthWithPlugin({
     provider: params.provider,
@@ -275,33 +290,41 @@ async function resolveProviderUsageAuthViaPlugin(params: {
         const auth = await resolveOAuthToken({
           state: params.state,
           provider: options?.provider ?? params.provider,
+          preferredProfileId: params.preferredProfileId,
         });
-        return auth
-          ? {
-              token: auth.token,
-              ...(auth.accountId ? { accountId: auth.accountId } : {}),
-            }
-          : null;
+        if (!auth) {
+          return null;
+        }
+        const resolvedAuth: { token: string; accountId?: string } = { token: auth.token };
+        if (auth.accountId) {
+          resolvedAuth.accountId = auth.accountId;
+        }
+        return resolvedAuth;
       },
     },
   });
   if (!resolved?.token) {
     return null;
   }
-  return {
+  const auth: ProviderAuth = {
     provider: params.provider,
     token: resolved.token,
-    ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
   };
+  if (resolved.accountId) {
+    auth.accountId = resolved.accountId;
+  }
+  return auth;
 }
 
 async function resolveProviderUsageAuthFallback(params: {
   state: UsageAuthState;
   provider: UsageProviderId;
+  preferredProfileId?: string;
 }): Promise<ProviderAuth | null> {
   const oauthToken = await resolveOAuthToken({
     state: params.state,
     provider: params.provider,
+    preferredProfileId: params.preferredProfileId,
   });
   if (oauthToken) {
     return oauthToken;
@@ -356,6 +379,7 @@ export async function resolveProviderAuths(params: {
   agentDir?: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  preferredProfileIds?: Partial<Record<UsageProviderId, string | undefined>>;
   skipPluginAuthWithoutCredentialSource?: boolean;
 }): Promise<ProviderAuth[]> {
   if (params.auth) {
@@ -381,6 +405,7 @@ export async function resolveProviderAuths(params: {
       const pluginAuth = await resolveProviderUsageAuthViaPlugin({
         state: authProfileSourceState,
         provider,
+        preferredProfileId: params.preferredProfileIds?.[provider],
       });
       if (pluginAuth) {
         auths.push(pluginAuth);
@@ -389,6 +414,7 @@ export async function resolveProviderAuths(params: {
       const fallbackAuth = await resolveProviderUsageAuthFallback({
         state: authProfileSourceState,
         provider,
+        preferredProfileId: params.preferredProfileIds?.[provider],
       });
       if (fallbackAuth) {
         auths.push(fallbackAuth);
@@ -433,6 +459,7 @@ export async function resolveProviderAuths(params: {
       const pluginAuth = await resolveProviderUsageAuthViaPlugin({
         state,
         provider,
+        preferredProfileId: params.preferredProfileIds?.[provider],
       });
       if (pluginAuth) {
         auths.push(pluginAuth);
@@ -442,6 +469,7 @@ export async function resolveProviderAuths(params: {
     const fallbackAuth = await resolveProviderUsageAuthFallback({
       state,
       provider,
+      preferredProfileId: params.preferredProfileIds?.[provider],
     });
     if (fallbackAuth) {
       auths.push(fallbackAuth);

@@ -40,6 +40,7 @@ type UsageSummaryOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
+  preferredProfileIds?: Partial<Record<UsageProviderId, string | undefined>>;
   skipPluginAuthWithoutCredentialSource?: boolean;
 };
 
@@ -97,6 +98,7 @@ export async function loadProviderUsageSummary(
     agentDir: opts.agentDir,
     config,
     env,
+    preferredProfileIds: opts.preferredProfileIds,
     skipPluginAuthWithoutCredentialSource: opts.skipPluginAuthWithoutCredentialSource,
   });
   if (auths.length === 0) {
