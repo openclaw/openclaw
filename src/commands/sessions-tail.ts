@@ -146,8 +146,10 @@ function safePreview(event: TrajectoryEvent): string {
     }
     case "prompt.submitted":
       return "prompt submitted";
-    case "prompt.skipped":
-      return `prompt skipped${toOptionalString(data?.reason) ? `: ${data?.reason}` : ""}`;
+    case "prompt.skipped": {
+      const reason = toOptionalString(data?.reason);
+      return `prompt skipped${reason ? `: ${reason}` : ""}`;
+    }
     case "tool.call":
       return `${toolName(data)} {...redacted...}`;
     case "tool.timeout":
