@@ -12,6 +12,8 @@ export type FeishuMessageEvent = {
   message: {
     message_id: string;
     reply_target_message_id?: string;
+    /** Internal marker used by synthetic card-action events. */
+    synthetic_card_action?: boolean;
     suppress_reply_target?: boolean;
     root_id?: string;
     parent_id?: string;

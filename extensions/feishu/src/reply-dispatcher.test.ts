@@ -1463,6 +1463,20 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("omits reply metadata from streaming cards when skipReplyToInMessages is true", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      replyToMessageId: "om_trigger",
+      skipReplyToInMessages: true,
+    });
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expectStreamingStartOptions(0, {
+      replyToMessageId: undefined,
+    });
+  });
+
   it("uses streaming cards for thread replies and keeps topic metadata", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),

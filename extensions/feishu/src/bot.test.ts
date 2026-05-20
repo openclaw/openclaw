@@ -864,7 +864,7 @@ describe("handleFeishuMessage ACP routing", () => {
     });
   });
 
-  it("records auto-threaded Feishu group replies with the dispatcher target", async () => {
+  it("does not record a Feishu thread target for normal group replies", async () => {
     const runtime = createFeishuBotRuntime();
     const recordInboundSession = vi.fn(async () => undefined);
     runtime.channel.session.recordInboundSession = recordInboundSession;
@@ -916,8 +916,8 @@ describe("handleFeishuMessage ACP routing", () => {
     }>(recordInboundSession);
     expect(recordParams?.updateLastRoute).toMatchObject({
       to: "chat:oc_group_chat",
-      threadId: "msg-group-auto-thread",
     });
+    expect(recordParams?.updateLastRoute?.threadId).toBeUndefined();
   });
 
   it("passes reasoning preview permission from session state into the dispatcher", async () => {
@@ -3315,6 +3315,49 @@ describe("handleFeishuMessage command authorization", () => {
     expect(dispatcherOptions.rootId).toBe("om_original_msg");
   });
 
+  it("replies to the triggering quoted command message in normal groups", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group",
+              replyInThread: "disabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-normal-user" } },
+      message: {
+        message_id: "om_current_quoted_command",
+        reply_target_message_id: "om_quoted_message",
+        parent_id: "om_quoted_message",
+        root_id: "om_quoted_root",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "use this quoted context" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    const dispatcherOptions = mockCallArg<{
+      replyToMessageId?: string;
+      rootId?: string;
+      replyInThread?: boolean;
+    }>(mockCreateFeishuReplyDispatcher, 0, 0);
+    expect(dispatcherOptions.replyToMessageId).toBe("om_current_quoted_command");
+    expect(dispatcherOptions.replyInThread).toBe(false);
+    expect(dispatcherOptions.rootId).toBe("om_quoted_root");
+  });
+
   it("replies to topic root in topic-mode group with root_id", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
@@ -3466,7 +3509,7 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
-  it("forces thread replies when inbound message contains thread_id", async () => {
+  it("does not force thread replies when thread_id exists but thread replies are disabled", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
     const cfg: ClawdbotConfig = {
@@ -3497,13 +3540,14 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    const dispatcherOptions = mockCallArg<{ replyInThread?: boolean; threadReply?: boolean }>(
-      mockCreateFeishuReplyDispatcher,
-      0,
-      0,
-    );
-    expect(dispatcherOptions.replyInThread).toBe(true);
-    expect(dispatcherOptions.threadReply).toBe(true);
+    const dispatcherOptions = mockCallArg<{
+      replyToMessageId?: string;
+      replyInThread?: boolean;
+      threadReply?: boolean;
+    }>(mockCreateFeishuReplyDispatcher, 0, 0);
+    expect(dispatcherOptions.replyToMessageId).toBe("msg-thread-reply");
+    expect(dispatcherOptions.replyInThread).toBe(false);
+    expect(dispatcherOptions.threadReply).toBe(false);
   });
 
   it("bootstraps topic thread context only for a new thread session", async () => {
