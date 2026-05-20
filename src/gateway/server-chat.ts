@@ -953,10 +953,17 @@ export function createAgentEventHandler({
       if (
         !isAborted &&
         evt.stream === "assistant" &&
-        typeof evt.data?.text === "string" &&
+        (typeof evt.data?.text === "string" || typeof evt.data?.delta === "string") &&
         !shouldSuppressAssistantEventForLiveChat(evt.data)
       ) {
-        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
+        emitChatDelta(
+          sessionKey,
+          clientRunId,
+          evt.runId,
+          evt.seq,
+          typeof evt.data.text === "string" ? evt.data.text : "",
+          evt.data.delta,
+        );
       }
     }
 

@@ -401,6 +401,37 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("emits chat delta for assistant delta-only events", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 1_000,
+    });
+    chatRunState.registry.add("run-1", {
+      sessionKey: "session-1",
+      clientRunId: "client-1",
+    });
+
+    handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { delta: "Hello from delta" },
+    });
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      state?: string;
+      deltaText?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(payload.state).toBe("delta");
+    expect(payload.deltaText).toBe("Hello from delta");
+    expect(payload.message?.content?.[0]?.text).toBe("Hello from delta");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
   it("coalesces assistant agent events under the chat delta throttle", () => {
     let now = 10_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);

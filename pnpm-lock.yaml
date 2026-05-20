@@ -9,6 +9,7 @@ overrides:
   hono: 4.12.18
   '@hono/node-server': 1.19.14
   '@aws-sdk/client-bedrock-runtime': 3.1045.0
+  '@earendil-works/pi-ai>@mistralai/mistralai': '-'
   axios: 1.16.0
   fast-uri: 3.1.2
   follow-redirects: 1.16.0
@@ -3099,9 +3100,6 @@ packages:
   '@microsoft/teams.graph@2.0.11':
     resolution: {integrity: sha512-Txc0N6dENmEluOCwGzCerz+3G/uomfzCElla1OR7nUNICIcY8p1A2babcIAA8AZiuAKPSkck0U1w5RTu7jZgVQ==}
     engines: {node: '>=20'}
-
-  '@mistralai/mistralai@2.2.1':
-    resolution: {integrity: sha512-uKU8CZmL2RzYKmplsU01hii4p3pe4HqJefpWNRWXm1Tcm0Sm4xXfwSLIy4k7ZCPlbETCGcp69E7hZs+WOJ5itQ==}
 
   '@modelcontextprotocol/sdk@1.29.0':
     resolution: {integrity: sha512-zo37mZA9hJWpULgkRpowewez1y6ML5GsXJPY8FI0tBBCd77HEvza4jDqRKOXgHNn867PVGCyTdzqpz0izu5ZjQ==}
@@ -8636,7 +8634,6 @@ snapshots:
       '@anthropic-ai/sdk': 0.95.1(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime': 3.1045.0
       '@google/genai': 1.52.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
-      '@mistralai/mistralai': 2.2.1
       http-proxy-agent: 7.0.2
       https-proxy-agent: 7.0.6
       openai: 6.26.0(ws@8.20.1)(zod@4.4.3)
@@ -9474,15 +9471,6 @@ snapshots:
       qs: 6.14.2
     transitivePeerDependencies:
       - debug
-
-  '@mistralai/mistralai@2.2.1':
-    dependencies:
-      ws: 8.20.1
-      zod: 4.4.3
-      zod-to-json-schema: 3.25.2(zod@4.4.3)
-    transitivePeerDependencies:
-      - bufferutil
-      - utf-8-validate
 
   '@modelcontextprotocol/sdk@1.29.0(zod@4.4.3)':
     dependencies:

@@ -531,11 +531,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (
       evt.stream === "assistant" &&
       !run.isBtw &&
-      typeof evt.data?.text === "string" &&
+      (typeof evt.data?.text === "string" || typeof evt.data?.delta === "string") &&
       !shouldSuppressAssistantEventForLiveChat(evt.data)
     ) {
       const cleaned = normalizeLiveAssistantEventText({
-        text: evt.data.text,
+        text: typeof evt.data.text === "string" ? evt.data.text : "",
         delta: evt.data.delta,
       });
       run.buffer = resolveMergedAssistantText({

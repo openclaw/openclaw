@@ -50,6 +50,7 @@ overrides:
   hono: 4.12.18
   "@hono/node-server": 1.19.14
   "@aws-sdk/client-bedrock-runtime": 3.1045.0
+  "@earendil-works/pi-ai>@mistralai/mistralai": "-"
   axios: 1.16.0
   fast-uri: 3.1.2
   follow-redirects: 1.16.0
