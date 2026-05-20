@@ -12,6 +12,10 @@ import {
   setDetachedTaskDeliveryStatusByRunId,
 } from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import {
+  buildAnnounceIdFromChildRun,
+  buildAnnounceIdempotencyKey,
+} from "./announce-idempotency.js";
 import { retireSessionMcpRuntimeForSessionKey } from "./pi-bundle-mcp-tools.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
@@ -170,6 +174,17 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     const mirrorNotBefore = entry.startedAt ?? entry.createdAt;
     const mirrorNotAfter = Date.now() + 30_000;
+    const expectedIdempotencyKey = buildAnnounceIdempotencyKey(
+      buildAnnounceIdFromChildRun({
+        childSessionKey: entry.childSessionKey,
+        childRunId: entry.runId,
+      }),
+    );
+    const isExpectedMirrorIdempotencyKey = (value: unknown): boolean =>
+      typeof value === "string" &&
+      (value === expectedIdempotencyKey ||
+        value.startsWith(`${expectedIdempotencyKey}:internal-source-reply:`) ||
+        value.startsWith(`${expectedIdempotencyKey}:message-tool:internal-source-reply:`));
     try {
       const history = await params.callGateway<{
         messages?: unknown[];
@@ -188,7 +203,8 @@ export function createSubagentRegistryLifecycleController(params: {
           typeof timestamp !== "number" ||
           !Number.isFinite(timestamp) ||
           timestamp < mirrorNotBefore ||
-          timestamp > mirrorNotAfter
+          timestamp > mirrorNotAfter ||
+          !isExpectedMirrorIdempotencyKey(record.idempotencyKey)
         ) {
           return false;
         }

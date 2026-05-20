@@ -184,12 +184,18 @@ function createLifecycleController({
   return createSubagentRegistryLifecycleController(params);
 }
 
-async function runNoReplyMirrorScenario(timestamp: number): Promise<SubagentRunRecord> {
+async function runNoReplyMirrorScenario(params: {
+  timestamp: number;
+  idempotencyKey?: string;
+}): Promise<SubagentRunRecord> {
   const entry = createRunEntry({
     endedAt: 4_000,
     expectsCompletionMessage: true,
     retainAttachmentsOnKeep: true,
   });
+  const idempotencyKey =
+    params.idempotencyKey ??
+    `announce:v1:${entry.childSessionKey}:${entry.runId}:internal-source-reply:0`;
   const runSubagentAnnounceFlow = vi.fn(
     async (announceParams: {
       onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
@@ -209,7 +215,8 @@ async function runNoReplyMirrorScenario(timestamp: number): Promise<SubagentRunR
         provider: "openclaw",
         model: "delivery-mirror",
         content: "final completion reply",
-        timestamp,
+        timestamp: params.timestamp,
+        idempotencyKey,
       },
     ],
   });
@@ -965,7 +972,7 @@ describe("subagent registry lifecycle hardening", () => {
   });
 
   it("credits only current-run requester delivery mirrors before retrying NO_REPLY", async () => {
-    const entry = await runNoReplyMirrorScenario(12_345);
+    const entry = await runNoReplyMirrorScenario({ timestamp: 12_345 });
 
     await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
     expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
@@ -984,7 +991,7 @@ describe("subagent registry lifecycle hardening", () => {
     vi.clearAllMocks();
     taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReset();
     gatewayMocks.callGateway.mockResolvedValue({});
-    const staleEntry = await runNoReplyMirrorScenario(1_999);
+    const staleEntry = await runNoReplyMirrorScenario({ timestamp: 1_999 });
 
     await vi.waitFor(() => expect(staleEntry.deliverySuspendedAt).toBeTypeOf("number"));
     expect(staleEntry.completionDeliveredAt).toBeUndefined();
@@ -1007,6 +1014,22 @@ describe("subagent registry lifecycle hardening", () => {
       }),
       "retry-limit",
     );
+
+    vi.clearAllMocks();
+    taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReset();
+    gatewayMocks.callGateway.mockResolvedValue({});
+    const sameWindowSiblingEntry = await runNoReplyMirrorScenario({
+      timestamp: 12_345,
+      idempotencyKey: "announce:v1:agent:main:subagent:sibling:run-sibling:internal-source-reply:0",
+    });
+
+    await vi.waitFor(() => expect(sameWindowSiblingEntry.deliverySuspendedAt).toBeTypeOf("number"));
+    expect(sameWindowSiblingEntry.completionDeliveredAt).toBeUndefined();
+    expect(sameWindowSiblingEntry.completionAnnouncedAt).toBeUndefined();
+    expect(sameWindowSiblingEntry.lastAnnounceDeliveryError).toBe(
+      "completion agent did not produce a visible reply",
+    );
+    expect(hasDeliveredTaskStatusUpdate(sameWindowSiblingEntry.runId)).toBe(false);
   });
 
   it("skips browser cleanup when steer restart suppresses cleanup flow", async () => {
