@@ -55,10 +55,13 @@ function mergeOpenRouterProviderRouting(params: {
   const providerRouting = readRecord(params.providerParams?.provider);
   const modelRouting = readRecord(params.modelParams?.provider);
   const extraRouting = readRecord(params.extraParams.provider);
+  // Spreading `undefined` is a no-op in object literals, so the explicit
+  // `?? {}` empty fallback is unnecessary and trips the
+  // `unicorn/no-useless-fallback-in-spread` lint rule.
   const merged = {
-    ...(providerRouting ?? {}),
-    ...(modelRouting ?? {}),
-    ...(extraRouting ?? {}),
+    ...providerRouting,
+    ...modelRouting,
+    ...extraRouting,
   };
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
@@ -76,12 +79,13 @@ export function resolveOpenRouterExtraParamsForTransport(
   if (!providerConfigParams && !modelParams && !providerRouting) {
     return undefined;
   }
-  return {
-    patch: {
-      ...(providerConfigParams ?? {}),
-      ...(modelParams ?? {}),
-      ...ctx.extraParams,
-      ...(providerRouting ? { provider: providerRouting } : {}),
-    },
+  const patch: Record<string, unknown> = {
+    ...providerConfigParams,
+    ...modelParams,
+    ...ctx.extraParams,
   };
+  if (providerRouting) {
+    patch.provider = providerRouting;
+  }
+  return { patch };
 }
