@@ -183,7 +183,14 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => gatewayLog,
 }));
 
-const LOOP_SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
+const detectRespawnSupervisor = vi.fn<() => "launchd" | "systemd" | "schtasks" | null>(() => null);
+
+vi.mock("../../infra/supervisor-markers.js", () => ({
+  detectRespawnSupervisor: (...args: unknown[]) => detectRespawnSupervisor(...(args as [])),
+  SUPERVISOR_HINT_ENV_VARS: [],
+}));
+
+const LOOP_SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1", "SIGHUP"] as const;
 type LoopSignal = (typeof LOOP_SIGNALS)[number];
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -383,6 +390,50 @@ describe("runGatewayLoop", () => {
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  it("ignores SIGHUP when running under a supervisor", async () => {
+    vi.clearAllMocks();
+    detectRespawnSupervisor.mockReturnValue("launchd");
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { runtime, exited } = await createSignaledLoopHarness();
+      const sighup = captureSignal("SIGHUP");
+
+      sighup();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(runtime.exit).not.toHaveBeenCalled();
+
+      const sigterm = captureSignal("SIGTERM");
+      sigterm();
+
+      await expect(exited).resolves.toBe(0);
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  it("does not install SIGHUP handler in foreground (no supervisor)", async () => {
+    vi.clearAllMocks();
+    detectRespawnSupervisor.mockReturnValue(null);
+
+    const existingHupListeners = new Set(
+      process.listeners("SIGHUP") as Array<(...args: unknown[]) => void>,
+    );
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { runtime, exited } = await createSignaledLoopHarness();
+
+      // SIGHUP listener should NOT be registered when no supervisor is detected
+      const sighupListener = addedSignalListener("SIGHUP", existingHupListeners);
+      expect(sighupListener).toBeNull();
+
+      const sigterm = captureSignal("SIGTERM");
+      sigterm();
+
+      await expect(exited).resolves.toBe(0);
       expect(runtime.exit).toHaveBeenCalledWith(0);
     });
   });
@@ -1311,6 +1362,7 @@ describe("runGatewayLoop", () => {
   it("waits briefly before exiting on launchd supervised restart", async () => {
     vi.clearAllMocks();
     peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    detectRespawnSupervisor.mockReturnValue("launchd");
     try {
       setPlatform("darwin");
       process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
@@ -1338,6 +1390,7 @@ describe("runGatewayLoop", () => {
       });
     } finally {
       vi.useRealTimers();
+      detectRespawnSupervisor.mockReturnValue(null);
       delete process.env.OPENCLAW_LAUNCHD_LABEL;
       if (originalPlatformDescriptor) {
         Object.defineProperty(process, "platform", originalPlatformDescriptor);
@@ -1348,6 +1401,7 @@ describe("runGatewayLoop", () => {
   it("carries SIGTERM restart intent reason into launchd supervised handoff", async () => {
     vi.clearAllMocks();
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ reason: "gateway.restart" });
+    detectRespawnSupervisor.mockReturnValue("launchd");
     try {
       setPlatform("darwin");
       process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
@@ -1372,6 +1426,7 @@ describe("runGatewayLoop", () => {
       });
     } finally {
       vi.useRealTimers();
+      detectRespawnSupervisor.mockReturnValue(null);
       delete process.env.OPENCLAW_LAUNCHD_LABEL;
       if (originalPlatformDescriptor) {
         Object.defineProperty(process, "platform", originalPlatformDescriptor);
