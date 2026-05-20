@@ -578,6 +578,20 @@ describe("diagnostics-otel service", () => {
     expect(unhandledRejectionHandlerState.getHandlers()).toHaveLength(0);
   });
 
+  test("does not retain an OTLP exporter handler when startup setup fails", async () => {
+    const startupError = new Error("trace exporter setup failed");
+    traceExporterCtor.mockImplementationOnce(() => {
+      throw startupError;
+    });
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+
+    await expect(service.start(ctx)).rejects.toBe(startupError);
+
+    expect(unhandledRejectionHandlerState.register).not.toHaveBeenCalled();
+    expect(unhandledRejectionHandlerState.getHandlers()).toHaveLength(0);
+  });
+
   test("uses a preloaded OpenTelemetry SDK without dropping diagnostic listeners", async () => {
     process.env.OPENCLAW_OTEL_PRELOADED = "1";
     const service = createDiagnosticsOtelService();
