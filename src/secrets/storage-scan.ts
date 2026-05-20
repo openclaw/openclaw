@@ -37,6 +37,26 @@ export function listLegacyAuthJsonPaths(stateDir: string): string[] {
   return out;
 }
 
+export function listConfigBackupPaths(configPath: string): string[] {
+  const resolvedConfigPath = resolveUserPath(configPath);
+  const configDir = path.dirname(resolvedConfigPath);
+  const configName = path.basename(resolvedConfigPath);
+  if (!fs.existsSync(configDir)) {
+    return [];
+  }
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(configDir, { withFileTypes: true })) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (!entry.name.startsWith(`${configName}.`)) {
+      continue;
+    }
+    out.push(path.join(configDir, entry.name));
+  }
+  return out.toSorted();
+}
+
 function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = process.env): string {
   const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   if (override) {

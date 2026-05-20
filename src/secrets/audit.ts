@@ -30,6 +30,7 @@ import {
 } from "./secret-value.js";
 import { isNonEmptyString, isRecord } from "./shared.js";
 import {
+  listConfigBackupPaths,
   listAgentModelsJsonPaths,
   listAuthProfileStorePaths,
   listLegacyAuthJsonPaths,
@@ -257,6 +258,56 @@ function collectConfigSecrets(params: {
       message: `${target.path} is stored as plaintext.`,
       provider: target.providerId,
     });
+  }
+}
+
+function collectConfigBackupSecrets(params: {
+  configPath: string;
+  collector: AuditCollector;
+}): void {
+  for (const backupPath of listConfigBackupPaths(params.configPath)) {
+    params.collector.filesScanned.add(backupPath);
+    const parsedResult = readJsonObjectIfExists(backupPath);
+    if (parsedResult.error) {
+      addFinding(params.collector, {
+        code: "REF_UNRESOLVED",
+        severity: "error",
+        file: backupPath,
+        jsonPath: "<root>",
+        message: `Invalid JSON in config backup: ${parsedResult.error}`,
+      });
+      continue;
+    }
+    const parsed = parsedResult.value;
+    if (!parsed) {
+      continue;
+    }
+    for (const target of discoverConfigSecretTargets(parsed as OpenClawConfig)) {
+      if (!target.entry.includeInAudit) {
+        continue;
+      }
+      if (
+        target.entry.id === "models.providers.*.headers.*" &&
+        !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "")
+      ) {
+        continue;
+      }
+      const hasPlaintext = hasConfiguredPlaintextSecretValue(
+        target.value,
+        target.entry.expectedResolvedValue,
+      );
+      if (!hasPlaintext) {
+        continue;
+      }
+      addFinding(params.collector, {
+        code: "PLAINTEXT_FOUND",
+        severity: "warn",
+        file: backupPath,
+        jsonPath: target.path,
+        message: `${target.path} is stored as plaintext in a config backup.`,
+        provider: target.providerId,
+      });
+    }
   }
 }
 
@@ -674,6 +725,10 @@ export async function runSecretsAudit(
   if (snapshot.valid) {
     collectConfigSecrets({
       config,
+      configPath,
+      collector,
+    });
+    collectConfigBackupSecrets({
       configPath,
       collector,
     });

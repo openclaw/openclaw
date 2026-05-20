@@ -251,6 +251,34 @@ describe("secrets audit", () => {
     expectFindingCode(report, "PLAINTEXT_FOUND");
   });
 
+  it("reports plaintext secrets left in openclaw.json backup files", async () => {
+    const backupPath = path.join(path.dirname(fixture.configPath), "openclaw.json.bak");
+    await writeJsonFile(backupPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: "sk-backup-plaintext", // pragma: allowlist secret
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === backupPath &&
+          entry.jsonPath === "models.providers.openai.apiKey",
+      ),
+    ).toBe(true);
+    expect(report.filesScanned).toContain(backupPath);
+  });
+
   it("does not mutate legacy auth.json during audit", async () => {
     await fs.rm(fixture.authStorePath, { force: true });
     await writeJsonFile(fixture.authJsonPath, {
