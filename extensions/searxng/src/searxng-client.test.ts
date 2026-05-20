@@ -26,7 +26,7 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
   };
 });
 
-import { __testing, runSearxngSearch } from "./searxng-client.js";
+import { testing, runSearxngSearch } from "./searxng-client.js";
 
 function createLookupFn(addresses: Array<{ address: string; family: number }>): LookupFn {
   return vi.fn(async (_hostname: string, options?: unknown) => {
@@ -41,12 +41,12 @@ describe("searxng client", () => {
   beforeEach(() => {
     endpointMockState.calls = [];
     endpointMockState.responses = [];
-    __testing.SEARXNG_SEARCH_CACHE.clear();
+    testing.SEARXNG_SEARCH_CACHE.clear();
   });
 
   it("preserves a configured base-path prefix when building the search URL", () => {
     expect(
-      __testing.buildSearxngSearchUrl({
+      testing.buildSearxngSearchUrl({
         baseUrl: "https://search.example.com/searxng",
         query: "openclaw",
         categories: "general,news",
@@ -59,7 +59,7 @@ describe("searxng client", () => {
 
   it("parses SearXNG JSON results and applies the requested count cap", () => {
     expect(
-      __testing.parseSearxngResponseText(
+      testing.parseSearxngResponseText(
         JSON.stringify({
           results: [
             { title: "One", url: "https://example.com/1", content: "A" },
@@ -98,14 +98,25 @@ describe("searxng client", () => {
     expect(endpointMockState.calls).toHaveLength(2);
     expect(new URL(endpointMockState.calls[0].url).searchParams.get("categories")).toBe("weather");
     expect(new URL(endpointMockState.calls[1].url).searchParams.get("categories")).toBe("general");
-    expect(result).toMatchObject({
+    expect(result.provider).toBe("searxng");
+    expect(result.query).toBe("beijing hourly weather");
+    expect(result.count).toBe(1);
+    const results = result.results as Array<{
+      url?: string;
+      siteName?: string;
+      title?: string;
+      snippet?: string;
+    }>;
+    expect(results).toHaveLength(1);
+    expect(results[0]?.url).toBe("https://example.com/weather");
+    expect(results[0]?.siteName).toBe("example.com");
+    expect(results[0]?.title).toContain("Beijing hourly weather");
+    expect(results[0]?.snippet).toContain("Hourly forecast");
+    expect(result.externalContent).toEqual({
       provider: "searxng",
-      count: 1,
-      results: [
-        expect.objectContaining({
-          url: "https://example.com/weather",
-        }),
-      ],
+      source: "web_search",
+      untrusted: true,
+      wrapped: true,
     });
   });
 
@@ -122,24 +133,33 @@ describe("searxng client", () => {
     });
 
     expect(endpointMockState.calls).toHaveLength(1);
-    expect(result).toMatchObject({
+    const { tookMs, ...stableResult } = result;
+    expect(typeof tookMs).toBe("number");
+    expect(stableResult).toEqual({
+      query: "openclaw",
       provider: "searxng",
       count: 0,
+      externalContent: {
+        provider: "searxng",
+        source: "web_search",
+        untrusted: true,
+        wrapped: true,
+      },
       results: [],
     });
   });
 
   it("detects category searches that should retry with general", () => {
-    expect(__testing.shouldRetryEmptyCategorySearchWithGeneral("weather")).toBe(true);
-    expect(__testing.shouldRetryEmptyCategorySearchWithGeneral("weather,news")).toBe(true);
-    expect(__testing.shouldRetryEmptyCategorySearchWithGeneral("general")).toBe(false);
-    expect(__testing.shouldRetryEmptyCategorySearchWithGeneral("general,news")).toBe(false);
-    expect(__testing.shouldRetryEmptyCategorySearchWithGeneral(undefined)).toBe(false);
+    expect(testing.shouldRetryEmptyCategorySearchWithGeneral("weather")).toBe(true);
+    expect(testing.shouldRetryEmptyCategorySearchWithGeneral("weather,news")).toBe(true);
+    expect(testing.shouldRetryEmptyCategorySearchWithGeneral("general")).toBe(false);
+    expect(testing.shouldRetryEmptyCategorySearchWithGeneral("general,news")).toBe(false);
+    expect(testing.shouldRetryEmptyCategorySearchWithGeneral(undefined)).toBe(false);
   });
 
   it("preserves img_src from image search results", () => {
     expect(
-      __testing.parseSearxngResponseText(
+      testing.parseSearxngResponseText(
         JSON.stringify({
           results: [
             {
@@ -186,7 +206,7 @@ describe("searxng client", () => {
 
   it("drops malformed result rows instead of failing the whole response", () => {
     expect(
-      __testing.parseSearxngResponseText(
+      testing.parseSearxngResponseText(
         JSON.stringify({
           results: [
             { title: "One", url: "https://example.com/1", content: "A" },
@@ -204,14 +224,14 @@ describe("searxng client", () => {
   });
 
   it("rejects invalid JSON bodies", () => {
-    expect(() => __testing.parseSearxngResponseText("{", 5)).toThrow(
+    expect(() => testing.parseSearxngResponseText("{", 5)).toThrow(
       "SearXNG returned invalid JSON.",
     );
   });
 
   it("allows https public hosts", async () => {
     await expect(
-      __testing.validateSearxngBaseUrl(
+      testing.validateSearxngBaseUrl(
         "https://search.example.com/searxng",
         createLookupFn([{ address: "93.184.216.34", family: 4 }]),
       ),
@@ -220,7 +240,7 @@ describe("searxng client", () => {
 
   it("allows cleartext private-network hosts", async () => {
     await expect(
-      __testing.validateSearxngBaseUrl(
+      testing.validateSearxngBaseUrl(
         "http://matrix-synapse:8080",
         createLookupFn([{ address: "10.0.0.5", family: 4 }]),
       ),
@@ -229,7 +249,7 @@ describe("searxng client", () => {
 
   it("routes https private-network hosts through the self-hosted guard", async () => {
     await expect(
-      __testing.validateSearxngBaseUrl(
+      testing.validateSearxngBaseUrl(
         "https://search.internal/searxng",
         createLookupFn([{ address: "10.0.0.5", family: 4 }]),
       ),
@@ -238,7 +258,7 @@ describe("searxng client", () => {
 
   it("rejects cleartext public hosts", async () => {
     await expect(
-      __testing.validateSearxngBaseUrl(
+      testing.validateSearxngBaseUrl(
         "http://search.example.com:8080",
         createLookupFn([{ address: "93.184.216.34", family: 4 }]),
       ),

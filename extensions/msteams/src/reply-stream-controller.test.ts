@@ -309,7 +309,7 @@ describe("createTeamsReplyStreamController", () => {
           mode: "progress",
           progress: {
             label: "Working",
-            maxLines: 1,
+            maxLines: 3,
           },
         },
       } as never,
@@ -321,7 +321,7 @@ describe("createTeamsReplyStreamController", () => {
     expect(ctrl.shouldSuppressDefaultToolProgressMessages()).toBe(true);
     expect(ctrl.shouldStreamPreviewToolProgress()).toBe(true);
     expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenLastCalledWith(
-      "Working\n- tool: exec",
+      "Working\n\n- tool: search\n- tool: exec",
     );
   });
 

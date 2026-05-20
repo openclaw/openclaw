@@ -38,6 +38,7 @@ describe("withCachedMigrationConfigRuntime", () => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: null,
+          persistedHash: "test-persisted-hash",
           snapshot: {} as never,
           nextConfig: runtimeConfig,
           afterWrite: { mode: "auto" },
@@ -52,6 +53,7 @@ describe("withCachedMigrationConfigRuntime", () => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: null,
+          persistedHash: "test-persisted-hash",
           snapshot: {} as never,
           nextConfig: runtimeConfig,
           afterWrite: { mode: "auto" },
@@ -141,11 +143,14 @@ describe("copyMigrationFileItem", () => {
     expect(second.status).toBe("migrated");
     const firstBackup = first.details?.backupPath;
     const secondBackup = second.details?.backupPath;
-    expect(firstBackup).toEqual(expect.stringContaining("AGENTS.md"));
-    expect(secondBackup).toEqual(expect.stringContaining("AGENTS.md"));
+    if (typeof firstBackup !== "string" || typeof secondBackup !== "string") {
+      throw new Error("expected both migration results to include backup paths");
+    }
+    expect(path.basename(firstBackup)).toBe("AGENTS.md");
+    expect(path.basename(secondBackup)).toBe("AGENTS.md");
     expect(firstBackup).not.toBe(secondBackup);
-    await expect(fs.readFile(firstBackup as string, "utf8")).resolves.toBe("old one");
-    await expect(fs.readFile(secondBackup as string, "utf8")).resolves.toBe("old two");
+    await expect(fs.readFile(firstBackup, "utf8")).resolves.toBe("old one");
+    await expect(fs.readFile(secondBackup, "utf8")).resolves.toBe("old two");
   });
 });
 

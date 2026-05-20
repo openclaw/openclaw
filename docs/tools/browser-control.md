@@ -104,7 +104,13 @@ browser binaries as shown below.
 #### Docker Playwright install
 
 If your Gateway runs in Docker, avoid `npx playwright` (npm override conflicts).
-Use the bundled CLI instead:
+For custom images, bake Chromium into the image:
+
+```bash
+OPENCLAW_INSTALL_BROWSER=1 ./scripts/docker/setup.sh
+```
+
+For an existing image, install through the bundled CLI instead:
 
 ```bash
 docker compose run --rm openclaw-cli \
@@ -113,7 +119,8 @@ docker compose run --rm openclaw-cli \
 
 To persist browser downloads, set `PLAYWRIGHT_BROWSERS_PATH` (for example,
 `/home/node/.cache/ms-playwright`) and make sure `/home/node` is persisted via
-`OPENCLAW_HOME_VOLUME` or a bind mount. See [Docker](/install/docker).
+`OPENCLAW_HOME_VOLUME` or a bind mount. OpenClaw auto-detects the persisted
+Chromium on Linux. See [Docker](/install/docker).
 
 ## How it works (internal)
 
@@ -186,9 +193,11 @@ openclaw browser waitfordownload report.pdf
 openclaw browser upload /tmp/openclaw/uploads/file.pdf
 openclaw browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'
 openclaw browser dialog --accept
+openclaw browser dialog --dismiss --dialog-id d1
 openclaw browser wait --text "Done"
 openclaw browser wait "#main" --url "**/dash" --load networkidle --fn "window.ready===true"
 openclaw browser evaluate --fn '(el) => el.textContent' --ref 7
+openclaw browser evaluate --timeout-ms 30000 --fn 'async () => { await window.ready; return true; }'
 openclaw browser highlight e12
 openclaw browser trace start
 openclaw browser trace stop
@@ -221,7 +230,7 @@ openclaw browser set device "iPhone 14"
 
 Notes:
 
-- `upload` and `dialog` are **arming** calls; run them before the click/press that triggers the chooser/dialog.
+- `upload` and `dialog` are **arming** calls; run them before the click/press that triggers the chooser/dialog. If an action opens a modal, the action response includes `blockedByDialog` and `browserState.dialogs.pending`; pass that `dialogId` to respond directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - `click`/`type`/etc require a `ref` from `snapshot` (numeric `12`, role ref `e12`, or actionable ARIA ref `ax12`). CSS selectors are intentionally not supported for actions. Use `click-coords` when the visible viewport position is the only reliable target.
 - Download, trace, and upload paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads,/uploads}` (fallback: `${os.tmpdir()}/openclaw/...`).
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
@@ -354,6 +363,8 @@ These are useful for "make the site behave like X" workflows:
 - `browser act kind=evaluate` / `openclaw browser evaluate` and `wait --fn`
   execute arbitrary JavaScript in the page context. Prompt injection can steer
   this. Disable it with `browser.evaluateEnabled=false` if you do not need it.
+- Use `openclaw browser evaluate --timeout-ms <ms>` when the page-side function
+  may need longer than the default evaluate timeout.
 - For logins and anti-bot notes (X/Twitter, etc.), see [Browser login + X/Twitter posting](/tools/browser-login).
 - Keep the Gateway/node host private (loopback or tailnet-only).
 - Remote CDP endpoints are powerful; tunnel and protect them.

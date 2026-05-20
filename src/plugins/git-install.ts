@@ -287,7 +287,7 @@ export async function installPluginFromGitSpec(
 
     if (parsed.ref) {
       const checkout = await runGitCommand({
-        argv: ["git", "checkout", "--detach", parsed.ref],
+        argv: ["git", "switch", "--detach", "--", parsed.ref],
         action: `checkout ${parsed.ref}`,
         source: parsed,
         cwd: repoDir,
@@ -324,7 +324,11 @@ export async function installPluginFromGitSpec(
         {
           cwd: repoDir,
           timeoutMs: Math.max(params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS, 300_000),
-          env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
+          env: createSafeNpmInstallEnv(process.env, {
+            npmConfigCwd: repoDir,
+            packageLock: true,
+            quiet: true,
+          }),
         },
       );
       if (install.code !== 0) {

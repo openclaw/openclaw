@@ -47,6 +47,7 @@
       "groupId": "openrouter",
       "groupLabel": "OpenRouter",
       "groupHint": "API key",
+      "onboardingScopes": ["text-inference", "music-generation"],
       "optionKey": "openrouterApiKey",
       "cliFlag": "--openrouter-api-key",
       "cliOption": "--openrouter-api-key <key>",
@@ -56,14 +57,19 @@
   "contracts": {
     "mediaUnderstandingProviders": ["openrouter"],
     "imageGenerationProviders": ["openrouter"],
+    "musicGenerationProviders": ["openrouter"],
     "videoGenerationProviders": ["openrouter"],
     "speechProviders": ["openrouter"]
   },
   "mediaUnderstandingProviderMetadata": {
     "openrouter": {
-      "capabilities": ["image"],
+      "capabilities": ["image", "audio"],
       "defaultModels": {
-        "image": "auto"
+        "image": "auto",
+        "audio": "openai/whisper-large-v3-turbo"
+      },
+      "autoPriority": {
+        "audio": 35
       }
     }
   },

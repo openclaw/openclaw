@@ -9,6 +9,8 @@ export type PluginCapabilityKind =
   | "realtime-voice"
   | "media-understanding"
   | "image-generation"
+  | "video-generation"
+  | "music-generation"
   | "web-search"
   | "agent-harness"
   | "context-engine"
@@ -44,6 +46,8 @@ function buildPluginCapabilityEntries(
     { kind: "realtime-voice" as const, ids: plugin.realtimeVoiceProviderIds },
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
+    { kind: "video-generation" as const, ids: plugin.videoGenerationProviderIds },
+    { kind: "music-generation" as const, ids: plugin.musicGenerationProviderIds },
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
     { kind: "agent-harness" as const, ids: plugin.agentHarnessIds },
     {
@@ -92,7 +96,7 @@ function derivePluginInspectShape(params: {
 
 export function buildPluginShapeSummary(params: {
   plugin: PluginRegistry["plugins"][number];
-  report: Pick<PluginRegistry, "hooks" | "typedHooks" | "tools">;
+  report: Pick<PluginRegistry, "hooks" | "typedHooks" | "tools" | "gatewayMethodDescriptors">;
 }): PluginShapeSummary {
   const capabilities = buildPluginCapabilityEntries(params.plugin);
   const typedHookCount = params.report.typedHooks.filter(
@@ -104,6 +108,10 @@ export function buildPluginShapeSummary(params: {
   const toolCount = params.report.tools.filter(
     (entry) => entry.pluginId === params.plugin.id,
   ).length;
+  const gatewayMethodCount = (params.report.gatewayMethodDescriptors ?? []).filter(
+    (descriptor) =>
+      descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === params.plugin.id,
+  ).length;
   const capabilityCount = capabilities.length;
   const shape = derivePluginInspectShape({
     capabilityCount,
@@ -114,7 +122,7 @@ export function buildPluginShapeSummary(params: {
     cliCount: params.plugin.cliCommands.length,
     serviceCount: params.plugin.services.length,
     gatewayDiscoveryServiceCount: params.plugin.gatewayDiscoveryServiceIds.length,
-    gatewayMethodCount: params.plugin.gatewayMethods.length,
+    gatewayMethodCount,
     httpRouteCount: params.plugin.httpRoutes,
   });
 

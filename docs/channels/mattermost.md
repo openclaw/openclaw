@@ -189,11 +189,13 @@ Notes:
   - `openclaw pairing list mattermost`
   - `openclaw pairing approve mattermost <CODE>`
 - Public DMs: `channels.mattermost.dmPolicy="open"` plus `channels.mattermost.allowFrom=["*"]`.
+- `channels.mattermost.allowFrom` accepts `accessGroup:<name>` entries. See [Access groups](/channels/access-groups).
 
 ## Channels (groups)
 
 - Default: `channels.mattermost.groupPolicy = "allowlist"` (mention-gated).
 - Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs recommended).
+- `channels.mattermost.groupAllowFrom` accepts `accessGroup:<name>` entries. See [Access groups](/channels/access-groups).
 - Per-channel mention overrides live under `channels.mattermost.groups.<channelId>.requireMention` or `channels.mattermost.groups["*"].requireMention` for a default.
 - `@username` matching is mutable and only enabled when `channels.mattermost.dangerouslyAllowNameMatching: true`.
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).
@@ -287,7 +289,7 @@ Enable via `channels.mattermost.streaming`:
   </Accordion>
   <Accordion title="Streaming behavior notes">
     - If the stream cannot be finalized in place (for example the post was deleted mid-stream), OpenClaw falls back to sending a fresh final post so the reply is never lost.
-    - Reasoning-only payloads are suppressed from channel posts, including text that arrives as a `> Reasoning:` blockquote. Set `/reasoning on` to see thinking in other surfaces; the Mattermost final post keeps the answer only.
+    - Thinking-only payloads are suppressed from channel posts, including text that arrives as a `> Thinking` blockquote. Set `/reasoning on` to see thinking in other surfaces; the Mattermost final post keeps the answer only.
     - See [Streaming](/concepts/streaming#preview-streaming-modes) for the channel-mapping matrix.
 
   </Accordion>
@@ -316,6 +318,8 @@ Config:
 ## Interactive buttons (message tool)
 
 Send messages with clickable buttons. When a user clicks a button, the agent receives the selection and can respond.
+
+Normal agent replies can also include semantic `presentation` payloads. OpenClaw renders value buttons as Mattermost interactive buttons, keeps URL buttons visible in the message text, and downgrades select menus to readable text.
 
 Enable buttons by adding `inlineButtons` to the channel capabilities:
 

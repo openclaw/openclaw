@@ -220,6 +220,7 @@ Advisory triage guidance:
 
 - **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
 - **Tool blast radius** (elevated tools + open rooms): could prompt injection turn into shell/file/network actions?
+- **Exec filesystem drift**: are mutating filesystem tools denied while `exec`/`process` remain available without sandbox filesystem constraints?
 - **Exec approval drift** (`security=full`, `autoAllowSkills`, interpreter allowlists without `strictInlineEval`): are host-exec guardrails still doing what you think they are?
   - `security="full"` is a broad posture warning, not proof of a bug. It is the chosen default for trusted personal-assistant setups; tighten it only when your threat model needs approval or allowlist guardrails.
 - **Network exposure** (Gateway bind/auth, Tailscale Serve/Funnel, weak/short auth tokens).
@@ -301,13 +302,16 @@ does not extend to node-role Control UI sessions.
 
 `openclaw security audit` raises `config.insecure_or_dangerous_flags` when
 known insecure/dangerous debug switches are enabled. Keep these unset in
-production.
+production. Each enabled flag is reported as its own finding. If audit
+suppressions are configured, `security.audit.suppressions.active` remains in the
+active audit output even when matching findings move to `suppressedFindings`.
 
 <AccordionGroup>
   <Accordion title="Flags tracked by the audit today">
     - `gateway.controlUi.allowInsecureAuth=true`
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`
     - `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
+    - `security.audit.suppressions configured (<count>)`
     - `hooks.gmail.allowUnsafeExternalContent=true`
     - `hooks.mappings[<index>].allowUnsafeExternalContent=true`
     - `tools.exec.applyPatch.workspaceOnly=false`
@@ -872,10 +876,11 @@ Doctor can generate one for you: `openclaw doctor --generate-gateway-token`.
 `gateway.remote.token` and `gateway.remote.password` are client credential sources. They do **not** protect local WS access by themselves. Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset. If `gateway.auth.token` or `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 </Note>
 Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
-Plaintext `ws://` is loopback-only by default. For trusted private-network
-paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as
-break-glass. This is intentionally process environment only, not an
-`openclaw.json` config key.
+Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and
+Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set
+`OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass.
+This is intentionally process environment only, not an `openclaw.json` config
+key.
 Mobile pairing and Android manual or scanned gateway routes are stricter:
 cleartext is accepted for loopback, but private-LAN, link-local, `.local`, and
 dotless hostnames must use TLS unless you explicitly opt into the trusted
@@ -926,9 +931,9 @@ configured HTTP auth mode.
 Important boundary note:
 
 - Gateway HTTP bearer auth is effectively all-or-nothing operator access.
-- Treat credentials that can call `/v1/chat/completions`, `/v1/responses`, or `/api/channels/*` as full-access operator secrets for that gateway.
+- Treat credentials that can call `/v1/chat/completions`, `/v1/responses`, plugin routes such as `/api/v1/admin/rpc`, or `/api/channels/*` as full-access operator secrets for that gateway.
 - On the OpenAI-compatible HTTP surface, shared-secret bearer auth restores the full default operator scopes (`operator.admin`, `operator.approvals`, `operator.pairing`, `operator.read`, `operator.talk.secrets`, `operator.write`) and owner semantics for agent turns; narrower `x-openclaw-scopes` values do not reduce that shared-secret path.
-- Per-request scope semantics on HTTP only apply when the request comes from an identity-bearing mode such as trusted proxy auth or `gateway.auth.mode="none"` on a private ingress.
+- Per-request scope semantics on HTTP only apply when the request comes from an identity-bearing mode such as trusted proxy auth, or from an explicitly no-auth private ingress.
 - In those identity-bearing modes, omitting `x-openclaw-scopes` falls back to the normal operator default scope set; send the header explicitly when you want a narrower scope set.
 - `/tools/invoke` follows the same shared-secret rule: token/password bearer auth is treated as full operator access there too, while identity-bearing modes still honor declared scopes.
 - Do not share these credentials with untrusted callers; prefer separate gateways per trust boundary.

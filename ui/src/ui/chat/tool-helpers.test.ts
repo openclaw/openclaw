@@ -1,7 +1,18 @@
 import { describe, it, expect } from "vitest";
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
+const emptyStringHelperCases = [
+  { name: "formatToolOutputForSidebar", resolve: formatToolOutputForSidebar },
+  { name: "getTruncatedPreview", resolve: getTruncatedPreview },
+];
+
 describe("tool-helpers", () => {
+  describe("empty string handling", () => {
+    it.each(emptyStringHelperCases)("$name handles empty string", ({ resolve }) => {
+      expect(resolve("")).toBe("");
+    });
+  });
+
   describe("formatToolOutputForSidebar", () => {
     it("formats valid JSON object as code block", () => {
       const input = '{"name":"test","value":123}';
@@ -32,9 +43,13 @@ describe("tool-helpers", () => {
       const input = '{"outer":{"inner":"value"}}';
       const result = formatToolOutputForSidebar(input);
 
-      expect(result).toContain("```json");
-      expect(result).toContain('"outer"');
-      expect(result).toContain('"inner"');
+      expect(result).toBe(`\`\`\`json
+{
+  "outer": {
+    "inner": "value"
+  }
+}
+\`\`\``);
     });
 
     it("returns plain text for non-JSON content", () => {
@@ -62,13 +77,11 @@ describe("tool-helpers", () => {
       const input = '   {"trimmed": true}   ';
       const result = formatToolOutputForSidebar(input);
 
-      expect(result).toContain("```json");
-      expect(result).toContain('"trimmed"');
-    });
-
-    it("handles empty string", () => {
-      const result = formatToolOutputForSidebar("");
-      expect(result).toBe("");
+      expect(result).toBe(`\`\`\`json
+{
+  "trimmed": true
+}
+\`\`\``);
     });
 
     it("handles whitespace-only string", () => {
@@ -89,8 +102,7 @@ describe("tool-helpers", () => {
       const input = "a".repeat(150);
       const result = getTruncatedPreview(input);
 
-      expect(result.length).toBe(101); // 100 chars + ellipsis
-      expect(result.endsWith("…")).toBe(true);
+      expect(result).toBe(`${"a".repeat(100)}…`);
     });
 
     it("truncates to max lines", () => {
@@ -105,7 +117,7 @@ describe("tool-helpers", () => {
       const input = "Line 1\nLine 2\nLine 3";
       const result = getTruncatedPreview(input);
 
-      expect(result.endsWith("…")).toBe(true);
+      expect(result).toBe("Line 1\nLine 2…");
     });
 
     it("does not add ellipsis when all lines fit", () => {
@@ -113,7 +125,6 @@ describe("tool-helpers", () => {
       const result = getTruncatedPreview(input);
 
       expect(result).toBe("Line 1\nLine 2");
-      expect(result.endsWith("…")).toBe(false);
     });
 
     it("handles single line within limits", () => {
@@ -123,19 +134,13 @@ describe("tool-helpers", () => {
       expect(result).toBe("Single line");
     });
 
-    it("handles empty string", () => {
-      const result = getTruncatedPreview("");
-      expect(result).toBe("");
-    });
-
     it("truncates by chars even within line limit", () => {
       // Two lines but very long content
       const longLine = "x".repeat(80);
       const input = `${longLine}\n${longLine}`;
       const result = getTruncatedPreview(input);
 
-      expect(result.length).toBe(101); // 100 + ellipsis
-      expect(result.endsWith("…")).toBe(true);
+      expect(result).toBe(`${"x".repeat(80)}\n${"x".repeat(19)}…`);
     });
   });
 });

@@ -52,6 +52,7 @@ import { formatForLog } from "../ws-log.js";
 import {
   broadcastTalkRoomEvents,
   buildRealtimeInstructions,
+  buildRealtimeVoiceLaunchOptions,
   buildTalkRealtimeConfig,
   buildTalkTranscriptionConfig,
   canUseTalkDirectTools,
@@ -109,6 +110,12 @@ function canCloseManagedRoomSession(
   return !handoff?.room.activeClientId || handoff.room.activeClientId === connId;
 }
 
+function canCreateUnscopedManagedRoomSession(
+  client: { connect?: { scopes?: string[] } } | null,
+): boolean {
+  return client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
+}
+
 function managedRoomOwnershipError(action: string) {
   return errorShape(
     ErrorCodes.INVALID_REQUEST,
@@ -159,10 +166,27 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        const spawnedBy = normalizeOptionalString(params.spawnedBy);
+        if (
+          normalizeOptionalString(params.sessionKey) &&
+          !spawnedBy &&
+          !canCreateUnscopedManagedRoomSession(client)
+        ) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `talk.session.create managed-room sessionKey requires spawnedBy or gateway scope: ${ADMIN_SCOPE}`,
+            ),
+          );
+          return;
+        }
         const resolvedSession = await resolveSessionKeyFromResolveParams({
           cfg: context.getRuntimeConfig(),
           p: {
             key: params.sessionKey,
+            ...(spawnedBy ? { spawnedBy } : {}),
             includeGlobal: true,
             includeUnknown: true,
           },
@@ -235,17 +259,20 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           cfgForResolve: runtimeConfig,
           noRegisteredProviderMessage: "No realtime voice provider registered",
         });
-        const model = normalizeOptionalString(params.model) ?? realtimeConfig.model;
-        const voice = normalizeOptionalString(params.voice) ?? realtimeConfig.voice;
+        const launchOptions = buildRealtimeVoiceLaunchOptions({
+          requested: params,
+          defaults: realtimeConfig,
+        });
         const session = createTalkRealtimeRelaySession({
           context,
           connId,
+          cfg: runtimeConfig,
           provider: resolution.provider,
-          providerConfig: withRealtimeBrowserOverrides(resolution.providerConfig, { model, voice }),
-          instructions: buildRealtimeInstructions(),
+          providerConfig: withRealtimeBrowserOverrides(resolution.providerConfig, launchOptions),
+          instructions: buildRealtimeInstructions(realtimeConfig.instructions),
           tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
-          model,
-          voice,
+          model: launchOptions.model,
+          voice: launchOptions.voice,
         });
         rememberUnifiedTalkSession(session.relaySessionId, {
           kind: "realtime-relay",
@@ -646,6 +673,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         connId,
         callId: params.callId,
         result: params.result,
+        options: params.options,
       });
       respond(true, { ok: true }, undefined);
     } catch (err) {

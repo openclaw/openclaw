@@ -6,6 +6,19 @@ import type { VoiceMessageMetadata } from "./voice-message.js";
 
 const runFfprobeMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<string>>());
 const runFfmpegMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<void>>());
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(
+    async (params: {
+      url: string;
+      init?: RequestInit;
+      policy?: { allowRfc2544BenchmarkRange?: boolean; allowIpv6UniqueLocalRange?: boolean };
+      auditContext?: string;
+    }) => ({
+      response: await globalThis.fetch(params.url, params.init),
+      release: async () => {},
+    }),
+  ),
+);
 
 vi.mock("openclaw/plugin-sdk/temp-path", async () => {
   return {
@@ -31,10 +44,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   return {
-    fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
-      response: await globalThis.fetch(params.url, params.init),
-      release: async () => {},
-    }),
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   };
 });
 
@@ -50,6 +60,30 @@ describe("ensureOggOpus", () => {
     runFfprobeMock.mockReset();
     runFfmpegMock.mockReset();
   });
+
+  function expectStagedFfmpegOutput(ffmpegOutputPath: string | undefined, finalPath: string) {
+    expect(ffmpegOutputPath).toBeTypeOf("string");
+    if (typeof ffmpegOutputPath !== "string") {
+      throw new Error("missing ffmpeg output path");
+    }
+    expect(ffmpegOutputPath).not.toBe(finalPath);
+    const stagedBase = path.basename(ffmpegOutputPath);
+    expect(stagedBase.startsWith(".fs-safe-output-")).toBe(true);
+    expect(stagedBase.endsWith(`-${path.basename(finalPath)}.part`)).toBe(true);
+  }
+
+  function readSingleCommandArgs(mock: typeof runFfprobeMock | typeof runFfmpegMock): string[] {
+    const [call] = mock.mock.calls;
+    if (!call) {
+      throw new Error("missing command call");
+    }
+    const [args] = call;
+    if (!Array.isArray(args) || !args.every((arg): arg is string => typeof arg === "string")) {
+      throw new Error("missing command args");
+    }
+    return args;
+  }
+
   it("rejects URL/protocol input paths", async () => {
     await expect(ensureOggOpus("https://example.com/audio.ogg")).rejects.toThrow(
       /local file path/i,
@@ -64,9 +98,18 @@ describe("ensureOggOpus", () => {
     const result = await ensureOggOpus("/tmp/input.ogg");
 
     expect(result).toEqual({ path: "/tmp/input.ogg", cleanup: false });
-    expect(runFfprobeMock).toHaveBeenCalledWith(
-      expect.arrayContaining(["-show_entries", "stream=codec_name,sample_rate", "/tmp/input.ogg"]),
-    );
+    expect(runFfprobeMock).toHaveBeenCalledTimes(1);
+    expect(readSingleCommandArgs(runFfprobeMock)).toEqual([
+      "-v",
+      "error",
+      "-select_streams",
+      "a:0",
+      "-show_entries",
+      "stream=codec_name,sample_rate",
+      "-of",
+      "csv=p=0",
+      "/tmp/input.ogg",
+    ]);
     expect(runFfmpegMock).not.toHaveBeenCalled();
   });
 
@@ -86,12 +129,28 @@ describe("ensureOggOpus", () => {
     expect(result.cleanup).toBe(true);
     expect(path.dirname(result.path)).toBe(path.normalize("/tmp"));
     expect(path.basename(result.path)).toMatch(/^voice-.*\.ogg$/);
-    expect(runFfmpegMock).toHaveBeenCalledWith(
-      expect.arrayContaining(["-t", "1200", "-ar", "48000", "/tmp/input.ogg"]),
-    );
-    const ffmpegOutputPath = (runFfmpegMock.mock.calls[0]?.[0] as string[] | undefined)?.at(-1);
-    expect(ffmpegOutputPath).not.toBe(result.path);
-    expect(path.basename(ffmpegOutputPath ?? "")).toBe(path.basename(result.path));
+    expect(runFfmpegMock).toHaveBeenCalledTimes(1);
+    const ffmpegArgs = readSingleCommandArgs(runFfmpegMock);
+    expect(ffmpegArgs.slice(0, -1)).toEqual([
+      "-y",
+      "-i",
+      "/tmp/input.ogg",
+      "-vn",
+      "-sn",
+      "-dn",
+      "-t",
+      "1200",
+      "-ar",
+      "48000",
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "64k",
+      "-f",
+      "ogg",
+    ]);
+    const ffmpegOutputPath = ffmpegArgs.at(-1);
+    expectStagedFfmpegOutput(ffmpegOutputPath, result.path);
     await expect(fs.readFile(result.path, "utf8")).resolves.toBe("ogg");
   });
 
@@ -109,12 +168,28 @@ describe("ensureOggOpus", () => {
 
     expect(result.cleanup).toBe(true);
     expect(runFfprobeMock).not.toHaveBeenCalled();
-    expect(runFfmpegMock).toHaveBeenCalledWith(
-      expect.arrayContaining(["-vn", "-sn", "-dn", "/tmp/input.mp3"]),
-    );
-    const ffmpegOutputPath = (runFfmpegMock.mock.calls[0]?.[0] as string[] | undefined)?.at(-1);
-    expect(ffmpegOutputPath).not.toBe(result.path);
-    expect(path.basename(ffmpegOutputPath ?? "")).toBe(path.basename(result.path));
+    expect(runFfmpegMock).toHaveBeenCalledTimes(1);
+    const ffmpegArgs = readSingleCommandArgs(runFfmpegMock);
+    expect(ffmpegArgs.slice(0, -1)).toEqual([
+      "-y",
+      "-i",
+      "/tmp/input.mp3",
+      "-vn",
+      "-sn",
+      "-dn",
+      "-t",
+      "1200",
+      "-ar",
+      "48000",
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "64k",
+      "-f",
+      "ogg",
+    ]);
+    const ffmpegOutputPath = ffmpegArgs.at(-1);
+    expectStagedFfmpegOutput(ffmpegOutputPath, result.path);
     await expect(fs.readFile(result.path, "utf8")).resolves.toBe("ogg");
   });
 });
@@ -131,6 +206,7 @@ describe("sendDiscordVoiceMessage", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    fetchWithSsrFGuardMock.mockClear();
   });
 
   function createRest(post = vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" }))) {
@@ -204,14 +280,48 @@ describe("sendDiscordVoiceMessage", () => {
 
     expect(uploadUrlRequests).toBe(2);
     expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(4);
+    expect(
+      fetchWithSsrFGuardMock.mock.calls.map(([params]) => ({
+        auditContext: params.auditContext,
+        allowRfc2544BenchmarkRange: params.policy?.allowRfc2544BenchmarkRange,
+        allowIpv6UniqueLocalRange: params.policy?.allowIpv6UniqueLocalRange,
+      })),
+    ).toEqual([
+      {
+        auditContext: "discord.voice.upload-url",
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      },
+      {
+        auditContext: "discord.voice.attachment-upload",
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      },
+      {
+        auditContext: "discord.voice.upload-url",
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      },
+      {
+        auditContext: "discord.voice.attachment-upload",
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      },
+    ]);
     expect(post).toHaveBeenCalledWith("/channels/channel-1/messages", {
-      body: expect.objectContaining({
+      body: {
+        flags: 8192,
         attachments: [
-          expect.objectContaining({
+          {
+            id: "0",
+            filename: "voice-message.ogg",
             uploaded_filename: "uploaded-2.ogg",
-          }),
+            duration_secs: 1,
+            waveform: "waveform",
+          },
         ],
-      }),
+      },
     });
   });
 
@@ -240,8 +350,9 @@ describe("sendDiscordVoiceMessage", () => {
       throw new Error(`unexpected fetch ${method} ${url}`);
     });
 
-    await expect(
-      sendDiscordVoiceMessage(
+    let error: unknown;
+    try {
+      await sendDiscordVoiceMessage(
         rest,
         "channel-1",
         Buffer.from("ogg"),
@@ -250,10 +361,16 @@ describe("sendDiscordVoiceMessage", () => {
         async (fn) => await fn(),
         false,
         "bot-token",
-      ),
-    ).rejects.toMatchObject({
-      name: "DiscordError",
-      status: 503,
+      );
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).name).toBe("DiscordError");
+    expect((error as { status?: unknown }).status).toBe(503);
+    expect((error as { statusCode?: unknown }).statusCode).toBe(503);
+    expect((error as { rawBody?: unknown }).rawBody).toEqual({
+      message: "cdn unavailable",
     });
   });
 });

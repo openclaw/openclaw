@@ -242,8 +242,8 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
     // 3 COS PUTs, one per part, each to the presigned URL.
     expect(fetchSpy).toHaveBeenCalledTimes(3);
     const putUrls = fetchSpy.mock.calls.map((c) => (c[0] as { url: string }).url);
-    expect(putUrls).toEqual(
-      expect.arrayContaining([
+    expect(new Set(putUrls)).toEqual(
+      new Set([
         "https://cos.example.com/part-1",
         "https://cos.example.com/part-2",
         "https://cos.example.com/part-3",
@@ -264,7 +264,7 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
 
     // Progress callback hit 3 times with monotonically-increasing counts.
     expect(onProgress).toHaveBeenCalledTimes(3);
-    const last = onProgress.mock.calls[2][0];
+    const last = onProgress.mock.calls.at(2)?.[0];
     expect(last.completedParts).toBe(3);
     expect(last.totalParts).toBe(3);
     expect(last.uploadedBytes).toBe(FIXTURE_BUFFER.length);

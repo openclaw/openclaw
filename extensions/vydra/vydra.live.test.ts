@@ -29,9 +29,11 @@ function expectBufferedAsset(
   kind: "image" | "video",
   minBytes: number,
 ): void {
-  expect(asset).toBeDefined();
-  expect(asset?.mimeType.startsWith(`${kind}/`)).toBe(true);
-  if (!asset?.buffer) {
+  if (!asset) {
+    throw new Error(`expected generated ${kind} asset`);
+  }
+  expect(asset.mimeType.startsWith(`${kind}/`)).toBe(true);
+  if (!asset.buffer) {
     throw new Error(`expected generated ${kind} buffer`);
   }
   expect(asset.buffer.byteLength).toBeGreaterThan(minBytes);
@@ -58,9 +60,7 @@ describe.skipIf(!LIVE || !VYDRA_API_KEY)("vydra live", () => {
     const { speechProviders } = await registerVydraPlugin();
     const provider = requireRegisteredProvider(speechProviders, "vydra");
     const voices = await provider.listVoices?.({});
-    expect(voices).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "21m00Tcm4TlvDq8ikWAM" })]),
-    );
+    expect(voices?.some((voice) => voice.id === "21m00Tcm4TlvDq8ikWAM")).toBe(true);
 
     const result = await provider.synthesize({
       text: "OpenClaw integration test OK.",

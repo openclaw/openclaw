@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  FileOperations,
+} from "@earendil-works/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -1297,7 +1301,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   });
 }
 
-export const __testing = {
+export const testing = {
   setSummarizeInStagesForTest(next?: typeof summarizeInStages) {
     compactionSafeguardDeps.summarizeInStages = next ?? summarizeInStages;
   },
@@ -1330,3 +1334,4 @@ export const __testing = {
   MAX_FILE_OPS_LIST_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } as const;
+export { testing as __testing };

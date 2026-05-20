@@ -50,14 +50,14 @@ vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
 type ChannelSelectionModule = typeof import("./channel-selection.js");
 type RuntimeModule = typeof import("../../runtime.js");
 
-let __testing: ChannelSelectionModule["__testing"];
+let testing: ChannelSelectionModule["testing"];
 let listConfiguredMessageChannels: ChannelSelectionModule["listConfiguredMessageChannels"];
 let resolveMessageChannelSelection: ChannelSelectionModule["resolveMessageChannelSelection"];
 let runtimeModule: RuntimeModule;
 
 beforeAll(async () => {
   runtimeModule = await import("../../runtime.js");
-  ({ __testing, listConfiguredMessageChannels, resolveMessageChannelSelection } =
+  ({ testing, listConfiguredMessageChannels, resolveMessageChannelSelection } =
     await import("./channel-selection.js"));
 });
 
@@ -97,7 +97,7 @@ describe("listConfiguredMessageChannels", () => {
     mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
       id: channel,
     }));
-    __testing.resetLoggedChannelSelectionErrors();
+    testing.resetLoggedChannelSelectionErrors();
     errorSpy.mockClear();
   });
 
@@ -271,7 +271,8 @@ describe("resolveMessageChannelSelection", () => {
     },
     {
       params: { cfg: {} as never },
-      expectedMessage: "Channel is required (no configured channels detected).",
+      expectedMessage:
+        "Channel is required (no configured channels detected). Run openclaw channels add to configure one",
     },
     {
       setup: () => {
@@ -292,7 +293,8 @@ describe("resolveMessageChannelSelection", () => {
         ]);
       },
       params: { cfg: { channels: { whatsapp: { enabled: true } } } as never },
-      expectedMessage: "Channel is required (no configured channels detected).",
+      expectedMessage:
+        "Channel is required (no configured channels detected). Run openclaw channels add to configure one",
     },
     {
       setup: () => {
@@ -302,7 +304,8 @@ describe("resolveMessageChannelSelection", () => {
         ]);
       },
       params: { cfg: {} as never },
-      expectedMessage: "Channel is required when multiple channels are configured: beta, gamma",
+      expectedMessage:
+        "Channel is required when multiple channels are configured: beta, gamma. Pass --channel <channel> to choose one.",
     },
   ])("rejects invalid channel selection for %j", async ({ setup, params, expectedMessage }) => {
     setup?.();

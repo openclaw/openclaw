@@ -80,6 +80,50 @@ private data class InvokeScenarioResult(
 @Config(sdk = [34])
 class GatewaySessionInvokeTest {
   @Test
+  fun connect_advertisesCompatibleProtocolRange() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val connectParams = CompletableDeferred<JsonObject>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(json) { webSocket, id, method, frame ->
+          when (method) {
+            "connect" -> {
+              if (!connectParams.isCompleted) {
+                connectParams.complete(frame["params"]!!.jsonObject)
+              }
+              webSocket.send(connectResponseFrame(id))
+              webSocket.close(1000, "done")
+            }
+          }
+        }
+
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+        val params = withTimeout(TEST_TIMEOUT_MS) { connectParams.await() }
+        assertEquals(
+          GATEWAY_MIN_PROTOCOL_VERSION,
+          params["minProtocol"]?.jsonPrimitive?.content?.toInt(),
+        )
+        assertEquals(
+          GATEWAY_PROTOCOL_VERSION,
+          params["maxProtocol"]?.jsonPrimitive?.content?.toInt(),
+        )
+      } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
   fun connect_usesBootstrapTokenWhenSharedAndDeviceTokensAreAbsent() =
     runBlocking {
       val json = testJson()
@@ -291,7 +335,7 @@ class GatewaySessionInvokeTest {
                 connectResponseFrame(
                   id,
                   authJson =
-                    """{"deviceToken":"bootstrap-node-token","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"bootstrap-operator-token","role":"operator","scopes":["operator.admin","operator.approvals","operator.read","operator.talk.secrets","operator.write"]}]}""",
+                    """{"deviceToken":"bootstrap-node-token","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"bootstrap-operator-token","role":"operator","scopes":["operator.admin","operator.approvals","operator.pairing","operator.read","operator.talk.secrets","operator.write"]}]}""",
                 ),
               )
               webSocket.close(1000, "done")
@@ -321,7 +365,7 @@ class GatewaySessionInvokeTest {
         assertEquals(emptyList<String>(), nodeEntry?.scopes)
         assertEquals("bootstrap-operator-token", operatorEntry?.token)
         assertEquals(
-          listOf("operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"),
+          listOf("operator.approvals", "operator.pairing", "operator.read", "operator.write"),
           operatorEntry?.scopes,
         )
       } finally {
@@ -598,7 +642,7 @@ class GatewaySessionInvokeTest {
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
         identityStore = DeviceIdentityStore(app),
         deviceAuthStore = deviceAuthStore,
-        onConnected = { _, _, _ ->
+        onConnected = {
           if (!connected.isCompleted) connected.complete(Unit)
         },
         onDisconnected = { message ->

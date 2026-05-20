@@ -17,6 +17,7 @@ function createMockOptions(
     req: { method, params, id: "req-1" },
     params,
     client: {
+      connId: "conn-test-client",
       connect: {
         client: { id: "test-client", displayName: "Test Client" },
       },
@@ -40,6 +41,102 @@ function createNoExecApprovalContext(): GatewayRequestHandlerOptions["context"] 
   } as unknown as GatewayRequestHandlerOptions["context"];
 }
 
+type MockCallSource = {
+  mock: {
+    calls: ArrayLike<ReadonlyArray<unknown>>;
+  };
+};
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  expect(Array.isArray(value), label).toBe(true);
+  return value as unknown[];
+}
+
+function mockCall(source: MockCallSource, index: number, label: string) {
+  const call = source.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call;
+}
+
+function responseCall(source: MockCallSource, index = 0) {
+  const call = mockCall(source, index, `response call ${index}`);
+  return {
+    ok: call[0],
+    result: call[1],
+    error: call[2],
+  };
+}
+
+function responseResult(source: MockCallSource, index = 0) {
+  return requireRecord(responseCall(source, index).result, `response result ${index}`);
+}
+
+function responseError(source: MockCallSource, index = 0) {
+  return requireRecord(responseCall(source, index).error, `response error ${index}`);
+}
+
+function acceptedResult(source: MockCallSource) {
+  const call = Array.from(source.mock.calls).find((candidate) => {
+    const result = candidate[1];
+    return typeof result === "object" && result !== null && "status" in result
+      ? (result as Record<string, unknown>).status === "accepted"
+      : false;
+  });
+  if (!call) {
+    throw new Error("Expected accepted response call");
+  }
+  return requireRecord(call[1], "accepted response result");
+}
+
+function acceptedApprovalId(source: MockCallSource) {
+  const id = acceptedResult(source).id;
+  expect(id, "accepted approval id").toBeTypeOf("string");
+  return id as string;
+}
+
+function expectPluginApprovalId(value: unknown, label: string): string {
+  expect(value, label).toBeTypeOf("string");
+  if (typeof value !== "string") {
+    throw new Error(`${label} must be a string`);
+  }
+  expect(value.startsWith("plugin:"), label).toBe(true);
+  const uuid = value.slice("plugin:".length);
+  expect(uuid).toHaveLength(36);
+  expect(uuid.split("-").map((part) => part.length)).toEqual([8, 4, 4, 4, 12]);
+  expect(
+    uuid.split("-").every((part) => /^[0-9a-f]+$/.test(part)),
+    label,
+  ).toBe(true);
+  return value;
+}
+
+function broadcastCall(opts: GatewayRequestHandlerOptions, index = 0) {
+  const call = mockCall(
+    opts.context.broadcast as unknown as MockCallSource,
+    index,
+    "broadcast call",
+  );
+  return {
+    event: call?.[0],
+    payload: requireRecord(call?.[1], "broadcast payload"),
+    options: call?.[2],
+  };
+}
+
+const invalidParamMethodCases = [
+  { method: "plugin.approval.request" },
+  { method: "plugin.approval.resolve" },
+] as const;
+
 describe("createPluginApprovalHandlers", () => {
   let manager: ExecApprovalManager<PluginApprovalRequestPayload>;
 
@@ -51,30 +148,28 @@ describe("createPluginApprovalHandlers", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns handlers for all three plugin approval methods", () => {
+  it("returns handlers for every plugin approval method", () => {
     const handlers = createPluginApprovalHandlers(manager);
-    expect(handlers).toHaveProperty("plugin.approval.request");
-    expect(handlers).toHaveProperty("plugin.approval.waitDecision");
-    expect(handlers).toHaveProperty("plugin.approval.resolve");
-    expect(typeof handlers["plugin.approval.request"]).toBe("function");
-    expect(typeof handlers["plugin.approval.waitDecision"]).toBe("function");
-    expect(typeof handlers["plugin.approval.resolve"]).toBe("function");
+    expect(Object.keys(handlers).toSorted()).toEqual([
+      "plugin.approval.list",
+      "plugin.approval.request",
+      "plugin.approval.resolve",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  describe("invalid params", () => {
+    it.each(invalidParamMethodCases)("$method rejects invalid params", async ({ method }) => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions(method, {});
+      await handlers[method](opts);
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseCall(opts.respond as unknown as MockCallSource).result).toBeUndefined();
+      expect(responseError(opts.respond as unknown as MockCallSource).code).toBeTypeOf("string");
+    });
   });
 
   describe("plugin.approval.request", () => {
-    it("rejects invalid params", async () => {
-      const handlers = createPluginApprovalHandlers(manager);
-      const opts = createMockOptions("plugin.approval.request", {});
-      await handlers["plugin.approval.request"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: expect.any(String),
-        }),
-      );
-    });
-
     it("creates and registers approval with twoPhase", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const respond = vi.fn();
@@ -95,34 +190,29 @@ describe("createPluginApprovalHandlers", () => {
 
       // Wait for the twoPhase "accepted" response
       await vi.waitFor(() => {
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ status: "accepted", id: expect.any(String) }),
-          undefined,
-        );
+        const accepted = acceptedResult(respond as unknown as MockCallSource);
+        expect(accepted.status).toBe("accepted");
+        expect(accepted.id).toBeTypeOf("string");
       });
 
-      expect(opts.context.broadcast).toHaveBeenCalledWith(
-        "plugin.approval.requested",
-        expect.objectContaining({ id: expect.any(String) }),
-        { dropIfSlow: true },
-      );
+      const requestedBroadcast = broadcastCall(opts);
+      expect(requestedBroadcast.event).toBe("plugin.approval.requested");
+      expect(requestedBroadcast.payload.id).toBeTypeOf("string");
+      expect(requestedBroadcast.options).toEqual({ dropIfSlow: true });
 
       // Resolve the approval so the handler can complete
-      const acceptedCall = respond.mock.calls.find(
-        (c) => (c[1] as Record<string, unknown>)?.status === "accepted",
-      );
-      const approvalId = (acceptedCall?.[1] as Record<string, unknown>)?.id as string;
+      const approvalId = acceptedApprovalId(respond as unknown as MockCallSource);
+      expect(manager.getSnapshot(approvalId)?.requestedByClientId).toBe("test-client");
       manager.resolve(approvalId, "allow-once");
 
       await handlerPromise;
 
       // Final response with decision
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ id: approvalId, decision: "allow-once" }),
-        undefined,
-      );
+      const finalResult = responseResult(respond as unknown as MockCallSource, 1);
+      expect(responseCall(respond as unknown as MockCallSource, 1).ok).toBe(true);
+      expect(finalResult.id).toBe(approvalId);
+      expect(finalResult.decision).toBe("allow-once");
+      expect(responseCall(respond as unknown as MockCallSource, 1).error).toBeUndefined();
     });
 
     it("expires immediately when no approval route", async () => {
@@ -138,11 +228,9 @@ describe("createPluginApprovalHandlers", () => {
         },
       );
       await handlers["plugin.approval.request"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ decision: null }),
-        undefined,
-      );
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(true);
+      expect(responseResult(opts.respond as unknown as MockCallSource).decision).toBeNull();
+      expect(responseCall(opts.respond as unknown as MockCallSource).error).toBeUndefined();
     });
 
     it("passes caller connId to hasExecApprovalClients to exclude self", async () => {
@@ -194,17 +282,12 @@ describe("createPluginApprovalHandlers", () => {
         const requestPromise = handlers["plugin.approval.request"](opts);
 
         await vi.waitFor(() => {
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            expect.objectContaining({ status: "accepted", id: expect.any(String) }),
-            undefined,
-          );
+          const accepted = acceptedResult(respond as unknown as MockCallSource);
+          expect(accepted.status).toBe("accepted");
+          expect(accepted.id).toBeTypeOf("string");
         });
 
-        const acceptedCall = respond.mock.calls.find(
-          (call) => (call[1] as Record<string, unknown>)?.status === "accepted",
-        );
-        const approvalId = (acceptedCall?.[1] as Record<string, unknown>)?.id as string;
+        const approvalId = acceptedApprovalId(respond as unknown as MockCallSource);
         manager.resolve(approvalId, "allow-once");
 
         await requestPromise;
@@ -221,11 +304,8 @@ describe("createPluginApprovalHandlers", () => {
         severity: "extreme",
       });
       await handlers["plugin.approval.request"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: expect.any(String) }),
-      );
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).code).toBeTypeOf("string");
     });
 
     it("rejects title exceeding max length", async () => {
@@ -235,11 +315,8 @@ describe("createPluginApprovalHandlers", () => {
         description: "D",
       });
       await handlers["plugin.approval.request"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: expect.any(String) }),
-      );
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).code).toBeTypeOf("string");
     });
 
     it("rejects description exceeding max length", async () => {
@@ -249,11 +326,8 @@ describe("createPluginApprovalHandlers", () => {
         description: "x".repeat(257),
       });
       await handlers["plugin.approval.request"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: expect.any(String) }),
-      );
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).code).toBeTypeOf("string");
     });
 
     it("rejects timeoutMs exceeding max", async () => {
@@ -264,11 +338,8 @@ describe("createPluginApprovalHandlers", () => {
         timeoutMs: 700_000,
       });
       await handlers["plugin.approval.request"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: expect.any(String) }),
-      );
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).code).toBeTypeOf("string");
     });
 
     it("generates plugin-prefixed IDs", async () => {
@@ -287,8 +358,8 @@ describe("createPluginApprovalHandlers", () => {
         },
       );
       await handlers["plugin.approval.request"](opts);
-      const result = respond.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
-      expect(result?.id).toEqual(expect.stringMatching(/^plugin:/));
+      const result = responseResult(respond as unknown as MockCallSource);
+      expectPluginApprovalId(result?.id, "generated plugin approval id");
     });
 
     it("passes plugin-prefixed IDs directly to manager.create", async () => {
@@ -305,7 +376,10 @@ describe("createPluginApprovalHandlers", () => {
       await handlers["plugin.approval.request"](opts);
 
       expect(createSpy).toHaveBeenCalledTimes(1);
-      expect(createSpy.mock.calls[0]?.[2]).toEqual(expect.stringMatching(/^plugin:/));
+      expectPluginApprovalId(
+        mockCall(createSpy, 0, "manager.create call")[2],
+        "manager.create approval id",
+      );
     });
 
     it("rejects plugin-provided id field", async () => {
@@ -316,10 +390,9 @@ describe("createPluginApprovalHandlers", () => {
         description: "D",
       });
       await handlers["plugin.approval.request"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("unexpected property") }),
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).message).toContain(
+        "unexpected property",
       );
     });
 
@@ -339,20 +412,16 @@ describe("createPluginApprovalHandlers", () => {
 
       const handlerPromise = handlers["plugin.approval.request"](opts);
       await vi.waitFor(() => {
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ status: "accepted", id: expect.any(String) }),
-          undefined,
-        );
+        const accepted = acceptedResult(respond as unknown as MockCallSource);
+        expect(accepted.status).toBe("accepted");
+        expect(accepted.id).toBeTypeOf("string");
       });
 
-      const acceptedCall = respond.mock.calls.find(
-        (call) => (call[1] as Record<string, unknown>)?.status === "accepted",
-      );
-      const approvalId = (acceptedCall?.[1] as Record<string, unknown>)?.id as string;
-      expect(manager.getSnapshot(approvalId)?.request).toMatchObject({
-        allowedDecisions: ["allow-once", "deny"],
-      });
+      const approvalId = acceptedApprovalId(respond as unknown as MockCallSource);
+      expect(manager.getSnapshot(approvalId)?.request.allowedDecisions).toEqual([
+        "allow-once",
+        "deny",
+      ]);
       manager.resolve(approvalId, "deny");
       await handlerPromise;
     });
@@ -374,37 +443,78 @@ describe("createPluginApprovalHandlers", () => {
 
       const handlerPromise = handlers["plugin.approval.request"](requestOpts);
       await vi.waitFor(() => {
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ status: "accepted", id: expect.any(String) }),
-          undefined,
-        );
+        const accepted = acceptedResult(respond as unknown as MockCallSource);
+        expect(accepted.status).toBe("accepted");
+        expect(accepted.id).toBeTypeOf("string");
       });
 
       const listRespond = vi.fn();
       await handlers["plugin.approval.list"](
         createMockOptions("plugin.approval.list", {}, { respond: listRespond }),
       );
-      expect(listRespond).toHaveBeenCalledWith(
-        true,
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: expect.stringMatching(/^plugin:/),
-            request: expect.objectContaining({
-              title: "Sensitive action",
-              description: "Desc",
-            }),
-          }),
-        ]),
-        undefined,
+      expect(responseCall(listRespond as unknown as MockCallSource).ok).toBe(true);
+      const approvals = requireArray(
+        responseCall(listRespond as unknown as MockCallSource).result,
+        "approval list",
       );
+      expect(approvals).toHaveLength(1);
+      const approval = requireRecord(approvals[0], "approval");
+      const listedApprovalId = expectPluginApprovalId(approval.id, "listed approval id");
+      const request = requireRecord(approval.request, "approval request");
+      expect(request.title).toBe("Sensitive action");
+      expect(request.description).toBe("Desc");
+      expect(responseCall(listRespond as unknown as MockCallSource).error).toBeUndefined();
 
-      const acceptedCall = respond.mock.calls.find(
-        (c) => (c[1] as Record<string, unknown>)?.status === "accepted",
-      );
-      const approvalId = (acceptedCall?.[1] as Record<string, unknown>)?.id as string;
+      const approvalId = acceptedApprovalId(respond as unknown as MockCallSource);
+      expect(listedApprovalId).toBe(approvalId);
       manager.resolve(approvalId, "allow-once");
       await handlerPromise;
+    });
+
+    it("lists only plugin approvals owned by the caller", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const visible = manager.create(
+        { title: "Visible", description: "D" },
+        60_000,
+        "plugin:visible",
+      );
+      visible.requestedByDeviceId = "device-owner";
+      visible.requestedByConnId = "conn-owner";
+      visible.requestedByClientId = "client-owner";
+      void manager.register(visible, 60_000);
+
+      const hidden = manager.create({ title: "Hidden", description: "D" }, 60_000, "plugin:hidden");
+      hidden.requestedByDeviceId = "device-other";
+      hidden.requestedByConnId = "conn-other";
+      hidden.requestedByClientId = "client-other";
+      void manager.register(hidden, 60_000);
+
+      const listRespond = vi.fn();
+      await handlers["plugin.approval.list"](
+        createMockOptions(
+          "plugin.approval.list",
+          {},
+          {
+            respond: listRespond,
+            client: {
+              connId: "conn-owner",
+              connect: {
+                client: { id: "client-owner" },
+                device: { id: "device-owner" },
+              },
+            } as unknown as GatewayRequestHandlerOptions["client"],
+          },
+        ),
+      );
+
+      expect(responseCall(listRespond as unknown as MockCallSource).ok).toBe(true);
+      const approvals = requireArray(
+        responseCall(listRespond as unknown as MockCallSource).result,
+        "approval list",
+      );
+      expect(approvals.map((entry) => requireRecord(entry, "approval").id)).toEqual([
+        "plugin:visible",
+      ]);
     });
   });
 
@@ -413,10 +523,9 @@ describe("createPluginApprovalHandlers", () => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.waitDecision", {});
       await handlers["plugin.approval.waitDecision"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("id is required") }),
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).message).toContain(
+        "id is required",
       );
     });
 
@@ -424,10 +533,39 @@ describe("createPluginApprovalHandlers", () => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.waitDecision", { id: "unknown" });
       await handlers["plugin.approval.waitDecision"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("expired or not found") }),
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).message).toContain(
+        "expired or not found",
+      );
+    });
+
+    it("returns not found for approvals hidden from the caller", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create({ title: "T", description: "D" }, 60_000);
+      record.requestedByDeviceId = "device-owner";
+      record.requestedByConnId = "conn-owner";
+      record.requestedByClientId = "client-owner";
+      void manager.register(record, 60_000);
+      manager.resolve(record.id, "allow-once");
+
+      const opts = createMockOptions(
+        "plugin.approval.waitDecision",
+        { id: record.id },
+        {
+          client: {
+            connId: "conn-other",
+            connect: {
+              client: { id: "client-other" },
+              device: { id: "device-other" },
+              scopes: ["operator.approvals"],
+            },
+          } as unknown as GatewayRequestHandlerOptions["client"],
+        },
+      );
+      await handlers["plugin.approval.waitDecision"](opts);
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).message).toContain(
+        "expired or not found",
       );
     });
 
@@ -441,28 +579,14 @@ describe("createPluginApprovalHandlers", () => {
 
       const opts = createMockOptions("plugin.approval.waitDecision", { id: record.id });
       await handlers["plugin.approval.waitDecision"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ id: record.id, decision: "allow-once" }),
-        undefined,
-      );
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(true);
+      expect(responseResult(opts.respond as unknown as MockCallSource).id).toBe(record.id);
+      expect(responseResult(opts.respond as unknown as MockCallSource).decision).toBe("allow-once");
+      expect(responseCall(opts.respond as unknown as MockCallSource).error).toBeUndefined();
     });
   });
 
   describe("plugin.approval.resolve", () => {
-    it("rejects invalid params", async () => {
-      const handlers = createPluginApprovalHandlers(manager);
-      const opts = createMockOptions("plugin.approval.resolve", {});
-      await handlers["plugin.approval.resolve"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: expect.any(String),
-        }),
-      );
-    });
-
     it("rejects invalid decision", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const record = manager.create({ title: "T", description: "D" }, 60_000);
@@ -472,10 +596,9 @@ describe("createPluginApprovalHandlers", () => {
         decision: "invalid",
       });
       await handlers["plugin.approval.resolve"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: "invalid decision" }),
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).message).toBe(
+        "invalid decision",
       );
     });
 
@@ -490,11 +613,79 @@ describe("createPluginApprovalHandlers", () => {
       });
       await handlers["plugin.approval.resolve"](opts);
       expect(opts.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-      expect(opts.context.broadcast).toHaveBeenCalledWith(
-        "plugin.approval.resolved",
-        expect.objectContaining({ id: record.id, decision: "deny" }),
-        { dropIfSlow: true },
+      const resolvedBroadcast = broadcastCall(opts);
+      expect(resolvedBroadcast.event).toBe("plugin.approval.resolved");
+      expect(resolvedBroadcast.payload.id).toBe(record.id);
+      expect(resolvedBroadcast.payload.decision).toBe("deny");
+      expect(resolvedBroadcast.options).toEqual({ dropIfSlow: true });
+    });
+
+    it("resolves only plugin approvals owned by the caller", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const visible = manager.create(
+        { title: "Visible", description: "D" },
+        60_000,
+        "plugin:abcd-visible",
       );
+      visible.requestedByDeviceId = "device-owner";
+      visible.requestedByConnId = "conn-owner";
+      visible.requestedByClientId = "client-owner";
+      void manager.register(visible, 60_000);
+
+      const hidden = manager.create(
+        { title: "Hidden", description: "D" },
+        60_000,
+        "plugin:abcd-hidden",
+      );
+      hidden.requestedByDeviceId = "device-other";
+      hidden.requestedByConnId = "conn-other";
+      hidden.requestedByClientId = "client-other";
+      void manager.register(hidden, 60_000);
+
+      const ownerClient = {
+        connId: "conn-owner",
+        connect: {
+          client: { id: "client-owner" },
+          device: { id: "device-owner" },
+        },
+      } as unknown as GatewayRequestHandlerOptions["client"];
+      const resolveRespond = vi.fn();
+      await handlers["plugin.approval.resolve"](
+        createMockOptions(
+          "plugin.approval.resolve",
+          {
+            id: "plugin:abcd",
+            decision: "allow-once",
+          },
+          {
+            respond: resolveRespond,
+            client: ownerClient,
+          },
+        ),
+      );
+      expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(manager.getSnapshot(visible.id)?.decision).toBe("allow-once");
+      expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
+
+      const hiddenRespond = vi.fn();
+      await handlers["plugin.approval.resolve"](
+        createMockOptions(
+          "plugin.approval.resolve",
+          {
+            id: hidden.id,
+            decision: "deny",
+          },
+          {
+            respond: hiddenRespond,
+            client: ownerClient,
+          },
+        ),
+      );
+      expect(responseCall(hiddenRespond as unknown as MockCallSource).ok).toBe(false);
+      const error = responseError(hiddenRespond as unknown as MockCallSource);
+      expect(error.code).toBe("INVALID_REQUEST");
+      expect(error.message).toBe("unknown or expired approval id");
+      expect(manager.getSnapshot(hidden.id)?.decision).toBeUndefined();
     });
 
     it("rejects decisions outside plugin approval allowed decisions", async () => {
@@ -514,15 +705,11 @@ describe("createPluginApprovalHandlers", () => {
         decision: "allow-always",
       });
       await handlers["plugin.approval.resolve"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: "allow-always is unavailable for this plugin approval",
-          details: { allowedDecisions: ["allow-once", "deny"] },
-        }),
-      );
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      const error = responseError(opts.respond as unknown as MockCallSource);
+      expect(error.code).toBe("INVALID_REQUEST");
+      expect(error.message).toBe("allow-always is unavailable for this plugin approval");
+      expect(error.details).toEqual({ allowedDecisions: ["allow-once", "deny"] });
       expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
     });
 
@@ -533,15 +720,11 @@ describe("createPluginApprovalHandlers", () => {
         decision: "allow-once",
       });
       await handlers["plugin.approval.resolve"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("unknown or expired"),
-          details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
-        }),
-      );
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      const error = responseError(opts.respond as unknown as MockCallSource);
+      expect(error.code).toBe("INVALID_REQUEST");
+      expect(error.message).toContain("unknown or expired");
+      expect(requireRecord(error.details, "error details").reason).toBe("APPROVAL_NOT_FOUND");
     });
 
     it("accepts unique short id prefixes", async () => {
@@ -570,14 +753,10 @@ describe("createPluginApprovalHandlers", () => {
         decision: "deny",
       });
       await handlers["plugin.approval.resolve"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: "unknown or expired approval id",
-        }),
-      );
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      const error = responseError(opts.respond as unknown as MockCallSource);
+      expect(error.code).toBe("INVALID_REQUEST");
+      expect(error.message).toBe("unknown or expired approval id");
     });
   });
 });

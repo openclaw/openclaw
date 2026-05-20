@@ -16,7 +16,9 @@ import {
 
 describe("Zalo reply-once lifecycle", () => {
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
-  const recordInboundSessionMock = vi.fn(async () => undefined);
+  const recordInboundSessionMock = vi.fn(
+    async (_input: { sessionKey?: string; ctx?: Record<string, unknown> }) => undefined,
+  );
   const resolveAgentRouteMock = vi.fn(() => ({
     agentId: "main",
     channel: "zalo",
@@ -58,6 +60,15 @@ describe("Zalo reply-once lifecycle", () => {
     });
   }
 
+  function requireRecordInboundSessionArgs() {
+    const [call] = recordInboundSessionMock.mock.calls;
+    if (!call) {
+      throw new Error("expected inbound session record call");
+    }
+    const [recordArgs] = call;
+    return recordArgs;
+  }
+
   it("routes one accepted webhook event to one visible reply across duplicate replay", async () => {
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
       async ({ dispatcherOptions }) => {
@@ -93,27 +104,23 @@ describe("Zalo reply-once lifecycle", () => {
       );
 
       expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
-      expect(recordInboundSessionMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: "agent:main:zalo:direct:dm-chat-1",
-          ctx: expect.objectContaining({
-            AccountId: "acct-zalo-lifecycle",
-            SessionKey: "agent:main:zalo:direct:dm-chat-1",
-            MessageSid: expect.stringContaining("zalo-replay-"),
-            From: "zalo:user-1",
-            To: "zalo:dm-chat-1",
-          }),
-        }),
-      );
+      const recordArgs = requireRecordInboundSessionArgs();
+      expect(recordArgs?.sessionKey).toBe("agent:main:zalo:direct:dm-chat-1");
+      expect(recordArgs?.ctx?.AccountId).toBe("acct-zalo-lifecycle");
+      expect(recordArgs?.ctx?.SessionKey).toBe("agent:main:zalo:direct:dm-chat-1");
+      expect(recordArgs?.ctx?.From).toBe("zalo:user-1");
+      expect(recordArgs?.ctx?.To).toBe("zalo:dm-chat-1");
+      expect(recordArgs?.ctx?.MessageSid).toContain("zalo-replay-");
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      expect(sendMessageMock).toHaveBeenCalledWith(
-        "zalo-token",
-        expect.objectContaining({
-          chat_id: "dm-chat-1",
-          text: "zalo reply once",
-        }),
-        undefined,
-      );
+      const [sendToken, sendPayload, sendOptions] = sendMessageMock.mock.calls[0] as [
+        string,
+        { chat_id?: string; text?: string },
+        unknown,
+      ];
+      expect(sendToken).toBe("zalo-token");
+      expect(sendPayload.chat_id).toBe("dm-chat-1");
+      expect(sendPayload.text).toBe("zalo reply once");
+      expect(sendOptions).toBeUndefined();
     } finally {
       await monitor.stop();
     }
@@ -162,7 +169,7 @@ describe("Zalo reply-once lifecycle", () => {
       expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
       expect(monitor.runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("Zalo webhook failed: Error: post-send failure"),
+        "[acct-zalo-lifecycle] Zalo webhook failed: Error: post-send failure",
       );
     } finally {
       await monitor.stop();

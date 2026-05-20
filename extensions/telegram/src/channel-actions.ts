@@ -9,8 +9,8 @@ import type {
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-types";
-import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-contracts";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import {
   createTelegramActionGate,
@@ -183,8 +183,11 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     cfg,
     accountId,
     mediaLocalRoots,
+    mediaReadFile,
     sessionKey,
+    inboundEventKind,
     toolContext,
+    gatewayClientScopes,
   }) => {
     const telegramAction = resolveTelegramMessageActionName(action);
     if (!telegramAction) {
@@ -202,7 +205,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           : {}),
       },
       cfg,
-      { mediaLocalRoots, sessionKey },
+      { mediaLocalRoots, mediaReadFile, sessionKey, inboundEventKind, gatewayClientScopes },
     );
   },
 };

@@ -46,6 +46,7 @@ type SettingsHost = {
     navWidth: number;
     navGroupsCollapsed: Record<string, boolean>;
     borderRadius: number;
+    textScale?: import("./storage.ts").TextScaleStop;
     customTheme?: import("./custom-theme.ts").ImportedCustomTheme;
   };
   theme: ThemeName & ThemeMode;
@@ -59,6 +60,7 @@ type SettingsHost = {
   logsAtBottom: boolean;
   eventLog: unknown[];
   eventLogBuffer: unknown[];
+  password?: string;
   basePath: string;
   themeMedia: MediaQueryList | null;
   themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
@@ -144,6 +146,7 @@ const createHost = (tab: Tab): SettingsHost => ({
     navWidth: 220,
     navGroupsCollapsed: {},
     borderRadius: 50,
+    textScale: 100,
   },
   theme: "claw" as unknown as ThemeName & ThemeMode,
   themeMode: "system",
@@ -156,6 +159,7 @@ const createHost = (tab: Tab): SettingsHost => ({
   logsAtBottom: false,
   eventLog: [],
   eventLogBuffer: [],
+  password: "",
   basePath: "",
   themeMedia: null,
   themeMediaHandler: null,
@@ -256,8 +260,8 @@ describe("setTabFromRoute", () => {
     const host = createHost("chat");
 
     setTabFromRoute(host, "logs");
-    expect(host.logsPollInterval).not.toBeNull();
     expect(host.debugPollInterval).toBeNull();
+    expect(host.logsPollInterval).not.toBe(host.debugPollInterval);
 
     setTabFromRoute(host, "chat");
     expect(host.logsPollInterval).toBeNull();
@@ -267,8 +271,8 @@ describe("setTabFromRoute", () => {
     const host = createHost("chat");
 
     setTabFromRoute(host, "debug");
-    expect(host.debugPollInterval).not.toBeNull();
     expect(host.logsPollInterval).toBeNull();
+    expect(host.debugPollInterval).not.toBe(host.logsPollInterval);
 
     setTabFromRoute(host, "chat");
     expect(host.debugPollInterval).toBeNull();
@@ -290,6 +294,18 @@ describe("setTabFromRoute", () => {
     expect(host.theme).toBe("knot");
     expect(host.themeMode).toBe("light");
     expect(host.themeResolved).toBe("openknot-light");
+  });
+
+  it("applies normalized browser-local text scale", () => {
+    const host = createHost("chat");
+
+    applySettings(host, {
+      ...host.settings,
+      textScale: 125,
+    });
+
+    expect(host.settings.textScale).toBe(125);
+    expect(document.documentElement.style.getPropertyValue("--control-ui-text-scale")).toBe("1.25");
   });
 
   it("syncs both theme family and mode from persisted settings", () => {
@@ -412,6 +428,37 @@ describe("applySettingsFromUrl", () => {
     expect(host.settings.token).toBe("hash-token");
     expect(window.location.search).toBe("");
     expect(window.location.hash).toBe("");
+  });
+
+  it("hydrates native Mac app auth before the first connection", () => {
+    setTestWindowUrl("https://control.example/ui/chat");
+    (
+      window as unknown as {
+        __OPENCLAW_NATIVE_CONTROL_AUTH__?: {
+          gatewayUrl?: string;
+          token?: string;
+          password?: string;
+        };
+      }
+    )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+      gatewayUrl: "wss://control.example/ui/",
+      token: "device-token",
+      password: "shared-password",
+    };
+    const host = createHost("chat");
+
+    applySettingsFromUrl(host);
+
+    expect(host.settings.gatewayUrl).toBe("wss://control.example/ui/");
+    expect(host.settings.token).toBe("device-token");
+    expect(host.password).toBe("shared-password");
+    expect(
+      (
+        window as unknown as {
+          __OPENCLAW_NATIVE_CONTROL_AUTH__?: unknown;
+        }
+      )["__OPENCLAW_NATIVE_CONTROL_AUTH__"],
+    ).toBeUndefined();
   });
 
   it("resets stale persisted session selection to main when a token is supplied without a session", () => {

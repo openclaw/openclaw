@@ -8,14 +8,17 @@ import {
 } from "openclaw/plugin-sdk/channel-message";
 import {
   createChannelProgressDraftGate,
+  type ChannelProgressDraftLine,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
+  mergeChannelProgressDraftLine,
+  normalizeChannelProgressDraftLineIdentity,
   resolveChannelPreviewStreamMode,
   resolveChannelProgressDraftMaxLines,
   resolveChannelProgressDraftLabel,
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-streaming";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
@@ -70,7 +73,7 @@ export function createTeamsReplyStreamController(params: {
 
   let streamReceivedTokens = false;
   let informativeUpdateSent = false;
-  let progressLines: string[] = [];
+  let progressLines: Array<string | ChannelProgressDraftLine> = [];
   let lastInformativeText = "";
   let pendingFinalize: Promise<void> | undefined;
   let liveState: LiveMessageState<ReplyPayload> = createLiveMessageState({
@@ -125,7 +128,7 @@ export function createTeamsReplyStreamController(params: {
   };
 
   const pushProgressLine = async (
-    line?: string,
+    line?: string | ChannelProgressDraftLine,
     options?: { toolName?: string },
   ): Promise<void> => {
     if (!stream || streamMode !== "progress") {
@@ -135,14 +138,13 @@ export function createTeamsReplyStreamController(params: {
       return;
     }
     if (shouldStreamPreviewToolProgress) {
-      const normalized = line?.replace(/\s+/g, " ").trim();
+      const normalized = normalizeChannelProgressDraftLineIdentity(line);
       if (normalized) {
-        const previous = progressLines.at(-1);
-        if (previous !== normalized) {
-          progressLines = [...progressLines, normalized].slice(
-            -resolveChannelProgressDraftMaxLines(params.msteamsConfig),
-          );
-        }
+        const progressLine: string | ChannelProgressDraftLine =
+          typeof line === "object" && line !== undefined ? line : normalized;
+        progressLines = mergeChannelProgressDraftLine(progressLines, progressLine, {
+          maxLines: resolveChannelProgressDraftMaxLines(params.msteamsConfig),
+        });
       }
     }
     await noteProgressWork();
@@ -230,7 +232,10 @@ export function createTeamsReplyStreamController(params: {
       stream.update(payload.text);
     },
 
-    async pushProgressLine(line?: string, options?: { toolName?: string }): Promise<void> {
+    async pushProgressLine(
+      line?: string | ChannelProgressDraftLine,
+      options?: { toolName?: string },
+    ): Promise<void> {
       await pushProgressLine(line, options);
     },
 

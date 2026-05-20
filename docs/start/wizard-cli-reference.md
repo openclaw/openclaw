@@ -138,13 +138,13 @@ What you set:
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.
 
-    Sets `agents.defaults.model` to `openai-codex/gpt-5.5` when model is unset or already OpenAI-family.
+    Sets `agents.defaults.model` to `openai/gpt-5.5` through the Codex runtime when model is unset or already OpenAI-family.
 
   </Accordion>
   <Accordion title="OpenAI Code subscription (device pairing)">
     Browser pairing flow with a short-lived device code.
 
-    Sets `agents.defaults.model` to `openai-codex/gpt-5.5` when model is unset or already OpenAI-family.
+    Sets `agents.defaults.model` to `openai/gpt-5.5` through the Codex runtime when model is unset or already OpenAI-family.
 
   </Accordion>
   <Accordion title="OpenAI API key">
@@ -153,8 +153,18 @@ What you set:
     Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset, `openai/*`, or `openai-codex/*`.
 
   </Accordion>
+  <Accordion title="xAI (Grok) OAuth">
+    Browser sign-in for eligible SuperGrok or X Premium accounts. This is the
+    recommended xAI path for most users. OpenClaw stores the resulting auth
+    profile for Grok models, `x_search`, and `code_execution`.
+  </Accordion>
+  <Accordion title="xAI (Grok) device code">
+    Remote-friendly browser sign-in with a short code instead of a localhost
+    callback. Use this from SSH, Docker, or VPS hosts.
+  </Accordion>
   <Accordion title="xAI (Grok) API key">
-    Prompts for `XAI_API_KEY` and configures xAI as a model provider.
+    Prompts for `XAI_API_KEY` and configures xAI as a model provider. Use this
+    when you want an xAI Console API key instead of subscription OAuth.
   </Accordion>
   <Accordion title="OpenCode">
     Prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`) and lets you choose the Zen or Go catalog.

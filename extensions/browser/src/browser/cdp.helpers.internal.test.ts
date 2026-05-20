@@ -49,6 +49,15 @@ describe("cdp.helpers internal", () => {
     }
   });
 
+  function requireGuardedFetchRequest() {
+    const [call] = fetchWithSsrFGuardMock.mock.calls;
+    if (!call) {
+      throw new Error("expected guarded CDP fetch call");
+    }
+    const [request] = call;
+    return request;
+  }
+
   describe("assertCdpEndpointAllowed", () => {
     it("throws on non-http/https/ws/wss protocols under any SSRF policy", async () => {
       await expect(
@@ -142,11 +151,8 @@ describe("cdp.helpers internal", () => {
       await fetchCdpChecked("http://93.184.216.34:9222/json/version", 250, undefined, {
         allowPrivateNetwork: true,
       });
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          policy: expect.objectContaining({ allowPrivateNetwork: true }),
-        }),
-      );
+      const request = requireGuardedFetchRequest();
+      expect(request?.policy?.allowPrivateNetwork).toBe(true);
     });
 
     it("falls back to a permissive private-network policy when none is supplied on a non-loopback host", async () => {
@@ -157,11 +163,8 @@ describe("cdp.helpers internal", () => {
         release,
       });
       await fetchCdpChecked("http://93.184.216.34:9222/json/version", 250);
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          policy: { allowPrivateNetwork: true },
-        }),
-      );
+      const request = requireGuardedFetchRequest();
+      expect(request?.policy).toEqual({ allowPrivateNetwork: true });
     });
   });
 
@@ -240,7 +243,7 @@ describe("cdp.helpers internal", () => {
         connectionCount += 1;
         socket.on("message", () => {
           // Defer close so the pending entry is definitely registered.
-          setTimeout(() => socket.close(), 10);
+          setImmediate(() => socket.close());
         });
       });
       await expect(
@@ -354,7 +357,7 @@ describe("cdp.helpers internal", () => {
         withCdpSocket("ws://127.0.0.1:1/devtools/browser/NO", async () => {
           return "unreachable";
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/ECONNREFUSED|CDP socket closed/);
     });
 
     it("wraps a non-Error callback throw before closing the socket", async () => {
@@ -438,7 +441,7 @@ describe("cdp.helpers internal", () => {
         withCdpSocket(server.url, async (send) => {
           await send("Test.boom");
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/CDP socket closed|WebSocket was closed/i);
     });
 
     // The non-Error branch of the `err instanceof Error ? ... : new Error(String(err))`
@@ -455,9 +458,11 @@ describe("openCdpWebSocket option handling", () => {
   it("clamps a non-finite handshakeTimeoutMs to the default", () => {
     // Exercises the Number.isFinite false side of the handshake-timeout
     // ternary in openCdpWebSocket.
-    const ws = openCdpWebSocket("ws://127.0.0.1:1/devtools/browser/X", {
+    const url = "ws://127.0.0.1:1/devtools/browser/X";
+    const ws = openCdpWebSocket(url, {
       handshakeTimeoutMs: Number.NaN,
     });
+    expect(ws.url).toBe(url);
     // Ensure we don't leak the socket even though we never await it.
     ws.once("error", () => {});
     ws.close();
@@ -466,9 +471,11 @@ describe("openCdpWebSocket option handling", () => {
   it("honours an explicit, finite handshakeTimeoutMs", () => {
     // Exercises the truthy side of the handshake-timeout ternary: both
     // typeof === "number" AND Number.isFinite must be true.
-    const ws = openCdpWebSocket("ws://127.0.0.1:1/devtools/browser/X", {
+    const url = "ws://127.0.0.1:1/devtools/browser/X";
+    const ws = openCdpWebSocket(url, {
       handshakeTimeoutMs: 500,
     });
+    expect(ws.url).toBe(url);
     ws.once("error", () => {});
     ws.close();
   });
@@ -476,16 +483,20 @@ describe("openCdpWebSocket option handling", () => {
   it("omits the direct-loopback agent for non-loopback targets", () => {
     // Exercises the falsy side of `agent ? { agent } : {}` — the loopback
     // agent helper returns undefined for non-loopback hosts.
-    const ws = openCdpWebSocket("ws://93.184.216.34:9222/devtools/browser/X");
+    const url = "ws://93.184.216.34:9222/devtools/browser/X";
+    const ws = openCdpWebSocket(url);
+    expect(ws.url).toBe(url);
     ws.once("error", () => {});
     ws.close();
   });
 
   it("injects custom headers when opts.headers is a non-empty object", () => {
     // Exercises the truthy side of `Object.keys(headers).length ? ... : {}`.
-    const ws = openCdpWebSocket("ws://127.0.0.1:1/devtools/browser/X", {
+    const url = "ws://127.0.0.1:1/devtools/browser/X";
+    const ws = openCdpWebSocket(url, {
       headers: { "X-Custom": "abc" },
     });
+    expect(ws.url).toBe(url);
     ws.once("error", () => {});
     ws.close();
   });

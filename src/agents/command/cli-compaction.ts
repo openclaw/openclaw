@@ -1,12 +1,17 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ensureContextEnginesInitialized as ensureContextEnginesInitializedImpl } from "../../context-engine/init.js";
 import { resolveContextEngine as resolveContextEngineImpl } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../pi-embedded-runner/compaction-runtime-context.js";
+import {
+  compactContextEngineWithSafetyTimeout,
+  resolveCompactionTimeoutMs,
+} from "../pi-embedded-runner/compaction-safety-timeout.js";
 import { runContextEngineMaintenance as runContextEngineMaintenanceImpl } from "../pi-embedded-runner/context-engine-maintenance.js";
 import { shouldPreemptivelyCompactBeforePrompt as shouldPreemptivelyCompactBeforePromptImpl } from "../pi-embedded-runner/run/preemptive-compaction.js";
 import { resolveLiveToolResultMaxChars as resolveLiveToolResultMaxCharsImpl } from "../pi-embedded-runner/tool-result-truncation.js";
@@ -32,6 +37,7 @@ type SettingsManagerLike = {
 };
 type CliCompactionDeps = {
   openSessionManager: (sessionFile: string) => SessionManagerLike;
+  ensureContextEnginesInitialized: () => void;
   resolveContextEngine: (cfg: OpenClawConfig) => Promise<ContextEngine>;
   createPreparedEmbeddedPiSettingsManager: (params: {
     cwd: string;
@@ -54,6 +60,7 @@ const log = createSubsystemLogger("agents/cli-compaction");
 
 const cliCompactionDeps: CliCompactionDeps = {
   openSessionManager: (sessionFile: string) => SessionManager.open(sessionFile),
+  ensureContextEnginesInitialized: ensureContextEnginesInitializedImpl,
   resolveContextEngine: resolveContextEngineImpl,
   createPreparedEmbeddedPiSettingsManager: createPreparedEmbeddedPiSettingsManagerImpl,
   applyPiAutoCompactionGuard: applyPiAutoCompactionGuardImpl,
@@ -70,6 +77,7 @@ export function setCliCompactionTestDeps(overrides: Partial<typeof cliCompaction
 export function resetCliCompactionTestDeps(): void {
   Object.assign(cliCompactionDeps, {
     openSessionManager: (sessionFile: string) => SessionManager.open(sessionFile),
+    ensureContextEnginesInitialized: ensureContextEnginesInitializedImpl,
     resolveContextEngine: resolveContextEngineImpl,
     createPreparedEmbeddedPiSettingsManager: createPreparedEmbeddedPiSettingsManagerImpl,
     applyPiAutoCompactionGuard: applyPiAutoCompactionGuardImpl,
@@ -145,16 +153,28 @@ async function compactCliTranscript(params: {
     trigger: "cli_budget",
   };
 
-  const compactResult = await params.contextEngine.compact({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sessionFile: params.sessionFile,
-    tokenBudget: params.contextTokenBudget,
-    currentTokenCount: params.currentTokenCount,
-    force: true,
-    compactionTarget: "budget",
-    runtimeContext,
-  });
+  let compactResult: Awaited<ReturnType<typeof params.contextEngine.compact>>;
+  try {
+    compactResult = await compactContextEngineWithSafetyTimeout(
+      params.contextEngine,
+      {
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+        tokenBudget: params.contextTokenBudget,
+        currentTokenCount: params.currentTokenCount,
+        force: true,
+        compactionTarget: "budget",
+        runtimeContext,
+      },
+      resolveCompactionTimeoutMs(params.cfg),
+    );
+  } catch (error) {
+    log.warn(
+      `CLI transcript compaction failed for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
+  }
 
   if (!compactResult.compacted) {
     log.warn(
@@ -201,6 +221,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     return params.sessionEntry;
   }
 
+  cliCompactionDeps.ensureContextEnginesInitialized();
   const contextEngine = await cliCompactionDeps.resolveContextEngine(params.cfg);
   const sessionManager = cliCompactionDeps.openSessionManager(sessionFile);
   const settingsManager = await cliCompactionDeps.createPreparedEmbeddedPiSettingsManager({

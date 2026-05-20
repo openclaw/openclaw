@@ -51,8 +51,6 @@ import {
 } from "./manager-status-state.js";
 import {
   enqueueMemoryTargetedSessionSync,
-  extractMemoryErrorReason,
-  isMemoryReadonlyDbError,
   runMemorySyncWithReadonlyRecovery,
   type MemoryReadonlyRecoveryState,
 } from "./manager-sync-control.js";
@@ -88,20 +86,46 @@ export async function closeAllMemoryIndexManagers(): Promise<void> {
   });
 }
 
+export async function closeMemoryIndexManagersForAgent(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<void> {
+  const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
+  if (!settings) {
+    return;
+  }
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const key = `${params.agentId}:${workspaceDir}:${JSON.stringify(settings)}:default`;
+  const pending = INDEX_CACHE_PENDING.get(key);
+  if (pending) {
+    await Promise.allSettled([pending]);
+  }
+  const manager = INDEX_CACHE.get(key);
+  if (!manager) {
+    return;
+  }
+  INDEX_CACHE.delete(key);
+  try {
+    await manager.close();
+  } catch (err) {
+    log.warn(`failed to close memory index manager for agent ${params.agentId}: ${String(err)}`);
+  }
+}
+
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
   protected readonly cfg: OpenClawConfig;
   protected readonly agentId: string;
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
-  protected provider: EmbeddingProvider | null;
+  protected override provider: EmbeddingProvider | null;
   private readonly requestedProvider: EmbeddingProviderRequest;
   private providerInitPromise: Promise<void> | null = null;
   private providerInitialized = false;
-  protected fallbackFrom?: EmbeddingProviderId;
-  protected fallbackReason?: string;
+  protected override fallbackFrom?: EmbeddingProviderId;
+  protected override fallbackReason?: string;
   private providerUnavailableReason?: string;
-  protected providerRuntime?: EmbeddingProviderRuntime;
+  protected override providerRuntime?: EmbeddingProviderRuntime;
   protected batch: {
     enabled: boolean;
     wait: boolean;
@@ -114,8 +138,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected batchFailureLastProvider?: string;
   protected batchFailureLock: Promise<void> = Promise.resolve();
   protected db: DatabaseSync;
-  protected readonly sources: Set<MemorySource>;
-  protected providerKey: string;
+  protected override readonly sources: Set<MemorySource>;
+  protected override providerKey: string;
   protected readonly cache: { enabled: boolean; maxEntries?: number };
   protected readonly vector: {
     enabled: boolean;
@@ -125,23 +149,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     loadError?: string;
     dims?: number;
   };
-  protected readonly fts: {
+  protected override readonly fts: {
     enabled: boolean;
     available: boolean;
     loadError?: string;
   };
-  protected vectorReady: Promise<boolean> | null = null;
-  protected watcher: FSWatcher | null = null;
-  protected watchTimer: NodeJS.Timeout | null = null;
-  protected sessionWatchTimer: NodeJS.Timeout | null = null;
-  protected sessionUnsubscribe: (() => void) | null = null;
-  protected intervalTimer: NodeJS.Timeout | null = null;
-  protected closed = false;
-  protected dirty = false;
-  protected sessionsDirty = false;
-  protected sessionsDirtyFiles = new Set<string>();
-  protected sessionPendingFiles = new Set<string>();
-  protected sessionDeltas = new Map<
+  protected override vectorReady: Promise<boolean> | null = null;
+  protected override watcher: FSWatcher | null = null;
+  protected override watchTimer: NodeJS.Timeout | null = null;
+  protected override sessionWatchTimer: NodeJS.Timeout | null = null;
+  protected override sessionUnsubscribe: (() => void) | null = null;
+  protected override intervalTimer: NodeJS.Timeout | null = null;
+  protected override closed = false;
+  protected override dirty = false;
+  protected override sessionsDirty = false;
+  protected override sessionsDirtyFiles = new Set<string>();
+  protected override sessionPendingFiles = new Set<string>();
+  protected override sessionDeltas = new Map<
     string,
     { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
@@ -248,6 +272,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       hasIndexedMeta: Boolean(meta),
     });
     this.batch = this.resolveBatchConfig();
+    if (!transient) {
+      this.ensureSessionStartupCatchup();
+    }
   }
 
   private applyProviderResult(providerResult: EmbeddingProviderResult): void {
@@ -653,14 +680,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     );
   }
 
-  private isReadonlyDbError(err: unknown): boolean {
-    return isMemoryReadonlyDbError(err);
-  }
-
-  private extractErrorReason(err: unknown): string {
-    return extractMemoryErrorReason(err);
-  }
-
   private async runSyncWithReadonlyRecovery(params?: {
     reason?: string;
     force?: boolean;
@@ -940,8 +959,36 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.sessionUnsubscribe();
       this.sessionUnsubscribe = null;
     }
-    await awaitPendingManagerWork({ pendingSync, pendingProviderInit });
-    closeMemoryDatabase(this.db);
-    INDEX_CACHE.delete(this.cacheKey);
+    const closeErrors = new Map<EmbeddingProvider, unknown>();
+    const closeCurrentProvider = async () => {
+      const provider = this.provider;
+      if (!provider) {
+        return;
+      }
+      try {
+        await provider.close?.();
+        closeErrors.delete(provider);
+        if (this.provider === provider) {
+          this.provider = null;
+        }
+      } catch (err) {
+        closeErrors.set(provider, err);
+      }
+    };
+    await awaitPendingManagerWork({ pendingProviderInit });
+    await closeCurrentProvider();
+    try {
+      await awaitPendingManagerWork({ pendingSync });
+      await closeCurrentProvider();
+    } finally {
+      closeMemoryDatabase(this.db);
+      if (INDEX_CACHE.get(this.cacheKey) === this) {
+        INDEX_CACHE.delete(this.cacheKey);
+      }
+    }
+    const closeError = closeErrors.values().next().value;
+    if (closeError) {
+      throw closeError;
+    }
   }
 }

@@ -2,12 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const callGateway = vi.hoisted(() => vi.fn());
+const note = vi.hoisted(() => vi.fn());
 
 vi.mock("../gateway/call.js", () => ({
   buildGatewayConnectionDetails: vi.fn(() => ({
     message: "Gateway target: ws://127.0.0.1:18789",
   })),
   callGateway,
+}));
+
+vi.mock("../terminal/note.js", () => ({
+  note,
 }));
 
 vi.mock("./health.js", () => ({
@@ -21,6 +26,7 @@ describe("checkGatewayHealth", () => {
 
   beforeEach(() => {
     callGateway.mockReset();
+    note.mockReset();
   });
 
   it("uses a lightweight status RPC for the restart liveness gate", async () => {
@@ -43,6 +49,27 @@ describe("checkGatewayHealth", () => {
       timeoutMs: 6000,
     });
     expect(runtime.error).not.toHaveBeenCalled();
+    expect(note.mock.calls.map(([, title]) => title)).not.toContain("OpenClaw version mismatch");
+  });
+
+  it("notes CLI and gateway version mismatch when the gateway reports another runtime version", async () => {
+    callGateway.mockResolvedValueOnce({ runtimeVersion: "2026.4.23" }).mockResolvedValueOnce({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ healthOk: true, status: { runtimeVersion: "2026.4.23" } });
+
+    const mismatchNotes = note.mock.calls
+      .filter(([, title]) => title === "OpenClaw version mismatch")
+      .map(([message]) => String(message));
+    const mismatchOutput = mismatchNotes.join("\n");
+    expect(mismatchOutput).toContain("the running Gateway is OpenClaw 2026.4.23");
+    expect(mismatchOutput).not.toContain("That usually means");
+    expect(mismatchOutput).toContain("Check `openclaw --version`, `which openclaw`");
+    expect(mismatchOutput).toContain(
+      "If this mismatch is unexpected, update PATH so `openclaw` points to the version you want",
+    );
   });
 
   it("does not run follow-up channel probes when liveness fails", async () => {
@@ -92,12 +119,11 @@ describe("probeGatewayMemoryStatus", () => {
       new Error("gateway timeout after 8000ms\nGateway target: ws://127.0.0.1:18789"),
     );
 
-    await expect(probeGatewayMemoryStatus({ cfg })).resolves.toEqual({
-      checked: false,
-      ready: false,
-      error: expect.stringContaining("gateway memory probe timed out"),
-      skipped: false,
-    });
+    const result = await probeGatewayMemoryStatus({ cfg });
+    expect(result.checked).toBe(false);
+    expect(result.ready).toBe(false);
+    expect(result.error).toContain("gateway memory probe timed out");
+    expect(result.skipped).toBe(false);
   });
 
   it("propagates checked: false and skipped: true when gateway skipped the embedding probe", async () => {
@@ -114,12 +140,11 @@ describe("probeGatewayMemoryStatus", () => {
       },
     });
 
-    await expect(probeGatewayMemoryStatus({ cfg })).resolves.toEqual({
-      checked: false,
-      ready: false,
-      error: expect.stringContaining("not checked"),
-      skipped: true,
-    });
+    const result = await probeGatewayMemoryStatus({ cfg });
+    expect(result.checked).toBe(false);
+    expect(result.ready).toBe(false);
+    expect(result.error).toContain("not checked");
+    expect(result.skipped).toBe(true);
   });
 
   it("keeps gateway request timeouts as explicit failures", async () => {

@@ -73,7 +73,8 @@ After the first successful load, the running process serves the active in-memory
 - One always-on process for routing, control plane, and channel connections.
 - Single multiplexed port for:
   - WebSocket control/RPC
-  - HTTP APIs, OpenAI compatible (`/v1/models`, `/v1/embeddings`, `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`)
+  - HTTP APIs (`/v1/models`, `/v1/embeddings`, `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`)
+  - Plugin HTTP routes, such as optional `/api/v1/admin/rpc`
   - Control UI and hooks
 - Default bind mode: `loopback`.
 - Auth is required by default. Shared-secret setups use
@@ -104,6 +105,8 @@ Planning note:
 - Use `x-openclaw-model` when you want a backend provider/model override; otherwise the selected agent's normal model and embedding setup stays in control.
 
 All of these run on the main Gateway port and use the same trusted operator auth boundary as the rest of the Gateway HTTP API.
+
+Admin HTTP RPC (`POST /api/v1/admin/rpc`) is a separate, default-off plugin route for host tooling that cannot use WebSocket RPC. See [Admin HTTP RPC](/plugins/admin-http-rpc).
 
 ### Port and bind precedence
 
@@ -217,7 +220,9 @@ openclaw gateway restart
 openclaw gateway stop
 ```
 
-Use `openclaw gateway restart` for restarts. Do not chain `openclaw gateway stop` and `openclaw gateway start`; on macOS, `gateway stop` intentionally disables the LaunchAgent before stopping it.
+Use `openclaw gateway restart` for restarts. Do not chain `openclaw gateway stop` and `openclaw gateway start` as a restart substitute.
+
+On macOS, `gateway stop` uses `launchctl bootout` by default — this removes the LaunchAgent from the current boot session without persisting a disable, so KeepAlive auto-recovery still works after unexpected crashes and `gateway start` re-enables cleanly. To persistently suppress auto-respawn across reboots, pass `--disable`: `openclaw gateway stop --disable`.
 
 LaunchAgent labels are `ai.openclaw.gateway` (default) or `ai.openclaw.<profile>` (named profile). `openclaw doctor` audits and repairs service config drift.
 
@@ -312,8 +317,9 @@ Defaults include isolated state/config and base gateway port `19001`.
   a generated dump of every callable helper route.
 - Requests: `req(method, params)` → `res(ok/payload|error)`.
 - Common events include `connect.challenge`, `agent`, `chat`,
-  `session.message`, `session.tool`, `sessions.changed`, `presence`, `tick`,
-  `health`, `heartbeat`, pairing/approval lifecycle events, and `shutdown`.
+  `session.message`, `session.operation`, `session.tool`, `sessions.changed`,
+  `presence`, `tick`, `health`, `heartbeat`, pairing/approval lifecycle events,
+  and `shutdown`.
 
 Agent runs are two-stage:
 

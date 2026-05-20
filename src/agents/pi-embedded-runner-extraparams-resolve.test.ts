@@ -22,7 +22,6 @@ describe("resolveExtraParams", () => {
     expect(result).toEqual({
       parallel_tool_calls: true,
       text_verbosity: "low",
-      openaiWsWarmup: false,
     });
   });
 
@@ -189,8 +188,42 @@ describe("resolveExtraParams", () => {
     });
 
     expect(result).toEqual({
-      openaiWsWarmup: false,
       parallel_tool_calls: true,
+      text_verbosity: "low",
+    });
+  });
+
+  it("canonicalizes response format alias styles with agent override precedence", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {
+                params: {
+                  response_format: { type: "text" },
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "main",
+              params: {
+                responseFormat: { type: "json_object" },
+              },
+            },
+          ],
+        },
+      },
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentId: "main",
+    });
+
+    expect(result).toEqual({
+      parallel_tool_calls: true,
+      response_format: { type: "json_object" },
       text_verbosity: "low",
     });
   });
