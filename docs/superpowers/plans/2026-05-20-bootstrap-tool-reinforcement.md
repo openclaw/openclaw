@@ -266,7 +266,9 @@ docker exec -u node openclaw-openclaw-gateway-1 python3 -c "import json; d=json.
 ```
 Expected: confirms `hooks` is absent or an empty object. If it is a non-empty object with existing `internal.entries`, preserve them in Step 3.
 
-- [ ] **Step 3: Write `t31.py`** (merge, preserving any existing hooks):
+**CRITICAL — do NOT set `internal.enabled = true`.** Per `src/hooks/configured.ts` + `src/hooks/loader.ts:105`: when `internal.enabled === true`, `resolveConfiguredInternalHookNames` returns `null`, which disables the allowlist filter and loads **every** bundled default-on hook (an unwanted surprise). With `internal.enabled` left **unset** and only an `entries` allowlist present, `hasConfiguredInternalHooks` is still true (because the entry is enabled) and the loader filters to **only** the named hook. So we configure the entry and leave `enabled` unset.
+
+- [ ] **Step 3: Write `t31.py`** (merge, preserving any existing hooks; entry-allowlist only, NO master `enabled` flag):
 
 ```python
 import json
@@ -279,7 +281,11 @@ if not isinstance(hooks, dict):
 internal = hooks.get("internal")
 if not isinstance(internal, dict):
     internal = {}
-internal["enabled"] = True
+# Intentionally do NOT set internal["enabled"]: leaving it unset keeps the
+# entry-allowlist semantics so ONLY bootstrap-extra-files loads. Setting it
+# True would load all bundled default-on hooks.
+if internal.get("enabled") is True:
+    raise SystemExit("REFUSING: internal.enabled is True — that loads ALL bundled hooks. Remove it first.")
 entries = internal.get("entries")
 if not isinstance(entries, dict):
     entries = {}
@@ -288,7 +294,8 @@ internal["entries"] = entries
 hooks["internal"] = internal
 d["hooks"] = hooks
 p.write_text(json.dumps(d, indent=2) + "\n")
-print("ok: bootstrap-extra-files hook configured ->", entries["bootstrap-extra-files"])
+print("ok: bootstrap-extra-files hook configured (allowlist-only) ->", entries["bootstrap-extra-files"])
+print("internal.enabled present?", "enabled" in internal)
 ```
 
 - [ ] **Step 4: Apply + verify shape**
@@ -296,9 +303,9 @@ print("ok: bootstrap-extra-files hook configured ->", entries["bootstrap-extra-f
 ```bash
 docker cp t31.py openclaw-openclaw-gateway-1:/tmp/t31.py
 docker exec -u node openclaw-openclaw-gateway-1 python3 /tmp/t31.py
-docker exec -u node openclaw-openclaw-gateway-1 python3 -c "import json; d=json.load(open('/home/node/.openclaw/openclaw.json')); print(d['hooks']['internal']['entries']['bootstrap-extra-files'])"
+docker exec -u node openclaw-openclaw-gateway-1 python3 -c "import json; d=json.load(open('/home/node/.openclaw/openclaw.json')); i=d['hooks']['internal']; print('entry:', i['entries']['bootstrap-extra-files']); print('master enabled set?', 'enabled' in i)"
 ```
-Expected: `ok: ...` then `{'enabled': True, 'paths': ['retrieval/AGENTS.md']}`.
+Expected: `ok: ... (allowlist-only)`, `internal.enabled present? False`, then `entry: {'enabled': True, 'paths': ['retrieval/AGENTS.md']}` and `master enabled set? False`. The master flag MUST be absent — if `master enabled set? True`, stop and remove it (it loads all bundled hooks).
 
 ### Task 3.2 — Restart and structurally verify injection (watch for basename collision)
 

@@ -67,7 +67,6 @@ Add (merging into existing config, not clobbering the current `hooks` value — 
 ```json
 "hooks": {
   "internal": {
-    "enabled": true,
     "entries": {
       "bootstrap-extra-files": {
         "enabled": true,
@@ -77,6 +76,8 @@ Add (merging into existing config, not clobbering the current `hooks` value — 
   }
 }
 ```
+
+**Do NOT set `hooks.internal.enabled = true`.** Per `src/hooks/configured.ts` + `src/hooks/loader.ts:105`, `internal.enabled === true` makes `resolveConfiguredInternalHookNames` return `null`, disabling the allowlist filter and loading **every** bundled default-on hook. Leaving `enabled` unset while providing an enabled `entries` item keeps `hasConfiguredInternalHooks` true and filters the loader to **only** `bootstrap-extra-files`. Entry-allowlist only — no master flag.
 
 - Back up `openclaw.json` with a timestamped copy before editing (prior-session convention).
 - Restart the gateway to load the hook (confirm whether hooks hot-reload; if not, `docker restart openclaw-openclaw-gateway-1`).
