@@ -1072,6 +1072,20 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(timeoutMs).toBe(123_456);
   });
 
+  it("uses a media-safe default for side-thread image_generate calls", () => {
+    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
+      call: {
+        threadId: "side-thread",
+        turnId: "turn-1",
+        callId: "tool-1",
+        tool: "image_generate",
+      },
+      config: {} as never,
+    });
+
+    expect(timeoutMs).toBe(testing.CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS);
+  });
+
   it("cleans up notification handlers when side tool setup fails", async () => {
     const client = createFakeClient();
     createOpenClawCodingToolsMock.mockImplementation(() => {
