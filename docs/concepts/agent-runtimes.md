@@ -58,6 +58,31 @@ the native app-server features available; `openclaw doctor --fix` owns legacy
 `openai/*` for an agent model now means "run this through Codex" unless a
 non-agent OpenAI API surface is being used.
 
+<Warning>
+**A model name that contains the substring `codex` is NOT runtime evidence.**
+Specifically, model IDs such as `openai/gpt-5.3-codex` or `openai/gpt-5.5-codex`
+are *model selections*, not *runtime selections*. They can be valid fallbacks
+for a Pi-routed agent — the model is allowed to run through Pi runtime when its
+`agentRuntime.id` resolves to `pi`. Removing a `gpt-*-codex` model from
+`fallbacks` because its ID contains `codex` is the wrong fix when the goal is
+to stop using Codex *runtime*. The two layers must be evaluated independently:
+
+- **Runtime routing** lives in `agentRuntime.id` (`pi`, `codex`, `claude-cli`, …) on the provider/model entry.
+- **Model selection** lives in the model ref (`openai/gpt-5.5`, `openai/gpt-5.3-codex`, `anthropic/claude-opus-4-7`, …) and in `fallbacks`.
+
+To audit "no Codex _runtime_ in normal sessions" without touching fallback policy:
+
+- inspect resolved `agentRuntime.id` on every provider/model entry and session row — only those that equal `"codex"` are evidence;
+- model IDs whose name contains `codex` are NOT evidence by themselves;
+- stale `systemPromptReport.provider` labels left over from earlier sessions are NOT evidence — they describe the prior route, not the current one.
+
+The shared substring `codex` across provider keys, auth labels, model IDs, the
+embedded harness, the ACP adapter, and the `/codex` chat command is real but
+unavoidable. When in doubt, route every claim through `agentRuntime.id` rather
+than name-matching. See #84637 for an incident where this distinction was
+missed in production.
+</Warning>
+
 The common ChatGPT/Codex subscription setup uses Codex OAuth for auth, but keeps
 the model ref as `openai/*` and selects the `codex` runtime:
 
