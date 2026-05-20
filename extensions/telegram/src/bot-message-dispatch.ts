@@ -1081,7 +1081,7 @@ export const dispatchTelegramMessage = async ({
   const startToolTimer = (): void => {
     clearActiveTimer();
     activeToolStartTime = Date.now();
-    activeTimerInterval = setInterval(async () => {
+    activeTimerInterval = setInterval(() => {
       if (!reasoningLane.stream) {
         clearActiveTimer();
         return;
@@ -1089,14 +1089,11 @@ export const dispatchTelegramMessage = async ({
       const elapsed = Math.round((Date.now() - activeToolStartTime) / 1000);
       activeTimerSuffix = `\n_${elapsed}s — ${formatTimerClock(new Date())}_`;
       updateInterleavedDisplay();
-      // Force the lane to flush past the typing-indicator throttle so the
-      // user actually sees the timer roll between deliveries.
-      try {
-        await reasoningLane.stream.flush();
-      } catch {
-        /* lane already torn down — next tick's reasoningLane.stream check
-           will clear the interval. */
-      }
+      // No explicit flush() — the draft-stream loop already self-pumps on
+      // update() once throttleMs has elapsed since the last send. The 3s tick
+      // interval is always ≥ throttleMs, so the timer reliably delivers, and
+      // 429 retry-after handling in the send path naturally gates us during
+      // Telegram backpressure instead of us racing the throttle.
     }, 3000);
   };
   const injectToolLineIntoInterleave = async (
@@ -1115,11 +1112,7 @@ export const dispatchTelegramMessage = async ({
         startToolTimer();
       }
       updateInterleavedDisplay();
-      try {
-        await reasoningLane.stream?.flush();
-      } catch {
-        /* see startToolTimer */
-      }
+      // See startToolTimer — no explicit flush; the loop self-pumps.
     });
     return true;
   };
