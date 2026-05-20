@@ -1327,6 +1327,71 @@ describe("codex command", () => {
     );
   });
 
+  it("respects explicit Codex auth order over stale lastGood after OAuth re-login", async () => {
+    const config = {};
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "stale-access-token",
+            refresh: "stale-refresh-token",
+            expires: now + 2 * 24 * 60 * 60 * 1000,
+            email: "previous@example.com",
+          },
+          "openai-codex:fresh-email@example.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "fresh-access-token",
+            refresh: "fresh-refresh-token",
+            expires: now + 9 * 24 * 60 * 60 * 1000,
+            email: "fresh-email@example.com",
+          },
+        },
+        order: {
+          "openai-codex": ["openai-codex:fresh-email@example.com", "openai-codex:default"],
+        },
+        lastGood: {
+          "openai-codex": "openai-codex:default",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { account: { type: "unknown" }, requiresOpenaiAuth: true },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: codexRateLimitPayload({
+          primaryUsedPercent: 5,
+          secondaryUsedPercent: 10,
+          primaryResetSeconds: Math.ceil(now / 1000) + 60 * 60,
+          secondaryResetSeconds: Math.ceil(now / 1000) + 6 * 60 * 60,
+        }),
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain(
+      "\n  1. fresh-email@example.com   ChatGPT subscription   — active now",
+    );
+    expect(result.text).toContain(
+      "\n  2. previous@example.com   ChatGPT subscription   — available if needed",
+    );
+    expect(result.text).not.toContain("previous@example.com   ChatGPT subscription   — active now");
+    expect(result.text).not.toContain("openai-codex:");
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
+  });
+
   it("escapes successful Codex account fallback summaries before chat display", async () => {
     const unsafe = "<@U123> [trusted](https://evil) @here";
     const safeCodexControlRequest = vi
