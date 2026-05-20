@@ -2886,6 +2886,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       return;
     }
 
+    const postCoreHostVersion = await readPackageVersion(root);
+    if (postCoreHostVersion) {
+      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = postCoreHostVersion;
+    }
+
     let postCoreConfigSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
     const preUpdateSourceConfig = await readPostCorePreUpdateSourceConfig({
       sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],

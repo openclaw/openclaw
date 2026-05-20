@@ -1143,6 +1143,10 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const npmRoot = makeTempDir();
     const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "matrix");
     fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/matrix", version: "1.2.3" }),
+    );
     mocks.resolveDefaultPluginNpmDir.mockReturnValue(npmRoot);
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
@@ -1192,13 +1196,17 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
 
     expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
-      spec: expectedNpmInstallSpec("@openclaw/matrix"),
-      npmDir: npmRoot,
-      mode: "update",
-    });
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
     expect(result.warnings).toEqual([]);
-    expect(result.records.matrix?.installPath).toBe(packageDir);
+    expectRecordFields(result.records.matrix, {
+      source: "npm",
+      spec: "@openclaw/matrix",
+      installPath: packageDir,
+      version: "1.2.3",
+      resolvedName: "@openclaw/matrix",
+      resolvedVersion: "1.2.3",
+      resolvedSpec: "@openclaw/matrix@1.2.3",
+    });
   });
 
   it("repairs missing external payload during post-core convergence even with OPENCLAW_UPDATE_IN_PROGRESS=1", async () => {
