@@ -74,6 +74,40 @@ export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig,
   preview?: TelegramStreamingPreviewConfig;
 };
 
+export type TelegramRateLimitDropPolicy = "silent" | "errorReply" | "summary";
+
+/**
+ * Per-sender sliding-window rate limit. Counted BEFORE inbound messages reach
+ * `messages.queue`, so a single sender's spam cannot evict other senders at
+ * the global queue cap. See https://github.com/openclaw/openclaw/issues/84447.
+ */
+export type TelegramRateLimitWindowConfig = {
+  /** Sliding window length in seconds. Must be > 0. */
+  windowSeconds: number;
+  /** Max inbound events from a single sender within the window. */
+  maxRequests: number;
+  /** Optional hard cooldown applied after a sender exceeds the limit. */
+  backoffMs?: number;
+  /** Telemetry hint for what to surface on a denied event. Default: "silent". */
+  dropPolicy?: TelegramRateLimitDropPolicy;
+};
+
+export type TelegramRateLimitConfig = {
+  /** Limiter applied to inbound DMs that already passed dmPolicy / allowFrom. */
+  perSender?: TelegramRateLimitWindowConfig;
+  /**
+   * Independent counter for inbound pairing-flow events. Bounds pairing-queue
+   * DoS without sharing budget with regular post-pairing DM traffic.
+   */
+  pairing?: TelegramRateLimitWindowConfig;
+  /**
+   * Sender ids that bypass both limiters. Bare numeric ids or "telegram:" /
+   * "tg:" prefixed strings are accepted. Owners and allowlist members are
+   * NOT auto-exempted: place them here explicitly.
+   */
+  exemptSenderIds?: Array<string | number>;
+};
+
 export type TelegramExecApprovalConfig = {
   /** Enable mode for Telegram exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
   enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
@@ -170,6 +204,12 @@ export type TelegramAccountConfig = {
   pollingStallThresholdMs?: number;
   /** Retry policy for outbound Telegram API calls. */
   retry?: OutboundRetryConfig;
+  /**
+   * Per-sender inbound rate limiting. Counted before messages enter
+   * `messages.queue`, separate windows for DM vs pairing-flow traffic.
+   * Default: no limit (preserves current behavior).
+   */
+  rateLimit?: TelegramRateLimitConfig;
   /** Network transport overrides for Telegram. */
   network?: TelegramNetworkConfig;
   proxy?: string;
