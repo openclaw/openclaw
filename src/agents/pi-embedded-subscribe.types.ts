@@ -69,14 +69,10 @@ export type SubscribeEmbeddedPiSessionParams = {
    */
   builtinToolNames?: ReadonlySet<string>;
   /**
-   * Exact raw names of active core tools that may emit local MEDIA: paths.
-   * Plugin tools with overlapping names are intentionally excluded.
+   * Exact raw names of active tools whose origin may emit local MEDIA: paths.
+   * The media helper still applies its static allowed-tool policy on top.
+   * MCP/external tools and non-bundled plugin overrides are intentionally excluded.
    */
-  trustedCoreToolNames?: ReadonlySet<string>;
-  /**
-   * Exact raw names of active bundled plugin tools that may emit local MEDIA:
-   * paths. Plugin overrides are intentionally excluded by origin.
-   */
-  trustedBundledPluginToolNames?: ReadonlySet<string>;
+  trustedLocalMediaToolNames?: ReadonlySet<string>;
   internalEvents?: AgentInternalEvent[];
 };

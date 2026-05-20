@@ -434,23 +434,14 @@ async function collectEmittedToolOutputMediaUrls(
   toolName: string,
   outputText: string,
   result: unknown,
-  builtinToolNames?: ReadonlySet<string>,
-  trustedBundledPluginToolNames?: ReadonlySet<string>,
-  trustedCoreToolNames?: ReadonlySet<string>,
+  trustedLocalMediaToolNames?: ReadonlySet<string>,
 ): Promise<string[]> {
   const { splitMediaFromOutput } = await loadMediaParse();
   const mediaUrls = splitMediaFromOutput(outputText).mediaUrls ?? [];
   if (mediaUrls.length === 0) {
     return [];
   }
-  return filterToolResultMediaUrls(
-    toolName,
-    mediaUrls,
-    result,
-    builtinToolNames,
-    trustedBundledPluginToolNames,
-    trustedCoreToolNames,
-  );
+  return filterToolResultMediaUrls(toolName, mediaUrls, result, trustedLocalMediaToolNames);
 }
 
 function readExecApprovalPendingDetails(result: unknown): {
@@ -623,9 +614,7 @@ async function emitToolResultOutput(params: {
         rawToolName,
         mediaReply.mediaUrls,
         result,
-        ctx.builtinToolNames,
-        ctx.trustedBundledPluginToolNames,
-        ctx.trustedCoreToolNames,
+        ctx.trustedLocalMediaToolNames,
       )
     : [];
   const shouldEmitOutput =
@@ -644,9 +633,7 @@ async function emitToolResultOutput(params: {
           rawToolName,
           outputText,
           result,
-          ctx.builtinToolNames,
-          ctx.trustedBundledPluginToolNames,
-          ctx.trustedCoreToolNames,
+          ctx.trustedLocalMediaToolNames,
         );
       }
     }

@@ -2243,38 +2243,36 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
       });
       // Exact raw names of every tool registered for this run, including
-      // bundled/plugin tools. Used as the raw-name set for the trusted local
-      // MEDIA: passthrough gate: a normalized alias is not sufficient — the
-      // emitted tool name must match an exact registration of this run.
+      // bundled/plugin tools. Used by diagnostics and TTS suppression paths.
       const builtinToolNames = new Set(
         uncompactedEffectiveTools.flatMap((tool) => {
           const name = (tool.name ?? "").trim();
           return name ? [name] : [];
         }),
       );
-      const trustedBundledPluginToolNames = new Set(
-        uncompactedEffectiveTools.flatMap((tool) => {
-          const name = (tool.name ?? "").trim();
-          const pluginId = getPluginToolMeta(
-            tool as Parameters<typeof getPluginToolMeta>[0],
-          )?.pluginId;
-          if (!name || !pluginId) {
-            return [];
-          }
-          return pluginMetadataSnapshot?.byPluginId.get(pluginId)?.origin === "bundled"
-            ? [name]
-            : [];
-        }),
-      );
       // Admission-time conflict check only against non-plugin core tools, to
       // preserve prior behavior where client tools may coexist with unrelated
       // plugin tool names. MEDIA passthrough is still gated by the raw-name
-      // set above, so a client tool that normalize-collides with a plugin
-      // tool cannot inherit the plugin's local-media trust.
+      // trust set below, so a client tool that normalize-collides with a plugin
+      // tool cannot inherit local-media trust.
       const coreBuiltinToolNames = collectCoreBuiltinToolNames(uncompactedEffectiveTools, {
         isPluginTool: (tool) =>
           Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
       });
+      const trustedLocalMediaToolNames = new Set(coreBuiltinToolNames);
+      for (const tool of uncompactedEffectiveTools) {
+        const name = (tool.name ?? "").trim();
+        const pluginId = getPluginToolMeta(
+          tool as Parameters<typeof getPluginToolMeta>[0],
+        )?.pluginId;
+        if (
+          name &&
+          pluginId &&
+          pluginMetadataSnapshot?.byPluginId.get(pluginId)?.origin === "bundled"
+        ) {
+          trustedLocalMediaToolNames.add(name);
+        }
+      }
       const clientToolNameConflicts = findClientToolNameConflicts({
         tools: clientTools ?? [],
         existingToolNames: [...coreBuiltinToolNames, ...PI_RESERVED_TOOL_NAMES],
@@ -3215,8 +3213,7 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           builtinToolNames,
-          trustedCoreToolNames: coreBuiltinToolNames,
-          trustedBundledPluginToolNames,
+          trustedLocalMediaToolNames,
           internalEvents: params.internalEvents,
         }),
       );

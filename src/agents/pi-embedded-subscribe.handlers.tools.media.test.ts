@@ -11,8 +11,7 @@ function createMockContext(overrides?: {
   onToolResult?: ReturnType<typeof vi.fn>;
   toolResultFormat?: "markdown" | "plain";
   builtinToolNames?: ReadonlySet<string>;
-  trustedCoreToolNames?: ReadonlySet<string>;
-  trustedBundledPluginToolNames?: ReadonlySet<string>;
+  trustedLocalMediaToolNames?: ReadonlySet<string>;
 }): EmbeddedPiSubscribeContext {
   const onToolResult = overrides?.onToolResult ?? vi.fn();
   return {
@@ -44,8 +43,7 @@ function createMockContext(overrides?: {
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     builtinToolNames: overrides?.builtinToolNames,
-    trustedCoreToolNames: overrides?.trustedCoreToolNames,
-    trustedBundledPluginToolNames: overrides?.trustedBundledPluginToolNames,
+    trustedLocalMediaToolNames: overrides?.trustedLocalMediaToolNames,
     shouldEmitToolResult: vi.fn(() => false),
     shouldEmitToolOutput: vi.fn(() => overrides?.shouldEmitToolOutput ?? false),
     emitToolSummary: vi.fn(),
@@ -140,6 +138,7 @@ async function handleCaseVariantBuiltinMedia(mediaPathOrUrl: string) {
     shouldEmitToolOutput: false,
     onToolResult: vi.fn(),
     builtinToolNames: new Set(["web_search"]),
+    trustedLocalMediaToolNames: new Set(["web_search"]),
   });
 
   await handleToolExecutionEnd(ctx, {
@@ -223,6 +222,7 @@ describe("handleToolExecutionEnd media emission", () => {
       shouldEmitToolOutput: false,
       onToolResult,
       builtinToolNames: new Set(["tts"]),
+      trustedLocalMediaToolNames: new Set(["tts"]),
     });
 
     await handleToolExecutionEnd(ctx, {
@@ -271,6 +271,7 @@ describe("handleToolExecutionEnd media emission", () => {
       shouldEmitToolOutput: false,
       onToolResult,
       builtinToolNames: new Set(["browser"]),
+      trustedLocalMediaToolNames: new Set(["browser"]),
     });
 
     await emitMcpMediaToolResult(ctx, "/tmp/secret.png");
@@ -320,6 +321,7 @@ describe("handleToolExecutionEnd media emission", () => {
       onToolResult: vi.fn(),
       toolResultFormat: "plain",
       builtinToolNames: new Set(["tts"]),
+      trustedLocalMediaToolNames: new Set(["tts"]),
     });
 
     await handleToolExecutionEnd(ctx, {
@@ -349,6 +351,7 @@ describe("handleToolExecutionEnd media emission", () => {
       onToolResult: vi.fn(),
       toolResultFormat: "plain",
       builtinToolNames: new Set(["tts"]),
+      trustedLocalMediaToolNames: new Set(["tts"]),
     });
 
     await handleToolExecutionEnd(ctx, {
@@ -378,6 +381,7 @@ describe("handleToolExecutionEnd media emission", () => {
       onToolResult: vi.fn(),
       toolResultFormat: "plain",
       builtinToolNames: new Set(["tts"]),
+      trustedLocalMediaToolNames: new Set(["tts"]),
     });
 
     await handleToolExecutionEnd(ctx, {
@@ -407,6 +411,7 @@ describe("handleToolExecutionEnd media emission", () => {
       onToolResult: vi.fn(),
       toolResultFormat: "plain",
       builtinToolNames: new Set(["web_search"]),
+      trustedLocalMediaToolNames: new Set(["web_search"]),
     });
 
     await handleToolExecutionEnd(ctx, {
@@ -628,11 +633,12 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
   });
 
-  it("queues trusted TTS local media when the exact built-in name is absent", async () => {
+  it("queues trusted TTS local media through the local-media trust set", async () => {
     const ctx = createMockContext({
       shouldEmitToolOutput: false,
       onToolResult: vi.fn(),
       builtinToolNames: new Set(["web_search"]),
+      trustedLocalMediaToolNames: new Set(["tts"]),
     });
 
     await handleToolExecutionEnd(ctx, {

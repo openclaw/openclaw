@@ -391,20 +391,18 @@ describe("extractToolResultMediaPaths", () => {
     ).toStrictEqual([]);
   });
 
-  it("keeps local media for exact registered built-in tool names", () => {
+  it("keeps local media for exact trusted built-in tool names", () => {
     expect(
       filterToolResultMediaUrls(
         "web_search",
         ["/tmp/screenshot.png"],
         undefined,
         new Set(["web_search"]),
-        undefined,
-        new Set(["web_search"]),
       ),
     ).toEqual(["/tmp/screenshot.png"]);
   });
 
-  it("keeps trusted TTS local media when the raw built-in name is absent", () => {
+  it("keeps trusted TTS local media through the local-media trust set", () => {
     expect(
       filterToolResultMediaUrls(
         "tts",
@@ -417,18 +415,17 @@ describe("extractToolResultMediaPaths", () => {
             },
           },
         },
-        new Set(["web_search"]),
+        new Set(["tts"]),
       ),
     ).toEqual(["/tmp/reply.opus"]);
   });
 
-  it("keeps local media for plugin tool names registered in this run", () => {
+  it("keeps local media for plugin tool names in the local-media trust set", () => {
     expect(
       filterToolResultMediaUrls(
         "firecrawl_search",
         ["/tmp/search.json"],
         undefined,
-        new Set(["firecrawl_search"]),
         new Set(["firecrawl_search"]),
       ),
     ).toEqual(["/tmp/search.json"]);
@@ -436,26 +433,13 @@ describe("extractToolResultMediaPaths", () => {
 
   it("strips local media for active non-bundled plugin overrides of bundled tool names", () => {
     expect(
-      filterToolResultMediaUrls(
-        "firecrawl_search",
-        ["/etc/passwd"],
-        undefined,
-        new Set(["firecrawl_search"]),
-        new Set(),
-      ),
+      filterToolResultMediaUrls("firecrawl_search", ["/etc/passwd"], undefined, new Set()),
     ).toStrictEqual([]);
   });
 
   it("strips local media for plugin overrides of overlapping core and bundled names", () => {
     expect(
-      filterToolResultMediaUrls(
-        "browser",
-        ["/etc/passwd"],
-        undefined,
-        new Set(["browser"]),
-        new Set(),
-        new Set(),
-      ),
+      filterToolResultMediaUrls("browser", ["/etc/passwd"], undefined, new Set()),
     ).toStrictEqual([]);
   });
 
@@ -466,8 +450,6 @@ describe("extractToolResultMediaPaths", () => {
         ["/tmp/screenshot.png"],
         undefined,
         new Set(["browser"]),
-        new Set(["browser"]),
-        new Set(),
       ),
     ).toEqual(["/tmp/screenshot.png"]);
   });
@@ -483,7 +465,7 @@ describe("extractToolResultMediaPaths", () => {
     ).toStrictEqual([]);
   });
 
-  it("does not trust unvetted plugin tool local MEDIA paths just because they are registered", () => {
+  it("does not trust unvetted plugin tool local MEDIA paths even inside the trust set", () => {
     expect(
       filterToolResultMediaUrls(
         "path_plugin_tool",
@@ -541,27 +523,37 @@ describe("extractToolResultMediaPaths", () => {
 
   it("does not trust external TTS results with trustedLocalMedia", () => {
     expect(
-      filterToolResultMediaUrls("tts", ["/tmp/reply.opus"], {
-        details: {
-          mcpServer: "probe",
-          mcpTool: "tts",
-          media: {
-            mediaUrl: "/tmp/reply.opus",
-            trustedLocalMedia: true,
+      filterToolResultMediaUrls(
+        "tts",
+        ["/tmp/reply.opus"],
+        {
+          details: {
+            mcpServer: "probe",
+            mcpTool: "tts",
+            media: {
+              mediaUrl: "/tmp/reply.opus",
+              trustedLocalMedia: true,
+            },
           },
         },
-      }),
+        new Set(["tts"]),
+      ),
     ).toStrictEqual([]);
   });
 
   it("still allows remote MEDIA urls for MCP-provenance results", () => {
     expect(
-      filterToolResultMediaUrls("browser", ["https://example.com/screenshot.png"], {
-        details: {
-          mcpServer: "probe",
-          mcpTool: "browser",
+      filterToolResultMediaUrls(
+        "browser",
+        ["https://example.com/screenshot.png"],
+        {
+          details: {
+            mcpServer: "probe",
+            mcpTool: "browser",
+          },
         },
-      }),
+        new Set(["browser"]),
+      ),
     ).toEqual(["https://example.com/screenshot.png"]);
   });
 });

@@ -548,9 +548,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       toolName,
       mediaUrls ?? [],
       result,
-      params.builtinToolNames,
-      params.trustedBundledPluginToolNames,
-      params.trustedCoreToolNames,
+      params.trustedLocalMediaToolNames,
     );
     if (!cleanedText && filteredMediaUrls.length === 0) {
       return;
@@ -981,8 +979,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     blockChunker,
     hookRunner: params.hookRunner,
     builtinToolNames: params.builtinToolNames,
-    trustedCoreToolNames: params.trustedCoreToolNames,
-    trustedBundledPluginToolNames: params.trustedBundledPluginToolNames,
+    trustedLocalMediaToolNames: params.trustedLocalMediaToolNames,
     noteLastAssistant,
     shouldEmitToolResult,
     shouldEmitToolOutput,
