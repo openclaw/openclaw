@@ -81,6 +81,16 @@ export function createSerpApiNewsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
       additionalProperties: false,
     },
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
+      const query = readStringParam(args, "query");
+      const topicToken = readStringParam(args, "topic_token");
+      const publicationToken = readStringParam(args, "publication_token");
+      const sectionToken = readStringParam(args, "section_token");
+      const storyToken = readStringParam(args, "story_token");
+      if (!query && !topicToken && !publicationToken && !sectionToken && !storyToken) {
+        throw new Error(
+          "serpapi_news: at least one of query, topic_token, publication_token, section_token, or story_token is required",
+        );
+      }
       const cfg = resolveToolConfig(api, ctx);
       const count = readNumberParam(args, "count", { integer: true }) ?? 5;
       const raw = await callSerpApi({
@@ -88,14 +98,14 @@ export function createSerpApiNewsTool(api: OpenClawPluginApi, ctx?: SerpApiToolC
         engine: "google_news",
         allowedParams: ALLOWED_PARAMS,
         params: {
-          q: readStringParam(args, "query"),
+          q: query ?? undefined,
           gl: readStringParam(args, "gl") ?? undefined,
           hl: readStringParam(args, "hl") ?? undefined,
           so: readNumberParam(args, "so", { integer: true }) ?? undefined,
-          topic_token: readStringParam(args, "topic_token") ?? undefined,
-          publication_token: readStringParam(args, "publication_token") ?? undefined,
-          section_token: readStringParam(args, "section_token") ?? undefined,
-          story_token: readStringParam(args, "story_token") ?? undefined,
+          topic_token: topicToken ?? undefined,
+          publication_token: publicationToken ?? undefined,
+          section_token: sectionToken ?? undefined,
+          story_token: storyToken ?? undefined,
         },
         signal,
       });

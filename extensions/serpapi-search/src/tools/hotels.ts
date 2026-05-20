@@ -31,6 +31,13 @@ function isoDateOffset(days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+function isoDateOffsetFrom(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  if (isNaN(d.getTime())) return isoDateOffset(days + 1); // fallback: today + days+1
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 function extract(raw: Record<string, unknown>): Record<string, unknown> {
   return {
     engine: "google_hotels",
@@ -89,14 +96,16 @@ export function createSerpApiHotelsTool(api: OpenClawPluginApi, ctx?: SerpApiToo
     execute: async (_toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal) => {
       const cfg = resolveToolConfig(api, ctx);
       const vacationRentals = readBooleanArg(args, "vacation_rentals");
+      const checkIn = readStringParam(args, "check_in_date") ?? isoDateOffset(1);
+      const checkOut = readStringParam(args, "check_out_date") ?? isoDateOffsetFrom(checkIn, 2);
       const raw = await callSerpApi({
         cfg,
         engine: "google_hotels",
         allowedParams: ALLOWED_PARAMS,
         params: {
           q: readStringParam(args, "query", { required: true }),
-          check_in_date: readStringParam(args, "check_in_date") ?? isoDateOffset(1),
-          check_out_date: readStringParam(args, "check_out_date") ?? isoDateOffset(3),
+          check_in_date: checkIn,
+          check_out_date: checkOut,
           adults: readNumberParam(args, "adults", { integer: true }) ?? undefined,
           currency: readStringParam(args, "currency") ?? undefined,
           gl: readStringParam(args, "gl") ?? undefined,
