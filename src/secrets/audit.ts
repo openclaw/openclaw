@@ -32,6 +32,7 @@ import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelsJsonPaths,
   listAuthProfileStorePaths,
+  listConfigBackupPaths,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
@@ -104,6 +105,7 @@ type AuditCollector = {
 };
 
 const REF_RESOLVE_FALLBACK_CONCURRENCY = 8;
+const MAX_AUDIT_CONFIG_BACKUP_BYTES = 5 * 1024 * 1024;
 const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
 const ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES = new Set([
   "authorization",
@@ -257,6 +259,61 @@ function collectConfigSecrets(params: {
       message: `${target.path} is stored as plaintext.`,
       provider: target.providerId,
     });
+  }
+}
+
+function collectConfigBackupSecrets(params: {
+  configPath: string;
+  collector: AuditCollector;
+}): void {
+  for (const backupPath of listConfigBackupPaths(params.configPath)) {
+    params.collector.filesScanned.add(backupPath);
+    const parsedResult = readJsonObjectIfExists(backupPath, {
+      requireRegularFile: true,
+      maxBytes: MAX_AUDIT_CONFIG_BACKUP_BYTES,
+    });
+    if (parsedResult.error || !parsedResult.value) {
+      continue;
+    }
+
+    const backupConfig = parsedResult.value as OpenClawConfig;
+    const defaults = backupConfig.secrets?.defaults;
+    for (const target of discoverConfigSecretTargets(backupConfig)) {
+      if (!target.entry.includeInAudit) {
+        continue;
+      }
+      if (
+        target.entry.id === "models.providers.*.headers.*" &&
+        !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "")
+      ) {
+        continue;
+      }
+
+      const { ref } = resolveSecretInputRef({
+        value: target.value,
+        refValue: target.refValue,
+        defaults,
+      });
+      if (ref) {
+        continue;
+      }
+
+      const hasPlaintext = hasConfiguredPlaintextSecretValue(
+        target.value,
+        target.entry.expectedResolvedValue,
+      );
+      if (!hasPlaintext) {
+        continue;
+      }
+      addFinding(params.collector, {
+        code: "PLAINTEXT_FOUND",
+        severity: "warn",
+        file: backupPath,
+        jsonPath: target.path,
+        message: `Config backup contains plaintext at ${target.path}. Remove stale snapshots or rotate the credential if this backup may have left the host.`,
+        provider: target.providerId,
+      });
+    }
   }
 }
 
@@ -714,6 +771,10 @@ export async function runSecretsAudit(
 
   collectEnvPlaintext({
     envPath,
+    collector,
+  });
+  collectConfigBackupSecrets({
+    configPath,
     collector,
   });
   collectAuthJsonResidue({

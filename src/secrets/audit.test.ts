@@ -277,6 +277,37 @@ describe("secrets audit", () => {
     expectFindingCode(report, "REF_UNRESOLVED");
   });
 
+  it("reports plaintext secrets retained by adjacent config backups", async () => {
+    await fs.rm(fixture.authStorePath, { force: true });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+    const backupPath = `${fixture.configPath}.bak`;
+    await writeJsonFile(backupPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: "sk-config-backup-plaintext", // pragma: allowlist secret
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    const finding = report.findings.find(
+      (entry) =>
+        entry.code === "PLAINTEXT_FOUND" &&
+        entry.file === backupPath &&
+        entry.jsonPath === "models.providers.openai.apiKey",
+    );
+
+    expect(finding).toBeDefined();
+    expect(finding?.message).toContain("Config backup contains plaintext");
+    expect(finding?.message).not.toContain("sk-config-backup-plaintext");
+    expect(report.filesScanned).toContain(backupPath);
+  });
+
   it("skips exec ref resolution during audit unless explicitly allowed", async () => {
     if (process.platform === "win32") {
       return;
