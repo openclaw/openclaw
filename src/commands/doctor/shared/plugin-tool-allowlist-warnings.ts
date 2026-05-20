@@ -1,3 +1,5 @@
+import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/pi-bundle-mcp-names.js";
 import { normalizeToolName } from "../../../agents/tool-policy-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
@@ -92,6 +94,173 @@ function collectKnownPluginIds(registry: PluginManifestRegistry): Set<string> {
   return new Set(registry.plugins.map((plugin) => normalizePluginId(plugin.id)));
 }
 
+function collectConfiguredMcpServerNames(cfg: OpenClawConfig): string[] {
+  const servers = cfg.mcp?.servers;
+  if (!hasRecord(servers)) {
+    return [];
+  }
+  return Object.entries(servers)
+    .filter(([, value]) => hasRecord(value))
+    .map(([name]) => name.trim())
+    .filter(Boolean)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function isSandboxModeActive(mode: unknown): boolean {
+  return mode === "all" || mode === "non-main";
+}
+
+function getList(value: unknown, key: "allow" | "alsoAllow" | "deny"): string[] | undefined {
+  if (!hasRecord(value)) {
+    return undefined;
+  }
+  const raw = value[key];
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  return raw
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function describeSandboxAllowGateSource(label: string, policy: unknown): string {
+  if (!hasRecord(policy)) {
+    return label;
+  }
+  if (Array.isArray(policy.allow)) {
+    return `${label}.allow`;
+  }
+  if (Array.isArray(policy.alsoAllow)) {
+    return `${label}.alsoAllow`;
+  }
+  return label;
+}
+
+function collectActiveSandboxToolPolicies(cfg: OpenClawConfig): Array<{
+  label: string;
+  policy: unknown;
+}> {
+  const out = new Map<string, { label: string; policy: unknown }>();
+  const globalPolicy = cfg.tools?.sandbox?.tools;
+  const addGlobalPolicy = () => {
+    const baseLabel = hasRecord(globalPolicy)
+      ? "tools.sandbox.tools"
+      : "default sandbox tool allowlist";
+    const label = describeSandboxAllowGateSource(baseLabel, globalPolicy);
+    out.set(label, { label, policy: globalPolicy });
+  };
+
+  const defaultSandboxActive = isSandboxModeActive(cfg.agents?.defaults?.sandbox?.mode);
+  if (defaultSandboxActive) {
+    addGlobalPolicy();
+  }
+
+  const agentList = cfg.agents?.list;
+  if (Array.isArray(agentList)) {
+    agentList.forEach((agent, index) => {
+      if (!hasRecord(agent)) {
+        return;
+      }
+      const explicitMode = agent.sandbox?.mode;
+      const agentSandboxActive =
+        explicitMode === undefined ? defaultSandboxActive : isSandboxModeActive(explicitMode);
+      if (!agentSandboxActive) {
+        return;
+      }
+      const agentPolicy = hasRecord(agent.tools?.sandbox) ? agent.tools.sandbox.tools : undefined;
+      if (hasRecord(agentPolicy)) {
+        const baseLabel = `agents.list[${index}].tools.sandbox.tools`;
+        const label = describeSandboxAllowGateSource(baseLabel, agentPolicy);
+        out.set(label, { label, policy: agentPolicy });
+        return;
+      }
+      addGlobalPolicy();
+    });
+  }
+
+  return [...out.values()];
+}
+
+function buildMcpProbeToolNames(serverNames: readonly string[]): string[] {
+  const usedNames = new Set<string>();
+  return serverNames.map(
+    (serverName) => `${sanitizeServerName(serverName, usedNames)}${TOOL_NAME_SEPARATOR}probe`,
+  );
+}
+
+function entriesMatchAnyMcpTool(
+  entries: readonly string[],
+  serverNames: readonly string[],
+): boolean {
+  const normalizedEntries = entries.map(normalizeToolName).filter(Boolean);
+  if (
+    normalizedEntries.some(
+      (entry) => entry === "*" || entry === "bundle-mcp" || entry === "group:plugins",
+    )
+  ) {
+    return true;
+  }
+  const patterns = compileGlobPatterns({ raw: normalizedEntries, normalize: normalizeToolName });
+  if (patterns.length === 0) {
+    return false;
+  }
+  return buildMcpProbeToolNames(serverNames).some((probeName) =>
+    matchesAnyGlobPattern(normalizeToolName(probeName), patterns),
+  );
+}
+
+function sandboxAllowGateAllowsMcp(policy: unknown, serverNames: readonly string[]): boolean {
+  const allow = getList(policy, "allow");
+  if (Array.isArray(allow) && allow.length === 0) {
+    return true;
+  }
+  const entries = [...(allow ?? []), ...(getList(policy, "alsoAllow") ?? [])];
+  return entriesMatchAnyMcpTool(entries, serverNames);
+}
+
+function sandboxPolicyIntentionallyDeniesMcp(
+  policy: unknown,
+  serverNames: readonly string[],
+): boolean {
+  const deny = getList(policy, "deny") ?? [];
+  return entriesMatchAnyMcpTool(deny, serverNames);
+}
+
+function formatMcpServerSummary(serverNames: readonly string[]): string {
+  const noun = serverNames.length === 1 ? "server" : "servers";
+  const listed = serverNames
+    .slice(0, 3)
+    .map((serverName) => `"${serverName}"`)
+    .join(", ");
+  const suffix = serverNames.length > 3 ? `, +${serverNames.length - 3} more` : "";
+  return `${serverNames.length} MCP ${noun}${listed ? ` (${listed}${suffix})` : ""}`;
+}
+
+function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
+  const serverNames = collectConfiguredMcpServerNames(cfg);
+  if (serverNames.length === 0) {
+    return [];
+  }
+  const sandboxPolicies = collectActiveSandboxToolPolicies(cfg);
+  if (sandboxPolicies.length === 0) {
+    return [];
+  }
+  const issueSources = sandboxPolicies
+    .filter(
+      ({ policy }) =>
+        !sandboxAllowGateAllowsMcp(policy, serverNames) &&
+        !sandboxPolicyIntentionallyDeniesMcp(policy, serverNames),
+    )
+    .map(({ label }) => label);
+  if (issueSources.length === 0) {
+    return [];
+  }
+  return [
+    `- mcp.servers defines ${formatMcpServerSummary(serverNames)}, but ${formatSourceLabels(issueSources)} does not include "bundle-mcp", "group:plugins", or a matching "<server>${TOOL_NAME_SEPARATOR}*" MCP tool pattern. Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.`,
+  ];
+}
+
 function formatPluginList(pluginIds: readonly string[]): string {
   if (pluginIds.length === 1) {
     return `"${pluginIds[0]}"`;
@@ -113,23 +282,23 @@ export function collectPluginToolAllowlistWarnings(params: {
   if (params.cfg.plugins?.enabled === false) {
     return [];
   }
+  const warnings = collectSandboxMcpAllowlistWarnings(params.cfg);
   const allowedPluginIds = (params.cfg.plugins?.allow ?? [])
     .map(normalizePluginIdMaybe)
     .filter((pluginId): pluginId is string => Boolean(pluginId));
   const allowedPlugins = new Set(allowedPluginIds);
   if (allowedPlugins.size === 0) {
-    return [];
+    return warnings;
   }
 
   const sources = collectToolAllowlistSources(params.cfg);
   if (sources.length === 0) {
-    return [];
+    return warnings;
   }
 
   const wildcardSources = sources
     .filter((source) => source.entries.some((entry) => normalizeToolName(entry) === "*"))
     .map((source) => source.label);
-  const warnings: string[] = [];
   if (wildcardSources.length > 0) {
     warnings.push(
       `- plugins.allow is an exclusive plugin allowlist. ${formatSourceLabels(wildcardSources)} contains "*", but that wildcard only matches tools from plugins that are loaded; plugin tools outside plugins.allow stay unavailable. Add the required plugin ids to plugins.allow or remove plugins.allow.`,

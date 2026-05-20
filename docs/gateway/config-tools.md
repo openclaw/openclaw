@@ -43,6 +43,43 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `group:agents`     | `agents_list`, `update_plan`                                                                                            |
 | `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                    |
 | `group:openclaw`   | All built-in tools (excludes provider plugins)                                                                          |
+| `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                            |
+
+### MCP and plugin tools inside sandbox tool policy
+
+Configured MCP servers are exposed as plugin-owned tools under the `bundle-mcp` plugin id. Normal tool profiles can allow them, but `tools.sandbox.tools` is an additional gate for sandboxed sessions. If sandbox mode is `"all"` or `"non-main"`, include one of these entries in the sandbox tool allowlist when MCP/plugin tools should be visible:
+
+- `bundle-mcp` for OpenClaw-managed MCP servers from `mcp.servers`
+- the plugin id for a specific native plugin
+- `group:plugins` for all loaded plugin-owned tools
+- exact MCP server globs such as `outlook__*` when you only want one server
+
+```json5
+{
+  agents: { defaults: { sandbox: { mode: "all" } } },
+  mcp: {
+    servers: {
+      outlook: { command: "node", args: ["./outlook-mcp.js"] },
+    },
+  },
+  tools: {
+    sandbox: {
+      tools: {
+        alsoAllow: [
+          "web_search",
+          "web_fetch",
+          "memory_search",
+          "memory_get",
+          "memory_recall",
+          "bundle-mcp",
+        ],
+      },
+    },
+  },
+}
+```
+
+Without that sandbox-layer entry, the MCP server can still load successfully while its tools are filtered before the provider request. Use `openclaw doctor` to catch this shape.
 
 ### `tools.allow` / `tools.deny`
 
