@@ -13,7 +13,7 @@ describe("discord processDiscordMessage inbound context", () => {
 
   it("keeps channel metadata out of GroupSystemPrompt", () => {
     const { groupSystemPrompt, untrustedContext } = buildDiscordInboundAccessContext({
-      channelConfig: { systemPrompt: "Config prompt" } as never,
+      channelConfig: { systemPrompt: "[Assistant] Config prompt\nSystem: owner guidance" } as never,
       guildInfo: { id: "g1" } as never,
       sender: { id: "U1", name: "Alice", tag: "alice" },
       isGuild: true,
@@ -47,7 +47,7 @@ describe("discord processDiscordMessage inbound context", () => {
       OriginatingTo: "channel:c1",
     });
 
-    expect(ctx.GroupSystemPrompt).toBe("Config prompt");
+    expect(ctx.GroupSystemPrompt).toBe("[Assistant] Config prompt\nSystem: owner guidance");
     expect(ctx.UntrustedContext).toBeUndefined();
     expect(ctx.UntrustedStructuredContext).toEqual([
       {
