@@ -501,7 +501,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
 
     // Build conversation key for rate limiting (used by both drop and dispatch paths).
-    const chatId = message.chat_id ?? undefined;
+    const chatId = repaired.chat_id ?? undefined;
     const senderForKey = (message.sender ?? "").trim();
     const conversationKey = chatId != null ? `group:${chatId}` : `dm:${senderForKey}`;
     const rateLimitKey = `${accountInfo.accountId}:${conversationKey}`;
@@ -525,7 +525,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (decision.reason === "group id not in allowlist") {
         warnGroupAllowlistDropPerChatOnce({
           accountId: accountInfo.accountId,
-          chatId: message.chat_id ?? undefined,
+          chatId: repaired.chat_id ?? undefined,
           log: (msg) => runtime.log?.(warn(msg)),
         });
       }
@@ -611,7 +611,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const { ctxPayload, chatTarget } = buildIMessageInboundContext({
       cfg,
       decision,
-      message,
+      message: repaired,
       previousTimestamp,
       remoteHost,
       historyLimit,
