@@ -5,6 +5,10 @@ async function importSubCliDescriptors() {
   return import("./subcli-descriptors.js");
 }
 
+function descriptorNames(descriptors: ReadonlyArray<{ name: string }>): string[] {
+  return descriptors.map((descriptor) => descriptor.name);
+}
+
 describe("sub-cli descriptors", () => {
   const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
 
@@ -21,11 +25,10 @@ describe("sub-cli descriptors", () => {
     delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
 
     const { SUB_CLI_DESCRIPTORS, getSubCliEntries } = await importSubCliDescriptors();
+    const exportedNames = descriptorNames(SUB_CLI_DESCRIPTORS);
 
-    expect(SUB_CLI_DESCRIPTORS.map((descriptor) => descriptor.name)).toEqual(
-      getSubCliEntries().map((descriptor) => descriptor.name),
-    );
-    expect(SUB_CLI_DESCRIPTORS.map((descriptor) => descriptor.name)).not.toContain("qa");
+    expect(exportedNames).toEqual(descriptorNames(getSubCliEntries()));
+    expect(exportedNames).not.toContain("qa");
   });
 
   it("keeps all sub-cli filter surfaces aligned when private QA is disabled (#83926)", async () => {
@@ -36,8 +39,9 @@ describe("sub-cli descriptors", () => {
       getSubCliCommandsWithSubcommands,
       getSubCliParentDefaultHelpCommands,
     } = await importSubCliDescriptors();
+    const exportedNames = descriptorNames(SUB_CLI_DESCRIPTORS);
 
-    expect(SUB_CLI_DESCRIPTORS.map((descriptor) => descriptor.name)).not.toContain("qa");
+    expect(exportedNames).not.toContain("qa");
     expect(getSubCliCommandsWithSubcommands()).not.toContain("qa");
     expect(getSubCliParentDefaultHelpCommands()).not.toContain("qa");
   });
@@ -51,11 +55,10 @@ describe("sub-cli descriptors", () => {
       getSubCliEntries,
       getSubCliParentDefaultHelpCommands,
     } = await importSubCliDescriptors();
+    const exportedNames = descriptorNames(SUB_CLI_DESCRIPTORS);
 
-    expect(SUB_CLI_DESCRIPTORS.map((descriptor) => descriptor.name)).toEqual(
-      getSubCliEntries().map((descriptor) => descriptor.name),
-    );
-    expect(SUB_CLI_DESCRIPTORS.map((descriptor) => descriptor.name)).toContain("qa");
+    expect(exportedNames).toEqual(descriptorNames(getSubCliEntries()));
+    expect(exportedNames).toContain("qa");
     expect(getSubCliCommandsWithSubcommands()).toContain("qa");
     expect(getSubCliParentDefaultHelpCommands()).not.toContain("qa");
   });
