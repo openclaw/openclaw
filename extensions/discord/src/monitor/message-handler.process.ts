@@ -550,11 +550,12 @@ export async function processDiscordMessage(
             return;
           }
         }
-        if (
+        const shouldFinalizeDraftPreview =
           draftStream &&
           isFinal &&
-          (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted)
-        ) {
+          (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted) &&
+          !payload.isError;
+        if (shouldFinalizeDraftPreview) {
           const reply = resolveSendableOutboundReplyParts(effectivePayload);
           const hasMedia = reply.hasMedia;
           const ttsSupplement = getReplyPayloadTtsSupplement(effectivePayload);
