@@ -1,6 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
+import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
@@ -305,6 +306,27 @@ export function isCodexSandboxExecServerEnabled(pluginConfig?: unknown): boolean
   return readCodexPluginConfig(pluginConfig).appServer?.experimental?.sandboxExecServer === true;
 }
 
+function assertCodexAppServerCommandHasNoInlineArgs(params: {
+  command: string;
+  source: CodexAppServerCommandSource;
+}): void {
+  const inlineArgs = detectWindowsSpawnCommandInlineArgs(params.command);
+  if (!inlineArgs) {
+    return;
+  }
+  const sourceLabel =
+    params.source === "env"
+      ? "OPENCLAW_CODEX_APP_SERVER_BIN"
+      : "plugins.entries.codex.config.appServer.command";
+  const argsLabel =
+    params.source === "env"
+      ? "OPENCLAW_CODEX_APP_SERVER_ARGS"
+      : "plugins.entries.codex.config.appServer.args";
+  throw new Error(
+    `${sourceLabel} must be only the Codex app-server executable path; "${inlineArgs.executable}" was configured with inline arguments "${inlineArgs.arguments}". Move those arguments to ${argsLabel}, or remove the override to use the managed Codex startup path.`,
+  );
+}
+
 export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodexPluginsPolicy {
   const config = readCodexPluginConfig(pluginConfig).codexPlugins;
   const configured = config !== undefined;
@@ -356,6 +378,9 @@ export function resolveCodexAppServerRuntimeOptions(
     : envCommand
       ? "env"
       : "managed";
+  if (commandSource === "config" || commandSource === "env") {
+    assertCodexAppServerCommandHasNoInlineArgs({ command, source: commandSource });
+  }
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
   const clearEnv = normalizeStringList(config.clearEnv);
