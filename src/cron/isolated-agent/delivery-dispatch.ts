@@ -23,6 +23,7 @@ import type {
   NormalizedOutboundPayload,
   OutboundDeliveryResult,
 } from "../../infra/outbound/deliver.js";
+import type { OutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForMirror,
@@ -564,9 +565,9 @@ async function resolveDirectCronDeliverySessionKey(params: {
   agentId: string;
   agentSessionKey: string;
   delivery: SuccessfulDeliveryTarget;
-}): Promise<string> {
+}): Promise<{ sessionKey: string; route: OutboundSessionRoute | null }> {
   if (isCustomCronSessionTarget(params.job.sessionTarget)) {
-    return params.agentSessionKey;
+    return { sessionKey: params.agentSessionKey, route: null };
   }
 
   try {
@@ -583,7 +584,7 @@ async function resolveDirectCronDeliverySessionKey(params: {
     });
     const routeSessionKey = route?.sessionKey?.trim();
     if (!route || !routeSessionKey) {
-      return params.agentSessionKey;
+      return { sessionKey: params.agentSessionKey, route: null };
     }
     const canonicalRouteSessionKey = canonicalizeDirectCronRouteSessionKey({
       cfg: params.cfg,
@@ -612,12 +613,12 @@ async function resolveDirectCronDeliverySessionKey(params: {
       accountId: params.delivery.accountId,
       route: canonicalRoute,
     });
-    return canonicalRouteSessionKey;
+    return { sessionKey: canonicalRouteSessionKey, route: canonicalRoute };
   } catch (err) {
     await logCronDeliveryWarn(
       `[cron:${params.job.id}] failed to resolve destination session for direct delivery mirror: ${formatErrorMessage(err)}`,
     );
-    return params.agentSessionKey;
+    return { sessionKey: params.agentSessionKey, route: null };
   }
 }
 
@@ -880,13 +881,14 @@ export async function dispatchCronDelivery(
         delivered = true;
         return null;
       }
-      const deliverySessionKey = await resolveDirectCronDeliverySessionKey({
+      const resolvedDeliverySession = await resolveDirectCronDeliverySessionKey({
         cfg: params.cfgWithAgentDefaults,
         job: params.job,
         agentId: params.agentId,
         agentSessionKey: params.agentSessionKey,
         delivery,
       });
+      const deliverySessionKey = resolvedDeliverySession.sessionKey;
       const deliverySession = buildOutboundSessionContext({
         cfg: params.cfgWithAgentDefaults,
         agentId: params.agentId,
@@ -900,6 +902,19 @@ export async function dispatchCronDelivery(
         deliverySessionKey,
         awarenessMainSessionKey,
       );
+      // A per-channel-peer session (agent:<agent>:<channel>:direct:<peer>)
+      // could be active in an embedded runner. Appending a delivery mirror
+      // would race the session lock and trigger a takeover error.
+      // Threaded main-session variants (agent:<agent>:<mainKey>:thread:<id>)
+      // are safe: the embedded runner never uses them as a primary session.
+      const deliverySessionBaseIsMainSession = isSameSessionKey(
+        parseThreadSessionSuffix(deliverySessionKey).baseSessionKey ?? deliverySessionKey,
+        awarenessMainSessionKey,
+      );
+      const deliverySessionIsRoutedPeerSession =
+        resolvedDeliverySession.route != null &&
+        !mirrorTargetsAwarenessMainSession &&
+        !deliverySessionBaseIsMainSession;
 
       // Track bestEffort partial failures so we can log them and avoid
       // marking the job as delivered when payloads were silently dropped.
@@ -991,7 +1006,8 @@ export async function dispatchCronDelivery(
       if (
         delivered &&
         !deliveryWillReachAwarenessMainSession &&
-        !mirrorWouldBypassIsolatedAwarenessPolicy
+        !mirrorWouldBypassIsolatedAwarenessPolicy &&
+        !deliverySessionIsRoutedPeerSession
       ) {
         const mirrorProjection =
           attemptedPayloadsForMirror.length > 0

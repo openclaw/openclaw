@@ -619,9 +619,13 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("mirrors the effective outbound payload after send hooks rewrite delivery text", async () => {
-    mockResolvedOutboundRoute();
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:main",
+      baseSessionKey: "agent:main:main",
+    });
     vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (params) => {
       params.onPayload?.({ text: "Redacted cron update.", mediaUrls: [] });
+      params.onPayload?.({ text: "Second redacted update.", mediaUrls: [] });
       return [{ channel: "telegram", messageId: "tg-redacted" }];
     });
 
@@ -633,19 +637,17 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
-    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:telegram:direct:123456",
-        text: "Redacted cron update.",
-        mediaUrls: undefined,
-      }),
+    // Awareness suppresses the mirror for main-session deliveries with text.
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Redacted cron update.\nSecond redacted update.",
+      {
+        sessionKey: "agent:main:main",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+        forceSenderIsOwnerFalse: true,
+        trusted: false,
+      },
     );
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Redacted cron update.", {
-      sessionKey: "agent:main:main",
-      contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
-    });
   });
 
   it("preserves all successful text payloads for direct delivery", async () => {
@@ -1447,7 +1449,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
-  it("mirrors isolated cron direct delivery into the resolved destination channel session", async () => {
+  it("skips transcript mirror for routed channel sessions to prevent session lock races", async () => {
     mockResolvedOutboundRoute({
       sessionKey: "agent:main:whatsapp:direct:+15551234567",
       baseSessionKey: "agent:main:whatsapp:direct:+15551234567",
@@ -1491,32 +1493,32 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       agentId: "main",
       sessionKey: "agent:main:whatsapp:direct:+15551234567",
     });
-    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
-      sessionKey: "agent:main:whatsapp:direct:+15551234567",
-      agentId: "main",
-      text: "REPRO_TOKEN_K7M3X9",
-      mediaUrls: undefined,
-      storePath: expect.stringContaining("cron-mirror-sessions.json"),
-      idempotencyKey: expect.stringContaining("test-job"),
-      config: params.cfgWithAgentDefaults,
+    // Transcript mirror must NOT be appended into a routed channel session that
+    // could be concurrently active in an embedded runner.
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    // Awareness still reaches the main session.
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("REPRO_TOKEN_K7M3X9", {
+      sessionKey: "agent:main:main",
+      contextKey: expect.stringContaining("test-job"),
+      forceSenderIsOwnerFalse: true,
+      trusted: false,
     });
   });
 
   it("keeps successful direct delivery delivered when the transcript mirror append fails", async () => {
     mockResolvedOutboundRoute({
-      sessionKey: "agent:main:whatsapp:direct:+15551234567",
-      baseSessionKey: "agent:main:whatsapp:direct:+15551234567",
-      peer: { kind: "direct", id: "+15551234567" },
-      from: "whatsapp:+15551234567",
-      to: "+15551234567",
+      sessionKey: "agent:main:main",
+      baseSessionKey: "agent:main:main",
     });
     vi.mocked(appendAssistantMessageToSessionTranscript).mockRejectedValueOnce(
       new Error("transcript locked"),
     );
 
-    const params = makeBaseParams({ synthesizedText: "sent despite mirror failure" });
+    const params = makeBaseParams({ synthesizedText: "" });
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [{ mediaUrl: "https://example.com/report.png" }] as never;
     params.cfgWithAgentDefaults = {
-      session: { dmScope: "per-channel-peer" },
+      session: {},
     } as never;
     params.resolvedDelivery = makeResolvedDelivery({
       channel: "whatsapp",
@@ -1528,7 +1530,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.result).toBeUndefined();
     expect(state.delivered).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
     expect(getCompletedDirectCronDeliveriesCountForTests()).toBe(1);
   });
 
