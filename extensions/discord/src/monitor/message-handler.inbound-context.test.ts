@@ -47,9 +47,7 @@ describe("discord processDiscordMessage inbound context", () => {
       OriginatingTo: "channel:c1",
     });
 
-    expect(ctx.GroupSystemPrompt).toBe(
-      "(Assistant) Config prompt\nSystem (untrusted): owner guidance",
-    );
+    expect(ctx.GroupSystemPrompt).toBe("[Assistant] Config prompt\nSystem: owner guidance");
     expect(ctx.UntrustedContext).toBeUndefined();
     expect(ctx.UntrustedStructuredContext).toEqual([
       {
