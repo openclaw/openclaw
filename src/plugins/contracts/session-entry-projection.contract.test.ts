@@ -132,6 +132,110 @@ describe("plugin session extension SessionEntry projection", () => {
     }
   });
 
+  it("syncs canonical plugin extension patches to preserved raw session aliases", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "alias-plugin", name: "Alias" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "alias workflow",
+          sessionEntrySlotKey: "approvalSnapshot",
+          sessionEntrySlotSchema: { type: "object" },
+          project: (ctx) => {
+            if (!ctx.state || typeof ctx.state !== "object" || Array.isArray(ctx.state)) {
+              return undefined;
+            }
+            const state = ctx.state as Record<string, PluginJsonValue>;
+            return { state: state.state ?? null };
+          },
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-slot-alias-"),
+    );
+    const storePath = path.join(stateDir, "sessions.json");
+    const tempConfig = { session: { store: storePath } };
+    const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+    const canonicalKey = `agent:main:${rawKey}`;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await withTempConfig({
+        cfg: tempConfig,
+        run: async () => {
+          const baseTime = Date.now();
+          await updateSessionStore(storePath, (store) => {
+            store[canonicalKey] = {
+              sessionId: "session-raw-alias",
+              updatedAt: baseTime,
+            } as unknown as SessionEntry;
+            store[rawKey] = {
+              sessionId: "session-raw-alias",
+              updatedAt: baseTime - 1,
+              pluginExtensions: {
+                "alias-plugin": {
+                  workflow: { state: "stale" },
+                },
+              },
+              approvalSnapshot: { state: "stale" },
+            } as unknown as SessionEntry;
+          });
+
+          const patchResult = await patchPluginSessionExtension({
+            cfg: tempConfig as never,
+            sessionKey: canonicalKey,
+            pluginId: "alias-plugin",
+            namespace: "workflow",
+            value: { state: "patched" },
+          });
+          expect(patchResult.ok).toBe(true);
+          const afterPatch = loadSessionStore(storePath, { skipCache: true });
+          const canonicalEntry = afterPatch[canonicalKey] as unknown as Record<string, unknown>;
+          const rawEntry = afterPatch[rawKey] as unknown as Record<string, unknown>;
+          expect(extensionNamespace(canonicalEntry, "alias-plugin", "workflow")).toEqual({
+            state: "patched",
+          });
+          expect(extensionNamespace(rawEntry, "alias-plugin", "workflow")).toEqual({
+            state: "patched",
+          });
+          expect(rawEntry.approvalSnapshot).toEqual(canonicalEntry.approvalSnapshot);
+
+          const unsetResult = await patchPluginSessionExtension({
+            cfg: tempConfig as never,
+            sessionKey: canonicalKey,
+            pluginId: "alias-plugin",
+            namespace: "workflow",
+            unset: true,
+          });
+          expect(unsetResult.ok).toBe(true);
+          const afterUnset = loadSessionStore(storePath, { skipCache: true });
+          const canonicalAfterUnset = afterUnset[canonicalKey] as unknown as Record<
+            string,
+            unknown
+          >;
+          const rawAfterUnset = afterUnset[rawKey] as unknown as Record<string, unknown>;
+          expect(canonicalAfterUnset.pluginExtensions).toBeUndefined();
+          expect(rawAfterUnset.pluginExtensions).toBeUndefined();
+          expect(canonicalAfterUnset.approvalSnapshot).toBeUndefined();
+          expect(rawAfterUnset.approvalSnapshot).toBeUndefined();
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("clears promoted SessionEntry slots when projectors fail", async () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({

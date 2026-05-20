@@ -1332,6 +1332,107 @@ describe("host-hook fixture plugin contract", () => {
     }
   });
 
+  it("syncs canonical next-turn injections to preserved raw session aliases", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({
+        id: "alias-injector",
+        name: "Alias Injector",
+        status: "loaded",
+      }),
+    );
+    setActivePluginRegistry(registry);
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-alias-injection-"),
+    );
+    const storePath = path.join(stateDir, "sessions.json");
+    const tempConfig = {
+      session: { store: storePath },
+    };
+    const rawKey = "conversation:pair:user_a::user_b:space:space_123";
+    const canonicalKey = `agent:main:${rawKey}`;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await withTempConfig({
+        cfg: tempConfig,
+        run: async () => {
+          const baseTime = Date.now();
+          await updateSessionStore(storePath, (store) => {
+            store[canonicalKey] = {
+              sessionId: "session-raw-alias",
+              updatedAt: baseTime,
+            };
+            store[rawKey] = {
+              sessionId: "session-raw-alias",
+              updatedAt: baseTime - 1,
+              pluginNextTurnInjections: {
+                "alias-injector": [
+                  {
+                    id: "stale",
+                    pluginId: "alias-injector",
+                    text: "stale raw alias",
+                    placement: "prepend_context",
+                    createdAt: baseTime - 1,
+                  },
+                ],
+              },
+            };
+            return undefined;
+          });
+
+          const enqueued = await enqueuePluginNextTurnInjection({
+            cfg: tempConfig,
+            pluginId: "alias-injector",
+            injection: {
+              sessionKey: canonicalKey,
+              text: "canonical queued injection",
+              placement: "prepend_context",
+              idempotencyKey: "alias:resume",
+            },
+            now: baseTime + 100,
+          });
+
+          expect(enqueued.enqueued).toBe(true);
+          expect(enqueued.sessionKey).toBe(canonicalKey);
+          const afterEnqueue = loadSessionStore(storePath, { skipCache: true });
+          expect(afterEnqueue[canonicalKey]?.pluginNextTurnInjections?.["alias-injector"]).toEqual([
+            expect.objectContaining({
+              id: enqueued.id,
+              text: "canonical queued injection",
+              idempotencyKey: "alias:resume",
+            }),
+          ]);
+          expect(afterEnqueue[rawKey]?.pluginNextTurnInjections?.["alias-injector"]).toEqual(
+            afterEnqueue[canonicalKey]?.pluginNextTurnInjections?.["alias-injector"],
+          );
+
+          const drained = await drainPluginNextTurnInjections({
+            cfg: tempConfig,
+            sessionKey: canonicalKey,
+            now: baseTime + 101,
+          });
+          expect(drained).toHaveLength(1);
+          expectRecordFields(drained[0], {
+            id: enqueued.id,
+            pluginId: "alias-injector",
+            text: "canonical queued injection",
+          });
+          const afterDrain = loadSessionStore(storePath, { skipCache: true });
+          expect(afterDrain[canonicalKey]?.pluginNextTurnInjections).toBeUndefined();
+          expect(afterDrain[rawKey]?.pluginNextTurnInjections).toBeUndefined();
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("suppresses stale next-turn injections from plugins that are no longer loaded", async () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(
