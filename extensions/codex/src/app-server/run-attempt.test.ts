@@ -6534,6 +6534,51 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.timedOut).toBe(false);
   });
 
+  it("defers turn completion until an active native tool item completes", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    let settled = false;
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 60_000,
+      turnTerminalIdleTimeoutMs: 60_000,
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "cmd-1", type: "commandExecution", status: "inProgress" },
+      },
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "cmd-1", type: "commandExecution", status: "completed" },
+      },
+    });
+
+    const result = await run;
+    expect(result.promptError ?? undefined).toBeUndefined();
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+  });
+
   it("does not time out when turn progress arrives before turn/start returns", async () => {
     let harness: ReturnType<typeof createAppServerHarness>;
     harness = createAppServerHarness(async (method) => {
