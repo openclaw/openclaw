@@ -83,15 +83,11 @@ describe("handleVcardCommand", () => {
   });
 
   it("returns null when vcard has no phone", async () => {
-    const result = await handleVcardCommand(
-      makeParams({ vcard: "BEGIN:VCARD\nVERSION:3.0\nFN:John\nEND:VCARD" } as never),
-    );
-    // pass no-phone vcard as quotedVcard
-    const r2 = await handleVcardCommand({
+    const result = await handleVcardCommand({
       ...makeParams(),
       quotedVcard: "BEGIN:VCARD\nVERSION:3.0\nFN:John\nEND:VCARD",
     });
-    expect(r2).toBeNull();
+    expect(result).toBeNull();
   });
 
   it("add: adds phone and replies confirmation", async () => {

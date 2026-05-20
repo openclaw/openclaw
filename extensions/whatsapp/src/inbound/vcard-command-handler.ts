@@ -68,14 +68,13 @@ export async function handleVcardCommand(params: VcardCommandParams): Promise<Vc
   if (parsed.phones.length === 0) return null;
 
   const phone = normalizeE164(parsed.phones[0]);
-  const normalizedPhone = normalizeE164(phone);
 
   if (cmd === "add") {
     // Single updateConfig call: read and conditionally write.
     let outcome: "added" | "already" = "already";
     await updateConfig((cfg) => {
       const list = readManualFrom(cfg as Record<string, unknown>, params.accountId);
-      const isPresent = list.map(normalizeE164).some((e) => e === normalizedPhone);
+      const isPresent = list.map(normalizeE164).some((e) => e === phone);
       if (isPresent) {
         outcome = "already";
         return cfg;
@@ -103,7 +102,7 @@ export async function handleVcardCommand(params: VcardCommandParams): Promise<Vc
     return cfg;
   });
 
-  const isPresent = currentList.some((e) => e === normalizedPhone);
+  const isPresent = currentList.some((e) => e === phone);
 
   if (!isPresent) {
     await params.sendMessage(params.selfJid, { text: "Not in manual list" });
@@ -111,10 +110,8 @@ export async function handleVcardCommand(params: VcardCommandParams): Promise<Vc
   }
 
   await updateConfig((cfg) => {
-    const list = readManualFrom(cfg as Record<string, unknown>, params.accountId).map(
-      normalizeE164,
-    );
-    const next = list.filter((e) => e !== normalizedPhone);
+    const list = readManualFrom(cfg as Record<string, unknown>, params.accountId);
+    const next = list.filter((e) => normalizeE164(e) !== phone);
     return writeManualFrom(cfg as Record<string, unknown>, params.accountId, next) as never;
   });
   await params.sendMessage(params.selfJid, { text: `Removed ${phone} from manual list` });
