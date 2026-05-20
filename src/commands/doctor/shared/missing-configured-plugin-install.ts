@@ -788,6 +788,7 @@ async function installCandidate(params: {
     : null;
   const shouldTryClawHub =
     clawhubInstallSpec &&
+    !existingNpmPackagePath &&
     !(params.preferNpm && npmInstallSpec) &&
     candidate.defaultChoice !== "npm";
   if (shouldTryClawHub) {

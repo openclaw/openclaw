@@ -1139,6 +1139,68 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.records.discord?.installPath).toBe(packageDir);
   });
 
+  it("prefers an existing npm payload over ClawHub during post-core repair", async () => {
+    const npmRoot = makeTempDir();
+    const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "matrix");
+    fs.mkdirSync(packageDir, { recursive: true });
+    mocks.resolveDefaultPluginNpmDir.mockReturnValue(npmRoot);
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "matrix",
+        pluginId: "matrix",
+        meta: { label: "Matrix" },
+        install: {
+          clawhubSpec: "clawhub:@openclaw/matrix",
+          npmSpec: "@openclaw/matrix",
+        },
+      },
+    ]);
+    mocks.installPluginFromClawHub.mockResolvedValue({
+      ok: false,
+      error: 'Plugin "@openclaw/matrix" requires plugin API >=2026.5.18.',
+    });
+    mocks.installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "matrix",
+      targetDir: packageDir,
+      version: "1.2.3",
+      npmResolution: {
+        name: "@openclaw/matrix",
+        version: "1.2.3",
+        resolvedSpec: "@openclaw/matrix@1.2.3",
+        integrity: "sha512-matrix",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        plugins: {
+          entries: {
+            matrix: { enabled: true },
+          },
+        },
+        channels: {
+          matrix: { enabled: true },
+        },
+      },
+      env: {
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      },
+    });
+
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
+      spec: expectedNpmInstallSpec("@openclaw/matrix"),
+      npmDir: npmRoot,
+      mode: "update",
+    });
+    expect(result.warnings).toEqual([]);
+    expect(result.records.matrix?.installPath).toBe(packageDir);
+  });
+
   it("repairs missing external payload during post-core convergence even with OPENCLAW_UPDATE_IN_PROGRESS=1", async () => {
     const records = {
       discord: {
