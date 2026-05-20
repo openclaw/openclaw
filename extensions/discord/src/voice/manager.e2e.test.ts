@@ -782,6 +782,90 @@ describe("DiscordVoiceManager", () => {
     expect(manager.status()).toEqual([]);
   });
 
+  it("hands off to another followed user when the active followed user disconnects", async () => {
+    const manager = createManager({
+      voice: {
+        enabled: true,
+        mode: "stt-tts",
+        allowedChannels: [
+          { guildId: "g1", channelId: "1001" },
+          { guildId: "g1", channelId: "1002" },
+        ],
+        followUsers: ["u-owner", "u-backup"],
+      },
+    });
+
+    await manager.handleVoiceStateUpdate({
+      guild_id: "g1",
+      user_id: "u-backup",
+      channel_id: "1002",
+    } as never);
+    await manager.handleVoiceStateUpdate({
+      guild_id: "g1",
+      user_id: "u-owner",
+      channel_id: "1001",
+    } as never);
+    await manager.handleVoiceStateUpdate({
+      guild_id: "g1",
+      user_id: "u-owner",
+      channel_id: null,
+    } as never);
+
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(3);
+    expectConnectedStatus(manager, "1002");
+  });
+
+  it("leaves the stale followed channel when handoff to another followed user fails", async () => {
+    const client = createClient();
+    let backupFetches = 0;
+    client.fetchChannel.mockImplementation(async (channelId: string) => {
+      if (channelId === "1002") {
+        backupFetches += 1;
+        if (backupFetches > 1) {
+          return null;
+        }
+      }
+      return {
+        id: channelId,
+        guildId: "g1",
+        guild: { id: "g1", name: "Guild One" },
+        type: ChannelType.GuildVoice,
+      };
+    });
+    const manager = createManager(
+      {
+        voice: {
+          enabled: true,
+          mode: "stt-tts",
+          allowedChannels: [
+            { guildId: "g1", channelId: "1001" },
+            { guildId: "g1", channelId: "1002" },
+          ],
+          followUsers: ["u-owner", "u-backup"],
+        },
+      },
+      client,
+    );
+
+    await manager.handleVoiceStateUpdate({
+      guild_id: "g1",
+      user_id: "u-backup",
+      channel_id: "1002",
+    } as never);
+    await manager.handleVoiceStateUpdate({
+      guild_id: "g1",
+      user_id: "u-owner",
+      channel_id: "1001",
+    } as never);
+    await manager.handleVoiceStateUpdate({
+      guild_id: "g1",
+      user_id: "u-owner",
+      channel_id: null,
+    } as never);
+
+    expect(manager.status()).toEqual([]);
+  });
+
   it("does not follow configured users into disallowed channels", async () => {
     const manager = createManager({
       voice: {
@@ -800,6 +884,148 @@ describe("DiscordVoiceManager", () => {
 
     expect(joinVoiceChannelMock).not.toHaveBeenCalled();
     expect(manager.status()).toEqual([]);
+  });
+
+  it("bounds followed user reconciliation REST lookups", async () => {
+    const client = createClient();
+    client.rest.get.mockRejectedValue(new Error("Unknown Voice State"));
+    const guilds = Object.fromEntries(
+      Array.from({ length: 10 }, (_, index) => [`g${index + 1}`, {}]),
+    );
+    const manager = createManager(
+      {
+        guilds,
+        voice: {
+          enabled: true,
+          mode: "stt-tts",
+          followUsers: ["u1", "u2", "u3", "u4", "u5"],
+        },
+      },
+      client,
+    );
+    manager.setBotUserId("bot-user");
+
+    await manager.autoJoin();
+    await manager.destroy();
+
+    expect(client.rest.get).toHaveBeenCalledTimes(24);
+  });
+
+  it("pages followed user reconciliation when the user list exceeds the REST budget", async () => {
+    const client = createClient();
+    client.rest.get.mockImplementation(async (path: string) => {
+      if (path.endsWith("/u39")) {
+        return { guild_id: "g1", user_id: "u39", channel_id: "1001" };
+      }
+      throw new Error("Unknown Voice State");
+    });
+    const manager = createManager(
+      {
+        guilds: { g1: {} },
+        voice: {
+          enabled: true,
+          mode: "stt-tts",
+          followUsers: Array.from({ length: 40 }, (_, index) => `u${index + 1}`),
+        },
+      },
+      client,
+    );
+    manager.setBotUserId("bot-user");
+
+    await manager.autoJoin();
+    expect(client.rest.get).toHaveBeenCalledTimes(31);
+    expect(joinVoiceChannelMock).not.toHaveBeenCalled();
+
+    await manager.autoJoin();
+    await manager.destroy();
+
+    expect(client.rest.get).toHaveBeenCalledTimes(62);
+    expect(joinVoiceChannelMock).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "g1", channelId: "1001" }),
+    );
+  });
+
+  it("rotates followed user reconciliation guilds when a user page consumes the REST budget", async () => {
+    const client = createClient();
+    client.fetchChannel.mockImplementation(async (channelId: string) => ({
+      id: channelId,
+      guildId: "g2",
+      guild: { id: "g2", name: "Guild Two" },
+      type: ChannelType.GuildVoice,
+    }));
+    client.rest.get.mockImplementation(async (path: string) => {
+      if (path.includes("/guilds/g2/") && path.endsWith("/u1")) {
+        return { guild_id: "g2", user_id: "u1", channel_id: "2001" };
+      }
+      throw new Error("Unknown Voice State");
+    });
+    const manager = createManager(
+      {
+        guilds: { g1: {}, g2: {} },
+        voice: {
+          enabled: true,
+          mode: "stt-tts",
+          followUsers: Array.from({ length: 40 }, (_, index) => `u${index + 1}`),
+        },
+      },
+      client,
+    );
+    manager.setBotUserId("bot-user");
+
+    await manager.autoJoin();
+    expect(client.rest.get).toHaveBeenCalledTimes(31);
+    expect(joinVoiceChannelMock).not.toHaveBeenCalled();
+
+    await manager.autoJoin();
+    await manager.destroy();
+
+    expect(client.rest.get).toHaveBeenCalledTimes(62);
+    expect(client.rest.get.mock.calls.slice(0, 31)).toEqual(
+      expect.arrayContaining([[expect.stringContaining("/guilds/g1/voice-states/u1")]]),
+    );
+    expect(client.rest.get.mock.calls.slice(31)).toEqual(
+      expect.arrayContaining([[expect.stringContaining("/guilds/g2/voice-states/u1")]]),
+    );
+    expect(joinVoiceChannelMock).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "g2", channelId: "2001" }),
+    );
+  });
+
+  it("rotates followed user reconciliation bot voice checks when only some fit the REST budget", async () => {
+    const client = createClient();
+    client.rest.get.mockImplementation(async (path: string) => {
+      if (path.includes("/guilds/g3/") && path.endsWith("/bot-user")) {
+        return { guild_id: "g3", user_id: "bot-user", channel_id: "3001" };
+      }
+      throw new Error("Unknown Voice State");
+    });
+    const manager = createManager(
+      {
+        guilds: { g1: {}, g2: {}, g3: {} },
+        voice: {
+          enabled: true,
+          mode: "stt-tts",
+          followUsers: Array.from({ length: 10 }, (_, index) => `u${index + 1}`),
+        },
+      },
+      client,
+    );
+    manager.setBotUserId("bot-user");
+
+    await manager.autoJoin();
+    expect(client.rest.get).toHaveBeenCalledTimes(32);
+    expect(updateVoiceStateMock).not.toHaveBeenCalled();
+
+    await manager.autoJoin();
+    await manager.destroy();
+
+    expect(client.rest.get).toHaveBeenCalledTimes(64);
+    expect(updateVoiceStateMock).toHaveBeenCalledWith({
+      guild_id: "g3",
+      channel_id: null,
+      self_mute: false,
+      self_deaf: false,
+    });
   });
 
   it("treats an empty allowed voice channel list as deny-all", async () => {
@@ -2898,6 +3124,41 @@ describe("DiscordVoiceManager", () => {
       expect(connection.daveSetPassthroughMode).toHaveBeenCalledWith(true, 15);
       expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("preserves follow ownership through DAVE receive recovery", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock
+      .mockReturnValueOnce(connection)
+      .mockReturnValueOnce(createConnectionMock());
+    const manager = createManager({
+      voice: {
+        enabled: true,
+        mode: "stt-tts",
+        followUsers: ["u-owner"],
+      },
+    });
+
+    await manager.handleVoiceStateUpdate({
+      guild_id: "g1",
+      user_id: "u-owner",
+      channel_id: "1001",
+    } as never);
+
+    emitDecryptFailure(manager);
+    emitDecryptFailure(manager);
+    emitDecryptFailure(manager);
+
+    await vi.waitFor(() => {
+      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+    });
+    await manager.handleVoiceStateUpdate({
+      guild_id: "g1",
+      user_id: "u-owner",
+      channel_id: null,
+    } as never);
+
+    expect(manager.status()).toEqual([]);
   });
 
   it("resets DAVE receive recovery after realtime audio decodes", async () => {
