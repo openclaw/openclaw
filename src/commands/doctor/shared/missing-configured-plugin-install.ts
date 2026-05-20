@@ -787,10 +787,13 @@ async function installCandidate(params: {
   const existingNpmPackagePath = npmInstallSpec
     ? resolveExistingCandidateNpmPackagePath({ candidate, npmDir })
     : null;
+  const existingNpmPackageVersion = existingNpmPackagePath
+    ? await readNpmPackageVersion(existingNpmPackagePath)
+    : undefined;
   if (
     existingNpmPackagePath &&
+    existingNpmPackageVersion &&
     npmInstallSpec &&
-    clawhubInstallSpec &&
     params.mode !== "update" &&
     isPostCoreConvergencePass(params.env)
   ) {
@@ -800,6 +803,7 @@ async function installCandidate(params: {
       npmInstallSpec,
       npmRecordSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
       packagePath: existingNpmPackagePath,
+      version: existingNpmPackageVersion,
     });
   }
   const shouldTryClawHub =
@@ -965,12 +969,12 @@ async function adoptExistingNpmPackage(params: {
   npmInstallSpec: string;
   npmRecordSpec: string;
   packagePath: string;
+  version: string;
 }): Promise<{
   records: Record<string, PluginInstallRecord>;
   changes: string[];
   warnings: string[];
 }> {
-  const version = await readNpmPackageVersion(params.packagePath);
   const npmName = parseRegistryNpmSpec(params.npmInstallSpec)?.name;
   return {
     records: {
@@ -980,9 +984,10 @@ async function adoptExistingNpmPackage(params: {
         spec: params.npmRecordSpec,
         installPath: params.packagePath,
         installedAt: new Date().toISOString(),
-        ...(version ? { version, resolvedVersion: version } : {}),
+        version: params.version,
+        resolvedVersion: params.version,
         ...(npmName ? { resolvedName: npmName } : {}),
-        ...(npmName && version ? { resolvedSpec: `${npmName}@${version}` } : {}),
+        ...(npmName ? { resolvedSpec: `${npmName}@${params.version}` } : {}),
       },
     },
     changes: [
