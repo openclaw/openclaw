@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { parseMd } from "@openclaw/oc-path/api.js";
 
 export type PolicyAttestation = {
   readonly checkedAt: string;
@@ -130,22 +131,19 @@ export function scanPolicyTools(raw: string): readonly PolicyToolEvidence[] {
 }
 
 function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
-  const lines = raw.split(/\r?\n/);
-  const toolsHeading = lines.findIndex((line) => /^##\s+tools\s*$/i.test(line.trim()));
-  if (toolsHeading < 0) {
+  const toolsBlock = parseMd(raw).ast.blocks.find((block) => block.slug === "tools");
+  if (toolsBlock === undefined) {
     return [];
   }
-  const nextHeading = lines.findIndex(
-    (line, index) => index > toolsHeading && /^##\s+\S+/.test(line.trim()),
-  );
-  const body = lines.slice(toolsHeading + 1, nextHeading < 0 ? undefined : nextHeading);
-  return body.flatMap((line, index): readonly PolicyToolEvidence[] => {
+  const body = toolsBlock.bodyText.split(/\r?\n/);
+  const tools: PolicyToolEvidence[] = [];
+  for (let index = 0; index < body.length; index += 1) {
+    const line = body[index];
     const match = /^###\s+([^\s#]+)(.*)$/.exec(line);
     if (match === null) {
-      return [];
+      continue;
     }
     const id = match[1].trim();
-    const meta = match[2] ?? "";
     const entry: {
       id: string;
       source: string;
@@ -157,12 +155,21 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
     } = {
       id,
       source: `oc://TOOLS.md/tools/${id}`,
-      line: toolsHeading + index + 2,
+      line: toolsBlock.line + index + 1,
     };
+    const metaLines = [match[2] ?? ""];
+    for (let metaIndex = index + 1; metaIndex < body.length; metaIndex += 1) {
+      const metaLine = body[metaIndex];
+      if (/^###\s+\S+/.test(metaLine.trim())) {
+        break;
+      }
+      metaLines.push(metaLine);
+    }
+    const meta = metaLines.join("\n");
     const risk = riskFromMeta(meta);
     const sensitivity = /\bsensitivity\s*:\s*([a-z0-9_-]+)\b/i.exec(meta)?.[1]?.toLowerCase();
     const owner = /\bowner\s*:\s*([^\s#]+)\b/i.exec(meta)?.[1];
-    const capabilities = meta.match(/\b[A-Z][A-Z0-9_]{2,}\b/g) ?? [];
+    const capabilities = capabilityTokensFromMetaLines(metaLines);
     if (risk !== undefined) {
       entry.risk = risk;
     }
@@ -175,8 +182,9 @@ function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
     if (capabilities.length > 0) {
       entry.capabilities = capabilities;
     }
-    return [entry];
-  });
+    tools.push(entry);
+  }
+  return tools;
 }
 
 function riskFromMeta(meta: string): string | undefined {
@@ -199,6 +207,23 @@ function riskFromMeta(meta: string): string | undefined {
     default:
       return undefined;
   }
+}
+
+function capabilityTokensFromMetaLines(lines: readonly string[]): readonly string[] {
+  return lines.flatMap((line, index): string[] => {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) {
+      return [];
+    }
+    const tokens = trimmed.match(/\b[A-Z][A-Z0-9_]{2,}\b/g) ?? [];
+    if (index === 0 || /\bcapabilities\s*:/i.test(trimmed)) {
+      return tokens;
+    }
+    const withoutTokens = tokens.reduce((remaining, token) => {
+      return remaining.replace(token, "");
+    }, trimmed);
+    return /^[\s,;:[\](){}#*_-]*$/.test(withoutTokens) ? tokens : [];
+  });
 }
 
 function configuredChannels(cfg: Record<string, unknown>): Record<string, unknown> {

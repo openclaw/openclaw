@@ -4,6 +4,10 @@
   "private": true,
   "description": "OpenClaw oc:// workspace path plugin",
   "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./api.js": "./src/oc-path/index.ts"
+  },
   "dependencies": {
     "commander": "14.0.3",
     "jsonc-parser": "3.3.1",
