@@ -21,7 +21,7 @@ vi.mock("node:child_process", async () => {
 });
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
-import { parseSystemdExecStart } from "./systemd-unit.js";
+import { parseSystemdEnvAssignments, parseSystemdExecStart } from "./systemd-unit.js";
 import {
   installSystemdService,
   isNonFatalSystemdInstallProbeError,
@@ -608,6 +608,24 @@ describe("splitArgsPreservingQuotes", () => {
   });
 });
 
+describe("parseSystemdEnvAssignments", () => {
+  it("parses single-quoted whole assignments", () => {
+    expect(
+      parseSystemdEnvAssignments("'OPENCLAW_GATEWAY_TOKEN=single quoted token' FOO=bar"),
+    ).toEqual([
+      { key: "OPENCLAW_GATEWAY_TOKEN", value: "single quoted token" },
+      { key: "FOO", value: "bar" },
+    ]);
+  });
+
+  it("keeps apostrophes inside unquoted assignment values literal", () => {
+    expect(parseSystemdEnvAssignments("FOO=can't OPENCLAW_GATEWAY_TOKEN=token")).toEqual([
+      { key: "FOO", value: "can't" },
+      { key: "OPENCLAW_GATEWAY_TOKEN", value: "token" },
+    ]);
+  });
+});
+
 describe("parseSystemdExecStart", () => {
   it("preserves quoted arguments", () => {
     const execStart = '/usr/bin/openclaw gateway start --name "My Bot"';
@@ -953,6 +971,7 @@ describe("stageSystemdService", () => {
           "ExecStart=/usr/bin/openclaw node run",
           "Environment=FOO=bar OPENCLAW_GATEWAY_TOKEN=inline-token BAZ=qux",
           "Environment=OPENCLAW_GATEWAY_TOKEN=token-only-line",
+          "Environment='OPENCLAW_GATEWAY_TOKEN=single-quoted-token' FROM_SINGLE=kept",
           "Environment=OPENCLAW_GATEWAY_PORT=18789",
         ].join("\n"),
         { encoding: "utf8", mode: 0o600 },
@@ -985,7 +1004,9 @@ describe("stageSystemdService", () => {
       expect(unit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=fresh-token");
       expect(backupUnit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=inline-token");
       expect(backupUnit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=token-only-line");
+      expect(backupUnit).not.toContain("single-quoted-token");
       expect(backupUnit).toContain("Environment=FOO=bar BAZ=qux");
+      expect(backupUnit).toContain("Environment=FROM_SINGLE=kept");
       expect(backupUnit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
       expect(backupStat.mode & 0o777).toBe(0o600);
     });

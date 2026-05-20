@@ -106,7 +106,8 @@ export function parseSystemdEnvAssignment(raw: string): { key: string; value: st
   }
 
   const unquoted = (() => {
-    if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+    const quote = trimmed[0];
+    if (!((quote === '"' || quote === "'") && trimmed.endsWith(quote))) {
       return trimmed;
     }
     let out = "";
@@ -139,7 +140,11 @@ export function parseSystemdEnvAssignment(raw: string): { key: string; value: st
 }
 
 export function parseSystemdEnvAssignments(raw: string): Array<{ key: string; value: string }> {
-  return splitArgsPreservingQuotes(raw, { escapeMode: "backslash" }).flatMap((entry) => {
+  return splitArgsPreservingQuotes(raw, {
+    escapeMode: "backslash",
+    quoteChars: ['"', "'"],
+    quoteStart: "item-start",
+  }).flatMap((entry) => {
     const parsed = parseSystemdEnvAssignment(entry);
     return parsed ? [parsed] : [];
   });
