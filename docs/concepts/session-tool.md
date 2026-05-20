@@ -84,6 +84,24 @@ from a previous list call.
 If you need the exact byte-for-byte transcript, inspect the transcript file on
 disk instead of treating `sessions_history` as a raw dump.
 
+<Note>
+**Session keys reflect the channel of origin, not the currently active channel.**
+The channel segment in a session key (`agent:<id>:<channel>:channel:<chatId>` or
+similar) records where the session was first created. If a user later continues
+the same session via webchat — or any other channel — the session key keeps the
+original channel segment. Inbound metadata's `channel` field, in contrast,
+reports the channel that delivered the *current* message.
+
+For example, a session originally opened from a Discord channel keeps the key
+`agent:main:discord:channel:1489…`. When the user replies via webchat,
+inbound metadata reports `channel: "webchat"` while the session key still says
+`discord:channel:`. The two values are intentionally allowed to disagree — they
+answer different questions ("where did this session start?" vs "where did this
+specific message arrive?"). An agent must not treat the session-key channel as a
+proxy for the current delivery channel, otherwise it can fetch the wrong
+session history or overwrite results when bouncing between channels.
+</Note>
+
 ## Sending cross-session messages
 
 `sessions_send` delivers a message to another session and optionally waits for
