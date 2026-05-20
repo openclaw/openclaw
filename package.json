@@ -992,6 +992,10 @@
       "types": "./dist/plugin-sdk/realtime-transcription.d.ts",
       "default": "./dist/plugin-sdk/realtime-transcription.js"
     },
+    "./plugin-sdk/realtime-bootstrap-context": {
+      "types": "./dist/plugin-sdk/realtime-bootstrap-context.d.ts",
+      "default": "./dist/plugin-sdk/realtime-bootstrap-context.js"
+    },
     "./plugin-sdk/realtime-voice": {
       "types": "./dist/plugin-sdk/realtime-voice.d.ts",
       "default": "./dist/plugin-sdk/realtime-voice.js"

@@ -202,6 +202,8 @@ describe("discord config schema", () => {
           voice: "cedar",
           toolPolicy: "safe-read-only",
           consultPolicy: "always",
+          bootstrapContextFiles: ["IDENTITY.md", "USER.md", "SOUL.md"],
+          bootstrapContextMaxChars: 4096,
           bargeIn: true,
           minBargeInAudioEndMs: 500,
           providers: {
@@ -223,6 +225,12 @@ describe("discord config schema", () => {
     expect(cfg.voice?.realtime?.voice).toBe("cedar");
     expect(cfg.voice?.realtime?.toolPolicy).toBe("safe-read-only");
     expect(cfg.voice?.realtime?.consultPolicy).toBe("always");
+    expect(cfg.voice?.realtime?.bootstrapContextFiles).toEqual([
+      "IDENTITY.md",
+      "USER.md",
+      "SOUL.md",
+    ]);
+    expect(cfg.voice?.realtime?.bootstrapContextMaxChars).toBe(4096);
     expect(cfg.voice?.realtime?.bargeIn).toBe(true);
     expect(cfg.voice?.realtime?.minBargeInAudioEndMs).toBe(500);
   });
@@ -233,6 +241,8 @@ describe("discord config schema", () => {
       { mode: "talk-buffer" },
       { mode: "bidi", realtime: { toolPolicy: "dangerous" } },
       { mode: "agent-proxy", realtime: { consultPolicy: "substantive" } },
+      { mode: "bidi", realtime: { bootstrapContextFiles: ["AGENTS.md"] } },
+      { mode: "bidi", realtime: { bootstrapContextMaxChars: 0 } },
       { mode: "agent-proxy", realtime: { debounceMs: 10_001 } },
       { mode: "agent-proxy", realtime: { minBargeInAudioEndMs: -1 } },
       { mode: "agent-proxy", realtime: { minBargeInAudioEndMs: 10_001 } },
