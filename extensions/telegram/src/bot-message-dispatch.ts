@@ -2189,6 +2189,11 @@ export const dispatchTelegramMessage = async ({
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
       progressDraftGate.cancel();
+      // Stop the rolling tool-timer interval first — startToolTimer() runs a
+      // setInterval(3000ms) that the lane cleanup below does NOT cover. A turn
+      // that ends mid-tool would otherwise leak the interval for the rest of
+      // the process, waking every 3s to repaint a torn-down lane.
+      clearActiveTimer();
       await draftLaneEventQueue;
       nativeToolProgressDraft?.stop();
       // Belt-and-braces: when interleavedOutput has content but onReasoningEnd
